@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 16
-updated_at: 2026-08-13T10:30:00Z
-updated_by: "orchestrator session faee3625 (U3 redirected to per-id locking, U6 sent churn findings)"
+revision: 17
+updated_at: 2026-08-13T11:05:00Z
+updated_by: "orchestrator session faee3625 (U6 merged as 75823204c)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -84,13 +84,13 @@ units:
   U6:
     issue: null
     goal: "Retained-size threshold warning (finding 7 per D2): edge-triggered WARN at SpringMongoSagaStateStore.flowStateToDocument naming stepWindow as the remedy"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "local_d3b6c302 (archive at closeout)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "767", met: true, evidence: "MERGED 2026-08-13 as 75823204c (CAS on head 938873467). 27/27 on the exact head, final review clean with no suppressed block, sole open thread is the policy-sanctioned reasoned decline (allow_reasoned_declines). Seven review rounds, every one surfacing something real: latch comment overclaim, delete cleanup hook, TTL-latch permanent-saturation leak (fixed with an access-ordered LRU), the churn falsifier of the LRU claim (guarantee restated as 10k most-recently-checked, degradation pinned by a churn test), and the missing changelog line folded into the stepWindow entry. 13 mutations killed across the rounds. Rides along, no adversarial pass per the skill."}
   U7:
     issue: 751
     goal: "Saga filter override, closes #751 (finding 5 per D1): explicit filter/type-selector override bypassing EventTypeExpansion, Kotlin sugar, refusal message gains the third remedy, changelog + migration section 10 rework, ADR 124 amendment wording design-gated to Johan"
