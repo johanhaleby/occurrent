@@ -103,6 +103,49 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final EventFormat CLOUD_EVENT_JSON_FORMAT = Objects.requireNonNull(
             EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE), "CloudEvents JSON format must be on the classpath");
 
+    // A flow saga's retained events sit inside the same document as the rest of its state, so an instance that keeps
+    // accumulating them (an unbounded stepWindow, or a step that never transitions) heads toward MongoDB's 16 MB document
+    // limit with no signal before the write itself starts failing. This is an early warning, not an enforced cap: the
+    // unbounded default stays, ADR 123 already gives the remedy (a stepWindow cap), and this only makes the growth visible.
+    // A round number one to two orders of magnitude below the document limit for typical CloudEvent sizes (a few hundred
+    // bytes to a few KB each): high enough that a normal, short-lived flow never sees it, low enough to warn well before a
+    // runaway instance is anywhere near failing to save. Not made configurable: it is a diagnostic tripwire, not a
+    // behavioural limit, and the actual remedy (stepWindow) is already configurable per saga.
+    // Package-private rather than private: a test asserting the edge-triggering behaviour builds exactly this many events
+    // rather than hardcoding a duplicate of the number here.
+    static final int RETAINED_EVENT_WARNING_THRESHOLD = 1_000;
+
+    // Bounds the latch's total SIZE. An entry is removed when its instance drops below the threshold, or explicitly on
+    // delete(String), but SagaStateStore.delete's own javadoc says the recommended default is to let a completed
+    // instance expire via MongoDB TTL instead, which happens entirely inside the database with no call this store ever
+    // sees. So an instance that stays above the threshold and is retired that way keeps its entry until something else
+    // reclaims the slot. That reclaiming is the eviction the latch does on access order (see the field below): whichever
+    // saga id has gone the longest without being checked is what gets evicted when a new one arrives at capacity. That
+    // is a statement about recency of check, not about which instance is still active: a continuously active instance
+    // that is not saved again for RETAINED_EVENT_WARNING_LATCH_CAPACITY other distinct ids' worth of checks is evicted
+    // just like an abandoned one would be, and re-warns on its next save. Package-private for the same reason as the
+    // threshold above: a test exercising the capacity backstop builds exactly this many tracked instances instead of
+    // duplicating the number.
+    static final int RETAINED_EVENT_WARNING_LATCH_CAPACITY = 10_000;
+
+    // Edge-triggered, least-recently-checked latch, keyed by saga id: present and true means "already warned while at
+    // or above the threshold". An instance is removed the moment it drops back below the threshold (typically after a
+    // stepWindow trim) or is deleted, so a later re-crossing warns again. Access-ordered (see the constructor) and
+    // capped at RETAINED_EVENT_WARNING_LATCH_CAPACITY, protecting the RETAINED_EVENT_WARNING_LATCH_CAPACITY most
+    // recently checked saga ids from eviction, not every instance that will eventually be saved again. A saga id not
+    // checked again before that many OTHER distinct ids have been checked is evicted regardless of whether it is
+    // still active, and re-warns on its own next save. This is an accepted trade-off for keeping a hard memory bound
+    // rather than an unbounded, idle-expiry-only cache: the cost is a spurious re-warn under high churn, never a
+    // missed one. Not a ConcurrentHashMap: LinkedHashMap's access-order mode is what gives the LRU property, and every
+    // access to this field goes through the synchronized block in warnIfRetainedSizeCrossesThreshold or
+    // delete(String).
+    private final Map<String, Boolean> retainedEventWarningLatch = new LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+            return size() > RETAINED_EVENT_WARNING_LATCH_CAPACITY;
+        }
+    };
+
     private final MongoOperations mongoOperations;
     private final String collectionName;
     private final Class<S> stateType;
@@ -218,6 +261,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     public void delete(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
         mongoOperations.remove(Query.query(where(ID).is(sagaId)), collectionName);
+        synchronized (retainedEventWarningLatch) {
+            retainedEventWarningLatch.remove(sagaId);
+        }
     }
 
     private Document toDocument(String sagaId, SagaEnvelope<S> envelope) {
@@ -226,7 +272,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 .append(VERSION, envelope.version());
         S state = envelope.state();
         if (state != null) {
-            document.append(STATE, toStateValue(state));
+            document.append(STATE, toStateValue(sagaId, state));
         }
         List<Document> timers = new ArrayList<>();
         for (TimerEntry timer : envelope.timers()) {
@@ -253,9 +299,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // flowStateToDocument), so events round-trip by their stable CloudEvent type. Any other state (a core saga's
     // own model) goes through convertToMongoType, exactly like the snapshot store: a scalar stays a scalar and a
     // POJO/record becomes a sub-document.
-    private Object toStateValue(S state) {
+    private Object toStateValue(String sagaId, S state) {
         if (cloudEventConverter != null && state instanceof FlowStateImpl<?> flowState) {
-            return flowStateToDocument(flowState);
+            return flowStateToDocument(sagaId, flowState);
         }
         if (cloudEventConverter != null && state instanceof FlowState<?>) {
             // A flow saga's state is always the executor's FlowStateImpl, which the read path (readState) reconstructs field
@@ -267,7 +313,8 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         return mongoOperations.getConverter().convertToMongoType(state);
     }
 
-    private Document flowStateToDocument(FlowStateImpl<?> flowState) {
+    private Document flowStateToDocument(String sagaId, FlowStateImpl<?> flowState) {
+        warnIfRetainedSizeCrossesThreshold(sagaId, flowState.received().size());
         Document document = new Document();
         if (flowState.currentStep() != null) {
             document.append(FLOW_CURRENT_STEP, flowState.currentStep());
@@ -292,6 +339,48 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         document.append(FLOW_RECEIVED, received);
         return document;
+    }
+
+    // Edge-triggered: warns once when an instance's retained-event count crosses the threshold from below, stays silent
+    // on every subsequent save while it remains at or above it, and warns again only after a later save has carried it
+    // back below the threshold (typically a stepWindow trim) and it crosses again. See the latch fields' comments for
+    // the memory-safety argument.
+    // Package-private so a test can exercise the latch's edge-triggering and capacity backstop directly, with plain
+    // counts, instead of building enough real retained events to cross the threshold thousands of times over.
+    void warnIfRetainedSizeCrossesThreshold(String sagaId, int retainedEventCount) {
+        boolean shouldWarn;
+        // LinkedHashMap is not thread-safe, and SagaStateStore supports concurrent saves, so the whole read-modify
+        // decision is locked rather than just the individual map calls. It costs a monitor per save, negligible next
+        // to the Mongo round trip compareAndSave already pays.
+        synchronized (retainedEventWarningLatch) {
+            if (retainedEventCount < RETAINED_EVENT_WARNING_THRESHOLD) {
+                retainedEventWarningLatch.remove(sagaId);
+                return;
+            }
+            // get(), not containsKey(): get() is what LinkedHashMap's access-order mode uses to mark this instance as
+            // recently used, so an already-tracked instance that keeps being saved is never the eviction target below.
+            if (retainedEventWarningLatch.get(sagaId) != null) {
+                shouldWarn = false;
+            } else {
+                // put() may evict the least-recently-used entry via removeEldestEntry if the latch is at capacity.
+                retainedEventWarningLatch.put(sagaId, Boolean.TRUE);
+                shouldWarn = true;
+            }
+        }
+        if (shouldWarn) {
+            log.warn("Flow saga instance '{}' has retained {} received events, at or above the warning threshold of {}. " +
+                            "Consider capping the flow's step with stepWindow(...) to trim what it retains, or the document " +
+                            "risks growing toward MongoDB's 16 MB document limit.",
+                    sagaId, retainedEventCount, RETAINED_EVENT_WARNING_THRESHOLD);
+        }
+    }
+
+    // Package-private so a test can assert the capacity backstop's actual guarantee, that the latch never grows past
+    // RETAINED_EVENT_WARNING_LATCH_CAPACITY. Synchronized like every other access to this LinkedHashMap.
+    int retainedEventWarningLatchSize() {
+        synchronized (retainedEventWarningLatch) {
+            return retainedEventWarningLatch.size();
+        }
     }
 
     private SagaEnvelope<S> toEnvelope(Document document) {
