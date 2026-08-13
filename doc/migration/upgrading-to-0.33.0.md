@@ -93,7 +93,9 @@ refuses to start when it would pair your store with a competing-consumer lease, 
 that.
 
 Occurrent's own Mongo and Redis checkpoint storages do not need this recipe. They already evaluate `notOlderThan`
-and `ifAbsent` for real, on Redis Cluster too, see section 4.
+and `ifAbsent` for real, on Redis Cluster too, see section 4. One subscription id shape the Redis storage refuses
+outright for a conditional write is a Cluster-only concept in name, the refusal itself applies on a standalone or
+replicated server exactly the same, since nothing about it depends on which one you run.
 
 If your store can evaluate a condition for real, the two rules that matter are the same two the TCK asserts on every
 storage that declares it supports them. `any()` must leave whatever version is stored untouched, carrying it
@@ -137,9 +139,10 @@ somewhere in it, for example `""`, `"{}orders"` or `"a}b{c"`.
 `save` refuses an id of that shape outright with an `IllegalArgumentException` for `notOlderThan` and `ifAbsent`,
 which is what keeps `evaluatesWriteConditions()` true without exception rather than true for every id except one
 Cluster would otherwise refuse two calls downstream. `any()` never refuses one, since it writes only the checkpoint
-key. `delete` never refuses one either, on a `CROSSSLOT` failure it falls back to two single-key deletes instead,
-which always succeed regardless of slot, since deleting has no comparison whose atomicity a cross-shard gap could
-undermine, unlike a conditional write's.
+key. `delete` never refuses one either. An id of this shape can only ever have had a checkpoint written for it
+through `any()`, since a conditional write already refuses one before touching Redis, so its version key can never
+exist to strand. On a `CROSSSLOT` failure `delete` falls back to two single-key deletes instead, which is provably
+safe for that reason and not merely convenient.
 
 This also assumes the `RedisOperations` passed in serializes a key to its own literal bytes, the same assumption
 the checkpoint's plain `GET` already makes.

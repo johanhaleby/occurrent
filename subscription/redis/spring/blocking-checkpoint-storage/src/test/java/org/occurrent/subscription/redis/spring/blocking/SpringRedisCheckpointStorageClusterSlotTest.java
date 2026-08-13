@@ -26,6 +26,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -38,9 +40,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code FlushRedisExtension}, wires a single-node {@code GenericContainer<>("redis:5.0.3-alpine")}, and standing up
  * a multi-node Cluster (several nodes exchanging gossip before they answer a single request) needs its own
  * multi-container topology, unlike anything else in this repository's Redis coverage, so it is not something a
- * single Testcontainers container gives you cheaply. Verifying the invariant against an independent implementation
- * of Cluster's own slot algorithm is the proportionate substitute. It catches exactly the defect a real Cluster
- * would, the checkpoint key and the version key landing in different slots, without that infrastructure.
+ * single Testcontainers container gives you cheaply. Verifying the invariant against a second implementation of
+ * Cluster's own slot algorithm is the proportionate substitute. It catches exactly the defect a real Cluster
+ * would, the checkpoint key and the version key landing in different slots, without that infrastructure. The CRC16
+ * half of that second implementation is genuinely independent, production has no CRC16 of its own to share a bug
+ * with, and is pinned against the standard test vector below. The hash-tag half restates the same Cluster
+ * specification production's {@code clusterHashTag} also implements, using a regex match rather than index
+ * scanning so a bug specific to one style of scanning is not shared by both sides of a comparison.
  */
 @DisplayNameGeneration(DisplayNameGenerator.Simple.class)
 class SpringRedisCheckpointStorageClusterSlotTest {
@@ -64,15 +70,18 @@ class SpringRedisCheckpointStorageClusterSlotTest {
     /**
      * Documents, rather than works around, the one shape the class javadoc names, a subscription id where Cluster
      * itself falls back to hashing the whole id (no brace pair, an unmatched brace, or an empty pair like
-     * {@code {}}) and that whole id contains a closing brace somewhere in it. Cluster hashes such an id on its
-     * whole, untagged text, and no hash tag built around that text can reproduce the same slot without introducing
-     * a closing brace of its own that Cluster would find first, so the mismatch below is Cluster's own hash-tag
-     * rule, not a gap in {@code versionKey}. Confirmed against an independent Python implementation of the same
-     * CRC16 and tag-extraction rules before this test was written, so the recorded expectation is not a guess.
+     * {@code {}}) and that whole id is either empty or contains a closing brace somewhere in it. Two of these
+     * values have no opening brace before their closing one at all ({@code "orders}v2"}, {@code "a}b{c"}), and four
+     * have an opening brace immediately before it, forming an empty tag ({@code "{}orders"}, {@code "{}v2"},
+     * {@code "orders{}v2"}, {@code "{}"}). Cluster hashes every one of them on its whole, untagged text, and no
+     * hash tag built around that text can reproduce the same slot without introducing a closing brace of its own
+     * that Cluster would find first, so the mismatch below is Cluster's own hash-tag rule, not a gap in
+     * {@code versionKey}. Confirmed against an independent Python implementation of the same CRC16 and
+     * tag-extraction rules before this test was written, so the recorded expectation is not a guess.
      */
     @ParameterizedTest
     @ValueSource(strings = {"orders}v2", "a}b{c", "{}orders", "{}v2", "orders{}v2", "{}"})
-    void a_stray_closing_brace_with_no_opening_brace_before_it_is_the_one_shape_the_hash_tag_cannot_reproduce(String subscriptionId) {
+    void a_cluster_hash_tag_that_comes_out_empty_or_still_contains_a_closing_brace_cannot_be_reproduced(String subscriptionId) {
         String versionKey = SpringRedisCheckpointStorage.versionKey(subscriptionId);
 
         assertThat(clusterSlot(versionKey)).isNotEqualTo(clusterSlot(subscriptionId));
@@ -154,22 +163,18 @@ class SpringRedisCheckpointStorageClusterSlotTest {
 
     // Redis Cluster's own slot algorithm (Cluster specification, "Keys hash tags"): hash the substring between the
     // first '{' and the first '}' after it, or the whole key when either brace is missing or none of the key sits
-    // between them. Written independently of SpringRedisCheckpointStorage's own extraction so this test is not
-    // tautological with the production code it is checking.
+    // between them.
     private static int clusterSlot(String key) {
         return crc16(hashTag(key)) & 0x3FFF;
     }
 
+    // A regex match, not the index-scanning SpringRedisCheckpointStorage.clusterHashTag uses, so a bug specific to
+    // one style of scanning is not shared by both sides of the comparisons above. "\\{([^}]+)\\}" finds the
+    // leftmost '{' that has a non-empty run of non-'}' characters before the next '}'. That is the same rule as
+    // the first '{', then the first '}' after it, only counting as a tag when something sits between them.
     private static String hashTag(String key) {
-        int openBrace = key.indexOf('{');
-        if (openBrace < 0) {
-            return key;
-        }
-        int closeBrace = key.indexOf('}', openBrace + 1);
-        if (closeBrace < 0 || closeBrace == openBrace + 1) {
-            return key;
-        }
-        return key.substring(openBrace + 1, closeBrace);
+        Matcher matcher = Pattern.compile("\\{([^}]+)\\}").matcher(key);
+        return matcher.find() ? matcher.group(1) : key;
     }
 
     /**

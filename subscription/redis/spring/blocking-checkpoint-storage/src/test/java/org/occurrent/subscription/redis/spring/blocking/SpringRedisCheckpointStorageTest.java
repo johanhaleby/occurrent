@@ -308,6 +308,23 @@ class SpringRedisCheckpointStorageTest {
                 .hasMessageContaining("cannot be used with a conditional write");
     }
 
+    /**
+     * Every conditional-save test elsewhere in this class uses a brace-free {@link UUID}, so a predicate broadened
+     * to refuse every brace-carrying id, not just the ones Cluster genuinely cannot align, would still pass the
+     * whole suite. These four are all accepted today, a well-formed tag, a fallback with an opening brace and no
+     * closing one, a single unmatched opening brace, and a nested pair. None of them are empty and none of their
+     * {@code clusterHashTag} results contain a closing brace, so {@code requireClusterSlotAlignable} lets all four
+     * through.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"{tenant}-orders", "a{b", "{", "a{b{c}d}e"})
+    void accepts_a_conditional_save_for_a_subscription_id_cluster_can_align(String subscriptionId) {
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+
+        assertThatCode(() -> storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(1)))
+                .doesNotThrowAnyException();
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"", "a}b{c", "{}orders"})
     void an_unconditional_save_accepts_a_subscription_id_a_conditional_write_would_refuse(String subscriptionId) {

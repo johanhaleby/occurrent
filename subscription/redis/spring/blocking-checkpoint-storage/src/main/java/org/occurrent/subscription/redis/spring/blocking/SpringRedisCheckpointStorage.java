@@ -74,17 +74,26 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * closing brace somewhere in it, for example {@code ""}, {@code "{}orders"} or {@code "a}b{c"}. Wrapping such text
  * in a fresh hash tag only reproduces it when the text has no closing brace of its own, since Cluster stops at the
  * first one it finds, and that is then the wrap's own or an earlier one already inside the id, not the one this
- * class appended. No subscription id this library or its tests generate takes that shape.
+ * class appended. This library's own tests use ids of that shape deliberately, to exercise the refusal below, but
+ * no subscription id a real caller would choose takes it by accident.
  * <p>
  * {@link #save(String, Checkpoint, CheckpointWriteCondition)} refuses an id of that shape outright, with an
  * {@link IllegalArgumentException} naming the reason, whenever the condition is {@link CheckpointWriteCondition#notOlderThan(long)}
  * or {@link CheckpointWriteCondition#ifAbsent()}. That refusal is what keeps {@link #evaluatesWriteConditions()}
  * true without exception, rather than true for every id except the one shape Cluster would otherwise refuse two
  * calls downstream. {@link CheckpointWriteCondition#any()} never refuses one, since it writes only the checkpoint
- * key and never touches the version key at all. {@link #delete(String)} never refuses one either. Deleting has no
- * comparison whose atomicity a cross-shard gap could undermine, so on a {@code CROSSSLOT} failure it falls back to
- * two single-key deletes, which always succeed regardless of slot, rather than leaving a checkpoint that an
- * unconditional write created with no way to remove it through this same class.
+ * key and never touches the version key at all. The refusal is unconditional, not only on Cluster, since a
+ * standalone or replicated server never needed slot alignment in the first place and gains nothing from writing an
+ * id of this shape either.
+ * <p>
+ * {@link #delete(String)} never refuses one. A subscription id of this shape can only ever have had a checkpoint
+ * written for it through {@code any()}, since a conditional write already refuses one before touching Redis at
+ * all, so its version key can never exist to strand. On a {@code CROSSSLOT} failure, falling back to two
+ * single-key deletes is provably safe for that reason, not merely convenient. The checkpoint key is deleted first
+ * regardless, a defensive ordering rather than one this specific fallback depends on. If a version key ever did
+ * exist here, deleting it first and failing before the checkpoint would leave a checkpoint with no stored version,
+ * which a later {@code notOlderThan} write would then accept unconditionally, letting a lease-holder that has
+ * already moved on win a write it should have lost.
  * <p>
  * This also assumes the {@link RedisOperations} passed in serializes a key to its own literal bytes, the same
  * assumption the checkpoint's plain {@code GET} already makes. A key serializer that reshapes the string changes
@@ -215,6 +224,16 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         return executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalArgumentException if {@code condition} is {@link CheckpointWriteCondition#notOlderThan(long)}
+     *                                  or {@link CheckpointWriteCondition#ifAbsent()} and {@code subscriptionId} is
+     *                                  one of the shapes the class javadoc names Redis Cluster cannot align a slot
+     *                                  for. Specific to this implementation, not part of the {@link CheckpointStorage}
+     *                                  contract, since no other storage this library ships has an analogous
+     *                                  unsupported shape.
+     */
     @Override
     public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
@@ -311,6 +330,12 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         return storedVersion == null || storedVersion == NO_VERSION_STORED ? OptionalLong.empty() : OptionalLong.of(storedVersion);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Unlike {@link #save(String, Checkpoint, CheckpointWriteCondition)}, this never throws for a subscription id
+     * shape Redis Cluster cannot align a slot for, see the class javadoc for why deleting one is always safe.
+     */
     @Override
     public void delete(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
@@ -321,11 +346,12 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
                 if (!isClusterSlotMismatch(e)) {
                     throw e;
                 }
-                // The one subscription id shape a conditional write refuses outright (requireClusterSlotAlignable)
-                // still has to be deletable, since an unconditional save never refused writing one. Two single-key
-                // deletes always succeed regardless of slot, and unlike a conditional write's compare-and-swap,
-                // delete has no comparison whose atomicity a cross-shard gap could undermine, so falling back here
-                // trades nothing away that delete relied on.
+                // Only the one subscription id shape requireClusterSlotAlignable refuses can land here, and a
+                // conditional write already refuses that shape before ever writing a version key, so this id's
+                // version key can never exist to strand. The second delete below is provably a no-op, not merely
+                // convenient. The checkpoint is still deleted first, defensively. If a version key ever did exist,
+                // deleting it first and failing before the checkpoint would leave a checkpoint with no stored
+                // version, which a later notOlderThan write would then accept unconditionally.
                 redis.delete(subscriptionId);
                 redis.delete(versionKey(subscriptionId));
                 return 0L;
@@ -348,11 +374,11 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     // digest of the full subscription id follows it, outside the braces, where Cluster never looks once it has
     // found the hash tag's closing brace, so two ids that share a hash tag (two tenant-scoped ids under the same
     // "{tenant}" tag, for instance) still get distinct version keys instead of silently sharing one fencing
-    // version. The digest, not the raw id or a length-prefixed copy of it, is what makes this collision-resistant:
-    // the tag can equal the whole subscription id (the fallback branch in clusterHashTag), so a raw or delimited
+    // version. The digest, not the raw id or a length-prefixed copy of it, is what makes this collision-resistant.
+    // The tag can equal the whole subscription id (the fallback branch in clusterHashTag), so a raw or delimited
     // copy of the id sitting next to that tag lets one subscription id's own text be read as a completely different
     // subscription id's tag-plus-copy. Two adversarially constructed pairs broke that this way in review, a plain
-    // "}:" separator ("a}:{a" vs "{a}:a}:{a") and a length-prefixed one ("a}12:{a" vs "{a}7:a}12:{a}"), both
+    // "}:" separator ("a}:{a" vs "{a}:a}:{a") and a length-prefixed one ("a}12:{a" vs "{a}7:a}12:{a"), both
     // exploiting the same doubling. A digest carries none of the id's own structure for an adversary to reuse.
     // Package-private, not private, so a test can compute it against an independent Cluster slot implementation.
     static String versionKey(String subscriptionId) {
