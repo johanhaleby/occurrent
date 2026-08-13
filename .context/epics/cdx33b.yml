@@ -105,8 +105,8 @@ pending_actions:
   - id: act-018
     type: workflow-dispatch
     target: "U12 corrections subagent (Sonnet, own clone, branch johan/cdx33b-u12-fixpoint-corrections off main at d376c8be5+): the MAJOR lock-comment rewrite with the true scope statement, plus four one-clause prose corrections (changelog Cluster qualifier, warns-once re-arm semantics, refuseArrayOrPrimitive walk claim, Redis DEL javadoc reconciliation); no behavior changes"
-    expected: "a small PR, green matrix, suppressed blocks handled, DELIVERY_RESULT with before/after per item"
-    status: PENDING
+    expected: "a small PR, green matrix, suppressed blocks handled, DELIVERY_RESULT with before/after per item. VERIFIED: PR 778 delivered at b8566d923 through three review rounds (round 2's suppressed comment corrected the comment in the OTHER direction, Spring's synchronous first-subscribe evaluation is lock-covered, only deferred evaluation escapes), final review verified bare by the orchestrator, per-item before/after complete, local builds green on all three heads; matrix pending at report time, merge on green. One agent-process note: the agent first paused on a background monitor that reports to nobody and had pushed nothing, resumed with a no-pausing directive. New register item from the correction: NativeMongoSubscriptionModel defers StartAt evaluation to its dispatcher executor with no serialization against cancelSubscription, the pre-existing orphan-checkpoint race family, 0.34 candidate"
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-13T22:00:00Z
