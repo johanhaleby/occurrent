@@ -147,6 +147,12 @@ safe for that reason and not merely convenient.
 This also assumes the `RedisOperations` passed in serializes a key to its own literal bytes, the same assumption
 the checkpoint's plain `GET` already makes.
 
+`read`, `save`, `delete`, and `exists` also refuse a subscription id that starts with the version key's own
+reserved prefix (`occurrent:checkpoint-version:`), with an `IllegalArgumentException`. This is a Cluster-independent
+guard, since a caller-chosen id equal to another subscription's version key would let a write against it corrupt
+that other subscription's stored version on a standalone or replicated server too. No subscription id a real caller
+would choose starts with that prefix by accident.
+
 ## 5. Five subscription-capability interfaces are renamed
 
 Only relevant if you implement or call one of these directly.

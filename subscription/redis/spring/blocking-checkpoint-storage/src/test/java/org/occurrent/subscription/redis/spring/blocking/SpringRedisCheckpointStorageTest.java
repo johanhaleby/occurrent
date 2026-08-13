@@ -371,6 +371,41 @@ class SpringRedisCheckpointStorageTest {
         verify(redis).delete(SpringRedisCheckpointStorage.versionKey(subscriptionId));
     }
 
+    @Test
+    void read_save_delete_and_exists_all_refuse_a_subscription_id_that_is_another_subscriptions_version_key() {
+        // versionKey("orders") is the exact Redis key this storage stores "orders"'s fencing version under. Using
+        // that same text as a different subscription's own id would let a save or delete on that id corrupt
+        // "orders"'s stored version, so every entry point that touches the checkpoint key as a Redis key refuses
+        // it before Redis is touched.
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String collidingId = SpringRedisCheckpointStorage.versionKey("orders");
+
+        assertThatThrownBy(() -> storage.read(collidingId))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserves for its own version keys");
+        assertThatThrownBy(() -> storage.save(collidingId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.any()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserves for its own version keys");
+        assertThatThrownBy(() -> storage.delete(collidingId))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserves for its own version keys");
+        assertThatThrownBy(() -> storage.exists(collidingId))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserves for its own version keys");
+    }
+
+    @Test
+    void a_subscription_id_merely_starting_with_the_version_key_prefix_is_refused_too() {
+        // The guard is a prefix check, not an exact match against one specific version key, since any text after
+        // the prefix could in principle be some other subscription's tag and digest.
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String subscriptionId = "occurrent:checkpoint-version:{whatever}notarealdigest";
+
+        assertThatThrownBy(() -> storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.any()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserves for its own version keys");
+    }
+
     private List<CloudEvent> serialize(DomainEvent e) {
         return List.of(CloudEventBuilder.v1()
                 .withId(e.eventId())

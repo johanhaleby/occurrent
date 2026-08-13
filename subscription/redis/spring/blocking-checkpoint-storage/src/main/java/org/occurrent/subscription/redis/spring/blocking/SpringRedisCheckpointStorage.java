@@ -51,6 +51,13 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * node still running a release before this one only ever does a plain {@code GET} against the first key, and that
  * value has not changed shape, so a rolling deploy stays safe.
  * <p>
+ * Because the checkpoint key is a caller-chosen subscription id with no prefix of its own, a subscription could in
+ * principle choose an id equal to the exact text of some other subscription's version key, and land its own
+ * checkpoint on that other subscription's stored version. {@link #read(String)}, {@link #save(String, Checkpoint,
+ * CheckpointWriteCondition)}, {@link #delete(String)}, and {@link #exists(String)} all refuse a subscription id
+ * that starts with the version key's own prefix, which every version key does and no id a real caller would pick
+ * does by accident, closing that off entirely rather than leaving it as a documented risk.
+ * <p>
  * {@link CheckpointWriteCondition#notOlderThan(long)} and {@link CheckpointWriteCondition#ifAbsent()} are evaluated
  * by a Lua script that compares the stored version and writes both keys in one round trip, so no other writer can
  * land between the comparison and the write. {@link CheckpointWriteCondition#any()} needs no comparison and keeps
@@ -210,9 +217,17 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         this.conditionArgsSerializer = conditionArgsSerializer(redis);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
+     *                                   its own version keys, see the class javadoc. Specific to this
+     *                                   implementation, not part of the {@link CheckpointStorage} contract.
+     */
     @Nullable
     @Override
     public Checkpoint read(String subscriptionId) {
+        requireOutsideVersionKeyNamespace(subscriptionId);
         Supplier<@Nullable Checkpoint> read = () -> {
             String checkpoint = redis.opsForValue().get(subscriptionId);
             if (checkpoint == null) {
@@ -227,11 +242,13 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     /**
      * {@inheritDoc}
      *
-     * @throws IllegalArgumentException if {@code condition} is {@link CheckpointWriteCondition#notOlderThan(long)}
-     *                                  or {@link CheckpointWriteCondition#ifAbsent()} and {@code subscriptionId} is
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
+     *                                  its own version keys, see the class javadoc, or if {@code condition} is
+     *                                  {@link CheckpointWriteCondition#notOlderThan(long)} or
+     *                                  {@link CheckpointWriteCondition#ifAbsent()} and {@code subscriptionId} is
      *                                  one of the shapes the class javadoc names Redis Cluster cannot align a slot
-     *                                  for. Specific to this implementation, not part of the {@link CheckpointStorage}
-     *                                  contract, since no other storage this library ships has an analogous
+     *                                  for. Neither is part of the {@link CheckpointStorage} contract, since no
+     *                                  other storage this library ships has an analogous reserved namespace or
      *                                  unsupported shape.
      */
     @Override
@@ -239,6 +256,7 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
         requireNonNull(condition, CheckpointWriteCondition.class.getSimpleName() + " cannot be null");
+        requireOutsideVersionKeyNamespace(subscriptionId);
         return switch (condition) {
             case CheckpointWriteCondition.Any ignored -> saveUnconditionally(subscriptionId, checkpoint);
             case CheckpointWriteCondition.NotOlderThan notOlderThan -> saveConditionally(subscriptionId, checkpoint, condition, NOT_OLDER_THAN_SCRIPT,
@@ -284,6 +302,17 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
 
         Predicate<Throwable> retryUnlessShutdownOrRefused = e -> !shutdown && !(e instanceof CheckpointWriteConditionNotFulfilledException) && !isClusterSlotMismatch(e);
         return requireNonNull(executeWithRetry(save, retryUnlessShutdownOrRefused, retryStrategy).get());
+    }
+
+    // The checkpoint key is subscriptionId itself, unprefixed, and every version key starts with VERSION_KEY_PREFIX,
+    // so a subscription id that starts with it too could be the exact text of some other subscription's version
+    // key. A save, delete, or read against that id would then land on the wrong subscription's stored version
+    // instead of its own checkpoint. Refusing the prefix outright is enough to rule that out entirely, since no
+    // version key this class ever builds starts with anything else.
+    private static void requireOutsideVersionKeyNamespace(String subscriptionId) {
+        if (subscriptionId.startsWith(VERSION_KEY_PREFIX)) {
+            throw new IllegalArgumentException("Subscription id \"" + subscriptionId + "\" cannot be used, since it starts with \"" + VERSION_KEY_PREFIX + "\", the prefix this storage reserves for its own version keys, and could otherwise be the exact key some other subscription's version is stored under.");
+        }
     }
 
     // The one input clusterHashTag cannot build a working hash tag from. It fell back to the whole subscription id
@@ -335,10 +364,15 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
      * <p>
      * Unlike {@link #save(String, Checkpoint, CheckpointWriteCondition)}, this never throws for a subscription id
      * shape Redis Cluster cannot align a slot for, see the class javadoc for why deleting one is always safe.
+     *
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
+     *                                  its own version keys, see the class javadoc. Specific to this
+     *                                  implementation, not part of the {@link CheckpointStorage} contract.
      */
     @Override
     public void delete(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
+        requireOutsideVersionKeyNamespace(subscriptionId);
         Supplier<Long> deleteBoth = () -> {
             try {
                 return redis.delete(List.of(subscriptionId, versionKey(subscriptionId)));
@@ -360,8 +394,16 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         executeWithRetry(deleteBoth, __ -> !shutdown, retryStrategy).get();
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
+     *                                  its own version keys, see the class javadoc. Specific to this
+     *                                  implementation, not part of the {@link CheckpointStorage} contract.
+     */
     @Override
     public boolean exists(String subscriptionId) {
+        requireOutsideVersionKeyNamespace(subscriptionId);
         Supplier<Boolean> exists = () -> {
             Boolean result = redis.hasKey(subscriptionId);
             return result != null && result;
