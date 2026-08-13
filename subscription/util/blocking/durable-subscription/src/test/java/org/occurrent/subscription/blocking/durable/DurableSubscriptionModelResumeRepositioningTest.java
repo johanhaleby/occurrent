@@ -295,16 +295,96 @@ class DurableSubscriptionModelResumeRepositioningTest {
         }
     }
 
+    @Test
+    void a_duplicate_opt_out_subscribe_against_an_already_registered_id_never_marks_it_opted_out() throws Exception {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        PausingBeforeRejectingDuplicateRepositionableSubscriptionModel delegate = new PausingBeforeRejectingDuplicateRepositionableSubscriptionModel();
+        CountDownLatch aboutToReject = new CountDownLatch(1);
+        CountDownLatch releaseRejection = new CountDownLatch(1);
+        delegate.aboutToReject = aboutToReject;
+        delegate.holdRejectionUntil = releaseRejection;
+        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
+        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        // A real, existing, checkpoint-managed subscription for this id, nothing to do with opting out.
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), event -> {
+        });
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Subscription> duplicateAttempt = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+            }));
+            assertThat(aboutToReject.await(10, TimeUnit.SECONDS)).isTrue();
+
+            // The duplicate opt-out attempt above is paused right before the delegate rejects it. A concurrent
+            // resume for the id's real, checkpoint-managed subscription must not be fooled by it in that window.
+            model.resumeSubscription(SUBSCRIPTION_ID);
+
+            releaseRejection.countDown();
+            assertThatThrownBy(() -> duplicateAttempt.get(10, TimeUnit.SECONDS)).hasCauseInstanceOf(RuntimeException.class);
+
+            assertThat(delegate.repositionedTo)
+                    .as("a duplicate opt-out subscribe against an id the wrapped model already has registered must "
+                            + "never mark that id opted out, even while the duplicate attempt is still in flight, "
+                            + "or its real, checkpoint-managed subscription stops being repositioned from storage")
+                    .isInstanceOf(StartAt.StartAtCheckpoint.class);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void a_cancel_after_the_delegate_has_already_accepted_the_subscription_leaves_no_marker_to_reinstate() throws Exception {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        RegisteringThenPausingRepositionableSubscriptionModel delegate = new RegisteringThenPausingRepositionableSubscriptionModel();
+        CountDownLatch registered = new CountDownLatch(1);
+        CountDownLatch releaseSubscribe = new CountDownLatch(1);
+        delegate.registeredAndPausing = registered;
+        delegate.holdReturnUntil = releaseSubscribe;
+        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
+        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Subscription> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+            }));
+            assertThat(registered.await(10, TimeUnit.SECONDS)).isTrue();
+
+            // The delegate has already accepted this registration by this point, so this cancel is real, not a
+            // no-op, and it must be the one that wins once the subscribe call above returns.
+            model.cancelSubscription(SUBSCRIPTION_ID);
+
+            releaseSubscribe.countDown();
+            subscribeFuture.get(10, TimeUnit.SECONDS);
+
+            storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+            model.resumeSubscription(SUBSCRIPTION_ID);
+
+            assertThat(delegate.repositionedTo)
+                    .as("a cancel that lands after the delegate already accepted the subscription must win, so a "
+                            + "later, checkpoint-managed subscription for the same id is not left with a stale "
+                            + "opt-out marker and skips repositioning")
+                    .isInstanceOf(StartAt.StartAtCheckpoint.class);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     /**
      * Records whether {@link #resumeSubscription(String)} was called, and answers something for every other
      * {@link CheckpointAwareSubscriptionModel} member, since {@link DurableSubscriptionModel} requires a whole one
-     * to wrap even though these tests only exercise its resume path.
+     * to wrap even though these tests only exercise its resume path. Tracks {@code subscribe}/{@code
+     * cancelSubscription} in {@code registeredIds} for real, since {@link DurableSubscriptionModel} now asks
+     * {@code isRunning}/{@code isPaused} to decide whether an id is already known before counting an opt-out
+     * attempt in, so a fake that answered those unconditionally would defeat that check for every id, known or not.
      */
     private static class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel {
         boolean plainResumeCalled = false;
+        private final Set<String> registeredIds = ConcurrentHashMap.newKeySet();
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            registeredIds.add(subscriptionId);
             return dummySubscription(subscriptionId);
         }
 
@@ -328,12 +408,12 @@ class DurableSubscriptionModelResumeRepositioningTest {
 
         @Override
         public boolean isRunning(String subscriptionId) {
-            return true;
+            return registeredIds.contains(subscriptionId);
         }
 
         @Override
         public boolean isPaused(String subscriptionId) {
-            return true;
+            return registeredIds.contains(subscriptionId);
         }
 
         @Override
@@ -348,6 +428,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
 
         @Override
         public void cancelSubscription(String subscriptionId) {
+            registeredIds.remove(subscriptionId);
         }
 
         static Subscription dummySubscription(String subscriptionId) {
@@ -417,6 +498,35 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     /**
+     * The same duplicate-rejecting fake, but a rejection signals {@code aboutToReject} and blocks on
+     * {@code holdRejectionUntil} before throwing, standing in for a delegate whose duplicate-id check takes long
+     * enough for a concurrent resume to land while the rejection is still in flight.
+     */
+    private static class PausingBeforeRejectingDuplicateRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
+        private final Set<String> subscribed = ConcurrentHashMap.newKeySet();
+        @Nullable CountDownLatch aboutToReject;
+        @Nullable CountDownLatch holdRejectionUntil;
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            if (subscribed.add(subscriptionId)) {
+                return super.subscribe(subscriptionId, filter, startAt, action);
+            }
+            if (aboutToReject != null) {
+                aboutToReject.countDown();
+            }
+            if (holdRejectionUntil != null) {
+                try {
+                    assertThat(holdRejectionUntil.await(10, TimeUnit.SECONDS)).isTrue();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            throw new RuntimeException("duplicate subscription id " + subscriptionId);
+        }
+    }
+
+    /**
      * The same repositionable fake, but {@code subscribe} signals {@code subscribeEntered} and then blocks on
      * {@code holdSubscribeUntil}, standing in for a delegate whose subscribe call is still in flight when a
      * concurrent {@code resumeSubscription} lands.
@@ -438,6 +548,33 @@ class DurableSubscriptionModelResumeRepositioningTest {
                 }
             }
             return super.subscribe(subscriptionId, filter, startAt, action);
+        }
+    }
+
+    /**
+     * The same repositionable fake, but {@code subscribe} registers the id first, then signals
+     * {@code registeredAndPausing} and blocks on {@code holdReturnUntil} before returning, standing in for a
+     * delegate that has already accepted a registration but has not yet handed the {@link Subscription} back to
+     * the caller.
+     */
+    private static class RegisteringThenPausingRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
+        @Nullable CountDownLatch registeredAndPausing;
+        @Nullable CountDownLatch holdReturnUntil;
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            Subscription subscription = super.subscribe(subscriptionId, filter, startAt, action);
+            if (registeredAndPausing != null) {
+                registeredAndPausing.countDown();
+            }
+            if (holdReturnUntil != null) {
+                try {
+                    assertThat(holdReturnUntil.await(10, TimeUnit.SECONDS)).isTrue();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return subscription;
         }
     }
 
