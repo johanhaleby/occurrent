@@ -67,8 +67,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private final Set<String> notCheckpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
     // Striped rather than one lock object per id, since subscriptionId is caller-supplied to public methods
     // (cancelSubscription, resumeSubscription) and an unknown or made-up id must not grow this without bound. A
-    // fixed number of locks bounds memory for good, at the cost of occasional cross-id serialization when two ids
-    // hash to the same stripe, harmless for control-plane calls like these.
+    // fixed number of locks bounds memory for good and needs no lifecycle bookkeeping to remove an entry once its
+    // holder is gone, at the cost of occasional cross-id serialization when two ids hash to the same stripe. These
+    // are startup and reconfiguration calls rather than the event path, so that cost is ordinarily microseconds,
+    // but if the delegate or checkpoint storage hangs inside one id's call, every other id sharing its stripe
+    // blocks too until it returns.
     private static final int SUBSCRIPTION_ID_LOCK_STRIPES = 1024;
     private final Object[] subscriptionIdLocks = new Object[SUBSCRIPTION_ID_LOCK_STRIPES];
 
