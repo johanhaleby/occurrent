@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 22
-updated_at: 2026-08-13T15:00:00Z
-updated_by: "orchestrator session faee3625 (U7 pass returned, 3 claim-truth defects routed)"
+revision: 23
+updated_at: 2026-08-13T15:10:00Z
+updated_by: "orchestrator session faee3625 (U7 fix head 445ee42c4 read: defects 2+3 resolved, defect 1 substituted with docs; rationale requested)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -30,6 +30,14 @@ pending_actions:
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-13T06:45:00Z
+  - id: act-004
+    type: message-session
+    target: "U7 session local_8a2de541 re PR 770 head 445ee42c4: routed defect 1 (isInstance guard before the FlowSagaImpl append + two tests) was replaced by documentation (guide section 10 flow-saga cost paragraph, Saga.filter() javadoc) with no rationale sent; asked for the rationale or the guard commit, plus the head's remaining obligations (updated DELIVERY_RESULT, Copilot re-review with suppressed block, ADR 124 wording set to Johan before the ruling ask)"
+    expected: "either a stated rationale I rule on, or a guard commit with the mutation evidence; recorded in the updated DELIVERY_RESULT either way"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T15:10:00Z
 units:
   U1:
     issue: null
