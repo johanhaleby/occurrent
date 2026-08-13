@@ -106,6 +106,13 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > registration or from a subscription that resumed from a position it should never have started at. The one-argument
 > factory keeps such a storage, at the cost of a first run starting from the moment it is started. A caller that passed
 > a storage of its own in 0.32.0 is refused until it answers true, which the changelog records as a breaking change.
+>
+> That question is coarser than this write needs. `evaluatesWriteConditions()` answers for `notOlderThan` and
+> `ifAbsent` together, so a storage that evaluates `ifAbsent` and refuses `notOlderThan` has to answer false and is
+> refused here even though the write it would be asked for is one it can do. Asking per condition means another method
+> on `CheckpointStorage`, which every implementation outside this repository would then have to answer, and that is a
+> decision for the interface rather than for this wrapper. The refusal names the method it asked and what this model
+> needs, so a caller in that position can see why.
 
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same
