@@ -73,8 +73,8 @@ pending_actions:
   - id: act-009
     type: merge
     target: "PR 770 (U7) CAS squash merge on exact head 6ca6c6d30 after the full gate (28/28 by run list, 0 threads, sentinels verified, all review channels read, both rulings closed)"
-    expected: "merge commit on main; main matrix green on it"
-    status: PENDING
+    expected: "merge commit on main; main matrix green on it. VERIFIED: all four workflows success on d376c8be5 including the full Java CI matrix"
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-13T17:28:00Z
