@@ -1378,3 +1378,6 @@ with trigger conditions. And when any unit's gate venue is `session`, the orches
 the user names the sessions holding questions for them, every time, because the venue that avoids
 round-tripping decisions also hides their existence. The skill now encodes the first three; the fourth
 is this epic's standing practice.
+
+## DELIVERY_RESULT posted as a PR comment is a channel no monitor watches (2026-08-13)
+U4 posted its complete DELIVERY_RESULT as a PR 766 comment at 19:20 and went idle. The v7 PR monitor emits head/check/mergeable deltas, the thread monitor emits thread transitions, and neither reads issue comments, so the report sat unread for ten hours while the orchestrator "waited for the report" and the unit session showed idle-with-obligation. The briefs themselves name the PR comment as the mirror channel, so the sweep must treat it as a primary channel: every liveness sweep greps the epic's open PRs for the DELIVERY_RESULT marker before concluding a unit still owes its report. An idle session plus an unread mirror channel is a detection defect, not a stall.
