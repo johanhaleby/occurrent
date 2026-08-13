@@ -81,8 +81,8 @@ pending_actions:
   - id: act-016
     type: message-session
     target: "U11 agent resumed with the fix round: RULED chain-aware registration resolution via SubscriptionModelWrapper descent (regression from starting state on public API rules out the documented-limitation option; interface verified on main), plus guide manual-mode carve-out, Breaking-changes entry for the factory refusal, requirement-stating refusal message, test rename, WARNING qualifier; ADR 86 amendment rewritten so the false sentence disappears by construction"
-    expected: "fix push on PR 777, green matrix, re-review read on the new head, DELIVERY_RESULT updated with the chain-descent invariant and new mutants"
-    status: PENDING
+    expected: "fix push on PR 777, green matrix, re-review read on the new head, DELIVERY_RESULT updated with the chain-descent invariant and new mutants. VERIFIED: delivered at 044edca51, 28/28 by job conclusion, all five ruled items in (chain walk via SubscriptionModelWrapper with its descent mutant killed by the layer-below test, guide carve-out, Breaking-changes entry, requirement-stating message, rename + WARNING qualifier), Copilot reviewed every head of the round, final suppressed comment read by the orchestrator. Two declines ACCEPTED with derivation (pass-through wrapper = pre-PR outcome exactly, no regression; runtime-class misread needs subclass + hand-written equality dynamic, fix needs a layer resolution-contract capability that does not exist), recorded in ADR 86 and the register. One framework-shard flake (ProjectionAnnotationDurableResumeMongoTest, expected 3 was 5) settled by same-commit rerun on a markdown-only delta. MERGE HOLDS solely on the queued ADR wording ruling"
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-13T20:45:00Z
