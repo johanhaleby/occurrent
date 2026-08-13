@@ -84,11 +84,14 @@ public final class EventTypeExpansion {
      * none, and still wants to report which event types it handles. The saga DSL's {@code filter(Filter)} override is
      * the one such caller.
      * <p>
-     * An array is still refused, through {@code cannotExpand}, because an array is not an event type at all rather than
-     * a hierarchy this cannot enumerate. No event is ever stored under an array's name, so accepting one would only
-     * mean saying nothing about a declaration that is always a mistake.
+     * An array and a primitive are still refused, through {@code cannotExpand}, because neither is a type an event can
+     * arrive as, rather than a hierarchy this cannot enumerate. No event is stored under an array's name, and
+     * {@code int.class.isInstance(..)} is false for every object, so a saga declaring one could never match anything.
+     * Accepting them would mean saying nothing about a declaration that is always a mistake. An interface or an abstract
+     * class is different, since an event really can be an instance of one, and that is the case this method is lenient
+     * about.
      *
-     * @param cannotExpand builds the exception to throw for an array
+     * @param cannotExpand builds the exception to throw for an array or a primitive
      */
     public static <E> Set<Class<? extends E>> expandWhatCanBeFound(Set<Class<? extends E>> declaredTypes,
                                                                    Function<Class<?>, RuntimeException> cannotExpand) {
@@ -96,7 +99,7 @@ public final class EventTypeExpansion {
         requireNonNull(cannotExpand, "cannotExpand cannot be null");
         Set<Class<? extends E>> expanded = new LinkedHashSet<>();
         for (Class<? extends E> declared : declaredTypes) {
-            if (declared.isArray()) {
+            if (declared.isArray() || declared.isPrimitive()) {
                 throw cannotExpand.apply(declared);
             }
             expanded.add(declared);

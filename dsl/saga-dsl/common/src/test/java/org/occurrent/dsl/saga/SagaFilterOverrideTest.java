@@ -243,6 +243,27 @@ class SagaFilterOverrideTest {
     }
 
     @Test
+    void does_not_excuse_a_primitive_event_type_either() {
+        // int.class.isInstance(..) is false for every object, so a saga declaring one could never match anything. It is
+        // refused with or without a filter, and its message does not offer a filter, since the caller already set one.
+        assertThatThrownBy(() -> Saga.<Object, String, OrderCommand>builder(null)
+                .correlateAll(e -> "order-1")
+                .startsOn(int.class)
+                .filter(SUBJECT_FILTER)
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no event is ever an instance of a primitive type")
+                .hasMessageNotContaining("set an explicit filter");
+
+        assertThatThrownBy(() -> Saga.<Object, String, OrderCommand>builder(null)
+                .correlateAll(e -> "order-1")
+                .startsOn(int.class)
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("no event is ever an instance of a primitive type");
+    }
+
+    @Test
     void does_not_excuse_an_array_event_type_either() {
         // An array is not an event type at all rather than a hierarchy that cannot be enumerated, so it stays refused
         // whether or not a filter is set. Without this the filter would silently turn off a diagnostic for a

@@ -223,6 +223,15 @@ class EventTypeExpansionTest {
     }
 
     @Test
+    void expanding_what_can_be_found_refuses_a_primitive_the_same_way_the_strict_path_does() {
+        // A primitive carries the abstract modifier, so the strict path already refuses it. isInstance is false for
+        // every object, so leniency would accept a declaration that can never match anything.
+        assertThatThrownBy(() -> expandOneLeniently(int.class)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> expandOneLeniently(void.class)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> expandOne(int.class)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void expanding_what_can_be_found_names_the_concrete_types_it_can_reach_below_a_reopened_level() {
         Set<Class<?>> found = expandOneLeniently(PartlyOpenEvent.class);
 

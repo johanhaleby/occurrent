@@ -134,6 +134,10 @@ public interface Saga<E, S extends @Nullable Object, C> {
             return new IllegalArgumentException(eventType.getTypeName()
                     + " cannot be a declared event type, since this expansion does not support an array. Declare the concrete event types instead.");
         }
+        if (eventType.isPrimitive()) {
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be a declared event type, since no event is ever an instance of a primitive type. Declare the concrete event types instead.");
+        }
         return new IllegalArgumentException("the concrete event types dispatch would accept for " + eventType.getName()
                 + " cannot all be enumerated, so a filter derived from it would miss some of them. Declare the concrete "
                 + "event types instead, make " + eventType.getSimpleName() + " and every level below it final or sealed, "
