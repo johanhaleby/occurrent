@@ -68,7 +68,13 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > skipping events between the two registrations (see #669 and ADR 116's amendments). The wrapper now writes
 > at registration, which is not a safer ordering chosen on its own terms. It is what makes this wrapper a
 > faithful stand-in for the `subscribe` call it withholds, matching what this section's opening sentence
-> already promised.
+> already promised. Two things bound that promise. It covers a subscription registered with the default start
+> position, since that is the one a wrapped model reads a stored checkpoint for, and registering with an explicit
+> `StartAt` writes the position without the wrapped model ever reading it. And it does not cover two nodes
+> registering the same subscription for the first time, where only one of the two positions can be stored and
+> neither node can tell which of them is earlier, whether the two register together or one of them is delayed
+> between capturing its position and writing it. ADR 116's third amendment states what happens then, and #771
+> tracks the question of closing it.
 
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same

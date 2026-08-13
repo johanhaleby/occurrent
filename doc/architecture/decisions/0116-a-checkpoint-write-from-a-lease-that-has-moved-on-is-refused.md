@@ -463,6 +463,59 @@ and is unaffected by which family it runs against.
 > window, only makes it visible. Pinning at registration is not simply a safer ordering chosen for its own
 > sake. ADR 86's own amendment records why it is the correct one. See `ManualStartSubscriptionModelTest`.
 
+> **Amended a third time, before 0.33.0 shipped.** The amendment above says the winning write is "always at or
+> before every node's own captured position", and its own closing sentence says the opposite, that nothing here
+> prevents the window and the log only makes it visible. The closing sentence is the true one. Writing at
+> registration shortened the window from the gap between registration and start down to the gap between one node
+> capturing a position and its own write reaching storage, and it did not remove it. A node that captures a
+> position and is then delayed, by a slow position source, a garbage collection pause, or a slow write, can lose
+> to a node that captured later, and the events between the two positions then reach nobody through that
+> subscription.
+>
+> What is true is narrower, and it is what the code now says. A checkpoint that is already stored when a node
+> reads before capturing its position was written no later than that capture, so starting from it skips nothing,
+> and it stays unlogged as the ordinary case of a subscription with real history or of an earlier registration
+> that finished first. The existence read has to happen before the capture for that to hold, which is why it is
+> not moved into the refusal path where a single read would otherwise do.
+>
+> That silent branch rests on a premise worth naming rather than on a proof. It needs the position source to hand
+> out positions in the order it is asked for them, so that a capture taken later never yields an earlier position.
+> The shipped MongoDB subscription models satisfy it, since both take the position from one primary's operation
+> time, but `GlobalCheckpointSource` deliberately allows a wall clock or a count of consumed events, and neither is
+> ordered across nodes. Give it a source built on each node's own clock and a node running five seconds ahead can
+> store a position five seconds later than one a slower node captures afterwards, which this branch accepts in
+> silence. So this is a property of the sources Occurrent ships, not a guarantee the wrapper can make for any source
+> a caller supplies.
+>
+> The same branch has a second hole, and it is the check being about presence rather than identity. Something stored
+> before the capture is accepted even if it is no longer the same something, and deletion is a real path, since
+> `cancelSubscription` on a durable model removes the checkpoint. A checkpoint deleted and written again while a
+> registration is in flight is therefore accepted as though it were the one that was read. Comparing the two values
+> instead was considered and rejected. A subscription another node is already running rewrites its checkpoint on
+> every event under the default configuration, so the comparison would warn every time a node registers a
+> subscription that is busy elsewhere, which is an ordinary state rather than a race, and that noise would bury the
+> case the warning exists for. Telling the two apart needs the same ordering the window itself needs. #771 tracks
+> both holes.
+>
+> A checkpoint that arrives after the capture was taken on another node at an unknown point, `Checkpoint` promises
+> only `asString()`, and neither node can tell which of the two positions is earlier. Overwriting is not the safer
+> choice, since a position that cannot be ordered is as likely to be later as earlier, so the stored position is
+> accepted and the possible loss is logged at `WARNING`, naming both positions whenever it can. Two nodes that
+> captured the same position have nothing to report and stay silent, and a stored position that cannot be read back,
+> or that has been removed by the time the warning reads it, is described instead of named. Ordering them is
+> something a person can do and this class cannot, but the warning stops at naming them rather than telling anyone
+> to rewind the
+> checkpoint, because `subscribe` records the position on a model that is already running too, and there the
+> subscription may already be advancing that same checkpoint while the warning is being read. A stored position that
+> happens to be the earlier one redelivers instead, which is why the warning says the events may not reach the
+> subscription rather than that they were lost.
+>
+> Closing the window needs either an ordering on the positions, which `Checkpoint`'s single `asString()` method
+> and its implementations outside this repository rule out, or agreement between the nodes before any position is
+> captured, which nothing here can arrange because this runs before a competing consumer is registered. Both
+> are larger decisions than a wrapper should make. #771 tracks that question, together with #738 for the reactor
+> stack, so it is settled once for both. See `ManualStartSubscriptionModelTest`.
+
 The blocking in-memory storage implements the capability too, which is a few lines and gives the new
 conformance suite something to run without a container.
 

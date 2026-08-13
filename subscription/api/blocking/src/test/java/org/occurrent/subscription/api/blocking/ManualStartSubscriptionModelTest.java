@@ -36,6 +36,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 
@@ -716,6 +717,126 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_registration_whose_write_is_delayed_past_a_later_ones_starts_from_that_later_position_and_warns() throws Exception {
+        // The node that captures first stalls before writing, so the other node's later position reaches storage
+        // first and wins. Neither node can order the two positions afterwards, so the earlier one starts from the
+        // later position and the events between the two never reach the subscription.
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        CountDownLatch earlierNodeReachedItsWrite = new CountDownLatch(1);
+        CountDownLatch laterNodeWrote = new CountDownLatch(1);
+        // Holds the earlier node inside its own save, after it has captured its position, so the later node's write
+        // is the one that reaches storage first.
+        CheckpointStorage sharedStorage = new CheckpointStorage() {
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                if (checkpoint.asString().equals("earlier-position")) {
+                    earlierNodeReachedItsWrite.countDown();
+                    awaitOrFail(laterNodeWrote);
+                }
+                return storage.save(subscriptionId, checkpoint, condition);
+            }
+
+            @Override
+            public Checkpoint read(String subscriptionId) {
+                return storage.read(subscriptionId);
+            }
+
+            @Override
+            public boolean exists(String subscriptionId) {
+                return storage.exists(subscriptionId);
+            }
+
+            @Override
+            public OptionalLong writeVersion(String subscriptionId) {
+                return storage.writeVersion(subscriptionId);
+            }
+
+            @Override
+            public void delete(String subscriptionId) {
+                storage.delete(subscriptionId);
+            }
+        };
+        GlobalCheckpointSource<@Nullable Checkpoint> earlierPositionSource = () -> new StringCheckpoint("earlier-position");
+        GlobalCheckpointSource<@Nullable Checkpoint> laterPositionSource = () -> new StringCheckpoint("later-position");
+        ManualStartSubscriptionModel earlierNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), earlierPositionSource, sharedStorage);
+        ManualStartSubscriptionModel laterNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), laterPositionSource, sharedStorage);
+
+        CapturingLogHandler logHandler = CapturingLogHandler.attached();
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> earlierRegistration = pool.submit(() -> earlierNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            }));
+            awaitOrFail(earlierNodeReachedItsWrite);
+            laterNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            });
+            laterNodeWrote.countDown();
+            earlierRegistration.get(10, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+            logHandler.detach();
+        }
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString())
+                .as("the write that reached storage first wins, whichever node captured its position first")
+                .isEqualTo("later-position");
+        assertThat(logHandler.records())
+                .as("this is the one case that skips events, so it is named at WARNING with both positions rather than accepted quietly")
+                .anySatisfy(record -> {
+                    assertThat(record.getLevel()).isEqualTo(java.util.logging.Level.WARNING);
+                    assertThat(record.getMessage()).contains("earlier-position", "later-position");
+                });
+    }
+
+    @Test
+    void a_registration_still_completes_when_the_position_that_won_cannot_be_read_back() {
+        // The write has already been refused by the time this read happens, so the registration's outcome is settled
+        // and a storage failure here may only cost the warning its detail.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        CheckpointStorage unreadableAfterRefusal = refusingStorage(() -> {
+            throw new IllegalStateException("the checkpoint store is unreachable");
+        });
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate,
+                () -> new StringCheckpoint("this-nodes-position"), unreadableAfterRefusal);
+
+        CapturingLogHandler logHandler = CapturingLogHandler.attached();
+        try {
+            assertThatCode(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            })).doesNotThrowAnyException();
+        } finally {
+            logHandler.detach();
+        }
+
+        assertThat(model.isPaused(SUBSCRIPTION_ID))
+                .as("the registration is kept, since the refused write already decided where this subscription starts")
+                .isTrue();
+        assertThat(logHandler.records()).anySatisfy(record -> {
+            assertThat(record.getLevel()).isEqualTo(java.util.logging.Level.WARNING);
+            assertThat(record.getMessage()).contains("this-nodes-position", "failed");
+        });
+    }
+
+    @Test
+    void a_winning_position_that_is_removed_before_it_can_be_read_is_not_named_as_null() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        CheckpointStorage emptyAfterRefusal = refusingStorage(() -> null);
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate,
+                () -> new StringCheckpoint("this-nodes-position"), emptyAfterRefusal);
+
+        CapturingLogHandler logHandler = CapturingLogHandler.attached();
+        try {
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            });
+        } finally {
+            logHandler.detach();
+        }
+
+        assertThat(logHandler.records()).anySatisfy(record -> {
+            assertThat(record.getLevel()).isEqualTo(java.util.logging.Level.WARNING);
+            assertThat(record.getMessage()).contains("has since been removed").doesNotContain("null");
+        });
+    }
+
+    @Test
     void an_earlier_registrant_always_wins_the_pin_even_when_a_later_registrant_starts_first() {
         // Stands for a rolling deploy where one node registers, the source position moves on, and a second node
         // registers the same subscription id minutes later. A duplicate id on the same model would throw, so a
@@ -770,6 +891,37 @@ class ManualStartSubscriptionModelTest {
 
     private static CloudEvent cloudEvent(String id) {
         return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("test.event").build();
+    }
+
+    // Nothing is stored as far as exists() can tell, and the conditional write is refused anyway, which is the state
+    // a node is left in when another registration won the position between its own check and its own write.
+    // readsBack decides what there is to read by the time it looks.
+    private static CheckpointStorage refusingStorage(Supplier<@Nullable Checkpoint> readsBack) {
+        return new CheckpointStorage() {
+            @Override
+            public Checkpoint read(String subscriptionId) {
+                return readsBack.get();
+            }
+
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.empty(), condition);
+            }
+
+            @Override
+            public OptionalLong writeVersion(String subscriptionId) {
+                return OptionalLong.empty();
+            }
+
+            @Override
+            public void delete(String subscriptionId) {
+            }
+
+            @Override
+            public boolean exists(String subscriptionId) {
+                return false;
+            }
+        };
     }
 
     private static void awaitOrFail(CountDownLatch latch) {
