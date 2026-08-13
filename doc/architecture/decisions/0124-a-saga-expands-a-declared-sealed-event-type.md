@@ -193,8 +193,8 @@ already matches with `isInstance`, and `FlowSagaImpl` is unchanged because `even
 > **Amended for 0.33.0, under [#751](https://github.com/johanhaleby/occurrent/issues/751).** All three still walk the
 > hierarchy, but there are now two entry points and only one of them refuses. A saga given an explicit filter derives no
 > filter, so it calls `EventTypeExpansion.expandWhatCanBeFound` instead of `expand` and reports the concrete types that
-> could be found rather than being refused. An array is refused on either path, because an array is not an event type at
-> all rather than a hierarchy that cannot be enumerated.
+> could be found rather than being refused. An array or a primitive is refused on either path, because neither is a type
+> an event can arrive as, rather than a hierarchy that cannot be enumerated.
 >
 > This paragraph's closing claim that `SagaFilters` and `FlowSagaImpl` are unchanged no longer holds, since #751 changed
 > both. `SagaFilters` reads an explicit filter ahead of deriving one, and `FlowSagaImpl` carries the filter and answers
