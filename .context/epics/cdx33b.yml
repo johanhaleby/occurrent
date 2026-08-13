@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 21
-updated_at: 2026-08-13T13:50:00Z
-updated_by: "orchestrator session faee3625 (U7 adversarial pass re-dispatched on final head 800aca091)"
+revision: 22
+updated_at: 2026-08-13T15:00:00Z
+updated_by: "orchestrator session faee3625 (U7 pass returned, 3 claim-truth defects routed)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -100,7 +100,7 @@ units:
     depends_on: []
     session: "local_8a2de541"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "770", met: false, evidence: "OPEN, rebased clean onto ce46e4969 with semantic verification (U4's and U5's tests run green on the merged result), 27/27 by run list on head 9a391aaad after one recorded-flake same-commit rerun (11th data point for the subscription-mongodb-spring shard). Suppressed block read: both findings real, one was the orchestrator's stale #751 line (fixed), one is U10's docs scope (correctly declined). DELIVERY_RESULT INCOMPLETE: missing invariant table, mutation evidence, johan-writing confirmation; sent back for restoration. ADR 124 wording gate with Johan in-session, told to present now. Orchestrator adversarial pass dispatched on the rebased diff. Merge slot: last of the guide set, after 769 and 762, with section-10 sentinel greps at final rebase."}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "770", met: false, evidence: "OPEN at 7f063ce56 (rebased over U2/U8, full matrix green on 800aca091, mid-pass array-refusal commit line-read by the orchestrator and sound). Adversarial pass at 800aca091: MECHANISM HELD on all seven angles (bypass proven end-to-end via the subject-narrowing subscription test, no-override path byte-identical, U4/U5 rebase integrity verified hunk-by-hunk, Kotlin parity by delegation, nothing persisted, sentinels exactly once). Three claim-truth defects routed: flow-saga window pollution under a broader override (foreign correlated events append and evict the step窗 events; fix is an isInstance guard before append plus the two unowned tests), the broader-filter-is-safe sentence false at the converter (scope the claim in javadoc/changelog/guide, caveats become three), ADR 124 One-check paragraph stale in 2 of 3 clauses with the amendment implicitly certifying it (fold the fix into the wording set BEFORE the Johan ruling, one gate). Projection.java twin of the house safety claim routed to UREG, shipped surface, not U7. Merge after: fixes, re-review, updated report, Johan ADR ruling, orchestrator read of final head."}
   U8:
     issue: null
     goal: "Migration guide Kotlin truth (finding 9): section 2 discloses Java-only recipe coverage, adds blocking and reactor Kotlin snippets; merges after U4 per guide serialization order U2-U4-U8-U7"
@@ -143,7 +143,7 @@ units:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
   UREG:
     issue: null
-    goal: "Register: decline pointers for findings 8/10/12/14, retention-policy issue (finding 7 residual), finding-11 convention note, environment-artifact note; route new arrivals #760 #761 (both released-behavior, non-overlapping)"
+    goal: "Register: decline pointers for findings 8/10/12/14, retention-policy issue (finding 7 residual), finding-11 convention note, environment-artifact note; route new arrivals #760 #761 (both released-behavior, non-overlapping). ADDED 2026-08-13: the broader-filter-is-safe house claim on shipped Projection.java (:39, :301) is falsifiable at the converter exactly as U7 pass defect 1 showed for Saga; released surface, so a register note or 0.34 issue, not a pre-tag fix"
     phase: READY
     health: PROGRESSING
     swept: false
