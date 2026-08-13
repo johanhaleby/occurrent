@@ -163,26 +163,42 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     @Test
-    void a_failed_duplicate_subscribe_does_not_erase_the_marker_of_an_already_active_subscription_with_the_same_id() {
+    void a_truly_concurrent_duplicate_subscribe_only_releases_its_own_share_of_a_shared_counter() throws Exception {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
-        DuplicateRejectingRepositionableSubscriptionModel delegate = new DuplicateRejectingRepositionableSubscriptionModel();
+        ConcurrentDuplicateRepositionableSubscriptionModel delegate = new ConcurrentDuplicateRepositionableSubscriptionModel();
+        CountDownLatch firstEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        delegate.firstCallEntered = firstEntered;
+        delegate.holdFirstCallUntil = releaseFirst;
         DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
         StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
-        model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
-        }).waitUntilStarted();
 
-        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
-        })).isInstanceOf(RuntimeException.class);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Subscription> firstAttempt = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+            }));
+            assertThat(firstEntered.await(10, TimeUnit.SECONDS)).isTrue();
 
-        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
-        model.resumeSubscription(SUBSCRIPTION_ID);
+            // The second attempt reaches and is accepted by the delegate while the first is still paused inside
+            // its own delegate call, so both attempts' increments land on the one counter they share before either
+            // is settled, neither having taken the early-return branch since neither is known to the delegate yet.
+            model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+            }).waitUntilStarted();
 
-        assertThat(delegate.repositionedTo)
-                .as("the second call's failure must release only its own share of the marker, not the first, "
-                        + "still-active subscription's, or the first subscription's next resume gets wrongly "
-                        + "repositioned from storage")
-                .isNull();
-        assertThat(delegate.plainResumeCalled).isTrue();
+            releaseFirst.countDown();
+            assertThatThrownBy(() -> firstAttempt.get(10, TimeUnit.SECONDS)).hasCauseInstanceOf(RuntimeException.class);
+
+            storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+            model.resumeSubscription(SUBSCRIPTION_ID);
+
+            assertThat(delegate.repositionedTo)
+                    .as("the first attempt's failure must release only its own share of the counter both attempts "
+                            + "shared, not the second attempt's share, which is the one the delegate accepted")
+                    .isNull();
+            assertThat(delegate.plainResumeCalled).isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test
@@ -522,14 +538,31 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     /**
-     * The same repositionable fake, but a second {@code subscribe} call for an id it already has throws, standing
-     * in for a delegate refusing a duplicate subscription id such as {@code DuplicateSubscriptionIdException}.
+     * The same repositionable fake, but the first {@code subscribe} call signals {@code firstCallEntered} and
+     * blocks on {@code holdFirstCallUntil} before checking for a duplicate, standing in for two attempts racing the
+     * delegate for the same id before either is known to it, so both land on the one counter this model's own
+     * preflight check has already made them share.
      */
-    private static class DuplicateRejectingRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
+    private static class ConcurrentDuplicateRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
         private final Set<String> subscribed = ConcurrentHashMap.newKeySet();
+        private final AtomicInteger callCount = new AtomicInteger();
+        @Nullable CountDownLatch firstCallEntered;
+        @Nullable CountDownLatch holdFirstCallUntil;
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            if (callCount.incrementAndGet() == 1) {
+                if (firstCallEntered != null) {
+                    firstCallEntered.countDown();
+                }
+                if (holdFirstCallUntil != null) {
+                    try {
+                        assertThat(holdFirstCallUntil.await(10, TimeUnit.SECONDS)).isTrue();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
             if (!subscribed.add(subscriptionId)) {
                 throw new RuntimeException("duplicate subscription id " + subscriptionId);
             }
