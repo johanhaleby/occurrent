@@ -476,15 +476,34 @@ and is unaffected by which family it runs against.
 > reads before capturing its position was written no later than that capture, so starting from it skips nothing,
 > and it stays unlogged as the ordinary case of a subscription with real history or of an earlier registration
 > that finished first. The existence read has to happen before the capture for that to hold, which is why it is
-> not moved into the refusal path where a single read would otherwise do. A checkpoint that arrives after the
-> capture was taken on another node at an unknown point, `Checkpoint` promises only `asString()`, and neither node
-> can tell which of the two positions is earlier. Overwriting is not the safer choice, since a position that
-> cannot be ordered is as likely to be later as earlier, so the stored position is accepted and the possible loss
-> is logged at `WARNING` with both positions named. Ordering them is something a person can do and this class
-> cannot, but the warning stops at naming them rather than telling anyone to rewind the checkpoint, because
-> `subscribe` pins on a model that is already running too, and there the subscription may be advancing that same
-> checkpoint while the warning is being read. A stored position that happens to be the earlier one redelivers
-> instead, which is why the warning says the events may not reach the subscription rather than that they were lost.
+> not moved into the refusal path where a single read would otherwise do.
+>
+> That silent branch rests on a premise worth naming rather than on a proof. It needs the position source to hand
+> out positions in the order it is asked for them, so that a capture taken later never yields an earlier position.
+> The shipped MongoDB subscription models satisfy it, since both take the position from one primary's operation
+> time, but `GlobalCheckpointSource` deliberately allows a wall clock or a count of consumed events, and neither is
+> ordered across nodes. Give it a source built on each node's own clock and a node running five seconds ahead can
+> store a position five seconds later than one a slower node captures afterwards, which this branch accepts in
+> silence. So this is a property of the sources Occurrent ships, not a guarantee the wrapper can make for any source
+> a caller supplies.
+>
+> The same branch has a second hole, and it is the check being about presence rather than identity. Something stored
+> before the capture is accepted even if it is no longer the same something, and deletion is a real path, since
+> `cancelSubscription` on a durable model removes the checkpoint. A checkpoint deleted and written again while a
+> registration is in flight is therefore accepted as though it were the one that was read. Comparing the two values
+> instead was considered and rejected, because a subscription another node is already running rewrites its checkpoint
+> on every event under the default configuration, so the comparison would warn on nearly every boot and bury the
+> warning that matters. #771 tracks both holes.
+>
+> A checkpoint that arrives after the capture was taken on another node at an unknown point, `Checkpoint` promises
+> only `asString()`, and neither node can tell which of the two positions is earlier. Overwriting is not the safer
+> choice, since a position that cannot be ordered is as likely to be later as earlier, so the stored position is
+> accepted and the possible loss is logged at `WARNING` with both positions named. Ordering them is something a
+> person can do and this class cannot, but the warning stops at naming them rather than telling anyone to rewind the
+> checkpoint, because `subscribe` records the position on a model that is already running too, and there the
+> subscription may already be advancing that same checkpoint while the warning is being read. A stored position that
+> happens to be the earlier one redelivers instead, which is why the warning says the events may not reach the
+> subscription rather than that they were lost.
 >
 > Closing the window needs either an ordering on the positions, which `Checkpoint`'s single `asString()` method
 > and its implementations outside this repository rule out, or agreement between the nodes before any position is

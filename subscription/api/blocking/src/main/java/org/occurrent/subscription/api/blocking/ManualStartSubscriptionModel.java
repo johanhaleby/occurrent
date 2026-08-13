@@ -56,9 +56,10 @@ import static java.util.Objects.requireNonNull;
  * wrapped model's default points at the moment it is started, silently skipping everything written since. Give this
  * model a position source and a checkpoint storage and it saves that position as the checkpoint when the subscription
  * is registered, instead of waiting until it starts. That way, starting a subscription late still delivers the events
- * written since registration instead of skipping them. Two nodes registering the same subscription for the first time
- * at the same moment are the exception, because only one of the two positions can be stored and neither node can tell
- * which of them is earlier. Without them, a first run starts from the moment it is started.
+ * written since registration instead of skipping them, for a subscription registered with the default start position,
+ * which is the one a wrapped model reads a stored checkpoint for. Two nodes registering the same subscription for the
+ * first time are the exception, since only one of their two positions can be stored and neither node can tell which of
+ * them is earlier. Without them, a first run starts from the moment it is started.
  *
  * @see #stoppedByDefault(SubscriptionModel)
  */
@@ -118,13 +119,17 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * nothing to add to a write like that, so this factory takes no {@link CheckpointWriteVersionSource}
      * (see ADR 116).
      * <p>
-     * Two nodes registering the same subscription id, minutes apart during a rolling deploy or at the same moment,
-     * both attempt this write, and only the first to reach storage succeeds. A node that already finds a checkpoint
-     * stored when it registers accepts it and loses nothing, because that position was recorded before this node
-     * captured its own. A node whose write is refused by a checkpoint that arrived while it was registering accepts
-     * it too and logs a warning, because the two positions were captured on different nodes and {@link Checkpoint}
-     * gives this class no way to tell which of them is earlier. Events written between the two positions may not
-     * reach the subscription.
+     * Two nodes registering the same subscription id, minutes apart during a rolling deploy or close enough together
+     * to overlap, both attempt this write, and only the first to reach storage succeeds. A node that already finds a
+     * checkpoint stored when it registers accepts it, which costs it nothing as long as {@code positionSource} hands
+     * out positions in the order it is asked for them, as the MongoDB subscription models do. A node whose write is
+     * refused by a checkpoint that arrived while it was registering accepts it too and logs a warning, because the
+     * two positions were captured on different nodes and {@link Checkpoint} gives this class no way to tell which of
+     * them is earlier. Events written between the two positions may not reach the subscription.
+     * <p>
+     * The recorded position only decides where a subscription registered with the default start position begins,
+     * since that is the one a wrapped model reads a stored checkpoint for. Registering with an explicit
+     * {@link StartAt} writes the position all the same, and the wrapped model starts from the caller's position.
      *
      * @param delegate          The subscription model to register with once a subscription is started.
      * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
@@ -394,9 +399,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             return;
         }
         // Read before the position is captured, which is what tells a checkpoint that was already there apart from
-        // one that arrived during this registration. A checkpoint already stored at this point was written no later
-        // than the capture that follows, so starting from it skips nothing. One that arrives after the capture can
-        // be a later position than this node's own.
+        // one that arrived during this registration. The first was written before this capture, so starting from it
+        // skips nothing while the source hands out positions in the order it is asked for them. The second can be a
+        // later position than this node's own.
         boolean checkpointAlreadyExisted = checkpointStorage.exists(subscriptionId);
         @Nullable Checkpoint positionToPin = positionSource.globalCheckpoint();
         if (positionToPin == null) {
@@ -408,18 +413,40 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             if (checkpointAlreadyExisted) {
                 return;
             }
-            @Nullable Checkpoint stored = checkpointStorage.read(subscriptionId);
-            @Nullable String storedAsString = stored == null ? null : stored.asString();
-            if (!positionToPin.asString().equals(storedAsString)) {
-                log.log(System.Logger.Level.WARNING,
-                        "Subscription " + subscriptionId + " registered at position " + positionToPin.asString() +
-                        " but another registration reached storage first with " + storedAsString + ". The two " +
-                        "positions were captured on different nodes and cannot be compared, so this subscription " +
-                        "starts from the stored one, and any events between the two positions may not reach it. " +
-                        "Recovering them means replaying that interval, which is only safe while this " +
-                        "subscription is not running anywhere.");
-            }
+            warnThatAnotherRegistrationWon(checkpointStorage, subscriptionId, positionToPin);
         }
+    }
+
+    // The write has already been refused and the stored position already accepted, so reading it back only decides
+    // what the warning can name. A failure here must not fail a registration whose outcome is settled either way.
+    private void warnThatAnotherRegistrationWon(CheckpointStorage storage, String subscriptionId, Checkpoint positionToPin) {
+        @Nullable Checkpoint stored;
+        try {
+            stored = storage.read(subscriptionId);
+        } catch (RuntimeException e) {
+            log.log(System.Logger.Level.WARNING,
+                    "Subscription " + subscriptionId + " registered at position " + positionToPin.asString() +
+                    " but another registration reached storage first, and reading that position back to name it " +
+                    "here failed.", e);
+            return;
+        }
+        if (stored == null) {
+            log.log(System.Logger.Level.WARNING,
+                    "Subscription " + subscriptionId + " registered at position " + positionToPin.asString() +
+                    " but another registration reached storage first and that checkpoint has since been removed, " +
+                    "so where this subscription starts from is decided by whatever is stored when it starts.");
+            return;
+        }
+        if (positionToPin.asString().equals(stored.asString())) {
+            return;
+        }
+        log.log(System.Logger.Level.WARNING,
+                "Subscription " + subscriptionId + " registered at position " + positionToPin.asString() +
+                " but another registration reached storage first with " + stored.asString() + ". The two positions " +
+                "were captured on different nodes and cannot be compared, so a subscription that resumes from its " +
+                "stored checkpoint starts from the stored position, and any events between the two may not reach " +
+                "it. Recovering them means replaying that interval, which is only safe while this subscription is " +
+                "not running anywhere.");
     }
 
     private sealed interface Registration {
