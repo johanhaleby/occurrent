@@ -985,6 +985,23 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_dynamic_start_position_naming_only_the_model_it_wants_is_pinned_for_a_subclassed_model() {
+        // The same equality check the other way round, answering with nothing for every model but the one it names.
+        // Nothing to descend to here, so the classes the delegate inherits from are what is left to ask.
+        SubclassedSubscriptionModel delegate = new SubclassedSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        delegate.globalCheckpoint = new StringCheckpoint("at-registration");
+        StartAt startAt = StartAt.dynamic(context -> context.hasSubscriptionModelType(RecordingSubscriptionModel.class)
+                ? StartAt.subscriptionModelDefault() : null);
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, startAt, __ -> {
+        });
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
+    }
+
+    @Test
     void a_dynamic_start_position_that_resolves_to_nothing_is_not_pinned() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();

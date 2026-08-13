@@ -100,13 +100,14 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > record nothing and leave the durable model to record a position when the subscription starts, which is the skip #669
 > was about.
 >
-> Each layer is asked under its runtime class and under every class it inherits from, and the model default wins over
-> its other answers. A model resolves the position against a class literal of its own, so a subclass of it, or a proxy
-> Spring hands back in its place, is asked about here under a name `hasSubscriptionModelType` does not match, since
-> that method compares for equality. Without the classes it inherits from, a function written with that method answers
-> here as though the position were not the model default, records nothing, and leaves the durable model to record one
-> at start, which is #669 again and a regression from the write this replaces. Recording where the model default wins
-> can only add a write the previous unconditional one already made.
+> When the walk ends with nothing to record, every layer is asked again under each class it inherits from, and the
+> model default from any of those answers records the position. A model resolves the position against a class literal
+> of its own, so a subclass of it, or a proxy Spring hands back in its place, is asked here under a name
+> `hasSubscriptionModelType` does not match, since that method compares for equality. Without that second pass, a
+> function written with that method records nothing, whichever way round it is written, and leaves the durable model to
+> record a position at start, which is #669 again and a regression from the write this replaces. The second pass runs
+> only where nothing would be recorded otherwise, and recording there can only add a write the unconditional one it
+> replaces already made.
 >
 > The walk asks every layer, including one that passes the position down without deciding anything for itself, so a
 > function answering with the model default for such a layer and with something else for the model that does read the

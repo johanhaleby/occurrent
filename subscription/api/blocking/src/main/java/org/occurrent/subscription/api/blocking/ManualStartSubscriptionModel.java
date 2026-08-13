@@ -32,6 +32,7 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -142,12 +143,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * function therefore runs once per layer it is asked about, on top of the calls it already got. The wrapped model
      * still receives the {@code StartAt} the caller passed, whatever those resolutions answered.
      * <p>
-     * A layer is asked under its own runtime class and under every class it inherits from, since a model resolves the
-     * position against a class literal of its own and a subclass or a proxy of it would otherwise be asked about under
-     * a name {@link StartAt.SubscriptionModelContext#hasSubscriptionModelType(Class)} does not match. The model default
-     * wins over the layer's other answers for that reason. One shape is still read differently here than the model
-     * that starts the subscription reads it, a layer that passes the position down without deciding anything for
-     * itself, which is asked all the same. ADR 86 has what that costs a subscription.
+     * When that walk ends with no position to record, each layer is asked again under every class it inherits from,
+     * since a model resolves the position against a class literal of its own and a subclass of it, or a proxy standing
+     * in for one, is otherwise asked under a name
+     * {@link StartAt.SubscriptionModelContext#hasSubscriptionModelType(Class)} does not match. The model default from
+     * any of those answers records the position. One shape is still read differently here than the model that starts
+     * the subscription reads it, a layer that passes the position down without deciding anything for itself, which is
+     * asked all the same. ADR 86 has what that costs a subscription.
      *
      * @param delegate          The subscription model to register with once a subscription is started.
      * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
@@ -461,36 +463,35 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     // position the annotations build, which answers with nothing for a catch-up layer, as a registration with no
     // position to record, and the durable model below it would then record one when the subscription starts.
     private boolean startsAtTheModelDefault(StartAt startAt) {
+        List<Class<?>> layersAsked = new ArrayList<>();
         SubscriptionModel model = delegate;
         while (true) {
-            @Nullable StartAt startAtToUse = resolveFor(startAt, model.getClass());
-            if (startAtToUse != null) {
-                return startAtToUse.isDefault();
+            Class<?> modelType = model.getClass();
+            layersAsked.add(modelType);
+            @Nullable StartAt startAtToUse = startAt.get(new SubscriptionModelContext(modelType));
+            if (startAtToUse != null && startAtToUse.isDefault()) {
+                return true;
             }
-            if (!(model instanceof SubscriptionModelWrapper wrapper)) {
-                return false;
+            if (startAtToUse != null || !(model instanceof SubscriptionModelWrapper wrapper)) {
+                break;
             }
             model = wrapper.getWrappedSubscriptionModel();
         }
+        // Nothing to record according to the walk above, and a model resolves the position against a class literal of
+        // its own, so a subclass of a model, or a proxy standing in for one, was asked under a name that
+        // hasSubscriptionModelType does not match, since that method compares for equality. Every class each layer
+        // inherits from is asked before settling on recording nothing.
+        return layersAsked.stream().anyMatch(modelType -> aClassItInheritsAnswersTheModelDefault(startAt, modelType));
     }
 
-    private @Nullable StartAt resolveFor(StartAt startAt, Class<?> modelType) {
-        @Nullable StartAt startAtToUse = startAt.get(new SubscriptionModelContext(modelType));
-        if (startAtToUse == null || startAtToUse.isDefault()) {
-            return startAtToUse;
-        }
-        // A model resolves the position against a class literal of its own, so a subclass or a proxy of it is asked
-        // about here under a name that hasSubscriptionModelType, which compares for equality, does not match, and the
-        // answer above is then the one meant for everything else. The classes this layer inherits from are asked too,
-        // and the model default wins over that answer, so a position is still recorded when the model that starts the
-        // subscription is going to read a checkpoint.
+    private boolean aClassItInheritsAnswersTheModelDefault(StartAt startAt, Class<?> modelType) {
         for (Class<?> type = modelType.getSuperclass(); type != null && type != Object.class; type = type.getSuperclass()) {
-            @Nullable StartAt answerForAClassItInherits = startAt.get(new SubscriptionModelContext(type));
-            if (answerForAClassItInherits != null && answerForAClassItInherits.isDefault()) {
-                return answerForAClassItInherits;
+            @Nullable StartAt startAtToUse = startAt.get(new SubscriptionModelContext(type));
+            if (startAtToUse != null && startAtToUse.isDefault()) {
+                return true;
             }
         }
-        return startAtToUse;
+        return false;
     }
 
     // The write has already been refused and the stored position already accepted, so reading it back only decides
