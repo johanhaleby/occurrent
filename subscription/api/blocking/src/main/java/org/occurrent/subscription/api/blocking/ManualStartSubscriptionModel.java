@@ -144,12 +144,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * still receives the {@code StartAt} the caller passed, whatever those resolutions answered.
      * <p>
      * When that walk ends with no position to record, each layer is asked again under every class it inherits from,
-     * since a model resolves the position against a class literal of its own and a subclass of it, or a proxy standing
-     * in for one, is otherwise asked under a name
+     * since a model resolves the position against a class literal of its own and a subclass of it, including a proxy
+     * built by subclassing, is otherwise asked under a name
      * {@link StartAt.SubscriptionModelContext#hasSubscriptionModelType(Class)} does not match. The model default from
-     * any of those answers records the position. One shape is still read differently here than the model that starts
-     * the subscription reads it, a layer that passes the position down without deciding anything for itself, which is
-     * asked all the same. ADR 86 has what that costs a subscription.
+     * any of those answers records the position. Two shapes are still read differently here than the model that starts
+     * the subscription reads it. A layer that passes the position down without deciding anything for itself is asked
+     * all the same, and a proxy that only implements a model's interfaces never shows that model's own class here, so
+     * a function naming it exactly is not recognised through one. ADR 86 has what each costs a subscription.
      *
      * @param delegate          The subscription model to register with once a subscription is started.
      * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.

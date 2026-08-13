@@ -102,8 +102,10 @@ neither, the wrapper still works and a first run starts from the moment it is st
 >
 > When the walk ends with nothing to record, every layer is asked again under each class it inherits from, and the
 > model default from any of those answers records the position. A model resolves the position against a class literal
-> of its own, so a subclass of it, or a proxy Spring hands back in its place, is asked here under a name
-> `hasSubscriptionModelType` does not match, since that method compares for equality. Without that second pass, a
+> of its own, so a subclass of it, including a proxy built by subclassing it, is asked here under a name
+> `hasSubscriptionModelType` does not match, since that method compares for equality. A proxy that only implements the
+> model's interfaces is out of reach either way, since its class inherits from `java.lang.reflect.Proxy` and never
+> names the model at all. Without that second pass, a
 > function written with that method records nothing, whichever way round it is written, and leaves the durable model to
 > record a position at start, which is #669 again and a regression from the write this replaces. The second pass runs
 > only where nothing would be recorded otherwise, and recording there can only add a write the unconditional one it
