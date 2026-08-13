@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 25
-updated_at: 2026-08-13T16:15:00Z
-updated_by: "orchestrator session faee3625 (Johan approved both ADR rulings; PR 772 merged as be68eb434, U1 DONE; U11 chip dispatched task_feaffead; U7 told to rebase)"
+revision: 26
+updated_at: 2026-08-13T16:30:00Z
+updated_by: "orchestrator session faee3625 (U7 rebase verified content-identical; suppressed block on e56098d25 read: one confirmed defect routed, factory skips start-type validation on empty eventTypes; array-lenient and docs-site comments declined with pointers)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -57,11 +57,19 @@ pending_actions:
   - id: act-007
     type: message-session
     target: "U7 session local_8a2de541: ADR 124 wording approved by Johan; rebase PR 770 over be68eb434 (shared changelog section), then run-list green on the Java-bearing verdict head, Copilot review + suppressed block on final head, DELIVERY_RESULT bumped with invariant table; merge stays the orchestrator's"
-    expected: "rebased head, final report; then my merge gate on the exact head"
-    status: PENDING
+    expected: "rebased head, final report; then my merge gate on the exact head. Rebase landed as e56098d25, verified content-identical (delta is exactly U1's five merged files, changelog corrections carried verbatim)"
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-13T16:11:00Z
+  - id: act-008
+    type: message-session
+    target: "U7 session local_8a2de541: Copilot suppressed block on e56098d25 yielded one confirmed defect (Saga.create's empty-eventTypes branch skips start-type validation, so int.class/array start types build an unstartable saga on the new trailing-filter overload's path; verified in code) routed with fix+test+mutation direction; array-lenient comment declined per ADR 124's behavior table, docs-site comment declined as U10 scope"
+    expected: "fix push, green run list, re-review read on the new head, DELIVERY_RESULT describing the final head"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T16:30:00Z
 units:
   U1:
     issue: null
