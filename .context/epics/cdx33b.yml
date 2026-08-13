@@ -73,8 +73,8 @@ pending_actions:
   - id: act-012
     type: workflow-dispatch
     target: "U10 executing subagent (Sonnet) in the docs repo via its own git worktrees off the held branches: join corrections both branches, filter-override chapter, Cluster and manual-start/stepWindow claim sweeps, jekyll builds with rendered-layer greps, push never merge"
-    expected: "pushed held branches and a report with before/after pairs, build results, grep evidence, worktrees removed"
-    status: PENDING
+    expected: "pushed held branches and a report with before/after pairs, build results, grep evidence, worktrees removed. VERIFIED: heads 90d2906 and 7472be8 confirmed on origin by ls-remote, report complete with rendered-layer evidence"
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-13T19:35:00Z
@@ -204,13 +204,13 @@ units:
   U10:
     issue: null
     goal: "Docs-site ripple, LAST: carried-over join correction (docs/0.33.0-preview ~5799, docs/707-step-conditions ~5546), U7 filter override chapter, claim sweep of saga/subscription/checkpoint chapters; push never merge"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U2, U4, U7]
     session: null
     deliverables:
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: true, evidence: "Both held branches pushed 2026-08-13, heads verified on origin by the orchestrator via ls-remote: docs/0.33.0-preview at 90d2906 (join correction, new saga-explicit-filter section with the three caveats and flow-saga cost plus the addedTags entry, Redis Cluster claim flipped to supported with the digest and refused-prefix detail; manual-start and stepWindow claims swept and found already accurate by grep), docs/707-step-conditions at 7472be8 (join correction only, per scope). Jekyll builds clean with the LC_ALL workaround, corrected claims verified in the rendered _site layer by grep, voice greps clean on added lines, worktrees removed, primary docs checkout untouched. Held-branch convention kept: pushed, no merge, no PR; docs merges are Johan's at release. U11's ripple explicitly excluded, lands as an appendix push after U11 merges"}
   U11:
     issue: null
     goal: "Addendum (from U1's adversarial pass, confirmed major, unreleased manual-start surface, pre-existing at U1's merge base): pinStartPosition ignores the caller's StartAt. With startAt NOW the pin is written and never read (single-node event skip since registration); with BEGINNING plus default resumeBehavior the pin makes exists() true at start so the first-run replay is silently replaced by resume-from-pin (no manual-mode BEGINNING test exists). Decide and implement the correct pin/StartAt interaction; also fold the register-note twin: the 3-arg factory does not check evaluatesWriteConditions, so an ifAbsent save on a non-evaluating storage fails first-registration boot (CheckpointFencingConfigurationCheck guards only the fencing combination). Dispatch AFTER PR 772 merges (same files)."
