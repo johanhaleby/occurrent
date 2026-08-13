@@ -294,7 +294,8 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * supplied {@code evolve}/{@code react} handle the whole {@link SagaInput} union themselves. This saga is never
      * terminal and has no {@code onStart}. Implement the interface directly for those. {@code startEventTypes} must be
      * non-empty, since a saga with no start type can never create an instance, the same guarantee {@link Builder#build()}
-     * gives.
+     * gives, and for the same reason a start type nothing can be an instance of, an array or a primitive, is refused
+     * whether or not {@code eventTypes} narrows the subscription.
      */
     static <E, S extends @Nullable Object, C> Saga<E, S, C> create(S initialState,
                                                                    Function<E, @Nullable String> sagaId,
@@ -337,6 +338,12 @@ public interface Saga<E, S extends @Nullable Object, C> {
         // decides what arrives, and it is kept so that eventTypes() answers the same question either way.
         Set<Class<? extends E>> types;
         if (eventTypes.isEmpty()) {
+            // Nothing narrows the subscription, so no filter is derived and there is no hierarchy to walk. A start type
+            // nothing can be an instance of is still refused here, because that saga would build and then never create
+            // an instance, which is the failure the non-empty branch and both builders already catch.
+            for (Class<? extends E> start : starts) {
+                EventTypeExpansion.refuseArrayOrPrimitive(start, Saga::cannotSubscribeOn);
+            }
             types = Set.of();
         } else {
             Set<Class<? extends E>> union = new LinkedHashSet<>(eventTypes);

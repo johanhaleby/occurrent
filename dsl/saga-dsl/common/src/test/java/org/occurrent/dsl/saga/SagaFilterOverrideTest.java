@@ -243,6 +243,34 @@ class SagaFilterOverrideTest {
     }
 
     @Test
+    void does_not_excuse_a_start_type_nothing_can_be_an_instance_of_on_the_empty_selector_factory_path() {
+        // An empty eventTypes narrows nothing, so no filter is derived and no hierarchy is walked. That branch used to
+        // check the start types either, so this saga built and could never create an instance. It is the same with and
+        // without a filter, because the filter was never what skipped the check.
+        for (Filter filter : new Filter[]{SUBJECT_FILTER, null}) {
+            assertThatThrownBy(() -> Saga.create(null, e -> "order-1", Set.of(int.class), Set.of(),
+                    (state, input) -> state, (state, input) -> List.of(), filter))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("no event is ever an instance of a primitive type");
+
+            assertThatThrownBy(() -> Saga.create(null, e -> "order-1", Set.of(OrderPlaced[].class), Set.of(),
+                    (state, input) -> state, (state, input) -> List.of(), filter))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("does not support an array");
+        }
+    }
+
+    @Test
+    void still_reports_no_event_types_for_a_usable_start_type_on_the_empty_selector_factory_path() {
+        // The refusal above must not turn into a walk. An empty eventTypes still means "no type narrowing".
+        Saga<OrderEvent, String, OrderCommand> saga = Saga.create(null, OrderEvent::orderId, Set.of(OrderPlaced.class),
+                Set.of(), (state, input) -> state, (state, input) -> List.of(), SUBJECT_FILTER);
+
+        assertThat(saga.eventTypes()).isEmpty();
+        assertThat(saga.startEventTypes()).containsExactly(OrderPlaced.class);
+    }
+
+    @Test
     void does_not_excuse_a_primitive_event_type_either() {
         // int.class.isInstance(..) is false for every object, so a saga declaring one could never match anything. It is
         // refused with or without a filter, and its message does not offer a filter, since the caller already set one.

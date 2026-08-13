@@ -102,13 +102,29 @@ public final class EventTypeExpansion {
         requireNonNull(cannotExpand, "cannotExpand cannot be null");
         Set<Class<? extends E>> expanded = new LinkedHashSet<>();
         for (Class<? extends E> declared : declaredTypes) {
-            if (declared.isArray() || declared.isPrimitive()) {
-                throw cannotExpand.apply(declared);
-            }
+            refuseArrayOrPrimitive(declared, cannotExpand);
             expanded.add(declared);
             collect(declared, expanded, new HashSet<>());
         }
         return Collections.unmodifiableSet(expanded);
+    }
+
+    /**
+     * Refuses an array or a primitive declared event type, and accepts anything else without walking it. The two
+     * reasons differ in strength, and both are given on {@link #expandWhatCanBeFound}, which applies this to every type
+     * it walks.
+     * <p>
+     * This is here on its own for a caller that narrows nothing and so has no set to expand, and that still should not
+     * accept a declaration nothing can ever match. {@code Saga.create} with an empty {@code eventTypes} is the one such
+     * caller, since it derives {@code Filter.all()} and walks no hierarchy, yet a start type nothing can be an instance
+     * of would build a saga that never creates an instance.
+     */
+    public static void refuseArrayOrPrimitive(Class<?> declaredType, Function<Class<?>, RuntimeException> cannotExpand) {
+        requireNonNull(declaredType, "declaredType cannot be null");
+        requireNonNull(cannotExpand, "cannotExpand cannot be null");
+        if (declaredType.isArray() || declaredType.isPrimitive()) {
+            throw cannotExpand.apply(declaredType);
+        }
     }
 
     /**
