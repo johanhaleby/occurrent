@@ -491,9 +491,11 @@ and is unaffected by which family it runs against.
 > before the capture is accepted even if it is no longer the same something, and deletion is a real path, since
 > `cancelSubscription` on a durable model removes the checkpoint. A checkpoint deleted and written again while a
 > registration is in flight is therefore accepted as though it were the one that was read. Comparing the two values
-> instead was considered and rejected, because a subscription another node is already running rewrites its checkpoint
-> on every event under the default configuration, so the comparison would warn on nearly every boot and bury the
-> warning that matters. #771 tracks both holes.
+> instead was considered and rejected. A subscription another node is already running rewrites its checkpoint on
+> every event under the default configuration, so the comparison would warn every time a node registers a
+> subscription that is busy elsewhere, which is an ordinary state rather than a race, and that noise would bury the
+> case the warning exists for. Telling the two apart needs the same ordering the window itself needs. #771 tracks
+> both holes.
 >
 > A checkpoint that arrives after the capture was taken on another node at an unknown point, `Checkpoint` promises
 > only `asString()`, and neither node can tell which of the two positions is earlier. Overwriting is not the safer
