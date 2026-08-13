@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 20
-updated_at: 2026-08-13T13:35:00Z
-updated_by: "orchestrator session faee3625 (U8 merged as bc6a1e872, U7 final rebase opened)"
+revision: 21
+updated_at: 2026-08-13T13:50:00Z
+updated_by: "orchestrator session faee3625 (U7 adversarial pass re-dispatched on final head 800aca091)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -25,8 +25,8 @@ pending_actions:
   - id: act-003
     type: workflow-dispatch
     target: "Fresh-context adversarial verify of PR 770 (U7) at rebased head 9a391aaad, dispatched 2026-08-13 ~06:45, STOPPED by Johan ~07:5x before reporting"
-    expected: "the pass is a standing gate obligation for U7 and remains UNMET; plan on record is to re-run it on U7's final pre-merge head after its rebase over U2/U8, pending Johan's confirmation that the stop was deliberate"
-    status: FAILED
+    expected: "the pass is a standing gate obligation for U7 and remains UNMET; plan on record is to re-run it on U7's final pre-merge head after its rebase over U2/U8, pending Johan's confirmation that the stop was deliberate. RESOLVED: re-dispatched 2026-08-13 ~13:45 on the final rebased head 800aca091 (full matrix green) per the recorded plan; the stopped instance targeted a superseded head and the gate obligation itself was never waived"
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-13T06:45:00Z
