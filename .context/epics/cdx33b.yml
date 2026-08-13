@@ -90,10 +90,18 @@ pending_actions:
     type: rerun
     target: "Copilot re-review requested on PR 777 final head 4ee0dc165 via GraphQL requestReviews (the REST path adds nobody)"
     expected: "a new review lands on 4ee0dc165; its body and suppressed block read before merge"
-    status: PENDING
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-13T20:18:00Z
+  - id: act-017
+    type: workflow-dispatch
+    target: "In-epic fixpoint review ROUND 1 (Opus, fresh context, read-only) over the merged increment f6ddc2cff...d376c8be5, nine units, severity line per the ratified stopping rule, cross-unit interactions and quantifier sweep mandated; PR 777 explicitly out of scope, it gets its own addendum round after merging"
+    expected: "verdict with N confirmed findings above minor; zero means round 2 only covers 777's addendum diff"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T21:40:00Z
   - id: act-012
     type: workflow-dispatch
     target: "U10 executing subagent (Sonnet) in the docs repo via its own git worktrees off the held branches: join corrections both branches, filter-override chapter, Cluster and manual-start/stepWindow claim sweeps, jekyll builds with rendered-layer greps, push never merge"
