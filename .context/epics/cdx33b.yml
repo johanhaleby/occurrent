@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 27
-updated_at: 2026-08-13T17:30:00Z
-updated_by: "orchestrator session faee3625 (PR 770 merged as d376c8be5 on exact head 6ca6c6d30; U7 DONE; all guide-serialized units landed; next: main run verification, U11 chip, U10 dispatch, UREG)"
+revision: 28
+updated_at: 2026-08-13T19:40:00Z
+updated_by: "orchestrator session faee3625 (vehicle switch at Johan's word from his phone: both chips withdrawn, U11 re-dispatched as plan-first subagent, U10 as executing subagent; gates route through the orchestrator session via AskUserQuestion)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -49,11 +49,27 @@ pending_actions:
   - id: act-006
     type: dispatch-chip
     target: "U11 chip task_feaffead (pin vs StartAt interaction + evaluatesWriteConditions boot-failure twin), Opus/high plan-first, base origin/main at be68eb434, plan_approval_venue session"
-    expected: "Johan starts the chip; unit presents its plan gate in its own session"
-    status: PENDING
+    expected: "Johan starts the chip. FAILED as designed: chips unreachable from his phone, chip withdrawn, superseded by act-011"
+    status: FAILED
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-13T16:12:00Z
+  - id: act-011
+    type: workflow-dispatch
+    target: "U11 planning subagent (Opus, read-only, base origin/main): produces the StartAt-variant pin table, design alternatives argued from AGENTS.md and the ADR 86/116 amendments, defect-2 fix shape, ADR impact, test plan. Gate content returns to the orchestrator; principle-settled parts decided here, taste parts to Johan via AskUserQuestion in this session"
+    expected: "a plan report; then the design gate, then an implementing dispatch"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T19:35:00Z
+  - id: act-012
+    type: workflow-dispatch
+    target: "U10 executing subagent (Sonnet) in the docs repo via its own git worktrees off the held branches: join corrections both branches, filter-override chapter, Cluster and manual-start/stepWindow claim sweeps, jekyll builds with rendered-layer greps, push never merge"
+    expected: "pushed held branches and a report with before/after pairs, build results, grep evidence, worktrees removed"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T19:35:00Z
   - id: act-007
     type: message-session
     target: "U7 session local_8a2de541: ADR 124 wording approved by Johan; rebase PR 770 over be68eb434 (shared changelog section), then run-list green on the Java-bearing verdict head, Copilot review + suppressed block on final head, DELIVERY_RESULT bumped with invariant table; merge stays the orchestrator's"
@@ -81,8 +97,8 @@ pending_actions:
   - id: act-010
     type: dispatch-chip
     target: "U10 chip task_1553430e (docs-site ripple: carried-over join corrections on both held branches, U7 filter-override chapter with the three caveats and the flow-saga cost, U2 Cluster claim sweep, U4/U1 claim sweep), Sonnet/high, base docs/0.33.0-preview in the docs repo, push-never-merge; U11 ripple explicitly excluded, lands as an appendix push later"
-    expected: "Johan starts the chip; corrected held branches pushed, builds clean, report with before/after pairs and rendered-layer greps"
-    status: PENDING
+    expected: "Johan starts the chip. FAILED as designed: chips unreachable from his phone, chip withdrawn, superseded by act-012"
+    status: FAILED
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-13T17:35:00Z
