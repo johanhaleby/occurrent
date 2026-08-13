@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 23
-updated_at: 2026-08-13T15:10:00Z
-updated_by: "orchestrator session faee3625 (U7 fix head 445ee42c4 read: defects 2+3 resolved, defect 1 substituted with docs; rationale requested)"
+revision: 24
+updated_at: 2026-08-13T15:45:00Z
+updated_by: "orchestrator session faee3625 (defect 1 ruled: documented-cost + #773 deferred to 0.34, guard refuted on the derived-path evidence; ADR 124 wording set with me for Johan)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -33,8 +33,8 @@ pending_actions:
   - id: act-004
     type: message-session
     target: "U7 session local_8a2de541 re PR 770 head 445ee42c4: routed defect 1 (isInstance guard before the FlowSagaImpl append + two tests) was replaced by documentation (guide section 10 flow-saga cost paragraph, Saga.filter() javadoc) with no rationale sent; asked for the rationale or the guard commit, plus the head's remaining obligations (updated DELIVERY_RESULT, Copilot re-review with suppressed block, ADR 124 wording set to Johan before the ruling ask)"
-    expected: "either a stated rationale I rule on, or a guard commit with the mutation evidence; recorded in the updated DELIVERY_RESULT either way"
-    status: PENDING
+    expected: "either a stated rationale I rule on, or a guard commit with the mutation evidence; recorded in the updated DELIVERY_RESULT either way. RESOLVED: rationale returned on the PR (the guard is not a no-op on the derived path under a collapsing mapper, so it changes shipped 0.32 behaviour; stepWindow's javadoc is not violated; the fix shape is an unsettled ReceivedEvents design owned by ADR 120/123). RULED 2026-08-13: documented-cost + #773 deferred to 0.34 per the stopping rule; guard refuted, my routed direction's no-op premise was wrong. One residual routed: ADR 124 line-193 clause must say an array or a primitive is refused on either path"
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-13T15:10:00Z
