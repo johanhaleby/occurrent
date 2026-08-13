@@ -271,6 +271,25 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
                 .isEqualTo(warningsBeforeResave + 1);
     }
 
+    // The limit of the LRU guarantee: it protects an active instance from eviction only while the number of
+    // simultaneously active oversized instances stays at or below capacity. One more than that, cycled round-robin
+    // with none of them ever idle, means every save evicts and re-admits the id about to be needed next, so the
+    // excess re-warns on every single save. This is the accepted cost of keeping a hard memory bound rather than an
+    // unbounded, idle-expiry-only cache, see RETAINED_EVENT_WARNING_LATCH_CAPACITY's comment.
+    @Test
+    void a_population_sustained_one_above_capacity_re_warns_on_every_save_for_the_whole_round() {
+        int populationSize = RETAINED_EVENT_WARNING_LATCH_CAPACITY + 1;
+
+        for (int round = 0; round < 3; round++) {
+            for (int i = 0; i < populationSize; i++) {
+                store.warnIfRetainedSizeCrossesThreshold("r" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+            }
+        }
+
+        assertThat(warnings().size()).as("every save in every round warns, not just the first round's crossings")
+                .isEqualTo(3L * populationSize);
+    }
+
     // Concurrent saves for fresh saga ids near capacity could each pass the size check before either was inserted,
     // pushing the latch past its cap. Threads race on distinct ids past RETAINED_EVENT_WARNING_LATCH_CAPACITY, so if
     // the check-and-insert sequence were not serialized, the assertion below would intermittently fail.
