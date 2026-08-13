@@ -127,12 +127,17 @@ whatever the checkpoint key itself hashes on, so Cluster places both in the same
 full subscription id after that tag, so two ids that happen to share a hash tag, two tenant-scoped ids under the
 same `{tenant}` for instance, still get their own version key instead of silently sharing one fencing version.
 
-The one shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no
-brace pair, an unmatched brace, or an empty pair like `{}`) and that whole id contains a closing brace somewhere in
-it, for example `"{}orders"` or `"a}b{c"`. Such an id still refuses a conditional write immediately, with the error
-Cluster reports for crossing slots, the same way every id used to before this fix. This also assumes the
-`RedisOperations` passed in serializes a key to its own literal bytes, the same assumption the checkpoint's plain
-`GET` already makes.
+One shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no brace
+pair, an unmatched brace, or an empty pair like `{}`) and that whole id contains a closing brace somewhere in it,
+for example `"{}orders"` or `"a}b{c"`. Such an id still refuses a conditional write immediately, with the error
+Cluster reports for crossing slots, the same way every id used to before this fix.
+
+An empty subscription id is a second, narrower shape this cannot help, for a different reason. There is no text at
+all to build a hash tag from. Unlike the shape above, `save` and `delete` refuse an empty subscription id outright
+with an `IllegalArgumentException`, on every deployment, since nothing in this library needs one.
+
+This also assumes the `RedisOperations` passed in serializes a key to its own literal bytes, the same assumption
+the checkpoint's plain `GET` already makes.
 
 ## 5. Five subscription-capability interfaces are renamed
 

@@ -61,13 +61,21 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * ids tenant-scoped under the same {@code "{tenant}"} for instance, still get distinct version keys, since the
  * version key carries the full subscription id too, after the tag and outside its braces where Cluster never looks.
  * <p>
- * The one shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no
- * brace pair, an unmatched brace, or an empty pair like {@code {}}) and that whole id contains a closing brace
- * somewhere in it, for example {@code "{}orders"} or {@code "a}b{c"}. Wrapping such text in a fresh hash tag only
- * reproduces it when the text has no closing brace of its own, since Cluster stops at the first one it finds, and
- * that is then the wrap's own or an earlier one already inside the id, not the one this class appended. Such an id
- * still refuses a conditional write immediately, with the error Cluster reports for crossing slots, the same way
- * every id used to. No subscription id this library or its tests generate takes that shape.
+ * One shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no brace
+ * pair, an unmatched brace, or an empty pair like {@code {}}) and that whole id contains a closing brace somewhere
+ * in it, for example {@code "{}orders"} or {@code "a}b{c"}. Wrapping such text in a fresh hash tag only reproduces
+ * it when the text has no closing brace of its own, since Cluster stops at the first one it finds, and that is then
+ * the wrap's own or an earlier one already inside the id, not the one this class appended. Such an id still refuses
+ * a conditional write immediately, with the error Cluster reports for crossing slots, the same way every id used
+ * to. No subscription id this library or its tests generate takes that shape.
+ * <p>
+ * An empty subscription id is a second, narrower shape this cannot help, for a different reason. The checkpoint key
+ * is then empty text with nothing to hash a tag from, while the version key's own hash tag, built from that same
+ * empty text, comes out as an empty pair that Cluster falls back on hashing whole instead. Unlike the shape above,
+ * {@link #save(String, Checkpoint, CheckpointWriteCondition)} and {@link #delete(String)} refuse an empty
+ * subscription id outright, with an {@link IllegalArgumentException} naming the reason, rather than let Cluster's
+ * own crossed-slots error surface two calls downstream. Nothing in this library needs an empty subscription id, so
+ * the refusal applies on every deployment, not only Cluster.
  * <p>
  * This also assumes the {@link RedisOperations} passed in serializes a key to its own literal bytes, the same
  * assumption the checkpoint's plain {@code GET} already makes. A key serializer that reshapes the string changes
@@ -231,6 +239,7 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
      * instead of by this class.
      */
     private Checkpoint saveConditionally(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition, RedisScript<Long> script, byte[]... extraArgs) {
+        requireNonEmptySubscriptionId(subscriptionId);
         Supplier<Checkpoint> save = () -> {
             Object[] args = new Object[1 + extraArgs.length];
             args[0] = checkpoint.asString();
@@ -247,6 +256,17 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
 
         Predicate<Throwable> retryUnlessShutdownOrRefused = e -> !shutdown && !(e instanceof CheckpointWriteConditionNotFulfilledException) && !isClusterSlotMismatch(e);
         return requireNonNull(executeWithRetry(save, retryUnlessShutdownOrRefused, retryStrategy).get());
+    }
+
+    // An empty subscription id is the one input the hash tag in versionKey cannot help, since Cluster hashes an
+    // empty checkpoint key on nothing to tag at all, while the version key's own hash tag, built from that same
+    // empty text, comes out as an empty pair Cluster falls back on hashing whole instead. No caller in this
+    // library, or a realistic one, needs an empty subscription id, so this refuses it at the boundary rather than
+    // let it surface as Cluster's own crossed-slots error two calls downstream.
+    private static void requireNonEmptySubscriptionId(String subscriptionId) {
+        if (subscriptionId.isEmpty()) {
+            throw new IllegalArgumentException("Subscription id cannot be empty, since Redis Cluster would hash the checkpoint key and this storage's version key for it to different slots and refuse a conditional write for crossing slots.");
+        }
     }
 
     // Cluster reports two script keys in different slots as CROSSSLOT, a deterministic failure no retry turns into
@@ -281,6 +301,7 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     @Override
     public void delete(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
+        requireNonEmptySubscriptionId(subscriptionId);
         Supplier<Long> deleteBoth = () -> redis.delete(List.of(subscriptionId, versionKey(subscriptionId)));
         // A CROSSSLOT failure here is excluded from retry for the same reason as in saveConditionally, the same
         // two-key pair crosses slots the same way, and the default infinite backoff would otherwise hang whatever
@@ -299,13 +320,18 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
 
     // The hash tag wraps the same substring Redis Cluster's own slot algorithm would pick out of the checkpoint key
     // (subscriptionId itself, unprefixed), so the two keys the write scripts touch land in the same slot. The full
-    // subscription id is appended after it, outside the braces, where Cluster never looks once it has found the
-    // hash tag's closing brace, purely so two ids that share a hash tag (two tenant-scoped ids under the same
-    // "{tenant}" tag, for instance) still get distinct version keys instead of silently sharing one fencing
-    // version. Package-private, not private, so a test can compute it against an independent Cluster slot
-    // implementation.
+    // subscription id follows it, outside the braces, where Cluster never looks once it has found the hash tag's
+    // closing brace, so two ids that share a hash tag (two tenant-scoped ids under the same "{tenant}" tag, for
+    // instance) still get distinct version keys instead of silently sharing one fencing version. The subscription
+    // id's own length comes first, not a fixed separator, because the tag can itself equal the whole subscription
+    // id (the fallback branch in clusterHashTag), so a separator alone cannot tell where the tag ends and the id
+    // begins: "a}:{a" and "{a}:a}:{a" produced the identical version key under a plain "}:" separator, one whole
+    // subscription id doubling as both its own tag and its own suffix, the other's genuine tag plus suffix landing
+    // on the same bytes. The length prefix fixes the id to the exact trailing substring of that length, which two
+    // different subscription ids can never both be at once. Package-private, not private, so a test can compute it
+    // against an independent Cluster slot implementation.
     static String versionKey(String subscriptionId) {
-        return VERSION_KEY_PREFIX + "{" + clusterHashTag(subscriptionId) + "}:" + subscriptionId;
+        return VERSION_KEY_PREFIX + "{" + clusterHashTag(subscriptionId) + "}" + subscriptionId.length() + ":" + subscriptionId;
     }
 
     // Redis Cluster's own slot algorithm (CLUSTER-SPEC, "Keys hash tags"): the first '{', then the first '}' after

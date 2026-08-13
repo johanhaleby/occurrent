@@ -272,7 +272,10 @@ class SpringRedisCheckpointStorageTest {
         @SuppressWarnings("unchecked")
         RedisOperations<String, String> redis = mock(RedisOperations.class);
         when(redis.getValueSerializer()).thenReturn((RedisSerializer) RedisSerializer.string());
-        RuntimeException crossSlot = new RedisSystemException("CROSSSLOT Keys in request don't hash to the same slot",
+        // The outer message is the generic Spring wrapper text, not the CROSSSLOT one, so this only passes if the
+        // cause chain is actually walked down to the driver exception. The two messages being identical here once
+        // let a broken walk (checking only the outer exception) pass anyway.
+        RuntimeException crossSlot = new RedisSystemException("Redis exception",
                 new RedisCommandExecutionException("CROSSSLOT Keys in request don't hash to the same slot"));
         // The last matcher is typed Object[], not Object, because saveConditionally passes an already-built array
         // as the vararg parameter. A plain any() matches one vararg element, which this call never has exactly
@@ -294,7 +297,10 @@ class SpringRedisCheckpointStorageTest {
         @SuppressWarnings("unchecked")
         RedisOperations<String, String> redis = mock(RedisOperations.class);
         when(redis.getValueSerializer()).thenReturn((RedisSerializer) RedisSerializer.string());
-        RuntimeException crossSlot = new RedisSystemException("CROSSSLOT Keys in request don't hash to the same slot",
+        // The outer message is the generic Spring wrapper text, not the CROSSSLOT one, so this only passes if the
+        // cause chain is actually walked down to the driver exception. The two messages being identical here once
+        // let a broken walk (checking only the outer exception) pass anyway.
+        RuntimeException crossSlot = new RedisSystemException("Redis exception",
                 new RedisCommandExecutionException("CROSSSLOT Keys in request don't hash to the same slot"));
         when(redis.delete(anyList())).thenThrow(crossSlot);
 
@@ -304,6 +310,27 @@ class SpringRedisCheckpointStorageTest {
                 assertThatThrownBy(() -> storage.delete(UUID.randomUUID().toString()))
                         .as("a Cluster CROSSSLOT failure on delete must be refused immediately, not queued behind a 30 second backoff")
                         .isSameAs(crossSlot));
+    }
+
+    @Test
+    void refuses_a_conditional_save_for_an_empty_subscription_id() {
+        // An empty subscription id leaves the checkpoint key with no text to build a hash tag from, so the version
+        // key's own hash tag comes out empty, which Cluster falls back on hashing whole instead of matching the
+        // checkpoint key's slot. Refused here rather than left to surface as Cluster's crossed-slots error.
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+
+        assertThatThrownBy(() -> storage.save("", new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Subscription id cannot be empty");
+    }
+
+    @Test
+    void refuses_to_delete_an_empty_subscription_id() {
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+
+        assertThatThrownBy(() -> storage.delete(""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Subscription id cannot be empty");
     }
 
     private List<CloudEvent> serialize(DomainEvent e) {

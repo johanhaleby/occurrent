@@ -85,13 +85,26 @@ class SpringRedisCheckpointStorageClusterSlotTest {
     @Test
     void version_key_wraps_the_whole_subscription_id_whenever_cluster_would_fall_back_to_hashing_it_whole() {
         assertThat(SpringRedisCheckpointStorage.versionKey("orders"))
-                .isEqualTo("occurrent:checkpoint-version:{orders}:orders");
+                .isEqualTo("occurrent:checkpoint-version:{orders}6:orders");
         assertThat(SpringRedisCheckpointStorage.versionKey("{tenant-42}-orders"))
-                .isEqualTo("occurrent:checkpoint-version:{tenant-42}:{tenant-42}-orders");
+                .isEqualTo("occurrent:checkpoint-version:{tenant-42}18:{tenant-42}-orders");
         assertThat(SpringRedisCheckpointStorage.versionKey("{}orders"))
-                .isEqualTo("occurrent:checkpoint-version:{{}orders}:{}orders");
+                .isEqualTo("occurrent:checkpoint-version:{{}orders}8:{}orders");
         assertThat(SpringRedisCheckpointStorage.versionKey("a}b{c"))
-                .isEqualTo("occurrent:checkpoint-version:{a}b{c}:a}b{c");
+                .isEqualTo("occurrent:checkpoint-version:{a}b{c}5:a}b{c");
+    }
+
+    /**
+     * The specific pair that broke the earlier, separator-only version key ({@code "{" + tag + "}:" + id}, no
+     * length). {@code "a}:{a"} falls back to hashing itself whole, so its own text doubles as its tag, and
+     * {@code "{a}:a}:{a"} genuinely extracts the tag {@code "a"}. The two constructions landed on the identical
+     * bytes, {@code "{a}:{a}:a}:{a"}, a shared fencing version between two different subscriptions. The subscription
+     * id's length, not a separator, is what tells these apart now.
+     */
+    @Test
+    void the_ids_that_broke_a_separator_only_version_key_now_get_distinct_ones() {
+        assertThat(SpringRedisCheckpointStorage.versionKey("a}:{a"))
+                .isNotEqualTo(SpringRedisCheckpointStorage.versionKey("{a}:a}:{a"));
     }
 
     /**
