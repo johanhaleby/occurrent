@@ -159,9 +159,11 @@ under the old id, save it under a new one that does not start with the reserved 
 point wherever the application passes that subscription id (a `subscribe(..)` call, typically) at the new one.
 Do this through the storage's own API and before the upgrade, because afterward `read` refuses the old id the
 same as `save` and `delete` do, so the API can no longer see the checkpoint to move it. If the upgrade has already
-happened, migrate directly in Redis instead, a plain `RENAME` of the literal key from the old id to the new one,
-which touches no Java code and needs no version of this guard to agree to it, then update the application's own
-subscription id the same way.
+happened, migrate directly in Redis instead, with the application stopped, `GET` the old key, `SET` the new one to
+that value, then `DEL` the old key, three single-key commands rather than `RENAME`. `RENAME` itself needs both keys
+in the same Cluster slot and fails with `CROSSSLOT` otherwise, which a new id chosen only to avoid the reserved
+prefix has no reason to land in, so it is not a safe substitute here. Update the application's own subscription id
+the same way once the data has moved.
 
 ## 5. Five subscription-capability interfaces are renamed
 
