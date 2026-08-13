@@ -111,9 +111,11 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > record one when the subscription starts, which is #669 again for that wiring. Telling the two kinds of layer apart needs the layers
 > to say which of them consumes a start position, which is a capability `SubscriptionModel` does not have, and no start
 > position Occurrent builds answers that way, since they either ignore the model type or branch on the catch-up,
-> competing consumer and durable layers, all three of which do decide for themselves. Recording a position that is not
-> read back costs a subscription nothing that writing one unconditionally, which is what this wrapper did until now,
-> did not already cost it.
+> competing consumer and durable layers, all three of which do decide for themselves. A position recorded off the back
+> of an answer no layer consumes is not harmless either, since a function that reads this storage to decide between
+> replaying and resuming then finds it and resumes. That is the outcome the unconditional write this replaces produced
+> for every registration, so such a function is left where it already was rather than made worse, and every function
+> Occurrent builds is moved out of it.
 >
 > The three-argument factory also refuses a `CheckpointStorage` that answers false to `evaluatesWriteConditions()`. The
 > position is written with `ifAbsent()`, so this wrapper needs a storage that evaluates that condition, and that method
