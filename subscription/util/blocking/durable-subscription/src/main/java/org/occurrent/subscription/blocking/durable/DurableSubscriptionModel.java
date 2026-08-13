@@ -27,13 +27,14 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.*;
 
+import java.util.Collections;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
@@ -57,14 +58,22 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     private final CheckpointStorage storage;
     private final DurableSubscriptionModelConfig config;
     private final @Nullable CheckpointWriteVersionSource writeVersionSource;
-    // subscribe(..) counts a subscription id in here for as long as an attempt with its StartAt resolved to null is
-    // in flight or has succeeded, opting it out of this model's checkpoint management (the same "not allowed to
-    // start" case CompetingConsumerSubscriptionModel has its own set for). A count rather than a plain marker, so a
-    // failing duplicate subscribe for an id that is already active only releases its own share, never the marker a
-    // still-active or still in-flight attempt for the same id owns. resumeSubscription reads this so it forwards
-    // such a subscription unchanged too, rather than resuming it from a checkpoint this model was never asked to
-    // manage.
-    private final ConcurrentMap<String, AtomicInteger> notCheckpointedSubscriptions = new ConcurrentHashMap<>();
+    // subscribe(..) records a subscription id here when its StartAt resolved to null, opting it out of this model's
+    // checkpoint management (the same "not allowed to start" case CompetingConsumerSubscriptionModel has its own
+    // set for). resumeSubscription reads this so it forwards such a subscription unchanged too, rather than
+    // resuming it from a checkpoint this model was never asked to manage. A plain set is safe here only because
+    // subscribe, cancelSubscription and resumeSubscription all run under subscriptionIdLock, which makes at most
+    // one of them active for a given id at a time, so no two attempts for the same id are ever both live against
+    // this set.
+    private final Set<String> notCheckpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    // One lock object per subscription id, created on first use and never removed. Subscription ids are a small,
+    // application-defined set (the same population the wrapped model itself tracks per id), so this does not grow
+    // in proportion to events or requests.
+    private final ConcurrentMap<String, Object> subscriptionIdLocks = new ConcurrentHashMap<>();
+
+    private Object lockFor(String subscriptionId) {
+        return subscriptionIdLocks.computeIfAbsent(subscriptionId, id -> new Object());
+    }
 
     /**
      * Create a subscription that combines a {@link CheckpointAwareSubscriptionModel} with a {@link CheckpointStorage} to automatically
@@ -135,42 +144,21 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
 
         StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
         if (startAtToUse == null) {
-            // Not allowed to start, delegate to the wrapped subscription instead. If the wrapped model already
-            // knows this id, this is a duplicate attempt against an existing, differently-managed subscription
-            // rather than a fresh registration, so it is never counted in at all: the delegate is left to reject
-            // it on its own, and this id's real owner (whatever marker state that owner already has) is never
-            // touched. Skipping the count-in here is what a concurrent resumeSubscription for that real owner
-            // depends on, since counting in first would make it look opted out for as long as this doomed call
-            // takes to fail.
-            //
-            // Otherwise, counted in before the delegate call so a concurrent resumeSubscription sees the opt-out
-            // too, released again if the delegate throws so a failing attempt leaves no marker behind for a later
-            // resubscribe to inherit, and reinstated if a concurrent cancelSubscription removed it while the
-            // delegate call was still running, since a subscription this call just started must stay opted out
-            // regardless, but only once the wrapped model still shows it live, or a cancel that landed after this
-            // call's own delegate.subscribe() already succeeded would otherwise be resurrected by this reinstate.
-            // The increment has to run inside compute(), not after a separate computeIfAbsent() returns the
-            // counter, or a decrement for the same id can remove the entry in between and strand the increment on
-            // a counter the map no longer holds.
-            // "mine" identifies this call's own counter object, so a cancelSubscription-then-resubscribe cycle that
-            // replaced it with a fresh one is never mistaken for this call's own share on either path below: the
-            // wrapped model refuses a second live registration for the same id, so anything other than "mine" or
-            // absent cannot belong to a subscription that is also active right now.
-            if (isAlreadyKnownToWrappedModel(subscriptionId)) {
-                return getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
-            }
-            AtomicInteger mine = notCheckpointedSubscriptions.compute(subscriptionId, (id, count) -> {
-                AtomicInteger current = count == null ? new AtomicInteger() : count;
-                current.incrementAndGet();
-                return current;
-            });
-            try {
-                Subscription subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
-                notCheckpointedSubscriptions.compute(subscriptionId, (id, count) -> count == null && isAlreadyKnownToWrappedModel(subscriptionId) ? mine : count);
-                return subscription;
-            } catch (Throwable t) {
-                notCheckpointedSubscriptions.computeIfPresent(subscriptionId, (id, count) -> count != mine ? count : (count.decrementAndGet() <= 0 ? null : count));
-                throw t;
+            // Not allowed to start, delegate to the wrapped subscription instead. Held under subscriptionIdLock so
+            // no resumeSubscription or cancelSubscription for this id can observe this attempt half-done, and
+            // whether it was already marked is captured before marking it, so a duplicate attempt against an
+            // already-active, opted-out id releases nothing on failure.
+            synchronized (lockFor(subscriptionId)) {
+                boolean alreadyMarked = notCheckpointedSubscriptions.contains(subscriptionId);
+                notCheckpointedSubscriptions.add(subscriptionId);
+                try {
+                    return getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+                } catch (Throwable t) {
+                    if (!alreadyMarked) {
+                        notCheckpointedSubscriptions.remove(subscriptionId);
+                    }
+                    throw t;
+                }
             }
         }
 
@@ -182,14 +170,6 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     }
                 }
         );
-    }
-
-    // Whether the wrapped model already has a live (running or paused) registration for this id, checked before
-    // counting an opt-out attempt in and again before reinstating one after success. Not atomic with what follows
-    // it, so it narrows the surrounding races rather than closing them outright. Fully closing them needs same-id
-    // subscribe/cancel/resume serialization, a bigger change than this check.
-    private boolean isAlreadyKnownToWrappedModel(String subscriptionId) {
-        return getWrappedSubscriptionModel().isRunning(subscriptionId) || getWrappedSubscriptionModel().isPaused(subscriptionId);
     }
 
     // A version from writeVersionSource stamps notOlderThan. An empty answer or no source stamps any(). Always the
@@ -273,19 +253,20 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
-        if (!notCheckpointedSubscriptions.containsKey(subscriptionId)) {
-            Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel());
-            if (repositionable.isPresent()) {
-                Checkpoint checkpoint = storage.read(subscriptionId);
-                // Re-checked here, not only above, since a concurrent opt-out subscribe can be accepted while the
-                // checkpoint read above was still running, and that acceptance must win over a reposition decision
-                // this method already made before it knew about it.
-                if (checkpoint != null && !notCheckpointedSubscriptions.containsKey(subscriptionId)) {
-                    return repositionable.get().resumeSubscription(subscriptionId, StartAt.checkpoint(checkpoint));
+        // Held for the whole decision, reposition call included, so a concurrent subscribe or cancelSubscription
+        // for this id cannot land between the marker check and acting on it.
+        synchronized (lockFor(subscriptionId)) {
+            if (!notCheckpointedSubscriptions.contains(subscriptionId)) {
+                Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel());
+                if (repositionable.isPresent()) {
+                    Checkpoint checkpoint = storage.read(subscriptionId);
+                    if (checkpoint != null) {
+                        return repositionable.get().resumeSubscription(subscriptionId, StartAt.checkpoint(checkpoint));
+                    }
                 }
             }
+            return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
         }
-        return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
     }
 
     @Override
@@ -301,14 +282,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
-        // Snapshotted before the delegate call, not read again afterward. A fresh subscribe joining the same
-        // counter while this delegate call is running changes its count, so the value comparison below leaves
-        // that counter alone instead of erasing it the way an unconditional remove used to.
-        AtomicInteger before = notCheckpointedSubscriptions.get(subscriptionId);
-        int countBefore = before == null ? 0 : before.get();
-        subscriptionModel.cancelSubscription(subscriptionId);
-        storage.delete(subscriptionId);
-        notCheckpointedSubscriptions.computeIfPresent(subscriptionId, (id, count) -> count == before && count.get() == countBefore ? null : count);
+        synchronized (lockFor(subscriptionId)) {
+            subscriptionModel.cancelSubscription(subscriptionId);
+            storage.delete(subscriptionId);
+            notCheckpointedSubscriptions.remove(subscriptionId);
+        }
     }
 
     @Override

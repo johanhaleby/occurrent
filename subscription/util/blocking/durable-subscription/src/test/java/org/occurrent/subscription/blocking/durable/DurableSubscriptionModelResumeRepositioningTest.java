@@ -22,18 +22,15 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
-import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.time.Duration;
-import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -41,7 +38,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,6 +50,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * back for a non-repositionable delegate, and the opt-out guard) is isolated from a change stream and provable on
  * its own. {@link CompetingConsumerLeaseRegainResumesFromCheckpointTest} proves the same mechanism end to end over
  * real Mongo.
+ * <p>
+ * {@code subscribe}, {@code cancelSubscription} and {@code resumeSubscription} for one id are mutually exclusive
+ * under {@code subscriptionIdLock}, so the concurrency tests here assert that a call blocks while another for the
+ * same id is still in flight, and that it sees the correct, settled state once released, rather than asserting
+ * against a specific unsynchronized interleaving.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelResumeRepositioningTest {
@@ -163,46 +165,52 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     @Test
-    void a_truly_concurrent_duplicate_subscribe_only_releases_its_own_share_of_a_shared_counter() throws Exception {
+    void a_failed_duplicate_opt_out_subscribe_does_not_disturb_the_first_ones_marker() {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
-        ConcurrentDuplicateRepositionableSubscriptionModel delegate = new ConcurrentDuplicateRepositionableSubscriptionModel();
-        CountDownLatch firstEntered = new CountDownLatch(1);
-        CountDownLatch releaseFirst = new CountDownLatch(1);
-        delegate.firstCallEntered = firstEntered;
-        delegate.holdFirstCallUntil = releaseFirst;
+        DuplicateRejectingRepositionableSubscriptionModel delegate = new DuplicateRejectingRepositionableSubscriptionModel();
         DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
         StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+        }).waitUntilStarted();
 
-        ExecutorService pool = Executors.newSingleThreadExecutor();
-        try {
-            Future<Subscription> firstAttempt = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
-            }));
-            assertThat(firstEntered.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+        })).isInstanceOf(RuntimeException.class);
 
-            // The second attempt reaches and is accepted by the delegate while the first is still paused inside
-            // its own delegate call, so both attempts' increments land on the one counter they share before either
-            // is settled, neither having taken the early-return branch since neither is known to the delegate yet.
-            model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
-            }).waitUntilStarted();
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+        model.resumeSubscription(SUBSCRIPTION_ID);
 
-            releaseFirst.countDown();
-            assertThatThrownBy(() -> firstAttempt.get(10, TimeUnit.SECONDS)).hasCauseInstanceOf(RuntimeException.class);
-
-            storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
-            model.resumeSubscription(SUBSCRIPTION_ID);
-
-            assertThat(delegate.repositionedTo)
-                    .as("the first attempt's failure must release only its own share of the counter both attempts "
-                            + "shared, not the second attempt's share, which is the one the delegate accepted")
-                    .isNull();
-            assertThat(delegate.plainResumeCalled).isTrue();
-        } finally {
-            pool.shutdownNow();
-        }
+        assertThat(delegate.repositionedTo)
+                .as("the second call's failure must not disturb the first, still-active subscription's marker, "
+                        + "or its next resume gets wrongly repositioned from storage")
+                .isNull();
+        assertThat(delegate.plainResumeCalled).isTrue();
     }
 
     @Test
-    void a_resume_racing_a_still_running_subscribe_sees_the_opt_out_marker_before_the_delegate_returns() throws InterruptedException {
+    void a_duplicate_opt_out_subscribe_against_an_already_registered_id_never_marks_it_opted_out() {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        DuplicateRejectingRepositionableSubscriptionModel delegate = new DuplicateRejectingRepositionableSubscriptionModel();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
+        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        // A real, existing, checkpoint-managed subscription for this id, nothing to do with opting out.
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), event -> {
+        });
+
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+        })).isInstanceOf(RuntimeException.class);
+
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delegate.repositionedTo)
+                .as("a duplicate opt-out subscribe against an id the wrapped model already has registered must "
+                        + "never mark that id opted out, or its real, checkpoint-managed subscription stops being "
+                        + "repositioned from storage")
+                .isInstanceOf(StartAt.StartAtCheckpoint.class);
+    }
+
+    @Test
+    void a_resume_blocks_behind_an_in_flight_subscribe_and_then_sees_its_settled_marker() throws Exception {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         PausingRepositionableSubscriptionModel delegate = new PausingRepositionableSubscriptionModel();
         CountDownLatch insideSubscribe = new CountDownLatch(1);
@@ -212,34 +220,39 @@ class DurableSubscriptionModelResumeRepositioningTest {
         DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
         StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
         // Left behind by an earlier checkpoint-managed subscription with the same id, and must never reposition
-        // the opted-out subscribe call below, whether resumeSubscription lands before or after it returns.
+        // the opted-out subscribe call below, whichever of the two calls the lock lets through first.
         storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
 
-        ExecutorService pool = Executors.newSingleThreadExecutor();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            pool.execute(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+            Future<Subscription> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
             }));
             assertThat(insideSubscribe.await(10, TimeUnit.SECONDS)).isTrue();
 
-            model.resumeSubscription(SUBSCRIPTION_ID);
+            Future<Subscription> resumeFuture = pool.submit(() -> model.resumeSubscription(SUBSCRIPTION_ID));
+
+            assertThatThrownBy(() -> resumeFuture.get(200, TimeUnit.MILLISECONDS))
+                    .as("resumeSubscription must wait for this id's lock rather than deciding from a state the "
+                            + "in-flight subscribe call could still change")
+                    .isInstanceOf(TimeoutException.class);
+
+            releaseSubscribe.countDown();
+            subscribeFuture.get(10, TimeUnit.SECONDS);
+            resumeFuture.get(10, TimeUnit.SECONDS);
 
             assertThat(delegate.plainResumeCalled)
-                    .as("the marker must already be visible while the delegate's own subscribe call is still in "
-                            + "flight, so resumeSubscription forwards to the delegate's own resume rather than "
-                            + "treating this id as checkpoint managed")
+                    .as("once the subscribe above has settled, resume must see the marker it left behind")
                     .isTrue();
             assertThat(delegate.repositionedTo)
-                    .as("a subscription that opted out must never be repositioned from a stored checkpoint, "
-                            + "concurrent resume or not")
+                    .as("a subscription that opted out must never be repositioned from a stored checkpoint")
                     .isNull();
         } finally {
-            releaseSubscribe.countDown();
             pool.shutdownNow();
         }
     }
 
     @Test
-    void a_cancel_racing_a_still_running_subscribe_does_not_erase_the_marker_once_that_subscribe_succeeds() throws Exception {
+    void a_cancel_blocks_behind_an_in_flight_subscribe_and_then_removes_its_settled_marker() throws Exception {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         PausingRepositionableSubscriptionModel delegate = new PausingRepositionableSubscriptionModel();
         CountDownLatch insideSubscribe = new CountDownLatch(1);
@@ -249,103 +262,28 @@ class DurableSubscriptionModelResumeRepositioningTest {
         DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
         StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
 
-        ExecutorService pool = Executors.newSingleThreadExecutor();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             Future<Subscription> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
             }));
             assertThat(insideSubscribe.await(10, TimeUnit.SECONDS)).isTrue();
 
-            // The delegate here does not yet know this id, so this cancel is a no-op on it, but it must not erase
-            // the opt-out marker that the still in-flight subscribe above is entitled to once it succeeds.
-            model.cancelSubscription(SUBSCRIPTION_ID);
+            Future<?> cancelFuture = pool.submit(() -> model.cancelSubscription(SUBSCRIPTION_ID));
+
+            assertThatThrownBy(() -> cancelFuture.get(200, TimeUnit.MILLISECONDS))
+                    .as("cancelSubscription must wait for this id's lock rather than racing the still in-flight subscribe")
+                    .isInstanceOf(TimeoutException.class);
 
             releaseSubscribe.countDown();
             subscribeFuture.get(10, TimeUnit.SECONDS);
+            cancelFuture.get(10, TimeUnit.SECONDS);
 
             storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
             model.resumeSubscription(SUBSCRIPTION_ID);
 
             assertThat(delegate.repositionedTo)
-                    .as("a subscribe call that finished after a concurrent cancel must still have its opt-out "
-                            + "marker, or its next resume gets wrongly repositioned from storage")
-                    .isNull();
-            assertThat(delegate.plainResumeCalled).isTrue();
-        } finally {
-            pool.shutdownNow();
-        }
-    }
-
-    @Test
-    void a_stale_attempts_failure_does_not_touch_a_later_generations_counter_for_the_same_id() throws Exception {
-        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
-        PausingThenThrowingOnFirstSubscribeRepositionableSubscriptionModel delegate = new PausingThenThrowingOnFirstSubscribeRepositionableSubscriptionModel();
-        CountDownLatch insideSubscribe = new CountDownLatch(1);
-        CountDownLatch releaseSubscribe = new CountDownLatch(1);
-        delegate.subscribeEntered = insideSubscribe;
-        delegate.holdSubscribeUntil = releaseSubscribe;
-        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
-        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
-
-        ExecutorService pool = Executors.newSingleThreadExecutor();
-        try {
-            Future<Subscription> staleAttempt = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
-            }));
-            assertThat(insideSubscribe.await(10, TimeUnit.SECONDS)).isTrue();
-
-            // Cancelling the stale attempt's marker while it is still in flight, then a fresh subscribe for the
-            // same id installs a genuinely different counter object, the same id but a later generation.
-            model.cancelSubscription(SUBSCRIPTION_ID);
-            model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
-            }).waitUntilStarted();
-
-            releaseSubscribe.countDown();
-            assertThatThrownBy(() -> staleAttempt.get(10, TimeUnit.SECONDS)).hasCauseInstanceOf(RuntimeException.class);
-
-            storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
-            model.resumeSubscription(SUBSCRIPTION_ID);
-
-            assertThat(delegate.repositionedTo)
-                    .as("the stale attempt's failure must release only its own generation's share, never the later "
-                            + "generation's counter that a fresh subscribe for the same id installed in between")
-                    .isNull();
-            assertThat(delegate.plainResumeCalled).isTrue();
-        } finally {
-            pool.shutdownNow();
-        }
-    }
-
-    @Test
-    void a_duplicate_opt_out_subscribe_against_an_already_registered_id_never_marks_it_opted_out() throws Exception {
-        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
-        PausingBeforeRejectingDuplicateRepositionableSubscriptionModel delegate = new PausingBeforeRejectingDuplicateRepositionableSubscriptionModel();
-        CountDownLatch aboutToReject = new CountDownLatch(1);
-        CountDownLatch releaseRejection = new CountDownLatch(1);
-        delegate.aboutToReject = aboutToReject;
-        delegate.holdRejectionUntil = releaseRejection;
-        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
-        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
-        // A real, existing, checkpoint-managed subscription for this id, nothing to do with opting out.
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), event -> {
-        });
-        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
-
-        ExecutorService pool = Executors.newSingleThreadExecutor();
-        try {
-            Future<Subscription> duplicateAttempt = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
-            }));
-            assertThat(aboutToReject.await(10, TimeUnit.SECONDS)).isTrue();
-
-            // The duplicate opt-out attempt above is paused right before the delegate rejects it. A concurrent
-            // resume for the id's real, checkpoint-managed subscription must not be fooled by it in that window.
-            model.resumeSubscription(SUBSCRIPTION_ID);
-
-            releaseRejection.countDown();
-            assertThatThrownBy(() -> duplicateAttempt.get(10, TimeUnit.SECONDS)).hasCauseInstanceOf(RuntimeException.class);
-
-            assertThat(delegate.repositionedTo)
-                    .as("a duplicate opt-out subscribe against an id the wrapped model already has registered must "
-                            + "never mark that id opted out, even while the duplicate attempt is still in flight, "
-                            + "or its real, checkpoint-managed subscription stops being repositioned from storage")
+                    .as("the cancel that waited out the subscribe must have removed its marker, so a later, "
+                            + "checkpoint-managed subscription for this id is not left looking opted out")
                     .isInstanceOf(StartAt.StartAtCheckpoint.class);
         } finally {
             pool.shutdownNow();
@@ -353,44 +291,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     @Test
-    void a_cancel_after_the_delegate_has_already_accepted_the_subscription_leaves_no_marker_to_reinstate() throws Exception {
-        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
-        RegisteringThenPausingRepositionableSubscriptionModel delegate = new RegisteringThenPausingRepositionableSubscriptionModel();
-        CountDownLatch registered = new CountDownLatch(1);
-        CountDownLatch releaseSubscribe = new CountDownLatch(1);
-        delegate.registeredAndPausing = registered;
-        delegate.holdReturnUntil = releaseSubscribe;
-        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
-        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
-
-        ExecutorService pool = Executors.newSingleThreadExecutor();
-        try {
-            Future<Subscription> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
-            }));
-            assertThat(registered.await(10, TimeUnit.SECONDS)).isTrue();
-
-            // The delegate has already accepted this registration by this point, so this cancel is real, not a
-            // no-op, and it must be the one that wins once the subscribe call above returns.
-            model.cancelSubscription(SUBSCRIPTION_ID);
-
-            releaseSubscribe.countDown();
-            subscribeFuture.get(10, TimeUnit.SECONDS);
-
-            storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
-            model.resumeSubscription(SUBSCRIPTION_ID);
-
-            assertThat(delegate.repositionedTo)
-                    .as("a cancel that lands after the delegate already accepted the subscription must win, so a "
-                            + "later, checkpoint-managed subscription for the same id is not left with a stale "
-                            + "opt-out marker and skips repositioning")
-                    .isInstanceOf(StartAt.StartAtCheckpoint.class);
-        } finally {
-            pool.shutdownNow();
-        }
-    }
-
-    @Test
-    void a_fresh_subscribe_joining_the_same_counter_while_a_cancel_is_still_in_flight_survives_that_cancels_delayed_removal() throws Exception {
+    void a_subscribe_blocks_behind_an_in_flight_cancel_and_then_registers_the_freed_id() throws Exception {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         UnregisteringThenPausingCancelRepositionableSubscriptionModel delegate = new UnregisteringThenPausingCancelRepositionableSubscriptionModel();
         DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
@@ -403,63 +304,29 @@ class DurableSubscriptionModelResumeRepositioningTest {
         delegate.unregisteredAndPausing = unregisteredAndPausing;
         delegate.holdReturnUntil = releaseCancel;
 
-        ExecutorService pool = Executors.newSingleThreadExecutor();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             Future<?> cancelFuture = pool.submit(() -> model.cancelSubscription(SUBSCRIPTION_ID));
             assertThat(unregisteredAndPausing.await(10, TimeUnit.SECONDS)).isTrue();
 
-            // The delegate already reports the id as gone, so this fresh subscribe is accepted and joins the same
-            // counter object the paused cancel captured before it started, incrementing the count cancel is about
-            // to compare against.
-            model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
-            }).waitUntilStarted();
+            Future<Subscription> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+            }));
+
+            assertThatThrownBy(() -> subscribeFuture.get(200, TimeUnit.MILLISECONDS))
+                    .as("a fresh subscribe for this id must wait for the in-flight cancel's lock rather than "
+                            + "racing the delegate transition it is still making")
+                    .isInstanceOf(TimeoutException.class);
 
             releaseCancel.countDown();
             cancelFuture.get(10, TimeUnit.SECONDS);
+            subscribeFuture.get(10, TimeUnit.SECONDS);
 
             storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
             model.resumeSubscription(SUBSCRIPTION_ID);
 
             assertThat(delegate.repositionedTo)
-                    .as("the cancel's delayed removal must not erase the fresh subscribe's share just because it "
-                            + "shares the same counter object the cancel captured before it started")
-                    .isNull();
-            assertThat(delegate.plainResumeCalled).isTrue();
-        } finally {
-            pool.shutdownNow();
-        }
-    }
-
-    @Test
-    void a_resume_that_already_read_the_checkpoint_does_not_reposition_once_a_concurrent_opt_out_subscribe_is_accepted() throws Exception {
-        PausingOnReadCheckpointStorage storage = new PausingOnReadCheckpointStorage();
-        CountDownLatch readingCheckpoint = new CountDownLatch(1);
-        CountDownLatch releaseRead = new CountDownLatch(1);
-        storage.aboutToReturn = readingCheckpoint;
-        storage.holdReturnUntil = releaseRead;
-        RecordingRepositionableSubscriptionModel delegate = new RecordingRepositionableSubscriptionModel();
-        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
-        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
-        // Left behind by an earlier, checkpoint-managed subscription with the same id, now cancelled and never
-        // cleaned up in this fake, standing in for the delegate reporting the id as no longer known.
-        storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
-
-        ExecutorService pool = Executors.newSingleThreadExecutor();
-        try {
-            Future<Subscription> resumeFuture = pool.submit(() -> model.resumeSubscription(SUBSCRIPTION_ID));
-            assertThat(readingCheckpoint.await(10, TimeUnit.SECONDS)).isTrue();
-
-            // The opt-out subscribe below is accepted while the resume above is still reading the checkpoint it
-            // will otherwise reposition from.
-            model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
-            }).waitUntilStarted();
-
-            releaseRead.countDown();
-            resumeFuture.get(10, TimeUnit.SECONDS);
-
-            assertThat(delegate.repositionedTo)
-                    .as("a resume must not act on a reposition decision it made before the checkpoint read "
-                            + "returned, once a concurrent opt-out subscribe was accepted while it was reading")
+                    .as("the fresh subscribe that waited out the cancel must have its own marker, not be treated "
+                            + "as checkpoint managed")
                     .isNull();
             assertThat(delegate.plainResumeCalled).isTrue();
         } finally {
@@ -471,9 +338,8 @@ class DurableSubscriptionModelResumeRepositioningTest {
      * Records whether {@link #resumeSubscription(String)} was called, and answers something for every other
      * {@link CheckpointAwareSubscriptionModel} member, since {@link DurableSubscriptionModel} requires a whole one
      * to wrap even though these tests only exercise its resume path. Tracks {@code subscribe}/{@code
-     * cancelSubscription} in {@code registeredIds} for real, since {@link DurableSubscriptionModel} now asks
-     * {@code isRunning}/{@code isPaused} to decide whether an id is already known before counting an opt-out
-     * attempt in, so a fake that answered those unconditionally would defeat that check for every id, known or not.
+     * cancelSubscription} in {@code registeredIds} for real, since some fakes below need to answer duplicate or
+     * cancel questions honestly rather than by a fixed stub.
      */
     private static class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel {
         boolean plainResumeCalled = false;
@@ -579,31 +445,14 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     /**
-     * The same repositionable fake, but the first {@code subscribe} call signals {@code firstCallEntered} and
-     * blocks on {@code holdFirstCallUntil} before checking for a duplicate, standing in for two attempts racing the
-     * delegate for the same id before either is known to it, so both land on the one counter this model's own
-     * preflight check has already made them share.
+     * The same repositionable fake, but a second {@code subscribe} call for an id it already has throws, standing
+     * in for a delegate refusing a duplicate subscription id such as {@code DuplicateSubscriptionIdException}.
      */
-    private static class ConcurrentDuplicateRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
+    private static class DuplicateRejectingRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
         private final Set<String> subscribed = ConcurrentHashMap.newKeySet();
-        private final AtomicInteger callCount = new AtomicInteger();
-        @Nullable CountDownLatch firstCallEntered;
-        @Nullable CountDownLatch holdFirstCallUntil;
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            if (callCount.incrementAndGet() == 1) {
-                if (firstCallEntered != null) {
-                    firstCallEntered.countDown();
-                }
-                if (holdFirstCallUntil != null) {
-                    try {
-                        assertThat(holdFirstCallUntil.await(10, TimeUnit.SECONDS)).isTrue();
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
-            }
             if (!subscribed.add(subscriptionId)) {
                 throw new RuntimeException("duplicate subscription id " + subscriptionId);
             }
@@ -612,38 +461,9 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     /**
-     * The same duplicate-rejecting fake, but a rejection signals {@code aboutToReject} and blocks on
-     * {@code holdRejectionUntil} before throwing, standing in for a delegate whose duplicate-id check takes long
-     * enough for a concurrent resume to land while the rejection is still in flight.
-     */
-    private static class PausingBeforeRejectingDuplicateRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
-        private final Set<String> subscribed = ConcurrentHashMap.newKeySet();
-        @Nullable CountDownLatch aboutToReject;
-        @Nullable CountDownLatch holdRejectionUntil;
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            if (subscribed.add(subscriptionId)) {
-                return super.subscribe(subscriptionId, filter, startAt, action);
-            }
-            if (aboutToReject != null) {
-                aboutToReject.countDown();
-            }
-            if (holdRejectionUntil != null) {
-                try {
-                    assertThat(holdRejectionUntil.await(10, TimeUnit.SECONDS)).isTrue();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            throw new RuntimeException("duplicate subscription id " + subscriptionId);
-        }
-    }
-
-    /**
      * The same repositionable fake, but {@code subscribe} signals {@code subscribeEntered} and then blocks on
-     * {@code holdSubscribeUntil}, standing in for a delegate whose subscribe call is still in flight when a
-     * concurrent {@code resumeSubscription} lands.
+     * {@code holdSubscribeUntil}, standing in for a delegate call slow enough for a concurrent
+     * {@code resumeSubscription} or {@code cancelSubscription} for the same id to have to wait for it.
      */
     private static class PausingRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
         @Nullable CountDownLatch subscribeEntered;
@@ -666,36 +486,9 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     /**
-     * The same repositionable fake, but {@code subscribe} registers the id first, then signals
-     * {@code registeredAndPausing} and blocks on {@code holdReturnUntil} before returning, standing in for a
-     * delegate that has already accepted a registration but has not yet handed the {@link Subscription} back to
-     * the caller.
-     */
-    private static class RegisteringThenPausingRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
-        @Nullable CountDownLatch registeredAndPausing;
-        @Nullable CountDownLatch holdReturnUntil;
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            Subscription subscription = super.subscribe(subscriptionId, filter, startAt, action);
-            if (registeredAndPausing != null) {
-                registeredAndPausing.countDown();
-            }
-            if (holdReturnUntil != null) {
-                try {
-                    assertThat(holdReturnUntil.await(10, TimeUnit.SECONDS)).isTrue();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            return subscription;
-        }
-    }
-
-    /**
      * The same repositionable fake, but {@code cancelSubscription} unregisters the id first, then signals
      * {@code unregisteredAndPausing} and blocks on {@code holdReturnUntil} before returning, standing in for a
-     * delegate that has already forgotten the id but has not yet handed control back to the caller.
+     * delegate call slow enough for a concurrent {@code subscribe} for the same id to have to wait for it.
      */
     private static class UnregisteringThenPausingCancelRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
         @Nullable CountDownLatch unregisteredAndPausing;
@@ -714,83 +507,6 @@ class DurableSubscriptionModelResumeRepositioningTest {
                     Thread.currentThread().interrupt();
                 }
             }
-        }
-    }
-
-    /**
-     * The same repositionable fake, but only the first {@code subscribe} call pauses on
-     * {@code subscribeEntered}/{@code holdSubscribeUntil} and then throws once released, standing in for a stale
-     * attempt that fails after being unblocked. Every later call for any id succeeds immediately, standing in for
-     * a fresh subscribe landing while the stale one is still in flight.
-     */
-    private static class PausingThenThrowingOnFirstSubscribeRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
-        @Nullable CountDownLatch subscribeEntered;
-        @Nullable CountDownLatch holdSubscribeUntil;
-        private final AtomicInteger callCount = new AtomicInteger();
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            if (callCount.incrementAndGet() != 1) {
-                return super.subscribe(subscriptionId, filter, startAt, action);
-            }
-            if (subscribeEntered != null) {
-                subscribeEntered.countDown();
-            }
-            if (holdSubscribeUntil != null) {
-                try {
-                    assertThat(holdSubscribeUntil.await(10, TimeUnit.SECONDS)).isTrue();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            throw new RuntimeException("stale attempt failed after being unblocked");
-        }
-    }
-
-    /**
-     * Wraps a real {@link InMemoryCheckpointStorage}, but {@code read} signals {@code aboutToReturn} and blocks on
-     * {@code holdReturnUntil} before returning, standing in for a checkpoint read slow enough for a concurrent
-     * opt-out subscribe to be accepted while it is still in flight.
-     */
-    private static class PausingOnReadCheckpointStorage implements CheckpointStorage {
-        final InMemoryCheckpointStorage delegate = new InMemoryCheckpointStorage();
-        @Nullable CountDownLatch aboutToReturn;
-        @Nullable CountDownLatch holdReturnUntil;
-
-        @Override
-        public @Nullable Checkpoint read(String subscriptionId) {
-            Checkpoint checkpoint = delegate.read(subscriptionId);
-            if (aboutToReturn != null) {
-                aboutToReturn.countDown();
-            }
-            if (holdReturnUntil != null) {
-                try {
-                    assertThat(holdReturnUntil.await(10, TimeUnit.SECONDS)).isTrue();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            return checkpoint;
-        }
-
-        @Override
-        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-            return delegate.save(subscriptionId, checkpoint, condition);
-        }
-
-        @Override
-        public OptionalLong writeVersion(String subscriptionId) {
-            return delegate.writeVersion(subscriptionId);
-        }
-
-        @Override
-        public void delete(String subscriptionId) {
-            delegate.delete(subscriptionId);
-        }
-
-        @Override
-        public boolean exists(String subscriptionId) {
-            return delegate.exists(subscriptionId);
         }
     }
 }
