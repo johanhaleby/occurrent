@@ -150,8 +150,18 @@ the checkpoint's plain `GET` already makes.
 `read`, `save`, `delete`, and `exists` also refuse a subscription id that starts with the version key's own
 reserved prefix (`occurrent:checkpoint-version:`), with an `IllegalArgumentException`. This is a Cluster-independent
 guard, since a caller-chosen id equal to another subscription's version key would let a write against it corrupt
-that other subscription's stored version on a standalone or replicated server too. No subscription id a real caller
-would choose starts with that prefix by accident.
+that other subscription's stored version on a standalone or replicated server too. Nothing this library or a
+realistic caller produces starts with that prefix by accident, but 0.32.0 had no version key at all, so an id of
+that exact shape worked there like any other, and this is a behaviour change for one that already exists.
+
+If you have such an id, migrate it before upgrading, while still on the previous version. Read the checkpoint
+under the old id, save it under a new one that does not start with the reserved prefix, delete the old id, then
+point wherever the application passes that subscription id (a `subscribe(..)` call, typically) at the new one.
+Do this through the storage's own API and before the upgrade, because afterward `read` refuses the old id the
+same as `save` and `delete` do, so the API can no longer see the checkpoint to move it. If the upgrade has already
+happened, migrate directly in Redis instead, a plain `RENAME` of the literal key from the old id to the new one,
+which touches no Java code and needs no version of this guard to agree to it, then update the application's own
+subscription id the same way.
 
 ## 5. Five subscription-capability interfaces are renamed
 
