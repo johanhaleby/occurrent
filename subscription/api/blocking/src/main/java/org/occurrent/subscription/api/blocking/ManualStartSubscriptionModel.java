@@ -133,11 +133,14 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * The position is recorded only for a registration that asks for {@link StartAt#subscriptionModelDefault()},
      * since that is the one a wrapped model reads a stored checkpoint for. Registering with a position of your own,
      * or with {@link StartAt#now()}, writes nothing, so a replay you asked for stays a replay instead of becoming a
-     * resume. A {@link StartAt#dynamic(java.util.function.Supplier) dynamic} start position is resolved once at
-     * registration to find out which of the two it is, before anything is read or written, so a function that answers
-     * the first-run question by looking for a stored checkpoint sees what was stored before this registration. Such a
-     * function therefore runs one more time than it used to. The wrapped model still receives the {@code StartAt} the
-     * caller passed, whatever that resolution answered.
+     * resume. A {@link StartAt#dynamic(java.util.function.Supplier) dynamic} start position is resolved at
+     * registration to find out which of the two it is, layer by layer down the wrapped models, exactly as those models
+     * resolve it themselves when the subscription starts. A layer answering with {@code null} leaves the subscription
+     * to the model it wraps, so the next model down is asked, and the first answer that is not {@code null} decides.
+     * All of that happens before anything is read or written, so a function that answers the first-run question by
+     * looking for a stored checkpoint sees what was stored before this registration. Such a function therefore runs
+     * once per layer it is asked about, on top of the calls it already got. The wrapped model still receives the
+     * {@code StartAt} the caller passed, whatever those resolutions answered.
      *
      * @param delegate          The subscription model to register with once a subscription is started.
      * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
@@ -146,23 +149,22 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      *                          this method demanding the full subscription model that happens to implement it.
      * @param checkpointStorage Where the recorded position is written, which must be the storage the wrapped models read.
      * @throws IllegalArgumentException If {@code checkpointStorage} does not
-     *                                  {@link CheckpointStorage#evaluatesWriteConditions() evaluate write conditions},
-     *                                  since the {@code ifAbsent()} write this model makes at registration is then
-     *                                  either refused outright or carried out over a checkpoint another node had
-     *                                  already stored.
+     *                                  {@link CheckpointStorage#evaluatesWriteConditions() evaluate write conditions}.
+     *                                  The position recorded at registration is written with
+     *                                  {@link CheckpointWriteCondition#ifAbsent() ifAbsent()}, so this model needs a
+     *                                  storage that evaluates that condition.
      */
     public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate, GlobalCheckpointSource<@Nullable Checkpoint> positionSource,
                                                                 CheckpointStorage checkpointStorage) {
         requireNonNull(positionSource, GlobalCheckpointSource.class.getSimpleName() + " cannot be null");
         requireNonNull(checkpointStorage, CheckpointStorage.class.getSimpleName() + " cannot be null");
         if (!checkpointStorage.evaluatesWriteConditions()) {
-            throw new IllegalArgumentException(checkpointStorage.getClass().getName() + " does not evaluate checkpoint write " +
-                                               "conditions, so the ifAbsent() write that records a start position at " +
-                                               "registration is either refused outright or carried out over a checkpoint " +
-                                               "another node had already stored. Use " +
+            throw new IllegalArgumentException("The start position recorded at registration is written with ifAbsent(), " +
+                                               "so this model needs a checkpoint storage that evaluates that condition, " +
+                                               "and " + checkpointStorage.getClass().getName() + " answers false to " +
+                                               "evaluatesWriteConditions(). Use a storage that evaluates it, or " +
                                                ManualStartSubscriptionModel.class.getSimpleName() +
-                                               ".stoppedByDefault(SubscriptionModel) instead, or a checkpoint storage that " +
-                                               "evaluates them.");
+                                               ".stoppedByDefault(SubscriptionModel), which records no position at all.");
         }
         return new ManualStartSubscriptionModel(delegate, positionSource, checkpointStorage);
     }
@@ -421,11 +423,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             return;
         }
         // Only the model default reads a stored checkpoint further down, so writing for any other position would
-        // store a checkpoint nothing starts from, over a subscription the caller asked to replay. Resolved through
-        // whatever a dynamic position stands for, and resolved before the read below, because a function answering
-        // the first-run question from this same storage must not find this registration's own write.
-        @Nullable StartAt startAtToUse = startAt.get(new SubscriptionModelContext(delegate.getClass()));
-        if (startAtToUse == null || !startAtToUse.isDefault()) {
+        // store a checkpoint nothing starts from, over a subscription the caller asked to replay. Resolved before
+        // the read below, because a function answering the first-run question from this same storage must not find
+        // this registration's own write.
+        if (!startsAtTheModelDefault(startAt)) {
             return;
         }
         // Read before the position is captured, which is what tells a checkpoint that was already there apart from
@@ -444,6 +445,25 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
                 return;
             }
             warnThatAnotherRegistrationWon(checkpointStorage, subscriptionId, positionToPin);
+        }
+    }
+
+    // Asks the question the way the wrapped models answer it when the subscription starts. Each layer resolves the
+    // position for itself, and a layer answering with nothing leaves the subscription to the model it wraps, so the
+    // answer that decides this is the first one a layer gives. Asking only the outermost model would read the start
+    // position the annotations build, which answers with nothing for a catch-up layer, as a registration with no
+    // position to record, and the durable model below it would then record one when the subscription starts.
+    private boolean startsAtTheModelDefault(StartAt startAt) {
+        SubscriptionModel model = delegate;
+        while (true) {
+            @Nullable StartAt startAtToUse = startAt.get(new SubscriptionModelContext(model.getClass()));
+            if (startAtToUse != null) {
+                return startAtToUse.isDefault();
+            }
+            if (!(model instanceof SubscriptionModelWrapper wrapper)) {
+                return false;
+            }
+            model = wrapper.getWrappedSubscriptionModel();
         }
     }
 

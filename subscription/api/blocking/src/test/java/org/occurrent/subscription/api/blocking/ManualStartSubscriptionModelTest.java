@@ -179,7 +179,7 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
-    void the_start_position_is_never_resolved_while_a_subscription_is_only_registered() {
+    void a_model_that_records_no_position_never_resolves_the_start_position_while_a_subscription_is_only_registered() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
         AtomicInteger resolutions = new AtomicInteger();
@@ -998,9 +998,35 @@ class ManualStartSubscriptionModelTest {
 
         assertThat(delegate.subscribeCalls.getFirst().startAt()).isSameAs(callersOwnStartAt);
         assertThat(resolutions.get())
-                .as("resolved once, to decide whether there is a position to record, and left alone after that")
+                .as("one resolution per layer asked, and this delegate wraps nothing and answers on the first one")
                 .isEqualTo(1);
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
+    }
+
+    @Test
+    void a_start_position_that_answers_with_nothing_for_the_outer_model_is_recorded_from_the_layer_below() {
+        // The shape the annotations build for the default start position, which answers with nothing for a catch-up
+        // layer and with the model default for everything else. A stack without a competing consumer above the
+        // catch-up model puts that layer outermost, and stopping there would read the registration as having no
+        // position to record, leaving the durable model below to record one when the subscription starts.
+        RecordingSubscriptionModel checkpointReadingModel = new RecordingSubscriptionModel();
+        ReplayingSubscriptionModel replayingModel = new ReplayingSubscriptionModel(checkpointReadingModel);
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        checkpointReadingModel.globalCheckpoint = new StringCheckpoint("at-registration");
+        AtomicInteger resolutions = new AtomicInteger();
+        StartAt startAt = StartAt.dynamic(context -> {
+            resolutions.incrementAndGet();
+            return context.hasSubscriptionModelType(ReplayingSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault();
+        });
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(replayingModel, checkpointReadingModel, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, startAt, __ -> {
+        });
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
+        assertThat(resolutions.get())
+                .as("asked for the outer model, which answered with nothing, and then for the one it wraps")
+                .isEqualTo(2);
     }
 
     @Test
@@ -1194,6 +1220,66 @@ class ManualStartSubscriptionModelTest {
         @Override
         public void shutdown() {
             shutdownCalls++;
+        }
+    }
+
+    // Stands for a layer that replays history of its own, the position the wrapped model below it reads a checkpoint
+    // for. Everything is passed straight down, since only its type matters to these tests.
+    private record ReplayingSubscriptionModel(SubscriptionModel wrapped) implements SubscriptionModel, SubscriptionModelWrapper {
+
+        @Override
+        public SubscriptionModel getWrappedSubscriptionModel() {
+            return wrapped;
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return wrapped.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return wrapped.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            wrapped.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            wrapped.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public void stop() {
+            wrapped.stop();
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            wrapped.start(resumeSubscriptionsAutomatically);
+        }
+
+        @Override
+        public boolean isRunning() {
+            return wrapped.isRunning();
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return wrapped.isRunning(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return wrapped.isPaused(subscriptionId);
+        }
+
+        @Override
+        public void shutdown() {
+            wrapped.shutdown();
         }
     }
 

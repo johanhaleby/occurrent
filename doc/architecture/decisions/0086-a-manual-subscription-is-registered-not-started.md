@@ -82,29 +82,30 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > reads a checkpoint for is not harmless. `StartPosition.BEGINNING` under the default resume behaviour asks to replay on
 > a first run and to resume afterwards, and it decides which of the two by asking whether this same storage holds a
 > checkpoint, so a position written at registration answered that question with a resume and the replay the caller asked
-> for never happened. The write now happens only when the caller's start position is the subscription model default,
-> resolved once at registration through whatever a dynamic position stands for, since the annotation default is one of
-> those. That resolution comes before the existence read and before the position is captured, which is what leaves a
-> first-run question with nothing of this registration's own to find. A dynamic function therefore runs one more time
-> than it used to, which `StartAt.dynamic` already allows for, and the wrapped model still receives the caller's own
+> for never happened. The write now happens only when the caller's start position resolves to the subscription model
+> default, through whatever a dynamic position stands for, since the annotation default is one of those. That
+> resolution comes before the existence read and before the position is captured, which is what leaves a first-run
+> question with nothing of this registration's own to find. A dynamic function therefore runs a few more times than it
+> used to, which `StartAt.dynamic` already allows for, and the wrapped model still receives the caller's own
 > `StartAt` object.
 >
-> The rule can be wrong in one case, and it is worth naming. A dynamic position is resolved against the model this
-> wrapper was handed, and the function may answer differently for a layer below that one. A function answering with
-> nothing for the competing consumer layer and with the model default for the durable layer under it reads here as
-> nothing to record, and the durable layer then resolves it to its own default at start and captures whatever position
-> it finds by then, which is the skip this write exists to prevent. Nothing Occurrent builds has that shape, since the
-> start positions that answer with nothing answer that way for the durable layer too, so it takes a function written by
-> hand. Resolving against every model in the wrapped chain would cover it and was rejected for now, because it calls the
-> function once per layer and functions like the one `StartPosition.BEGINNING` builds read the checkpoint storage on
-> every call.
+> **A dynamic position is resolved layer by layer, not once against the model this wrapper was handed.** Each layer is
+> asked for its own answer, a layer answering with nothing leaves the subscription to the model it wraps and the model
+> below is asked next, and the first answer that is not nothing decides. That is what the wrapped models do to the same
+> position when the subscription starts, and reproducing it is the only way this wrapper can tell whether a checkpoint
+> will be read at all. One ask would have been wrong for the start position the annotations build, which answers with
+> nothing for a catch-up layer and with the model default for everything else. The Spring Boot starter's own stack
+> answers on the first ask, since it always puts a competing consumer layer on top, but its subscription model bean is
+> `@ConditionalOnMissingBean` and a stack wired by hand can put the catch-up layer outermost. There, one ask would
+> record nothing and leave the durable model to record a position when the subscription starts, which is the skip #669
+> was about.
 >
-> The three-argument factory also refuses a `CheckpointStorage` that answers false to `evaluatesWriteConditions()`.
-> That answer covers a storage that refuses `ifAbsent()` and one that writes through it regardless, and neither gives
-> this wrapper the conditional write it needs, so a position recorded through one is either lost to an exception or
-> written over whatever another node stored first. A refusal at wiring time is cheaper than finding out from a
-> subscription that resumed from the wrong position. The one-argument factory is the way to keep such a storage, at the
-> cost of a first run starting from the moment it is started.
+> The three-argument factory also refuses a `CheckpointStorage` that answers false to `evaluatesWriteConditions()`. The
+> position is written with `ifAbsent()`, so this wrapper needs a storage that evaluates that condition, and that method
+> is the only thing it has to ask. Refusing at wiring time is cheaper than finding out later, either on the first
+> registration or from a subscription that resumed from a position it should never have started at. The one-argument
+> factory keeps such a storage, at the cost of a first run starting from the moment it is started. A caller that passed
+> a storage of its own in 0.32.0 is refused until it answers true, which the changelog records as a breaking change.
 
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same
