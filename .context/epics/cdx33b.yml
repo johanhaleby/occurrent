@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 26
-updated_at: 2026-08-13T16:30:00Z
-updated_by: "orchestrator session faee3625 (U7 rebase verified content-identical; suppressed block on e56098d25 read: one confirmed defect routed, factory skips start-type validation on empty eventTypes; array-lenient and docs-site comments declined with pointers)"
+revision: 27
+updated_at: 2026-08-13T17:30:00Z
+updated_by: "orchestrator session faee3625 (PR 770 merged as d376c8be5 on exact head 6ca6c6d30; U7 DONE; all guide-serialized units landed; next: main run verification, U11 chip, U10 dispatch, UREG)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -66,10 +66,18 @@ pending_actions:
     type: message-session
     target: "U7 session local_8a2de541: Copilot suppressed block on e56098d25 yielded one confirmed defect (Saga.create's empty-eventTypes branch skips start-type validation, so int.class/array start types build an unstartable saga on the new trailing-filter overload's path; verified in code) routed with fix+test+mutation direction; array-lenient comment declined per ADR 124's behavior table, docs-site comment declined as U10 scope"
     expected: "fix push, green run list, re-review read on the new head, DELIVERY_RESULT describing the final head"
-    status: PENDING
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-13T16:30:00Z
+  - id: act-009
+    type: merge
+    target: "PR 770 (U7) CAS squash merge on exact head 6ca6c6d30 after the full gate (28/28 by run list, 0 threads, sentinels verified, all review channels read, both rulings closed)"
+    expected: "merge commit on main; main matrix green on it"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-13T17:28:00Z
 units:
   U1:
     issue: null
@@ -134,13 +142,13 @@ units:
   U7:
     issue: 751
     goal: "Saga filter override, closes #751 (finding 5 per D1): explicit filter/type-selector override bypassing EventTypeExpansion, Kotlin sugar, refusal message gains the third remedy, changelog + migration section 10 rework, ADR 124 amendment wording design-gated to Johan"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: "local_8a2de541"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "770", met: false, evidence: "OPEN at 7f063ce56 (rebased over U2/U8, full matrix green on 800aca091, mid-pass array-refusal commit line-read by the orchestrator and sound). Adversarial pass at 800aca091: MECHANISM HELD on all seven angles (bypass proven end-to-end via the subject-narrowing subscription test, no-override path byte-identical, U4/U5 rebase integrity verified hunk-by-hunk, Kotlin parity by delegation, nothing persisted, sentinels exactly once). Three claim-truth defects routed: flow-saga window pollution under a broader override (foreign correlated events append and evict the step's own events; fix is an isInstance guard before append plus the two unowned tests), the broader-filter-is-safe sentence false at the converter (scope the claim in javadoc/changelog/guide, caveats become three), ADR 124 One-check paragraph stale in 2 of 3 clauses with the amendment implicitly certifying it (fold the fix into the wording set BEFORE the Johan ruling, one gate). Projection.java twin of the house safety claim routed to UREG, shipped surface, not U7. Merge after: fixes, re-review, updated report, Johan ADR ruling, orchestrator read of final head."}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "770", met: true, evidence: "MERGED 2026-08-13 as d376c8be5, CAS on exact head 6ca6c6d30 (run list 28/28 jobs across 5 runs, 0 threads, CLEAN, sentinels exactly-once verified by the orchestrator on the head). Adversarial pass held on all seven angles; its three defects closed as: claim rescope + ADR clause (fixed in-PR), flow-window guard RULED OUT on U7's derived-path evidence (would change shipped 0.32 behaviour under a collapsing mapper) and deferred as #773 with both fix candidates, documented-cost meanwhile. Johan approved the ADR 116/86 and ADR 124 wording via AskUserQuestion; one post-approval truth refinement to blockquote 2 flagged to him. Copilot suppressed blocks read at every head, yielding two more real fixes (primitive refusal on the lenient path; empty-selector factory start-type validation) plus declines recorded with pointers (array-lenient per ADR 124 table, docs-site per U10, ORCHESTRATOR.md per single-writer). Seven mutations killed, restore-from-copy. Final report describes 100d9d4a4 with the tail test-comment commit directed and line-read by the orchestrator; its stale still-owed paragraph (claims U2/U8 open) noted, substance re-verified on the final head."}
   U8:
     issue: null
     goal: "Migration guide Kotlin truth (finding 9): section 2 discloses Java-only recipe coverage, adds blocking and reactor Kotlin snippets; merges after U4 per guide serialization order U2-U4-U8-U7"
