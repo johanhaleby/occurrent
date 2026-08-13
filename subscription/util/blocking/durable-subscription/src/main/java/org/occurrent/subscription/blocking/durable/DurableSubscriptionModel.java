@@ -152,15 +152,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
-        // Held for the whole method, not just the opt-out branch, because subscribe, resumeSubscription and
-        // cancelSubscription for the same id must stay serialized against notCheckpointedSubscriptions (see the
-        // field comment above). It does not cover the checkpoint read and write that generateStartAtPositionFrom's
-        // default case defers to its returned supplier. That runs later, when the delegate evaluates the StartAt.
-        // SpringMongoSubscriptionModel serializes that evaluation against its own cancelSubscription under one
-        // shared monitor (#subscribe, #restartOnce, #cancelSubscription). NativeMongoSubscriptionModel queues the
-        // same evaluation onto its dispatcher executor without that serialization, so its cancelSubscription can
-        // still race a checkpoint write there. Any CheckpointAwareSubscriptionModel delegate that does not already
-        // serialize this itself carries that race.
+        // Held for the whole method, not just the opt-out branch, so subscribe, resumeSubscription and
+        // cancelSubscription for the same id stay serialized against notCheckpointedSubscriptions (see the field
+        // comment above). SpringMongoSubscriptionModel evaluates the returned StartAt synchronously on the first
+        // subscribe, so this lock covers that checkpoint read and write too, and it evaluates the StartAt again on
+        // a later restartOnce, serialized against its own cancelSubscription by one shared monitor instead
+        // (#subscribe, #restartOnce, #cancelSubscription). NativeMongoSubscriptionModel always defers the
+        // evaluation to its dispatcher executor, even on the first subscribe, with no such serialization, so its
+        // cancelSubscription can race a checkpoint write.
         synchronized (lockFor(subscriptionId)) {
             StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
             if (startAtToUse == null) {
