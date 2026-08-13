@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 19
-updated_at: 2026-08-13T13:40:00Z
-updated_by: "orchestrator session faee3625 (U2 merged as e5175f0ce, U8 window opened)"
+revision: 20
+updated_at: 2026-08-13T13:35:00Z
+updated_by: "orchestrator session faee3625 (U8 merged as bc6a1e872, U7 final rebase opened)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -104,13 +104,13 @@ units:
   U8:
     issue: null
     goal: "Migration guide Kotlin truth (finding 9): section 2 discloses Java-only recipe coverage, adds blocking and reactor Kotlin snippets; merges after U4 per guide serialization order U2-U4-U8-U7"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U4]
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "762", met: true, evidence: "MERGED 2026-08-13 as bc6a1e872 (CAS on rebased head 733e69192). Report: three claim sentences rescoped after Copilot caught the umbrella-recipe overreach (rename sub-recipe IS Kotlin-capable, only the checkpoint-storage stub is Java-only), snippets written against both real interfaces with file:line, By-hand-in-Kotlin subsection added. Rebase over U2 verified by the orchestrator at byte level (compare vs new main = its own +46/-8 only, per-phrase sentinel counts all exactly one, two line-wrap false alarms resolved by inspection), which voided the owed confirmation line. Markdown-only PR: no matrix by design, review clean at content-identical pre-rebase head."}
   U9:
     issue: null
     goal: "ADR and javadoc integrity (finding 15): ADR 0110 follow-up note, ADR 0116 three-way reconciliation, reactor Projections.java stale phrase, ADR 0111 Status wording to Johan at design gate"
