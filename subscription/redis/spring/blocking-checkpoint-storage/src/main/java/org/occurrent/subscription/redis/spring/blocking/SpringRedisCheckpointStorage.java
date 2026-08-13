@@ -30,7 +30,10 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.serializer.RedisSerializer;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.function.Predicate;
@@ -48,16 +51,60 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * node still running a release before this one only ever does a plain {@code GET} against the first key, and that
  * value has not changed shape, so a rolling deploy stays safe.
  * <p>
+ * Because the checkpoint key is a caller-chosen subscription id with no prefix of its own, a subscription could in
+ * principle choose an id equal to the exact text of some other subscription's version key, and land its own
+ * checkpoint on that other subscription's stored version. {@link #read(String)}, {@link #save(String, Checkpoint,
+ * CheckpointWriteCondition)}, {@link #delete(String)}, and {@link #exists(String)} all refuse a subscription id
+ * that starts with the version key's own prefix, which every version key does and no id a real caller would pick
+ * does by accident, closing that off entirely rather than leaving it as a documented risk.
+ * <p>
  * {@link CheckpointWriteCondition#notOlderThan(long)} and {@link CheckpointWriteCondition#ifAbsent()} are evaluated
  * by a Lua script that compares the stored version and writes both keys in one round trip, so no other writer can
  * land between the comparison and the write. {@link CheckpointWriteCondition#any()} needs no comparison and keeps
  * writing through {@code opsForValue().set}, exactly as before, leaving the version key untouched.
  * <p>
- * <strong>Redis Cluster.</strong> The checkpoint key and the version key are not guaranteed to hash to the same
- * slot, and Cluster refuses a script that touches keys in different slots. A caller that never passes a condition
- * other than {@link CheckpointWriteCondition#any()} is unaffected, since that path never runs the script. A caller
- * that does is refused immediately, on the first conditional write, with the error Cluster itself reports for
- * crossing slots.
+ * <strong>Redis Cluster.</strong> The version key carries a hash tag built from whatever the checkpoint key itself
+ * hashes on, so Cluster places both keys in the same slot and the scripts above, and the two-key {@code DEL} in
+ * {@link #delete(String)}, are never refused for crossing slots. A subscription id with no braces of its own hashes
+ * on its full text either way, and one that already contains a matched, non-empty pair hashes on the text between
+ * them, the same substring Cluster would use for the checkpoint key. A SHA-256 digest of the full subscription id
+ * follows the tag, outside its braces where Cluster never looks once it has found the closing one, so two ids that
+ * happen to share a hash tag, two ids tenant-scoped under the same {@code "{tenant}"} for instance, still get
+ * distinct version keys instead of silently sharing one fencing version. The digest, not a raw or delimited copy of
+ * the id, is what makes that collision-resistant. The tag can equal the whole subscription id (see the first shape
+ * below), so a raw copy sitting next to it lets one id's own text be misread as a different id's tag plus copy.
+ * Two earlier constructions built this way, a plain separator and a length prefix, both broke on exactly that
+ * doubling during review.
+ * <p>
+ * One shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no brace
+ * pair, an unmatched brace, or an empty pair like {@code {}}) and that whole id is either empty or contains a
+ * closing brace somewhere in it, for example {@code ""}, {@code "{}orders"} or {@code "a}b{c"}. Wrapping such text
+ * in a fresh hash tag only reproduces it when the text has no closing brace of its own, since Cluster stops at the
+ * first one it finds, and that is then the wrap's own or an earlier one already inside the id, not the one this
+ * class appended. This library's own tests use ids of that shape deliberately, to exercise the refusal below, but
+ * no subscription id a real caller would choose takes it by accident.
+ * <p>
+ * {@link #save(String, Checkpoint, CheckpointWriteCondition)} refuses an id of that shape outright, with an
+ * {@link IllegalArgumentException} naming the reason, whenever the condition is {@link CheckpointWriteCondition#notOlderThan(long)}
+ * or {@link CheckpointWriteCondition#ifAbsent()}. That refusal is what keeps {@link #evaluatesWriteConditions()}
+ * true without exception, rather than true for every id except the one shape Cluster would otherwise refuse two
+ * calls downstream. {@link CheckpointWriteCondition#any()} never refuses one, since it writes only the checkpoint
+ * key and never touches the version key at all. The refusal is unconditional, not only on Cluster, since a
+ * standalone or replicated server never needed slot alignment in the first place and gains nothing from writing an
+ * id of this shape either.
+ * <p>
+ * {@link #delete(String)} never refuses one. A subscription id of this shape can only ever have had a checkpoint
+ * written for it through {@code any()}, since a conditional write already refuses one before touching Redis at
+ * all, so its version key can never exist to strand. On a {@code CROSSSLOT} failure, falling back to two
+ * single-key deletes is provably safe for that reason, not merely convenient. The checkpoint key is deleted first
+ * regardless, a defensive ordering rather than one this specific fallback depends on. If a version key ever did
+ * exist here, deleting it first and failing before the checkpoint would leave a checkpoint with no stored version,
+ * which a later {@code notOlderThan} write would then accept unconditionally, letting a lease-holder that has
+ * already moved on win a write it should have lost.
+ * <p>
+ * This also assumes the {@link RedisOperations} passed in serializes a key to its own literal bytes, the same
+ * assumption the checkpoint's plain {@code GET} already makes. A key serializer that reshapes the string changes
+ * what Cluster actually hashes, and nothing in this class can see that reshaping to compensate for it.
  */
 @NullMarked
 public class SpringRedisCheckpointStorage implements CheckpointStorage {
@@ -170,9 +217,17 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         this.conditionArgsSerializer = conditionArgsSerializer(redis);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
+     *                                   its own version keys, see the class javadoc. Specific to this
+     *                                   implementation, not part of the {@link CheckpointStorage} contract.
+     */
     @Nullable
     @Override
     public Checkpoint read(String subscriptionId) {
+        requireOutsideVersionKeyNamespace(subscriptionId);
         Supplier<@Nullable Checkpoint> read = () -> {
             String checkpoint = redis.opsForValue().get(subscriptionId);
             if (checkpoint == null) {
@@ -184,11 +239,24 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         return executeWithRetry(read, __ -> !shutdown, retryStrategy).get();
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
+     *                                  its own version keys, see the class javadoc, or if {@code condition} is
+     *                                  {@link CheckpointWriteCondition#notOlderThan(long)} or
+     *                                  {@link CheckpointWriteCondition#ifAbsent()} and {@code subscriptionId} is
+     *                                  one of the shapes the class javadoc names Redis Cluster cannot align a slot
+     *                                  for. Neither is part of the {@link CheckpointStorage} contract, since no
+     *                                  other storage this library ships has an analogous reserved namespace or
+     *                                  unsupported shape.
+     */
     @Override
     public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireNonNull(checkpoint, Checkpoint.class.getSimpleName() + " cannot be null");
         requireNonNull(condition, CheckpointWriteCondition.class.getSimpleName() + " cannot be null");
+        requireOutsideVersionKeyNamespace(subscriptionId);
         return switch (condition) {
             case CheckpointWriteCondition.Any ignored -> saveUnconditionally(subscriptionId, checkpoint);
             case CheckpointWriteCondition.NotOlderThan notOlderThan -> saveConditionally(subscriptionId, checkpoint, condition, NOT_OLDER_THAN_SCRIPT,
@@ -208,13 +276,16 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     /**
      * Runs a write script and turns its return code into either the saved checkpoint or a refusal.
      * <p>
-     * The refusal is excluded from the retry strategy's own predicate, not merely allowed to exhaust it. This
-     * storage's default {@link RetryStrategy} is {@code exponentialBackoff}, whose default max attempts is infinite,
-     * so a refusal left inside the ordinary retry path would retry a write that can never succeed and hang the
-     * delivery thread forever. Excluding it is what {@link CheckpointWriteConditionNotFulfilledException}'s javadoc
-     * means by "must never be retried on the path that threw it".
+     * The refusal, and a Cluster {@code CROSSSLOT} failure, are both excluded from the retry strategy's own
+     * predicate, not merely allowed to exhaust it. This storage's default {@link RetryStrategy} is
+     * {@code exponentialBackoff}, whose default max attempts is infinite, so either one left inside the ordinary
+     * retry path would retry a write that can never succeed and hang the delivery thread forever. Excluding the
+     * refusal is what {@link CheckpointWriteConditionNotFulfilledException}'s javadoc means by "must never be
+     * retried on the path that threw it", and a slot mismatch is the same kind of failure, just reported by Cluster
+     * instead of by this class.
      */
     private Checkpoint saveConditionally(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition, RedisScript<Long> script, byte[]... extraArgs) {
+        requireClusterSlotAlignable(subscriptionId);
         Supplier<Checkpoint> save = () -> {
             Object[] args = new Object[1 + extraArgs.length];
             args[0] = checkpoint.asString();
@@ -229,13 +300,51 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
             throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, storedVersion, condition);
         };
 
-        Predicate<Throwable> retryUnlessShutdownOrRefused = e -> !shutdown && !(e instanceof CheckpointWriteConditionNotFulfilledException);
+        Predicate<Throwable> retryUnlessShutdownOrRefused = e -> !shutdown && !(e instanceof CheckpointWriteConditionNotFulfilledException) && !isClusterSlotMismatch(e);
         return requireNonNull(executeWithRetry(save, retryUnlessShutdownOrRefused, retryStrategy).get());
     }
 
-    // True because the comparison is real on a standalone or replicated server, which is where this storage is
-    // supported. On Cluster the script is refused for crossing slots, and nothing here can tell the two deployments
-    // apart without a round trip to the server.
+    // The checkpoint key is subscriptionId itself, unprefixed, and every version key starts with VERSION_KEY_PREFIX,
+    // so a subscription id that starts with it too could be the exact text of some other subscription's version
+    // key. A save, delete, or read against that id would then land on the wrong subscription's stored version
+    // instead of its own checkpoint. Refusing the prefix outright is enough to rule that out entirely, since no
+    // version key this class ever builds starts with anything else.
+    private static void requireOutsideVersionKeyNamespace(String subscriptionId) {
+        if (subscriptionId.startsWith(VERSION_KEY_PREFIX)) {
+            throw new IllegalArgumentException("Subscription id \"" + subscriptionId + "\" cannot be used, since it starts with \"" + VERSION_KEY_PREFIX + "\", the prefix this storage reserves for its own version keys, and could otherwise be the exact key some other subscription's version is stored under.");
+        }
+    }
+
+    // The one input clusterHashTag cannot build a working hash tag from. It fell back to the whole subscription id
+    // (no usable brace pair) and that fallback text is either empty or itself contains a closing brace, the two
+    // shapes the class javadoc names. Refused here, immediately and by name, rather than left to surface as
+    // Cluster's own crossed-slots error, which is what makes evaluatesWriteConditions() true without exception for
+    // every subscription id a conditional write actually accepts. No caller in this library, or a realistic one,
+    // needs an id of this shape.
+    private static void requireClusterSlotAlignable(String subscriptionId) {
+        String tag = clusterHashTag(subscriptionId);
+        if (tag.isEmpty() || tag.contains("}")) {
+            throw new IllegalArgumentException("Subscription id \"" + subscriptionId + "\" cannot be used with a conditional write, since Redis Cluster would hash the checkpoint key and this storage's version key for it to different slots and refuse the write for crossing slots.");
+        }
+    }
+
+    // Cluster reports two script keys in different slots as CROSSSLOT, a deterministic failure no retry turns into
+    // a success. Neither Lettuce nor Spring Data Redis gives this its own exception type, so this walks the cause
+    // chain for the stable error-code word Redis itself puts at the start of the reply.
+    private static boolean isClusterSlotMismatch(Throwable e) {
+        for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+            String message = cause.getMessage();
+            if (message != null && message.startsWith("CROSSSLOT")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // True unconditionally. The comparison is real on a standalone server, a replicated one, and on Cluster, since
+    // versionKey's hash tag keeps both keys the script touches in the same slot for every subscription id a
+    // conditional write accepts. The one shape it does not accept, requireClusterSlotAlignable refuses outright
+    // before either key is touched, so true never quietly stops being true for an id this class lets through.
     @Override
     public boolean evaluatesWriteConditions() {
         return true;
@@ -250,15 +359,51 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         return storedVersion == null || storedVersion == NO_VERSION_STORED ? OptionalLong.empty() : OptionalLong.of(storedVersion);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Unlike {@link #save(String, Checkpoint, CheckpointWriteCondition)}, this never throws for a subscription id
+     * shape Redis Cluster cannot align a slot for, see the class javadoc for why deleting one is always safe.
+     *
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
+     *                                  its own version keys, see the class javadoc. Specific to this
+     *                                  implementation, not part of the {@link CheckpointStorage} contract.
+     */
     @Override
     public void delete(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        Supplier<Long> deleteBoth = () -> redis.delete(List.of(subscriptionId, versionKey(subscriptionId)));
+        requireOutsideVersionKeyNamespace(subscriptionId);
+        Supplier<Long> deleteBoth = () -> {
+            try {
+                return redis.delete(List.of(subscriptionId, versionKey(subscriptionId)));
+            } catch (RuntimeException e) {
+                if (!isClusterSlotMismatch(e)) {
+                    throw e;
+                }
+                // Only the one subscription id shape requireClusterSlotAlignable refuses can land here, and a
+                // conditional write already refuses that shape before ever writing a version key, so this id's
+                // version key can never exist to strand. The second delete below is provably a no-op, not merely
+                // convenient. The checkpoint is still deleted first, defensively. If a version key ever did exist,
+                // deleting it first and failing before the checkpoint would leave a checkpoint with no stored
+                // version, which a later notOlderThan write would then accept unconditionally.
+                redis.delete(subscriptionId);
+                redis.delete(versionKey(subscriptionId));
+                return 0L;
+            }
+        };
         executeWithRetry(deleteBoth, __ -> !shutdown, retryStrategy).get();
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalArgumentException if {@code subscriptionId} starts with the prefix this storage reserves for
+     *                                  its own version keys, see the class javadoc. Specific to this
+     *                                  implementation, not part of the {@link CheckpointStorage} contract.
+     */
     @Override
     public boolean exists(String subscriptionId) {
+        requireOutsideVersionKeyNamespace(subscriptionId);
         Supplier<Boolean> exists = () -> {
             Boolean result = redis.hasKey(subscriptionId);
             return result != null && result;
@@ -266,8 +411,49 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         return Boolean.TRUE.equals(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
     }
 
-    private static String versionKey(String subscriptionId) {
-        return VERSION_KEY_PREFIX + subscriptionId;
+    // The hash tag wraps the same substring Redis Cluster's own slot algorithm would pick out of the checkpoint key
+    // (subscriptionId itself, unprefixed), so the two keys the write scripts touch land in the same slot. A SHA-256
+    // digest of the full subscription id follows it, outside the braces, where Cluster never looks once it has
+    // found the hash tag's closing brace, so two ids that share a hash tag (two tenant-scoped ids under the same
+    // "{tenant}" tag, for instance) still get distinct version keys instead of silently sharing one fencing
+    // version. The digest, not the raw id or a length-prefixed copy of it, is what makes this collision-resistant.
+    // The tag can equal the whole subscription id (the fallback branch in clusterHashTag), so a raw or delimited
+    // copy of the id sitting next to that tag lets one subscription id's own text be read as a completely different
+    // subscription id's tag-plus-copy. Two adversarially constructed pairs broke that this way in review, a plain
+    // "}:" separator ("a}:{a" vs "{a}:a}:{a") and a length-prefixed one ("a}12:{a" vs "{a}7:a}12:{a"), both
+    // exploiting the same doubling. A digest carries none of the id's own structure for an adversary to reuse.
+    // Package-private, not private, so a test can compute it against an independent Cluster slot implementation.
+    static String versionKey(String subscriptionId) {
+        return VERSION_KEY_PREFIX + "{" + clusterHashTag(subscriptionId) + "}" + sha256Hex(subscriptionId);
+    }
+
+    // SHA-256 is a JDK-guaranteed algorithm (Java Cryptography Architecture Standard Algorithm Names), so this can
+    // never actually throw. Hex, not the raw digest bytes, because this key is a Java String, and hex keeps it to
+    // characters any reasonable key serializer round-trips cleanly, rather than raw bytes that decode to arbitrary
+    // code points.
+    private static String sha256Hex(String s) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(s.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is a mandatory algorithm for every Java implementation", e);
+        }
+    }
+
+    // Redis Cluster's own slot algorithm (CLUSTER-SPEC, "Keys hash tags"): the first '{', then the first '}' after
+    // it; the whole key stands in for the tag when either brace is missing or none of the key sits between them.
+    // Mirrored here, rather than pulled from a client library, because keeping it beside versionKey is what makes it
+    // obvious the two must never drift apart.
+    private static String clusterHashTag(String key) {
+        int openBrace = key.indexOf('{');
+        if (openBrace < 0) {
+            return key;
+        }
+        int closeBrace = key.indexOf('}', openBrace + 1);
+        if (closeBrace < 0 || closeBrace == openBrace + 1) {
+            return key;
+        }
+        return key.substring(openBrace + 1, closeBrace);
     }
 
     @SuppressWarnings("unchecked")

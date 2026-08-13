@@ -93,8 +93,9 @@ refuses to start when it would pair your store with a competing-consumer lease, 
 that.
 
 Occurrent's own Mongo and Redis checkpoint storages do not need this recipe. They already evaluate `notOlderThan`
-and `ifAbsent` for real. Redis Cluster is the exception. It still refuses a conditional write outright, and
-section 4 covers why.
+and `ifAbsent` for real, on Redis Cluster too, see section 4. One subscription id shape the Redis storage refuses
+outright for a conditional write is a Cluster-only concept in name, the refusal itself applies on a standalone or
+replicated server exactly the same, since nothing about it depends on which one you run.
 
 If your store can evaluate a condition for real, the two rules that matter are the same two the TCK asserts on every
 storage that declares it supports them. `any()` must leave whatever version is stored untouched, carrying it
@@ -121,9 +122,48 @@ redelivered, which is within the at-least-once contract this library has always 
 
 ## 4. Redis Cluster
 
-`SpringRedisCheckpointStorage` refuses `notOlderThan` and `ifAbsent` on Redis Cluster, on the first conditional
-write, because the checkpoint and its stored version live in two differently named keys that Cluster will not
-guarantee land in the same slot.
+`SpringRedisCheckpointStorage` keeps the checkpoint and its stored version in two differently named keys, and
+Cluster refuses a script that touches keys in different slots. The version key's name carries a hash tag built from
+whatever the checkpoint key itself hashes on, so Cluster places both in the same slot and `notOlderThan` and
+`ifAbsent` work there exactly as they do on a standalone or replicated server. The version key also carries a
+SHA-256 digest of the subscription id after that tag, so two ids that happen to share a hash tag, two tenant-scoped
+ids under the same `{tenant}` for instance, still get their own version key instead of silently sharing one
+fencing version. A digest rather than a raw or delimited copy of the id, because the tag can itself equal the whole
+subscription id, and two non-cryptographic constructions tried here both let one id's own text be misread as a
+different id's tag plus copy.
+
+One shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no brace
+pair, an unmatched brace, or an empty pair like `{}`) and that whole id is either empty or contains a closing brace
+somewhere in it, for example `""`, `"{}orders"` or `"a}b{c"`.
+
+`save` refuses an id of that shape outright with an `IllegalArgumentException` for `notOlderThan` and `ifAbsent`,
+which is what keeps `evaluatesWriteConditions()` true without exception rather than true for every id except one
+Cluster would otherwise refuse two calls downstream. `any()` never refuses one, since it writes only the checkpoint
+key. `delete` never refuses one either. An id of this shape can only ever have had a checkpoint written for it
+through `any()`, since a conditional write already refuses one before touching Redis, so its version key can never
+exist to strand. On a `CROSSSLOT` failure `delete` falls back to two single-key deletes instead, which is provably
+safe for that reason and not merely convenient.
+
+This also assumes the `RedisOperations` passed in serializes a key to its own literal bytes, the same assumption
+the checkpoint's plain `GET` already makes.
+
+`read`, `save`, `delete`, and `exists` also refuse a subscription id that starts with the version key's own
+reserved prefix (`occurrent:checkpoint-version:`), with an `IllegalArgumentException`. This is a Cluster-independent
+guard, since a caller-chosen id equal to another subscription's version key would let a write against it corrupt
+that other subscription's stored version on a standalone or replicated server too. Nothing this library or a
+realistic caller produces starts with that prefix by accident, but 0.32.0 had no version key at all, so an id of
+that exact shape worked there like any other, and this is a behaviour change for one that already exists.
+
+If you have such an id, migrate it before upgrading, while still on the previous version. Read the checkpoint
+under the old id, save it under a new one that does not start with the reserved prefix, delete the old id, then
+point wherever the application passes that subscription id (a `subscribe(..)` call, typically) at the new one.
+Do this through the storage's own API and before the upgrade, because afterward `read` refuses the old id the
+same as `save` and `delete` do, so the API can no longer see the checkpoint to move it. If the upgrade has already
+happened, migrate directly in Redis instead, with the application stopped, `GET` the old key, `SET` the new one to
+that value, then `DEL` the old key, three single-key commands rather than `RENAME`. `RENAME` itself needs both keys
+in the same Cluster slot and fails with `CROSSSLOT` otherwise, which a new id chosen only to avoid the reserved
+prefix has no reason to land in, so it is not a safe substitute here. Update the application's own subscription id
+the same way once the data has moved.
 
 ## 5. Five subscription-capability interfaces are renamed
 

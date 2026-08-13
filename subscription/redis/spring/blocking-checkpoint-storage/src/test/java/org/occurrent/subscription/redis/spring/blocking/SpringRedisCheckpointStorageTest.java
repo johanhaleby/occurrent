@@ -23,8 +23,11 @@ import com.mongodb.client.MongoClients;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.github.artsok.RepeatedIfExceptionsTest;
+import io.lettuce.core.RedisCommandExecutionException;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
@@ -48,9 +51,12 @@ import org.occurrent.time.TimeConversion;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
+import org.springframework.data.redis.RedisSystemException;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
+import org.springframework.data.redis.serializer.RedisSerializer;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -70,11 +76,18 @@ import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @Timeout(20)
 @DisplayNameGeneration(DisplayNameGenerator.Simple.class)
@@ -252,6 +265,145 @@ class SpringRedisCheckpointStorageTest {
                 assertThatThrownBy(() -> storage.save(subscriptionId, new StringBasedCheckpoint("stale"), CheckpointWriteCondition.notOlderThan(1)))
                         .as("a version below the stored one must be refused immediately, not queued behind a 30 second backoff")
                         .isInstanceOf(CheckpointWriteConditionNotFulfilledException.class));
+    }
+
+    @Test
+    void a_cluster_crossslot_failure_escapes_retry_immediately_instead_of_hanging_the_calling_thread() {
+        // Given a retry strategy whose backoff is longer than this test's own timeout and whose max attempts is the
+        // exponentialBackoff default, infinite. If a CROSSSLOT failure were retried even once, this test would still
+        // be waiting out that backoff when assertTimeoutPreemptively gives up, since the write can never succeed.
+        // No test container here runs Cluster mode, so the failure is injected on a mocked RedisOperations instead
+        // of provoked from a real one.
+        @SuppressWarnings("unchecked")
+        RedisOperations<String, String> redis = mock(RedisOperations.class);
+        when(redis.getValueSerializer()).thenReturn((RedisSerializer) RedisSerializer.string());
+        // The outer message is the generic Spring wrapper text, not the CROSSSLOT one, so this only passes if the
+        // cause chain is actually walked down to the driver exception. The two messages being identical here once
+        // let a broken walk (checking only the outer exception) pass anyway.
+        RuntimeException crossSlot = new RedisSystemException("Redis exception",
+                new RedisCommandExecutionException("CROSSSLOT Keys in request don't hash to the same slot"));
+        // The last matcher is typed Object[], not Object, because saveConditionally passes an already-built array
+        // as the vararg parameter. A plain any() matches one vararg element, which this call never has exactly
+        // one of, so the stub would silently miss and the mock would return null instead of throwing.
+        when(redis.execute(any(RedisScript.class), any(), any(), anyList(), any(Object[].class))).thenThrow(crossSlot);
+
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redis, RetryStrategy.exponentialBackoff(Duration.ofSeconds(30), Duration.ofSeconds(30), 1.0f));
+
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
+                assertThatThrownBy(() -> storage.save(UUID.randomUUID().toString(), new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(1)))
+                        .as("a Cluster CROSSSLOT failure must be refused immediately, not queued behind a 30 second backoff")
+                        .isSameAs(crossSlot));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "a}b{c", "{}orders"})
+    void refuses_a_conditional_save_for_a_subscription_id_cluster_cannot_align(String subscriptionId) {
+        // Each of these falls back to hashing itself whole, empty or containing a closing brace of its own, so
+        // Cluster would hash the checkpoint key and this storage's version key for it to different slots. Refused
+        // here rather than left to surface as Cluster's crossed-slots error two calls downstream.
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+
+        assertThatThrownBy(() -> storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot be used with a conditional write");
+    }
+
+    /**
+     * Every conditional-save test elsewhere in this class uses a brace-free {@link UUID}, so a predicate broadened
+     * to refuse every brace-carrying id, not just the ones Cluster genuinely cannot align, would still pass the
+     * whole suite. These four are all accepted today, a well-formed tag, a fallback with an opening brace and no
+     * closing one, a single unmatched opening brace, and a nested pair. None of them are empty and none of their
+     * {@code clusterHashTag} results contain a closing brace, so {@code requireClusterSlotAlignable} lets all four
+     * through.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"{tenant}-orders", "a{b", "{", "a{b{c}d}e"})
+    void accepts_a_conditional_save_for_a_subscription_id_cluster_can_align(String subscriptionId) {
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+
+        assertThatCode(() -> storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(1)))
+                .doesNotThrowAnyException();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "a}b{c", "{}orders"})
+    void an_unconditional_save_accepts_a_subscription_id_a_conditional_write_would_refuse(String subscriptionId) {
+        // any() never touches the version key, so none of the reasoning that makes a conditional write refuse
+        // these ids applies to it. A checkpoint written this way still has to be deletable, see the delete() tests.
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+
+        assertThatCode(() -> storage.save(subscriptionId, new StringBasedCheckpoint("first")))
+                .doesNotThrowAnyException();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "a}b{c", "{}orders"})
+    void deletes_a_subscription_id_a_conditional_write_would_refuse(String subscriptionId) {
+        // Standalone Redis has no slot concept, so the multi-key DEL these ids would refuse for crossing slots on
+        // Cluster succeeds directly here. The CROSSSLOT fallback path itself is covered by the mocked test below,
+        // since provoking a real CROSSSLOT needs a Cluster this module has no container for.
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"));
+
+        assertThatCode(() -> storage.delete(subscriptionId)).doesNotThrowAnyException();
+        assertThat(storage.read(subscriptionId)).isNull();
+    }
+
+    @Test
+    void deleting_falls_back_to_two_single_key_deletes_when_the_multi_key_delete_hits_a_cluster_crossslot_failure() {
+        // A checkpoint written through an unconditional save for one of the ids a conditional write refuses still
+        // has to be deletable on a real Cluster, where the multi-key DEL these two keys would go through refuses
+        // for crossing slots. Two single-key deletes always succeed regardless of slot.
+        @SuppressWarnings("unchecked")
+        RedisOperations<String, String> redis = mock(RedisOperations.class);
+        when(redis.getValueSerializer()).thenReturn((RedisSerializer) RedisSerializer.string());
+        RuntimeException crossSlot = new RedisSystemException("Redis exception",
+                new RedisCommandExecutionException("CROSSSLOT Keys in request don't hash to the same slot"));
+        when(redis.delete(anyList())).thenThrow(crossSlot);
+        when(redis.delete(anyString())).thenReturn(true);
+
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redis);
+        String subscriptionId = "";
+
+        assertThatCode(() -> storage.delete(subscriptionId)).doesNotThrowAnyException();
+
+        verify(redis).delete(subscriptionId);
+        verify(redis).delete(SpringRedisCheckpointStorage.versionKey(subscriptionId));
+    }
+
+    @Test
+    void read_save_delete_and_exists_all_refuse_a_subscription_id_that_is_another_subscriptions_version_key() {
+        // versionKey("orders") is the exact Redis key this storage stores "orders"'s fencing version under. Using
+        // that same text as a different subscription's own id would let a save or delete on that id corrupt
+        // "orders"'s stored version, so every entry point that touches the checkpoint key as a Redis key refuses
+        // it before Redis is touched.
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String collidingId = SpringRedisCheckpointStorage.versionKey("orders");
+
+        assertThatThrownBy(() -> storage.read(collidingId))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserves for its own version keys");
+        assertThatThrownBy(() -> storage.save(collidingId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.any()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserves for its own version keys");
+        assertThatThrownBy(() -> storage.delete(collidingId))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserves for its own version keys");
+        assertThatThrownBy(() -> storage.exists(collidingId))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserves for its own version keys");
+    }
+
+    @Test
+    void a_subscription_id_merely_starting_with_the_version_key_prefix_is_refused_too() {
+        // The guard is a prefix check, not an exact match against one specific version key, since any text after
+        // the prefix could in principle be some other subscription's tag and digest.
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        String subscriptionId = "occurrent:checkpoint-version:{whatever}notarealdigest";
+
+        assertThatThrownBy(() -> storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.any()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserves for its own version keys");
     }
 
     private List<CloudEvent> serialize(DomainEvent e) {
