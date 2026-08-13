@@ -327,15 +327,15 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     // Edge-triggered: warns once when an instance's retained-event count crosses the threshold from below, stays silent
     // on every subsequent save while it remains at or above it, and warns again only after a later save has carried it
-    // back below the threshold (typically a stepWindow trim) and it crosses again. See the latch fields' javadoc for the
-    // memory-safety argument.
+    // back below the threshold (typically a stepWindow trim) and it crosses again. See the latch fields' comments for
+    // the memory-safety argument.
     // Package-private so a test can exercise the latch's edge-triggering and capacity backstop directly, with plain
     // counts, instead of building enough real retained events to cross the threshold thousands of times over.
     void warnIfRetainedSizeCrossesThreshold(String sagaId, int retainedEventCount) {
         boolean shouldWarn;
-        // The check, eviction and insert below are not individually atomic on a ConcurrentHashMap, and SagaStateStore
-        // supports concurrent saves, so two saves for fresh saga ids near capacity could both pass the size check and
-        // both insert, pushing the latch past its cap. Locking the whole decision keeps the cap and the once-per-crossing
+        // The check and insert below are not individually atomic on a ConcurrentHashMap, and SagaStateStore supports
+        // concurrent saves, so two saves for fresh saga ids near capacity could both pass the size check and both
+        // insert, pushing the latch past its cap. Locking the whole decision keeps the cap and the once-per-crossing
         // guarantee exact under concurrent saves. It costs a monitor per save, which is negligible next to the Mongo
         // round trip compareAndSave already pays.
         synchronized (retainedEventWarningLatch) {
@@ -362,7 +362,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     // Package-private so a test can assert the capacity backstop's actual guarantee, that the latch never grows past
-    // RETAINED_EVENT_WARNING_LATCH_CAPACITY, rather than a duplicate-warning count the eviction policy does not promise.
+    // RETAINED_EVENT_WARNING_LATCH_CAPACITY.
     int retainedEventWarningLatchSize() {
         return retainedEventWarningLatch.size();
     }
