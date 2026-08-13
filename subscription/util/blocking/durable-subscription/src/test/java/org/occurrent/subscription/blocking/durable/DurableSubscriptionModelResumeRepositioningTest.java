@@ -22,15 +22,18 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.time.Duration;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -370,6 +373,43 @@ class DurableSubscriptionModelResumeRepositioningTest {
         }
     }
 
+    @Test
+    void a_resume_that_already_read_the_checkpoint_does_not_reposition_once_a_concurrent_opt_out_subscribe_is_accepted() throws Exception {
+        PausingOnReadCheckpointStorage storage = new PausingOnReadCheckpointStorage();
+        CountDownLatch readingCheckpoint = new CountDownLatch(1);
+        CountDownLatch releaseRead = new CountDownLatch(1);
+        storage.aboutToReturn = readingCheckpoint;
+        storage.holdReturnUntil = releaseRead;
+        RecordingRepositionableSubscriptionModel delegate = new RecordingRepositionableSubscriptionModel();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
+        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        // Left behind by an earlier, checkpoint-managed subscription with the same id, now cancelled and never
+        // cleaned up in this fake, standing in for the delegate reporting the id as no longer known.
+        storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Subscription> resumeFuture = pool.submit(() -> model.resumeSubscription(SUBSCRIPTION_ID));
+            assertThat(readingCheckpoint.await(10, TimeUnit.SECONDS)).isTrue();
+
+            // The opt-out subscribe below is accepted while the resume above is still reading the checkpoint it
+            // will otherwise reposition from.
+            model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+            }).waitUntilStarted();
+
+            releaseRead.countDown();
+            resumeFuture.get(10, TimeUnit.SECONDS);
+
+            assertThat(delegate.repositionedTo)
+                    .as("a resume must not act on a reposition decision it made before the checkpoint read "
+                            + "returned, once a concurrent opt-out subscribe was accepted while it was reading")
+                    .isNull();
+            assertThat(delegate.plainResumeCalled).isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     /**
      * Records whether {@link #resumeSubscription(String)} was called, and answers something for every other
      * {@link CheckpointAwareSubscriptionModel} member, since {@link DurableSubscriptionModel} requires a whole one
@@ -605,6 +645,53 @@ class DurableSubscriptionModelResumeRepositioningTest {
                 }
             }
             throw new RuntimeException("stale attempt failed after being unblocked");
+        }
+    }
+
+    /**
+     * Wraps a real {@link InMemoryCheckpointStorage}, but {@code read} signals {@code aboutToReturn} and blocks on
+     * {@code holdReturnUntil} before returning, standing in for a checkpoint read slow enough for a concurrent
+     * opt-out subscribe to be accepted while it is still in flight.
+     */
+    private static class PausingOnReadCheckpointStorage implements CheckpointStorage {
+        final InMemoryCheckpointStorage delegate = new InMemoryCheckpointStorage();
+        @Nullable CountDownLatch aboutToReturn;
+        @Nullable CountDownLatch holdReturnUntil;
+
+        @Override
+        public @Nullable Checkpoint read(String subscriptionId) {
+            Checkpoint checkpoint = delegate.read(subscriptionId);
+            if (aboutToReturn != null) {
+                aboutToReturn.countDown();
+            }
+            if (holdReturnUntil != null) {
+                try {
+                    assertThat(holdReturnUntil.await(10, TimeUnit.SECONDS)).isTrue();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return checkpoint;
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            return delegate.save(subscriptionId, checkpoint, condition);
+        }
+
+        @Override
+        public OptionalLong writeVersion(String subscriptionId) {
+            return delegate.writeVersion(subscriptionId);
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            delegate.delete(subscriptionId);
+        }
+
+        @Override
+        public boolean exists(String subscriptionId) {
+            return delegate.exists(subscriptionId);
         }
     }
 }

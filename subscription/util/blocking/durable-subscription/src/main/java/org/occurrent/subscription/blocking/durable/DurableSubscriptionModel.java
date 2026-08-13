@@ -185,8 +185,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     }
 
     // Whether the wrapped model already has a live (running or paused) registration for this id, checked before
-    // counting an opt-out attempt in and again before reinstating one after success, so this model's own local
-    // bookkeeping never disagrees with what the delegate itself currently reports.
+    // counting an opt-out attempt in and again before reinstating one after success. Not atomic with what follows
+    // it, so it narrows the surrounding races rather than closing them outright. Fully closing them needs same-id
+    // subscribe/cancel/resume serialization, a bigger change than this check.
     private boolean isAlreadyKnownToWrappedModel(String subscriptionId) {
         return getWrappedSubscriptionModel().isRunning(subscriptionId) || getWrappedSubscriptionModel().isPaused(subscriptionId);
     }
@@ -276,7 +277,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel());
             if (repositionable.isPresent()) {
                 Checkpoint checkpoint = storage.read(subscriptionId);
-                if (checkpoint != null) {
+                // Re-checked here, not only above, since a concurrent opt-out subscribe can be accepted while the
+                // checkpoint read above was still running, and that acceptance must win over a reposition decision
+                // this method already made before it knew about it.
+                if (checkpoint != null && !notCheckpointedSubscriptions.containsKey(subscriptionId)) {
                     return repositionable.get().resumeSubscription(subscriptionId, StartAt.checkpoint(checkpoint));
                 }
             }
