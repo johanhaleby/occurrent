@@ -721,23 +721,51 @@ class ManualStartSubscriptionModelTest {
         // first and wins. Neither node can order the two positions afterwards, so the earlier one starts from the
         // later position and the events between the two never reach the subscription.
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
-        CountDownLatch earlierNodeCaptured = new CountDownLatch(1);
+        CountDownLatch earlierNodeReachedItsWrite = new CountDownLatch(1);
         CountDownLatch laterNodeWrote = new CountDownLatch(1);
-        GlobalCheckpointSource<@Nullable Checkpoint> earlierPositionSource = () -> {
-            earlierNodeCaptured.countDown();
-            awaitOrFail(laterNodeWrote);
-            return new StringCheckpoint("earlier-position");
+        // Holds the earlier node inside its own save, after it has captured its position, so the later node's write
+        // is the one that reaches storage first.
+        CheckpointStorage sharedStorage = new CheckpointStorage() {
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                if (checkpoint.asString().equals("earlier-position")) {
+                    earlierNodeReachedItsWrite.countDown();
+                    awaitOrFail(laterNodeWrote);
+                }
+                return storage.save(subscriptionId, checkpoint, condition);
+            }
+
+            @Override
+            public Checkpoint read(String subscriptionId) {
+                return storage.read(subscriptionId);
+            }
+
+            @Override
+            public boolean exists(String subscriptionId) {
+                return storage.exists(subscriptionId);
+            }
+
+            @Override
+            public OptionalLong writeVersion(String subscriptionId) {
+                return storage.writeVersion(subscriptionId);
+            }
+
+            @Override
+            public void delete(String subscriptionId) {
+                storage.delete(subscriptionId);
+            }
         };
+        GlobalCheckpointSource<@Nullable Checkpoint> earlierPositionSource = () -> new StringCheckpoint("earlier-position");
         GlobalCheckpointSource<@Nullable Checkpoint> laterPositionSource = () -> new StringCheckpoint("later-position");
-        ManualStartSubscriptionModel earlierNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), earlierPositionSource, storage);
-        ManualStartSubscriptionModel laterNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), laterPositionSource, storage);
+        ManualStartSubscriptionModel earlierNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), earlierPositionSource, sharedStorage);
+        ManualStartSubscriptionModel laterNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), laterPositionSource, sharedStorage);
 
         CapturingLogHandler logHandler = CapturingLogHandler.attached();
         ExecutorService pool = Executors.newSingleThreadExecutor();
         try {
             Future<?> earlierRegistration = pool.submit(() -> earlierNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
             }));
-            awaitOrFail(earlierNodeCaptured);
+            awaitOrFail(earlierNodeReachedItsWrite);
             laterNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
             });
             laterNodeWrote.countDown();
