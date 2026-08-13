@@ -76,6 +76,25 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > between capturing its position and writing it. ADR 116's third amendment states what happens then, and #771
 > tracks the question of closing it.
 
+> **Amended again, before 0.33.0 shipped.** The amendment above says the write covers a subscription registered with
+> the default start position, and then says a registration with an explicit `StartAt` writes the position anyway. Those
+> two do not fit together, and the second one was what the code did. A checkpoint written for a registration nothing
+> reads a checkpoint for is not harmless. `StartPosition.BEGINNING` under the default resume behaviour asks to replay on
+> a first run and to resume afterwards, and it decides which of the two by asking whether this same storage holds a
+> checkpoint, so a position written at registration answered that question with a resume and the replay the caller asked
+> for never happened. The write now happens only when the caller's start position is the subscription model default,
+> resolved once at registration through whatever a dynamic position stands for, since the annotation default is one of
+> those. That resolution comes before the existence read and before the position is captured, which is what leaves a
+> first-run question with nothing of this registration's own to find. A dynamic function therefore runs one more time
+> than it used to, which `StartAt.dynamic` already allows for, and the wrapped model still receives the caller's own
+> `StartAt` object.
+>
+> The three-argument factory also refuses a `CheckpointStorage` that answers false to `evaluatesWriteConditions()`.
+> Recording a position through one of those overwrites whatever another node stored first, which is the write this
+> wrapper exists to make safe, and a refusal at wiring time is cheaper than finding out from a subscription that
+> resumed from the wrong position. The one-argument factory is the way to keep such a storage, at the cost of a first
+> run starting from the moment it is started.
+
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same
 reason the wrapper reports its own ids from `subscriptionIds()`, merged with the delegate's, since

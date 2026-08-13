@@ -27,6 +27,7 @@ import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.GlobalCheckpointSource;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 
@@ -443,7 +444,7 @@ class ManualStartSubscriptionModelTest {
 
         ExecutorService pool = Executors.newSingleThreadExecutor();
         try {
-            Future<Subscription> registering = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            Future<Subscription> registering = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             }));
             assertThat(registrationInProgress.await(10, TimeUnit.SECONDS)).isTrue();
             model.start(true);
@@ -475,7 +476,7 @@ class ManualStartSubscriptionModelTest {
 
         ExecutorService pool = Executors.newSingleThreadExecutor();
         try {
-            Future<Subscription> registering = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            Future<Subscription> registering = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             }));
             assertThat(registrationInProgress.await(10, TimeUnit.SECONDS))
                     .as("the position is read on every registration, whatever the state looked like on the way in")
@@ -499,7 +500,7 @@ class ManualStartSubscriptionModelTest {
         GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("at-registration");
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
 
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
         });
 
         assertThat(storage.conditions.get(SUBSCRIPTION_ID)).isEqualTo(CheckpointWriteCondition.ifAbsent());
@@ -585,7 +586,7 @@ class ManualStartSubscriptionModelTest {
         delegate.globalCheckpoint = new StringCheckpoint("at-registration");
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
 
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
         });
 
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
@@ -597,7 +598,7 @@ class ManualStartSubscriptionModelTest {
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
         delegate.globalCheckpoint = new StringCheckpoint("at-registration");
-        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
         });
 
         delegate.globalCheckpoint = new StringCheckpoint("much-later");
@@ -616,7 +617,7 @@ class ManualStartSubscriptionModelTest {
 
         CapturingLogHandler logHandler = CapturingLogHandler.attached();
         try {
-            model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             });
         } finally {
             logHandler.detach();
@@ -644,7 +645,7 @@ class ManualStartSubscriptionModelTest {
 
         CapturingLogHandler logHandler = CapturingLogHandler.attached();
         try {
-            model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             });
         } finally {
             logHandler.detach();
@@ -670,14 +671,14 @@ class ManualStartSubscriptionModelTest {
         GlobalCheckpointSource<@Nullable Checkpoint> secondPositionSource = () -> new StringCheckpoint("second-nodes-position");
         ManualStartSubscriptionModel firstNode = ManualStartSubscriptionModel.stoppedByDefault(firstDelegate, firstPositionSource, storage);
         ManualStartSubscriptionModel secondNode = ManualStartSubscriptionModel.stoppedByDefault(secondDelegate, secondPositionSource, storage);
-        firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
         });
 
         // The pin happens at registration now, so the second node's loss is decided and logged here, not later
         // when either node actually starts.
         CapturingLogHandler logHandler = CapturingLogHandler.attached();
         try {
-            secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             });
         } finally {
             logHandler.detach();
@@ -699,12 +700,12 @@ class ManualStartSubscriptionModelTest {
         GlobalCheckpointSource<@Nullable Checkpoint> sharedPositionSource = () -> new StringCheckpoint("shared-position");
         ManualStartSubscriptionModel firstNode = ManualStartSubscriptionModel.stoppedByDefault(firstDelegate, sharedPositionSource, storage);
         ManualStartSubscriptionModel secondNode = ManualStartSubscriptionModel.stoppedByDefault(secondDelegate, sharedPositionSource, storage);
-        firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
         });
 
         CapturingLogHandler logHandler = CapturingLogHandler.attached();
         try {
-            secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             });
         } finally {
             logHandler.detach();
@@ -727,6 +728,11 @@ class ManualStartSubscriptionModelTest {
         // Holds the earlier node inside its own save, after it has captured its position, so the later node's write
         // is the one that reaches storage first.
         CheckpointStorage sharedStorage = new CheckpointStorage() {
+            @Override
+            public boolean evaluatesWriteConditions() {
+                return true;
+            }
+
             @Override
             public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
                 if (checkpoint.asString().equals("earlier-position")) {
@@ -764,10 +770,10 @@ class ManualStartSubscriptionModelTest {
         CapturingLogHandler logHandler = CapturingLogHandler.attached();
         ExecutorService pool = Executors.newSingleThreadExecutor();
         try {
-            Future<?> earlierRegistration = pool.submit(() -> earlierNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            Future<?> earlierRegistration = pool.submit(() -> earlierNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             }));
             awaitOrFail(earlierNodeReachedItsWrite);
-            laterNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            laterNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             });
             laterNodeWrote.countDown();
             earlierRegistration.get(10, TimeUnit.SECONDS);
@@ -800,7 +806,7 @@ class ManualStartSubscriptionModelTest {
 
         CapturingLogHandler logHandler = CapturingLogHandler.attached();
         try {
-            assertThatCode(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            assertThatCode(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             })).doesNotThrowAnyException();
         } finally {
             logHandler.detach();
@@ -824,7 +830,7 @@ class ManualStartSubscriptionModelTest {
 
         CapturingLogHandler logHandler = CapturingLogHandler.attached();
         try {
-            model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             });
         } finally {
             logHandler.detach();
@@ -847,13 +853,13 @@ class ManualStartSubscriptionModelTest {
         RecordingSubscriptionModel earlierDelegate = new RecordingSubscriptionModel();
         GlobalCheckpointSource<@Nullable Checkpoint> earlierPositionSource = () -> new StringCheckpoint("earlier-registration-position");
         ManualStartSubscriptionModel earlierNode = ManualStartSubscriptionModel.stoppedByDefault(earlierDelegate, earlierPositionSource, storage);
-        earlierNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        earlierNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
         });
 
         RecordingSubscriptionModel laterDelegate = new RecordingSubscriptionModel();
         GlobalCheckpointSource<@Nullable Checkpoint> laterPositionSource = () -> new StringCheckpoint("later-registration-position");
         ManualStartSubscriptionModel laterNode = ManualStartSubscriptionModel.stoppedByDefault(laterDelegate, laterPositionSource, storage);
-        laterNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        laterNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
         });
 
         // The later registrant starts first, but the pin was already decided at registration, so this changes
@@ -876,7 +882,7 @@ class ManualStartSubscriptionModelTest {
         GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> new StringCheckpoint("live-registration-position");
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
         model.start(true);
-        StartAt callersOwnStartAt = StartAt.now();
+        StartAt callersOwnStartAt = StartAt.subscriptionModelDefault();
 
         Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, callersOwnStartAt, __ -> {
         });
@@ -889,6 +895,124 @@ class ManualStartSubscriptionModelTest {
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("live-registration-position");
     }
 
+    @Test
+    void a_registration_that_starts_at_now_writes_no_checkpoint() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        delegate.globalCheckpoint = new StringCheckpoint("at-registration");
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        assertThat(storage.checkpoints)
+                .as("nothing below reads a stored checkpoint for this subscription, so a write here would only take the id from a node that does")
+                .isEmpty();
+    }
+
+    @Test
+    void a_registration_that_names_its_own_checkpoint_writes_nothing() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        delegate.globalCheckpoint = new StringCheckpoint("at-registration");
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(new StringCheckpoint("chosen-by-the-caller")), __ -> {
+        });
+
+        assertThat(storage.checkpoints).isEmpty();
+    }
+
+    @Test
+    void a_first_run_asking_to_replay_from_the_beginning_still_replays_instead_of_resuming() {
+        // The start position the Spring Boot starter builds for StartPosition.BEGINNING. It answers the first-run
+        // question by asking the same checkpoint storage this model writes to, so a position recorded before it is
+        // resolved would turn the replay the caller asked for into a resume from the moment of registration.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        delegate.globalCheckpoint = new StringCheckpoint("at-registration");
+        StartAt replayFromTheBeginning = StartAt.checkpoint(new StringCheckpoint("beginning"));
+        StartAt beginningThenResume = StartAt.dynamic(() -> storage.exists(SUBSCRIPTION_ID)
+                ? StartAt.subscriptionModelDefault()
+                : replayFromTheBeginning);
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, beginningThenResume, __ -> {
+        });
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(storage.checkpoints).isEmpty();
+        StartAt startAtTheWrappedModelGot = delegate.subscribeCalls.getFirst().startAt();
+        assertThat(startAtTheWrappedModelGot.get(new SubscriptionModelContext(RecordingSubscriptionModel.class)))
+                .as("the storage is still empty when the wrapped model resolves the same function, so it replays")
+                .isSameAs(replayFromTheBeginning);
+    }
+
+    @Test
+    void a_dynamic_start_position_that_resolves_to_the_model_default_is_pinned_like_a_plain_one() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        delegate.globalCheckpoint = new StringCheckpoint("at-registration");
+        // Branching on the model type as well, since that is what the functions the Spring Boot starter builds do,
+        // and it is the wrapped model this one has to name when it resolves.
+        StartAt defaultForTheWrappedModel = StartAt.dynamic(context ->
+                context.hasSubscriptionModelType(RecordingSubscriptionModel.class) ? StartAt.subscriptionModelDefault() : StartAt.now());
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, defaultForTheWrappedModel, __ -> {
+        });
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
+    }
+
+    @Test
+    void a_dynamic_start_position_that_resolves_to_nothing_is_not_pinned() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        delegate.globalCheckpoint = new StringCheckpoint("at-registration");
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.dynamic(() -> null), __ -> {
+        });
+
+        assertThat(storage.checkpoints)
+                .as("answering with nothing tells the wrapped model to leave this subscription to the model below it, which reads no checkpoint either")
+                .isEmpty();
+    }
+
+    @Test
+    void the_wrapped_model_receives_the_start_position_the_caller_passed_and_it_is_resolved_once_here() {
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        delegate.globalCheckpoint = new StringCheckpoint("at-registration");
+        AtomicInteger resolutions = new AtomicInteger();
+        StartAt callersOwnStartAt = StartAt.dynamic(() -> {
+            resolutions.incrementAndGet();
+            return StartAt.subscriptionModelDefault();
+        });
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
+        model.start(true);
+
+        model.subscribe(SUBSCRIPTION_ID, null, callersOwnStartAt, __ -> {
+        });
+
+        assertThat(delegate.subscribeCalls.getFirst().startAt()).isSameAs(callersOwnStartAt);
+        assertThat(resolutions.get())
+                .as("resolved once, to decide whether there is a position to record, and left alone after that")
+                .isEqualTo(1);
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
+    }
+
+    @Test
+    void a_checkpoint_storage_that_cannot_evaluate_write_conditions_is_refused() {
+        UnconditionalCheckpointStorage storage = new UnconditionalCheckpointStorage();
+
+        assertThatThrownBy(() -> ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(),
+                () -> new StringCheckpoint("at-registration"), storage))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(UnconditionalCheckpointStorage.class.getName());
+    }
+
     private static CloudEvent cloudEvent(String id) {
         return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("test.event").build();
     }
@@ -898,6 +1022,11 @@ class ManualStartSubscriptionModelTest {
     // readsBack decides what there is to read by the time it looks.
     private static CheckpointStorage refusingStorage(Supplier<@Nullable Checkpoint> readsBack) {
         return new CheckpointStorage() {
+            @Override
+            public boolean evaluatesWriteConditions() {
+                return true;
+            }
+
             @Override
             public Checkpoint read(String subscriptionId) {
                 return readsBack.get();
@@ -1083,6 +1212,11 @@ class ManualStartSubscriptionModelTest {
         final Map<String, CheckpointWriteCondition> conditions = new HashMap<>();
 
         @Override
+        public boolean evaluatesWriteConditions() {
+            return true;
+        }
+
+        @Override
         public Checkpoint read(String subscriptionId) {
             return checkpoints.get(subscriptionId);
         }
@@ -1113,12 +1247,50 @@ class ManualStartSubscriptionModelTest {
         }
     }
 
+    // Writes every checkpoint unconditionally, which is what a storage that answers false to evaluatesWriteConditions()
+    // does with an ifAbsent() write, so recording a start position against it would overwrite whatever another node
+    // stored first.
+    private static final class UnconditionalCheckpointStorage implements CheckpointStorage {
+        final Map<String, Checkpoint> checkpoints = new HashMap<>();
+
+        @Override
+        public Checkpoint read(String subscriptionId) {
+            return checkpoints.get(subscriptionId);
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            checkpoints.put(subscriptionId, checkpoint);
+            return checkpoint;
+        }
+
+        @Override
+        public OptionalLong writeVersion(String subscriptionId) {
+            return OptionalLong.empty();
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            checkpoints.remove(subscriptionId);
+        }
+
+        @Override
+        public boolean exists(String subscriptionId) {
+            return checkpoints.containsKey(subscriptionId);
+        }
+    }
+
     // exists() always answers false, whatever is already stored. That is what two nodes racing to pin the same
     // subscription id would each see from their own read, whichever real wall-clock order the two calls land in, so
     // this makes the race in #669 deterministic instead of depending on winning an actual thread scheduling race.
     // save() evaluates ifAbsent() for real, the way every checkpoint storage in this repository does.
     private static final class RaceSimulatingCheckpointStorage implements CheckpointStorage {
         final Map<String, Checkpoint> checkpoints = new HashMap<>();
+
+        @Override
+        public boolean evaluatesWriteConditions() {
+            return true;
+        }
 
         @Override
         public Checkpoint read(String subscriptionId) {
