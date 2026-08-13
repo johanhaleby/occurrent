@@ -134,13 +134,20 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * since that is the one a wrapped model reads a stored checkpoint for. Registering with a position of your own,
      * or with {@link StartAt#now()}, writes nothing, so a replay you asked for stays a replay instead of becoming a
      * resume. A {@link StartAt#dynamic(java.util.function.Supplier) dynamic} start position is resolved at
-     * registration to find out which of the two it is, layer by layer down the wrapped models, exactly as those models
-     * resolve it themselves when the subscription starts. A layer answering with {@code null} leaves the subscription
-     * to the model it wraps, so the next model down is asked, and the first answer that is not {@code null} decides.
-     * All of that happens before anything is read or written, so a function that answers the first-run question by
-     * looking for a stored checkpoint sees what was stored before this registration. Such a function therefore runs
-     * once per layer it is asked about, on top of the calls it already got. The wrapped model still receives the
-     * {@code StartAt} the caller passed, whatever those resolutions answered.
+     * registration to find out which of the two it is, layer by layer down the wrapped models, following what those
+     * models do to the same position when the subscription starts. A layer answering with {@code null} leaves the
+     * subscription to the model it wraps, so the next model down is asked, and the first answer that is not
+     * {@code null} decides. All of that happens before anything is read or written, so a function that answers the
+     * first-run question by looking for a stored checkpoint sees what was stored before this registration. Such a
+     * function therefore runs once per layer it is asked about, on top of the calls it already got. The wrapped model
+     * still receives the {@code StartAt} the caller passed, whatever those resolutions answered.
+     * <p>
+     * Two shapes of function are read differently here than the model that starts the subscription reads them. A layer
+     * that passes the position down without deciding anything for itself is asked all the same, and every layer is
+     * asked under its runtime class rather than the class literal a model resolves against, which
+     * {@link StartAt.SubscriptionModelContext#hasSubscriptionModelType(Class)} compares for equality. The start
+     * positions the annotations build are unaffected, since they either ignore the model type or ask whether a class is
+     * assignable. ADR 86 has what each of the two costs a subscription.
      *
      * @param delegate          The subscription model to register with once a subscription is started.
      * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
