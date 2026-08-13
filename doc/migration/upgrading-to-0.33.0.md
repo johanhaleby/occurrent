@@ -131,13 +131,15 @@ subscription id, and two non-cryptographic constructions tried here both let one
 different id's tag plus copy.
 
 One shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no brace
-pair, an unmatched brace, or an empty pair like `{}`) and that whole id contains a closing brace somewhere in it,
-for example `"{}orders"` or `"a}b{c"`. Such an id still refuses a conditional write immediately, with the error
-Cluster reports for crossing slots, the same way every id used to before this fix.
+pair, an unmatched brace, or an empty pair like `{}`) and that whole id is either empty or contains a closing brace
+somewhere in it, for example `""`, `"{}orders"` or `"a}b{c"`.
 
-An empty subscription id is a second, narrower shape this cannot help, for a different reason. There is no text at
-all to build a hash tag from. Unlike the shape above, `save` and `delete` refuse an empty subscription id outright
-with an `IllegalArgumentException`, on every deployment, since nothing in this library needs one.
+`save` refuses an id of that shape outright with an `IllegalArgumentException` for `notOlderThan` and `ifAbsent`,
+which is what keeps `evaluatesWriteConditions()` true without exception rather than true for every id except one
+Cluster would otherwise refuse two calls downstream. `any()` never refuses one, since it writes only the checkpoint
+key. `delete` never refuses one either, on a `CROSSSLOT` failure it falls back to two single-key deletes instead,
+which always succeed regardless of slot, since deleting has no comparison whose atomicity a cross-shard gap could
+undermine, unlike a conditional write's.
 
 This also assumes the `RedisOperations` passed in serializes a key to its own literal bytes, the same assumption
 the checkpoint's plain `GET` already makes.

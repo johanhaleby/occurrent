@@ -26,6 +26,8 @@ import io.github.artsok.RepeatedIfExceptionsTest;
 import io.lettuce.core.RedisCommandExecutionException;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
@@ -74,6 +76,7 @@ import static java.time.temporal.ChronoUnit.MILLIS;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.awaitility.Durations.ONE_SECOND;
@@ -81,7 +84,9 @@ import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @Timeout(20)
@@ -290,47 +295,63 @@ class SpringRedisCheckpointStorageTest {
                         .isSameAs(crossSlot));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"", "a}b{c", "{}orders"})
+    void refuses_a_conditional_save_for_a_subscription_id_cluster_cannot_align(String subscriptionId) {
+        // Each of these falls back to hashing itself whole, empty or containing a closing brace of its own, so
+        // Cluster would hash the checkpoint key and this storage's version key for it to different slots. Refused
+        // here rather than left to surface as Cluster's crossed-slots error two calls downstream.
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+
+        assertThatThrownBy(() -> storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(1)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot be used with a conditional write");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "a}b{c", "{}orders"})
+    void an_unconditional_save_accepts_a_subscription_id_a_conditional_write_would_refuse(String subscriptionId) {
+        // any() never touches the version key, so none of the reasoning that makes a conditional write refuse
+        // these ids applies to it. A checkpoint written this way still has to be deletable, see the delete() tests.
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+
+        assertThatCode(() -> storage.save(subscriptionId, new StringBasedCheckpoint("first")))
+                .doesNotThrowAnyException();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "a}b{c", "{}orders"})
+    void deletes_a_subscription_id_a_conditional_write_would_refuse(String subscriptionId) {
+        // Standalone Redis has no slot concept, so the multi-key DEL these ids would refuse for crossing slots on
+        // Cluster succeeds directly here. The CROSSSLOT fallback path itself is covered by the mocked test below,
+        // since provoking a real CROSSSLOT needs a Cluster this module has no container for.
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+        storage.save(subscriptionId, new StringBasedCheckpoint("first"));
+
+        assertThatCode(() -> storage.delete(subscriptionId)).doesNotThrowAnyException();
+        assertThat(storage.read(subscriptionId)).isNull();
+    }
+
     @Test
-    void deleting_a_checkpoint_escapes_a_cluster_crossslot_failure_immediately_instead_of_hanging_the_calling_thread() {
-        // delete() sends the checkpoint and version keys to a single multi-key DEL, so it can hit the same CROSSSLOT
-        // failure the write scripts can, and needs the same exclusion from retry.
+    void deleting_falls_back_to_two_single_key_deletes_when_the_multi_key_delete_hits_a_cluster_crossslot_failure() {
+        // A checkpoint written through an unconditional save for one of the ids a conditional write refuses still
+        // has to be deletable on a real Cluster, where the multi-key DEL these two keys would go through refuses
+        // for crossing slots. Two single-key deletes always succeed regardless of slot.
         @SuppressWarnings("unchecked")
         RedisOperations<String, String> redis = mock(RedisOperations.class);
         when(redis.getValueSerializer()).thenReturn((RedisSerializer) RedisSerializer.string());
-        // The outer message is the generic Spring wrapper text, not the CROSSSLOT one, so this only passes if the
-        // cause chain is actually walked down to the driver exception. The two messages being identical here once
-        // let a broken walk (checking only the outer exception) pass anyway.
         RuntimeException crossSlot = new RedisSystemException("Redis exception",
                 new RedisCommandExecutionException("CROSSSLOT Keys in request don't hash to the same slot"));
         when(redis.delete(anyList())).thenThrow(crossSlot);
+        when(redis.delete(anyString())).thenReturn(true);
 
-        CheckpointStorage storage = new SpringRedisCheckpointStorage(redis, RetryStrategy.exponentialBackoff(Duration.ofSeconds(30), Duration.ofSeconds(30), 1.0f));
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redis);
+        String subscriptionId = "";
 
-        assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
-                assertThatThrownBy(() -> storage.delete(UUID.randomUUID().toString()))
-                        .as("a Cluster CROSSSLOT failure on delete must be refused immediately, not queued behind a 30 second backoff")
-                        .isSameAs(crossSlot));
-    }
+        assertThatCode(() -> storage.delete(subscriptionId)).doesNotThrowAnyException();
 
-    @Test
-    void refuses_a_conditional_save_for_an_empty_subscription_id() {
-        // An empty subscription id leaves the checkpoint key with no text to build a hash tag from, so the version
-        // key's own hash tag comes out empty, which Cluster falls back on hashing whole instead of matching the
-        // checkpoint key's slot. Refused here rather than left to surface as Cluster's crossed-slots error.
-        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
-
-        assertThatThrownBy(() -> storage.save("", new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(1)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Subscription id cannot be empty");
-    }
-
-    @Test
-    void refuses_to_delete_an_empty_subscription_id() {
-        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
-
-        assertThatThrownBy(() -> storage.delete(""))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Subscription id cannot be empty");
+        verify(redis).delete(subscriptionId);
+        verify(redis).delete(SpringRedisCheckpointStorage.versionKey(subscriptionId));
     }
 
     private List<CloudEvent> serialize(DomainEvent e) {

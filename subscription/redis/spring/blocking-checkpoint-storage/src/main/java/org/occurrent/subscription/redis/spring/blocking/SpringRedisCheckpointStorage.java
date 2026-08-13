@@ -70,20 +70,21 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * doubling during review.
  * <p>
  * One shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no brace
- * pair, an unmatched brace, or an empty pair like {@code {}}) and that whole id contains a closing brace somewhere
- * in it, for example {@code "{}orders"} or {@code "a}b{c"}. Wrapping such text in a fresh hash tag only reproduces
- * it when the text has no closing brace of its own, since Cluster stops at the first one it finds, and that is then
- * the wrap's own or an earlier one already inside the id, not the one this class appended. Such an id still refuses
- * a conditional write immediately, with the error Cluster reports for crossing slots, the same way every id used
- * to. No subscription id this library or its tests generate takes that shape.
+ * pair, an unmatched brace, or an empty pair like {@code {}}) and that whole id is either empty or contains a
+ * closing brace somewhere in it, for example {@code ""}, {@code "{}orders"} or {@code "a}b{c"}. Wrapping such text
+ * in a fresh hash tag only reproduces it when the text has no closing brace of its own, since Cluster stops at the
+ * first one it finds, and that is then the wrap's own or an earlier one already inside the id, not the one this
+ * class appended. No subscription id this library or its tests generate takes that shape.
  * <p>
- * An empty subscription id is a second, narrower shape this cannot help, for a different reason. The checkpoint key
- * is then empty text with nothing to hash a tag from, while the version key's own hash tag, built from that same
- * empty text, comes out as an empty pair that Cluster falls back on hashing whole instead. Unlike the shape above,
- * {@link #save(String, Checkpoint, CheckpointWriteCondition)} and {@link #delete(String)} refuse an empty
- * subscription id outright, with an {@link IllegalArgumentException} naming the reason, rather than let Cluster's
- * own crossed-slots error surface two calls downstream. Nothing in this library needs an empty subscription id, so
- * the refusal applies on every deployment, not only Cluster.
+ * {@link #save(String, Checkpoint, CheckpointWriteCondition)} refuses an id of that shape outright, with an
+ * {@link IllegalArgumentException} naming the reason, whenever the condition is {@link CheckpointWriteCondition#notOlderThan(long)}
+ * or {@link CheckpointWriteCondition#ifAbsent()}. That refusal is what keeps {@link #evaluatesWriteConditions()}
+ * true without exception, rather than true for every id except the one shape Cluster would otherwise refuse two
+ * calls downstream. {@link CheckpointWriteCondition#any()} never refuses one, since it writes only the checkpoint
+ * key and never touches the version key at all. {@link #delete(String)} never refuses one either. Deleting has no
+ * comparison whose atomicity a cross-shard gap could undermine, so on a {@code CROSSSLOT} failure it falls back to
+ * two single-key deletes, which always succeed regardless of slot, rather than leaving a checkpoint that an
+ * unconditional write created with no way to remove it through this same class.
  * <p>
  * This also assumes the {@link RedisOperations} passed in serializes a key to its own literal bytes, the same
  * assumption the checkpoint's plain {@code GET} already makes. A key serializer that reshapes the string changes
@@ -247,7 +248,7 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
      * instead of by this class.
      */
     private Checkpoint saveConditionally(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition, RedisScript<Long> script, byte[]... extraArgs) {
-        requireNonEmptySubscriptionId(subscriptionId);
+        requireClusterSlotAlignable(subscriptionId);
         Supplier<Checkpoint> save = () -> {
             Object[] args = new Object[1 + extraArgs.length];
             args[0] = checkpoint.asString();
@@ -266,14 +267,16 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
         return requireNonNull(executeWithRetry(save, retryUnlessShutdownOrRefused, retryStrategy).get());
     }
 
-    // An empty subscription id is the one input the hash tag in versionKey cannot help, since Cluster hashes an
-    // empty checkpoint key on nothing to tag at all, while the version key's own hash tag, built from that same
-    // empty text, comes out as an empty pair Cluster falls back on hashing whole instead. No caller in this
-    // library, or a realistic one, needs an empty subscription id, so this refuses it at the boundary rather than
-    // let it surface as Cluster's own crossed-slots error two calls downstream.
-    private static void requireNonEmptySubscriptionId(String subscriptionId) {
-        if (subscriptionId.isEmpty()) {
-            throw new IllegalArgumentException("Subscription id cannot be empty, since Redis Cluster would hash the checkpoint key and this storage's version key for it to different slots and refuse a conditional write for crossing slots.");
+    // The one input clusterHashTag cannot build a working hash tag from. It fell back to the whole subscription id
+    // (no usable brace pair) and that fallback text is either empty or itself contains a closing brace, the two
+    // shapes the class javadoc names. Refused here, immediately and by name, rather than left to surface as
+    // Cluster's own crossed-slots error, which is what makes evaluatesWriteConditions() true without exception for
+    // every subscription id a conditional write actually accepts. No caller in this library, or a realistic one,
+    // needs an id of this shape.
+    private static void requireClusterSlotAlignable(String subscriptionId) {
+        String tag = clusterHashTag(subscriptionId);
+        if (tag.isEmpty() || tag.contains("}")) {
+            throw new IllegalArgumentException("Subscription id \"" + subscriptionId + "\" cannot be used with a conditional write, since Redis Cluster would hash the checkpoint key and this storage's version key for it to different slots and refuse the write for crossing slots.");
         }
     }
 
@@ -291,7 +294,9 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     }
 
     // True unconditionally. The comparison is real on a standalone server, a replicated one, and on Cluster, since
-    // versionKey's hash tag keeps both keys the script touches in the same slot.
+    // versionKey's hash tag keeps both keys the script touches in the same slot for every subscription id a
+    // conditional write accepts. The one shape it does not accept, requireClusterSlotAlignable refuses outright
+    // before either key is touched, so true never quietly stops being true for an id this class lets through.
     @Override
     public boolean evaluatesWriteConditions() {
         return true;
@@ -309,12 +314,24 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     @Override
     public void delete(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
-        requireNonEmptySubscriptionId(subscriptionId);
-        Supplier<Long> deleteBoth = () -> redis.delete(List.of(subscriptionId, versionKey(subscriptionId)));
-        // A CROSSSLOT failure here is excluded from retry for the same reason as in saveConditionally, the same
-        // two-key pair crosses slots the same way, and the default infinite backoff would otherwise hang whatever
-        // called delete().
-        executeWithRetry(deleteBoth, e -> !shutdown && !isClusterSlotMismatch(e), retryStrategy).get();
+        Supplier<Long> deleteBoth = () -> {
+            try {
+                return redis.delete(List.of(subscriptionId, versionKey(subscriptionId)));
+            } catch (RuntimeException e) {
+                if (!isClusterSlotMismatch(e)) {
+                    throw e;
+                }
+                // The one subscription id shape a conditional write refuses outright (requireClusterSlotAlignable)
+                // still has to be deletable, since an unconditional save never refused writing one. Two single-key
+                // deletes always succeed regardless of slot, and unlike a conditional write's compare-and-swap,
+                // delete has no comparison whose atomicity a cross-shard gap could undermine, so falling back here
+                // trades nothing away that delete relied on.
+                redis.delete(subscriptionId);
+                redis.delete(versionKey(subscriptionId));
+                return 0L;
+            }
+        };
+        executeWithRetry(deleteBoth, __ -> !shutdown, retryStrategy).get();
     }
 
     @Override

@@ -172,8 +172,18 @@ class SpringRedisCheckpointStorageClusterSlotTest {
         return key.substring(openBrace + 1, closeBrace);
     }
 
+    /**
+     * Every slot assertion in this class rests on {@link #crc16(String)} matching Cluster's own CRC16, so a subtly
+     * wrong polynomial or initial value here would validate the production mapping against the wrong model and
+     * every test above could still pass. This is the standard CRC16/XMODEM test vector, not a guess.
+     */
+    @Test
+    void crc16_matches_the_standard_test_vector() {
+        assertThat(crc16("123456789")).isEqualTo(0x31C3);
+    }
+
     // CRC16/XMODEM (polynomial 0x1021, initial value 0x0000, no reflection), the variant the Cluster specification's
-    // reference implementation uses. Cross-checked against the standard test vector, crc16("123456789") == 0x31C3.
+    // reference implementation uses.
     private static int crc16(String s) {
         byte[] bytes = s.getBytes(StandardCharsets.UTF_8);
         int crc = 0x0000;
