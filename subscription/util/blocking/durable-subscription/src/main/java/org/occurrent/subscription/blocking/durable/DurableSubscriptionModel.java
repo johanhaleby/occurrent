@@ -138,8 +138,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
             // Not allowed to start, delegate to the wrapped subscription instead. Counted in before the delegate
             // call so a concurrent resumeSubscription sees the opt-out too, and released again if the delegate
             // throws so a failing attempt leaves no marker behind for a later resubscribe to inherit, without
-            // touching another still-active or still in-flight attempt for the same id.
-            notCheckpointedSubscriptions.computeIfAbsent(subscriptionId, id -> new AtomicInteger()).incrementAndGet();
+            // touching another still-active or still in-flight attempt for the same id. The increment has to run
+            // inside compute(), not after a separate computeIfAbsent() returns the counter, or a decrement for the
+            // same id can remove the entry in between and strand the increment on a counter the map no longer holds.
+            notCheckpointedSubscriptions.compute(subscriptionId, (id, count) -> {
+                AtomicInteger current = count == null ? new AtomicInteger() : count;
+                current.incrementAndGet();
+                return current;
+            });
             try {
                 return getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
             } catch (Throwable t) {
