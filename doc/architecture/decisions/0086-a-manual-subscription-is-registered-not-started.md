@@ -102,7 +102,13 @@ neither, the wrapper still works and a first run starts from the moment it is st
 >
 > The walk asks every layer, including one that passes the position down without deciding anything for itself, so a
 > function answering with the model default for such a layer and with something else for the model that does read the
-> checkpoint is read as a position to record when it is not one. Telling the two kinds of layer apart needs the layers
+> checkpoint is read as a position to record when it is not one. It also asks about each layer under that layer's
+> runtime class, while a model resolving the same position at start passes a class literal of its own, so a subclassed
+> or proxied model is asked about under a name that `StartAt.SubscriptionModelContext.hasSubscriptionModelType`, which
+> compares for equality, does not match. A function branching with `isAssignableFrom`, which is what every start
+> position Occurrent builds uses, gives the same answer either way. One using the equality check on a subclassed model
+> answers here as though the position were not the model default, records nothing, and leaves the durable model to
+> record one when the subscription starts, which is #669 again for that wiring. Telling the two kinds of layer apart needs the layers
 > to say which of them consumes a start position, which is a capability `SubscriptionModel` does not have, and no start
 > position Occurrent builds answers that way, since they either ignore the model type or branch on the catch-up,
 > competing consumer and durable layers, all three of which do decide for themselves. Recording a position that is not
