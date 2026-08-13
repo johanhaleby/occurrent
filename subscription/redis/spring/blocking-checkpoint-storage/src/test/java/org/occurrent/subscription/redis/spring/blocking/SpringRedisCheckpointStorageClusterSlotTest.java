@@ -161,6 +161,18 @@ class SpringRedisCheckpointStorageClusterSlotTest {
                 .isNotEqualTo(SpringRedisCheckpointStorage.versionKey(sameTagOtherId));
     }
 
+    /**
+     * A key with an empty brace pair before a non-empty one, {@code "{}{tenant}"}, is the case an earlier,
+     * unanchored version of {@link #hashTag(String)} got wrong. It matched past the empty pair to the valid one
+     * after it and returned {@code "tenant"}, while {@code clusterHashTag} stops at the first pair it finds,
+     * empty or not, and falls back to the whole key. None of the parameterized cases above exercise this, since
+     * none of them has a valid pair sitting after an empty one.
+     */
+    @Test
+    void hash_tag_extraction_falls_back_to_the_whole_key_when_an_earlier_brace_pair_is_empty_even_though_a_later_one_is_not() {
+        assertThat(hashTag("{}{tenant}")).isEqualTo("{}{tenant}");
+    }
+
     // Redis Cluster's own slot algorithm (Cluster specification, "Keys hash tags"): hash the substring between the
     // first '{' and the first '}' after it, or the whole key when either brace is missing or none of the key sits
     // between them.
@@ -169,11 +181,14 @@ class SpringRedisCheckpointStorageClusterSlotTest {
     }
 
     // A regex match, not the index-scanning SpringRedisCheckpointStorage.clusterHashTag uses, so a bug specific to
-    // one style of scanning is not shared by both sides of the comparisons above. "\\{([^}]+)\\}" finds the
-    // leftmost '{' that has a non-empty run of non-'}' characters before the next '}'. That is the same rule as
-    // the first '{', then the first '}' after it, only counting as a tag when something sits between them.
+    // one style of scanning is not shared by both sides of the comparisons above. Anchored with "^[^{]*", not a
+    // bare find(), because an unanchored "\\{([^}]+)\\}" would skip past a leading empty pair like "{}" and match
+    // a later one instead, "{}{tenant}" would come back "tenant" when Cluster, finding only an empty tag in the
+    // first pair, hashes the whole key. The prefix before the first '{' can only be non-'{' characters, which
+    // pins the match to that first brace specifically, and the whole match failing (no non-empty pair right there)
+    // falls back to the whole key exactly as production does.
     private static String hashTag(String key) {
-        Matcher matcher = Pattern.compile("\\{([^}]+)\\}").matcher(key);
+        Matcher matcher = Pattern.compile("^[^{]*\\{([^}]+)\\}").matcher(key);
         return matcher.find() ? matcher.group(1) : key;
     }
 
