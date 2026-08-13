@@ -123,8 +123,8 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * stored when it registers accepts it and loses nothing, because that position was recorded before this node
      * captured its own. A node whose write is refused by a checkpoint that arrived while it was registering accepts
      * it too and logs a warning, because the two positions were captured on different nodes and {@link Checkpoint}
-     * gives this class no way to tell which of them is earlier. Events written between the two positions are not
-     * delivered to the subscription.
+     * gives this class no way to tell which of them is earlier. Events written between the two positions may not
+     * reach the subscription.
      *
      * @param delegate          The subscription model to register with once a subscription is started.
      * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
@@ -414,8 +414,8 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
                         "Subscription " + subscriptionId + " registered at position " + positionToPin.asString() +
                         " but another registration reached storage first with " + storedAsString + ". The two " +
                         "positions were captured on different nodes and cannot be compared, so this subscription " +
-                        "starts from the stored one, and any events between the two positions are not delivered " +
-                        "to it. Store " + positionToPin.asString() + " as the checkpoint for " + subscriptionId +
+                        "starts from the stored one, and any events between the two positions may not reach it. " +
+                        "Store " + positionToPin.asString() + " as the checkpoint for " + subscriptionId +
                         " before starting the subscription if those events matter.");
             }
         }

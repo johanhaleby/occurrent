@@ -479,12 +479,14 @@ and is unaffected by which family it runs against.
 > not moved into the refusal path where a single read would otherwise do. A checkpoint that arrives after the
 > capture was taken on another node at an unknown point, `Checkpoint` promises only `asString()`, and neither node
 > can tell which of the two positions is earlier. Overwriting is not the safer choice, since a position that
-> cannot be ordered is as likely to be later as earlier, so the stored position is accepted and the loss is logged
-> at `WARNING` with both positions and with what to store to recover the events.
+> cannot be ordered is as likely to be later as earlier, so the stored position is accepted and the possible loss
+> is logged at `WARNING` with both positions and with what to store to recover the events. A stored position that
+> happens to be the earlier one redelivers instead, which is why the warning says the events may not reach the
+> subscription rather than that they were lost.
 >
 > Closing the window needs either an ordering on the positions, which `Checkpoint`'s single `asString()` method
 > and its implementations outside this repository rule out, or agreement between the nodes before any position is
-> captured, which nothing has here because this runs before a competing consumer is registered. Both are larger
+> captured, which nothing here can arrange because this runs before a competing consumer is registered. Both are larger
 > decisions than a wrapper should make. #771 tracks that question, together with #738 for the reactor stack, so
 > it is settled once for both. See `ManualStartSubscriptionModelTest`.
 
