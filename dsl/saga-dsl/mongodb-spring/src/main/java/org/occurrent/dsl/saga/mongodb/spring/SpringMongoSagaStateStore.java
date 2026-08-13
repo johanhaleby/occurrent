@@ -117,16 +117,15 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     static final int RETAINED_EVENT_WARNING_THRESHOLD = 1_000;
 
     // Bounds the latch below so an instance that crosses the threshold and is then abandoned (completed, or simply never
-    // saved again) cannot hold its entry forever. At capacity, adding a new saga id evicts one arbitrary existing entry
-    // rather than clearing the whole map, so a single instance running past capacity costs at most one duplicate
-    // warning, not every currently-tracked instance re-warning at once the way a wholesale clear would. The map's SIZE
-    // never exceeds this cap, which is the guarantee this backstop actually makes. It does not bound how many duplicate
-    // warnings a sustained population above capacity can produce over many saves, since each new id added while at
-    // capacity evicts one more entry, and that is an inherent cost of any fixed-size cache holding a larger population,
-    // not a defect in this one. In the ordinary case the latch stays far smaller than the cap, since an entry is removed
-    // as soon as its instance drops back below the threshold (see warnIfRetainedSizeCrossesThreshold). Package-private
-    // for the same reason as the threshold above: a test exercising the capacity backstop builds exactly this many
-    // tracked instances instead of duplicating the number.
+    // saved again) cannot hold its entry forever. At capacity, a never-before-seen saga id is left untracked rather
+    // than evicting an existing entry to make room for it, so that instance warns on every save until a tracked
+    // instance drops below the threshold and frees a slot, but no already-tracked instance is ever forced to re-warn.
+    // Evicting an active instance to admit another only moves the problem: under sustained load it can chain through
+    // the whole tracked set. The map's SIZE never exceeds this cap, which combined with never evicting a tracked
+    // instance is the actual memory and correctness guarantee this backstop makes. In the ordinary case the latch
+    // stays far smaller than the cap, since an entry is removed as soon as its instance drops back below the threshold
+    // (see warnIfRetainedSizeCrossesThreshold). Package-private for the same reason as the threshold above: a test
+    // exercising the capacity backstop builds exactly this many tracked instances instead of duplicating the number.
     static final int RETAINED_EVENT_WARNING_LATCH_CAPACITY = 10_000;
 
     // Edge-triggered latch, keyed by saga id: present and true means "already warned while at or above the threshold".
@@ -345,18 +344,15 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 retainedEventWarningLatch.remove(sagaId);
                 return;
             }
-            // Evicts one arbitrary entry rather than clearing the whole map, and only when sagaId is not already tracked.
-            // Clearing wholesale at capacity would reset every already-warned instance at once, and under sustained load
-            // at the cap that reset repeats on every save, turning the diagnostic into continuous re-warning instead of
-            // the occasional duplicate this backstop is meant to cost.
-            if (!retainedEventWarningLatch.containsKey(sagaId) && retainedEventWarningLatch.size() >= RETAINED_EVENT_WARNING_LATCH_CAPACITY) {
-                Iterator<String> oldest = retainedEventWarningLatch.keySet().iterator();
-                if (oldest.hasNext()) {
-                    oldest.next();
-                    oldest.remove();
-                }
+            if (retainedEventWarningLatch.containsKey(sagaId)) {
+                shouldWarn = false;
+            } else if (retainedEventWarningLatch.size() >= RETAINED_EVENT_WARNING_LATCH_CAPACITY) {
+                // At capacity: leave this new instance untracked rather than evicting a tracked one. See
+                // RETAINED_EVENT_WARNING_LATCH_CAPACITY above for why.
+                shouldWarn = true;
+            } else {
+                shouldWarn = retainedEventWarningLatch.putIfAbsent(sagaId, Boolean.TRUE) == null;
             }
-            shouldWarn = retainedEventWarningLatch.putIfAbsent(sagaId, Boolean.TRUE) == null;
         }
         if (shouldWarn) {
             log.warn("Flow saga instance '{}' has retained {} received events, at or above the warning threshold of {}. " +

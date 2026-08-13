@@ -40,11 +40,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoOperations;
 
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
@@ -74,10 +77,16 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
     private Logger logger;
     private SpringMongoSagaStateStore<FlowState<FlowEvent>> store;
 
+    private boolean loggerWasAdditive;
+
     @BeforeEach
     void attachAppenderAndCreateStore() {
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         logger = context.getLogger(SpringMongoSagaStateStore.class);
+        loggerWasAdditive = logger.isAdditive();
+        // The capacity tests below invoke the warning path tens of thousands of times, and additivity would forward
+        // every one of those log events to the root console appender as well as this test's own appender.
+        logger.setAdditive(false);
         appender = new ListAppender<>();
         appender.start();
         logger.addAppender(appender);
@@ -96,6 +105,7 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
     @AfterEach
     void detachAppender() {
         logger.detachAppender(appender);
+        logger.setAdditive(loggerWasAdditive);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -171,62 +181,86 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
     // the real capacity that would mean building and CloudEvent-serializing 1,000+ retained events for over 10,000
     // instances, which is too slow for a unit test and tests nothing extra over the smaller counts used here.
     @Test
-    void a_single_instance_past_capacity_evicts_exactly_one_existing_entry_instead_of_clearing_the_map() {
+    void a_new_instance_past_capacity_warns_on_every_save_but_is_never_tracked() {
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
             store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
         int warningsAtCapacity = warnings().size();
 
         store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
+        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
+        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
 
         assertThat(warningsAtCapacity).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
-        assertThat(warnings().size()).isEqualTo(warningsAtCapacity + 1);
-        assertThat(store.retainedEventWarningLatchSize()).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
+        assertThat(warnings().size()).as("every save of the untracked instance warns").isEqualTo(warningsAtCapacity + 3);
+        assertThat(store.retainedEventWarningLatchSize()).as("the untracked instance never entered the latch").isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
     }
 
-    // The eviction the test above exercises picks an arbitrary existing entry, so which one it is depends on map
-    // iteration order. Re-saving that same population afterward can therefore chain into further evictions (the
-    // evicted id, once re-added, again sits at a map already at capacity), so the only property the backstop actually
-    // promises under sustained churn is the SIZE cap, not a fixed count of re-warns. See RETAINED_EVENT_WARNING_LATCH_CAPACITY's
-    // javadoc for why an exact duplicate-warning bound is not something this eviction policy can guarantee.
+    // The property the capacity backstop actually promises: instances already tracked before saturation are immune
+    // to whatever happens with instances arriving after the cap is full, unlike an eviction-based policy where an
+    // arriving instance can force an already-tracked one out and make it re-warn.
     @Test
-    void sustained_churn_at_capacity_never_grows_the_latch_past_its_cap() {
+    void already_tracked_instances_keep_not_re_warning_while_new_arrivals_are_untracked_at_capacity() {
+        for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
+            store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+        }
+        int warningsAtCapacity = warnings().size();
+
+        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
+        store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
+
+        assertThat(warnings().size()).as("s0 was already latched, so only the untracked overflow warns again")
+                .isEqualTo(warningsAtCapacity + 1);
+    }
+
+    // Once a tracked instance drops below the threshold, its slot frees up, so an instance that was warning on every
+    // save because it arrived at capacity can be tracked from then on and stop re-warning.
+    @Test
+    void a_slot_freed_by_a_tracked_instance_dropping_below_the_threshold_lets_a_new_instance_get_tracked() {
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
             store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
         store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
+        store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD - 1);
 
-        for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
-            store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
-        }
+        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
+        int warningsAfterOverflowIsTracked = warnings().size();
+        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
 
-        assertThat(store.retainedEventWarningLatchSize()).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
+        assertThat(warnings().size()).as("overflow is now latched, so this save does not re-warn")
+                .isEqualTo(warningsAfterOverflowIsTracked);
     }
 
-    // Concurrent saves for fresh saga ids near capacity could each pass the size check before either evicted, pushing
-    // the latch past its cap. Threads race on distinct ids past RETAINED_EVENT_WARNING_LATCH_CAPACITY, so if the
-    // check-evict-insert sequence were not serialized, the assertion below would intermittently fail.
+    // Concurrent saves for fresh saga ids near capacity could each pass the size check before either was added,
+    // pushing the latch past its cap. Threads race on distinct ids past RETAINED_EVENT_WARNING_LATCH_CAPACITY, so if
+    // the check-and-insert sequence were not serialized, the assertion below would intermittently fail.
     @Test
-    void concurrent_saves_of_fresh_instances_past_capacity_never_push_the_latch_past_its_cap() throws InterruptedException {
+    void concurrent_saves_of_fresh_instances_past_capacity_never_push_the_latch_past_its_cap() throws InterruptedException, ExecutionException {
         int threadCount = 50;
         int idsPerThread = 250;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         CountDownLatch ready = new CountDownLatch(threadCount);
         CountDownLatch start = new CountDownLatch(1);
+        List<Future<?>> futures = new ArrayList<>();
         for (int t = 0; t < threadCount; t++) {
             int threadIndex = t;
-            executor.submit(() -> {
+            futures.add(executor.submit(() -> {
                 ready.countDown();
                 await(start);
                 for (int i = 0; i < idsPerThread; i++) {
                     store.warnIfRetainedSizeCrossesThreshold("thread" + threadIndex + "-id" + i, RETAINED_EVENT_WARNING_THRESHOLD);
                 }
-            });
+            }));
         }
         ready.await();
         start.countDown();
         executor.shutdown();
         assertThat(executor.awaitTermination(30, TimeUnit.SECONDS)).as("all saves completed").isTrue();
+        // A worker exception would otherwise be swallowed and the test would pass on whatever the latch's state
+        // happened to be when the exception cut that worker short.
+        for (Future<?> future : futures) {
+            future.get();
+        }
 
         assertThat(threadCount * idsPerThread).as("test setup pushes past capacity").isGreaterThan(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
         assertThat(store.retainedEventWarningLatchSize()).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
