@@ -109,6 +109,13 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > only where nothing would be recorded otherwise, and recording there can only add a write the unconditional one it
 > replaces already made.
 >
+> Any inherited class answering with the model default is enough, rather than the nearest one deciding as a layer's own
+> answer does. A model's class literal can be any of the classes its runtime class inherits from, and this cannot tell
+> which, so both rules are wrong for some function written against a subclassed model. The one that records is wrong by
+> writing a position that is read only where the model default is what gets resolved, and the one that stops at the
+> nearest answer is wrong by leaving a subscription to record its position at start, which is the skip this exists to
+> prevent.
+>
 > It asks classes rather than layers, so it does not resume the walk. A subclassed wrapper answering with a position of
 > its own, where the class it inherits from would have handed the question down, ends the walk there and the model
 > below is never asked. Closing that needs each layer to say which class it resolves against, which belongs on the
