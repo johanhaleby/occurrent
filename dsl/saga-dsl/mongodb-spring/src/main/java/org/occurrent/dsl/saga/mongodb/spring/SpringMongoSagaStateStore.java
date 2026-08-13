@@ -118,11 +118,15 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
 
     // Bounds the latch below so an instance that crosses the threshold and is then abandoned (completed, or simply never
     // saved again) cannot hold its entry forever. At capacity, adding a new saga id evicts one arbitrary existing entry
-    // rather than clearing the whole map, so the cost of running past capacity is at most one duplicate warning per
-    // evicted instance, not every instance currently tracked re-warning on every subsequent save. In the ordinary case
-    // the latch stays far smaller than this, since an entry is removed as soon as its instance drops back below the
-    // threshold (see warnIfRetainedSizeCrossesThreshold). Package-private for the same reason as the threshold above: a
-    // test exercising the capacity backstop builds exactly this many tracked instances instead of duplicating the number.
+    // rather than clearing the whole map, so a single instance running past capacity costs at most one duplicate
+    // warning, not every currently-tracked instance re-warning at once the way a wholesale clear would. The map's SIZE
+    // never exceeds this cap, which is the guarantee this backstop actually makes. It does not bound how many duplicate
+    // warnings a sustained population above capacity can produce over many saves, since each new id added while at
+    // capacity evicts one more entry, and that is an inherent cost of any fixed-size cache holding a larger population,
+    // not a defect in this one. In the ordinary case the latch stays far smaller than the cap, since an entry is removed
+    // as soon as its instance drops back below the threshold (see warnIfRetainedSizeCrossesThreshold). Package-private
+    // for the same reason as the threshold above: a test exercising the capacity backstop builds exactly this many
+    // tracked instances instead of duplicating the number.
     static final int RETAINED_EVENT_WARNING_LATCH_CAPACITY = 10_000;
 
     // Edge-triggered latch, keyed by saga id: present and true means "already warned while at or above the threshold".
@@ -330,28 +334,42 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // Package-private so a test can exercise the latch's edge-triggering and capacity backstop directly, with plain
     // counts, instead of building enough real retained events to cross the threshold thousands of times over.
     void warnIfRetainedSizeCrossesThreshold(String sagaId, int retainedEventCount) {
-        if (retainedEventCount < RETAINED_EVENT_WARNING_THRESHOLD) {
-            retainedEventWarningLatch.remove(sagaId);
-            return;
-        }
-        // Evicts one arbitrary entry rather than clearing the whole map, and only when sagaId is not already tracked.
-        // Clearing wholesale at capacity would reset every already-warned instance at once, and under sustained load at
-        // the cap that reset repeats on every save, turning the diagnostic into continuous re-warning instead of the
-        // rare duplicate this backstop is meant to cost.
-        if (!retainedEventWarningLatch.containsKey(sagaId) && retainedEventWarningLatch.size() >= RETAINED_EVENT_WARNING_LATCH_CAPACITY) {
-            Iterator<String> oldest = retainedEventWarningLatch.keySet().iterator();
-            if (oldest.hasNext()) {
-                oldest.next();
-                oldest.remove();
+        boolean shouldWarn;
+        // The check, eviction and insert below are not individually atomic on a ConcurrentHashMap, and SagaStateStore
+        // supports concurrent saves, so two saves for fresh saga ids near capacity could both pass the size check and
+        // both insert, pushing the latch past its cap. Locking the whole decision keeps the cap and the once-per-crossing
+        // guarantee exact under concurrent saves. It costs a monitor per save, which is negligible next to the Mongo
+        // round trip compareAndSave already pays.
+        synchronized (retainedEventWarningLatch) {
+            if (retainedEventCount < RETAINED_EVENT_WARNING_THRESHOLD) {
+                retainedEventWarningLatch.remove(sagaId);
+                return;
             }
+            // Evicts one arbitrary entry rather than clearing the whole map, and only when sagaId is not already tracked.
+            // Clearing wholesale at capacity would reset every already-warned instance at once, and under sustained load
+            // at the cap that reset repeats on every save, turning the diagnostic into continuous re-warning instead of
+            // the occasional duplicate this backstop is meant to cost.
+            if (!retainedEventWarningLatch.containsKey(sagaId) && retainedEventWarningLatch.size() >= RETAINED_EVENT_WARNING_LATCH_CAPACITY) {
+                Iterator<String> oldest = retainedEventWarningLatch.keySet().iterator();
+                if (oldest.hasNext()) {
+                    oldest.next();
+                    oldest.remove();
+                }
+            }
+            shouldWarn = retainedEventWarningLatch.putIfAbsent(sagaId, Boolean.TRUE) == null;
         }
-        boolean alreadyWarned = retainedEventWarningLatch.putIfAbsent(sagaId, Boolean.TRUE) != null;
-        if (!alreadyWarned) {
+        if (shouldWarn) {
             log.warn("Flow saga instance '{}' has retained {} received events, at or above the warning threshold of {}. " +
                             "Consider capping the flow's step with stepWindow(...) to trim what it retains, or the document " +
                             "risks growing toward MongoDB's 16 MB document limit.",
                     sagaId, retainedEventCount, RETAINED_EVENT_WARNING_THRESHOLD);
         }
+    }
+
+    // Package-private so a test can assert the capacity backstop's actual guarantee, that the latch never grows past
+    // RETAINED_EVENT_WARNING_LATCH_CAPACITY, rather than a duplicate-warning count the eviction policy does not promise.
+    int retainedEventWarningLatchSize() {
+        return retainedEventWarningLatch.size();
     }
 
     private SagaEnvelope<S> toEnvelope(Document document) {
