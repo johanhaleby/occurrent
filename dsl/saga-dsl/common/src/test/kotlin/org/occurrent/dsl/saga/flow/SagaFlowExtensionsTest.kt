@@ -25,6 +25,7 @@ import org.occurrent.dsl.saga.Saga
 import org.occurrent.dsl.saga.SagaEffect
 import org.occurrent.dsl.saga.SagaInput
 import org.occurrent.dsl.saga.TimerName
+import org.occurrent.filter.Filter
 import java.time.Duration
 
 /**
@@ -54,6 +55,13 @@ class SagaFlowExtensionsTest {
 
     sealed interface GameCommand
     data class CloseGame(val gameId: String) : GameCommand
+
+    /** Not sealed, so its concrete types cannot be enumerated and a derived filter would miss them. */
+    interface OpenGameEvent {
+        val gameId: String
+    }
+
+    data class OpenGameCreated(override val gameId: String) : OpenGameEvent
 
     private fun closeAbandonedGameSaga(): Saga<GameEvent, FlowState<GameEvent>, GameCommand> =
         saga {
@@ -940,6 +948,45 @@ class SagaFlowExtensionsTest {
         @Test
         fun `the top-level stepTimer names a step's timer inside the step namespace`() {
             assertThat(stepTimer("awaiting-payment")).isEqualTo(TimerName.of("step", "awaiting-payment"))
+        }
+    }
+
+    @Nested
+    inner class ExplicitFilter {
+
+        @Test
+        fun `filter sets the selector the flow saga subscribes on`() {
+            val subject = Filter.subject("game-1")
+
+            val saga = saga<GameEvent, GameCommand> {
+                startsOn<GameCreated>()
+                correlateAll { "game-1" }
+                filter(subject)
+                step("awaiting-players") {
+                    on<PlayerJoinedGame>(then = end)
+                }
+            }
+
+            assertThat(saga.filter()).isSameAs(subject)
+        }
+
+        @Test
+        fun `a flow saga without one reports no filter`() {
+            assertThat(closeAbandonedGameSaga().filter()).isNull()
+        }
+
+        @Test
+        fun `filter builds a flow saga on an open supertype that is otherwise refused`() {
+            val saga = saga<OpenGameEvent, GameCommand> {
+                startsOn<OpenGameCreated>()
+                correlateAll { it.gameId }
+                filter(Filter.type("game-event"))
+                step("awaiting-players") {
+                    on<OpenGameEvent>(then = end)
+                }
+            }
+
+            assertThat(saga.eventTypes()).contains(OpenGameEvent::class.java)
         }
     }
 }

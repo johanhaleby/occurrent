@@ -17,6 +17,7 @@
 package org.occurrent.dsl.saga
 
 import org.occurrent.cloudevents.EventMetadata
+import org.occurrent.filter.Filter
 import java.time.Duration
 import java.time.Instant
 import java.util.function.BiFunction
@@ -41,9 +42,9 @@ import java.util.function.Predicate
  * }
  * ```
  *
- * The registered event types become the saga's [Saga.eventTypes] (its default subscription selector). Every handled
- * event type needs a correlation, from [SagaBuilder.correlate] or a [SagaBuilder.correlateAll] fallback, or [build]
- * throws.
+ * The registered event types become the saga's [Saga.eventTypes], and the selector it subscribes on is derived from them
+ * unless [SagaBuilder.filter] sets one explicitly. Every handled event type needs a correlation, from
+ * [SagaBuilder.correlate] or a [SagaBuilder.correlateAll] fallback, or [build] throws.
  */
 fun <E : Any, S, C : Any> saga(initialState: S, block: SagaBuilder<E, S, C>.() -> Unit): Saga<E, S, C> {
     val builder = SagaBuilder<E, S, C>(initialState)
@@ -136,6 +137,14 @@ class SagaBuilder<E : Any, S, C : Any> @PublishedApi internal constructor(initia
     /** The terminal predicate. Can be set only once. */
     fun isTerminal(predicate: (S) -> Boolean) {
         delegate.isTerminal(Predicate { s -> predicate(s) })
+    }
+
+    /**
+     * Sets an explicit selector replacing the one derived from the registered event types, so the saga can select on
+     * more than event type. See [Saga.filter] for what it leaves you responsible for. Can be set only once.
+     */
+    fun filter(filter: Filter) {
+        delegate.filter(filter)
     }
 
     @PublishedApi

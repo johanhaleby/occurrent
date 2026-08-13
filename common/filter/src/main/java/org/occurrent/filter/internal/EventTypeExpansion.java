@@ -44,6 +44,11 @@ import static java.util.Objects.requireNonNull;
  * Shared by the saga DSL and the subscription annotations, which each derive a type filter from declared event types and
  * each used to walk the hierarchy themselves. The caller formats and throws, because a saga and a subscription have
  * different things to say about the type they were given.
+ * <p>
+ * The rule above governs {@link #expand} and {@link #concreteTypesOf}, the two entry points a derived filter is built
+ * from. {@link #expandWhatCanBeFound} walks the same hierarchy for a caller that was handed an explicit filter and so
+ * derives none, and it still refuses an array or a primitive. Nothing here relaxes the rule, because a caller with no
+ * derived filter has no filter for it to be true of.
  */
 public final class EventTypeExpansion {
 
@@ -67,6 +72,59 @@ public final class EventTypeExpansion {
             expanded.addAll(concreteTypesOf(declared, cannotExpand));
         }
         return Collections.unmodifiableSet(expanded);
+    }
+
+    /**
+     * The declared types plus every concrete type they cover that can be found, in the same order {@link #expand} uses.
+     * A declared type whose concrete types cannot all be found contributes the ones that can, instead of being refused.
+     * <p>
+     * <strong>Only for a caller that is not deriving a filter.</strong> The rule at the top of this class is enforced by
+     * {@link #expand}, and this method does not enforce it, so a filter built from what comes back here can miss event
+     * types that dispatch would accept. It exists for a caller that has been given an explicit filter and so derives
+     * none, and still wants to report which event types it handles. The saga DSL's {@code filter(Filter)} override is
+     * the one such caller.
+     * <p>
+     * An array and a primitive are still refused, through {@code cannotExpand}, and for two different strengths of
+     * reason worth keeping apart. A primitive can match nothing at all, since {@code int.class.isInstance(..)} is false
+     * for every object, so a saga declaring one would build and then never start an instance. An array is refused for
+     * consistency rather than impossibility, because an object really can be an instance of an array type, and the
+     * reason not to accept one here is that {@link #expand} and the subscription annotations both refuse a declared
+     * array, so this path is not the place to become the single exception.
+     * <p>
+     * An interface or an abstract class is different from both, since a hierarchy whose concrete types cannot all be
+     * found is exactly the case this method exists to be lenient about.
+     *
+     * @param cannotExpand builds the exception to throw for an array or a primitive
+     */
+    public static <E> Set<Class<? extends E>> expandWhatCanBeFound(Set<Class<? extends E>> declaredTypes,
+                                                                   Function<Class<?>, RuntimeException> cannotExpand) {
+        requireNonNull(declaredTypes, "declaredTypes cannot be null");
+        requireNonNull(cannotExpand, "cannotExpand cannot be null");
+        Set<Class<? extends E>> expanded = new LinkedHashSet<>();
+        for (Class<? extends E> declared : declaredTypes) {
+            refuseArrayOrPrimitive(declared, cannotExpand);
+            expanded.add(declared);
+            collect(declared, expanded, new HashSet<>());
+        }
+        return Collections.unmodifiableSet(expanded);
+    }
+
+    /**
+     * Refuses an array or a primitive declared event type, and accepts anything else without walking it. The two
+     * reasons differ in strength, and both are given on {@link #expandWhatCanBeFound}, which applies this to every type
+     * it walks.
+     * <p>
+     * This is here on its own for a caller that narrows nothing and so has no set to expand, and that still should not
+     * accept a declaration nothing can ever match. {@code Saga.create} with an empty {@code eventTypes} is the one such
+     * caller, since it derives {@code Filter.all()} and walks no hierarchy, yet a start type nothing can be an instance
+     * of would build a saga that never creates an instance.
+     */
+    public static void refuseArrayOrPrimitive(Class<?> declaredType, Function<Class<?>, RuntimeException> cannotExpand) {
+        requireNonNull(declaredType, "declaredType cannot be null");
+        requireNonNull(cannotExpand, "cannotExpand cannot be null");
+        if (declaredType.isArray() || declaredType.isPrimitive()) {
+            throw cannotExpand.apply(declaredType);
+        }
     }
 
     /**

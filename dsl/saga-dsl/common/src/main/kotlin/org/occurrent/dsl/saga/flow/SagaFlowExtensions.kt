@@ -19,6 +19,7 @@ package org.occurrent.dsl.saga.flow
 import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.dsl.saga.Saga
 import org.occurrent.dsl.saga.TimerName
+import org.occurrent.filter.Filter
 import java.time.Duration
 import java.time.Instant
 import java.util.function.BiFunction
@@ -140,6 +141,14 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
      */
     fun correlateAll(correlatedBy: (E) -> String) {
         delegate.correlateAll { correlatedBy(it) }
+    }
+
+    /**
+     * Sets an explicit selector replacing the one derived from the event types the flow names, so the saga can select on
+     * more than event type. See [Saga.filter] for what it leaves you responsible for. Can be set only once.
+     */
+    fun filter(filter: Filter) {
+        delegate.filter(filter)
     }
 
     /** Adds a step named [name]. */

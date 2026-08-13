@@ -200,9 +200,67 @@ class EventTypeExpansionTest {
         }
     }
 
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("hierarchyShapes")
+    void expanding_what_can_be_found_refuses_only_an_array_and_otherwise_answers_what_expand_answers(String shape, Class<?> declaredType, Outcome expected) {
+        if (declaredType.isArray()) {
+            // An array is not an event type at all, so it stays refused whether or not a filter is deriving anything.
+            assertThatThrownBy(() -> expandOneLeniently(declaredType)).as("%s is refused", shape)
+                    .isInstanceOf(IllegalArgumentException.class);
+            return;
+        }
+
+        Set<Class<?>> lenient = expandOneLeniently(declaredType);
+
+        assertThat(lenient).as("%s always names itself", shape).contains(declaredType);
+        if (expected == Outcome.REFUSED) {
+            // The second entry point exists for this. A caller with an explicit filter derives nothing, so there is
+            // no filter for the rule to be true of, and it gets the partial answer rather than an exception.
+            return;
+        }
+        assertThat(lenient).as("%s answers exactly what expand answers when expand accepts it", shape)
+                .isEqualTo(expandOne(declaredType));
+    }
+
+    @Test
+    void expanding_what_can_be_found_refuses_a_primitive_the_same_way_the_strict_path_does() {
+        // A primitive carries the abstract modifier, so the strict path already refuses it. isInstance is false for
+        // every object, so leniency would accept a declaration that can never match anything.
+        assertThatThrownBy(() -> expandOneLeniently(int.class)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> expandOneLeniently(void.class)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> expandOne(int.class)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void expanding_what_can_be_found_names_the_concrete_types_it_can_reach_below_a_reopened_level() {
+        Set<Class<?>> found = expandOneLeniently(PartlyOpenEvent.class);
+
+        assertThatThrownBy(() -> expandOne(PartlyOpenEvent.class))
+                .as("the shape this is about is one expand refuses")
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(found)
+                .as("the reachable side of the hierarchy is still named")
+                .contains(PartlyOpenEvent.class, SealedLeaf.class);
+    }
+
+    @Test
+    void expanding_what_can_be_found_keeps_declaration_order_and_is_unmodifiable() {
+        Set<Class<? extends OrderEvent>> found = EventTypeExpansion.expandWhatCanBeFound(
+                new LinkedHashSet<>(List.of(PaymentEvent.class, OrderPlaced.class)), REFUSAL);
+
+        assertThat(found).startsWith(PaymentEvent.class);
+        assertThat(found).containsSequence(PaymentReserved.class, PaymentFailed.class, OrderPlaced.class);
+        assertThatThrownBy(() -> found.add(OrderPlaced.class)).isInstanceOf(UnsupportedOperationException.class);
+    }
+
     @SuppressWarnings("unchecked")
     private static Set<Class<?>> expandOne(Class<?> declaredType) {
         return (Set<Class<?>>) (Set<?>) EventTypeExpansion.expand(Set.of((Class<Object>) declaredType), REFUSAL);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<Class<?>> expandOneLeniently(Class<?> declaredType) {
+        return (Set<Class<?>>) (Set<?>) EventTypeExpansion.expandWhatCanBeFound(Set.of((Class<Object>) declaredType), REFUSAL);
     }
 
     @Test
