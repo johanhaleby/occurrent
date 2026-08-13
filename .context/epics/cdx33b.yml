@@ -1,7 +1,7 @@
 schema_version: 1
 epic: cdx33b
-revision: 5
-updated_at: 2026-08-13T05:35:00Z
+revision: 6
+updated_at: 2026-08-13T05:50:00Z
 updated_by: "orchestrator session faee3625 (U4 merged; DELIVERY_RESULT-comment channel added to sweeps)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
@@ -98,13 +98,13 @@ units:
   U9:
     issue: null
     goal: "ADR and javadoc integrity (finding 15): ADR 0110 follow-up note, ADR 0116 three-way reconciliation, reactor Projections.java stale phrase, ADR 0111 Status wording to Johan at design gate"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "local_ded4eaaf (idle since merge, archive at closeout)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "763", met: true, evidence: "MERGED 2026-08-12 as 8eed7a138. ADR 0111 Status flipped to Withdrawn per Johan's in-session choice at the design gate (answered before the diff, verified in the unit transcript). Three-dot merge-base diff confirmed clean of .context/ after a two-dot artifact scare. Prose-only, no adversarial pass per the skill."}
   U10:
     issue: null
     goal: "Docs-site ripple, LAST: carried-over join correction (docs/0.33.0-preview ~5799, docs/707-step-conditions ~5546), U7 filter override chapter, claim sweep of saga/subscription/checkpoint chapters; push never merge"
