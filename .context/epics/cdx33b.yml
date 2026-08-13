@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 9
-updated_at: 2026-08-13T06:21:00Z
-updated_by: "orchestrator session faee3625 (U1 report banked, blocker adversarial pass dispatched)"
+revision: 10
+updated_at: 2026-08-13T06:38:00Z
+updated_by: "orchestrator session faee3625 (blocker pass returned 4 confirmed, U1 sent back, U11 registered)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -18,7 +18,7 @@ pending_actions:
     type: workflow-dispatch
     target: "Fresh-context adversarial verify of PR 772 (U1, the blocker) at head 93711c943, Opus in an isolated worktree, six attack angles against the stated interleaving invariant"
     expected: "a report with CONFIRMED-DEFECT/REFUTED/UNVERIFIABLE per angle; merge of 772 waits on it AND on Johan's ADR wording ruling in U1's session"
-    status: PENDING
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-13T06:20:00Z
@@ -32,7 +32,7 @@ units:
     depends_on: []
     session: "local_6d655966"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "772", met: false, evidence: "OPEN, DELIVERY_RESULT banked 2026-08-13 ~06:15: 4-clause interleaving invariant, 3 mutation rounds each killing a distinct branch, finding 13 declined with a mutation-backed reason (post-capture read cannot classify, and moving it fails a test), #771 filed for the residual window cross-referenced with #738, 28/28 on head 93711c943 with final Copilot review clean and 4 earlier findings (3 suppressed) recorded as acted on. Merge waits on TWO gates: Johan's ADR 116/86 wording ruling in U1's session, and the orchestrator's adversarial pass (act-002)."}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "772", met: false, evidence: "OPEN, sent back 2026-08-13 ~06:35 after the blocker adversarial pass. Mechanism and new test HELD (angle f clean); 4 confirmed defects routed: same-moment prose narrower than the capture-to-write window in 4 places (the PR's own ADR 116 amendment contradicts it), provably-safe overclaim needing an unnamed monotonicity premise GlobalCheckpointSource does not promise, delete-driven misclassification (cancelSubscription deletes checkpoints, making checkpointAlreadyExisted stale, silent adopt of a later capture; fix is read() pre-capture instead of exists() plus a hardened refusal path), and startAt scoping (pin ignored for non-default StartAt, prose must scope; BEHAVIOR split to addendum unit U11, pre-existing at merge base). ADR wording gate HELD until the corrected text is in front of Johan, so he rules once. Earlier bank: 3 mutation rounds, finding 13 declined with mutation-backed reason, #771 filed."}
   U2:
     issue: null
     goal: "Redis Cluster hash slots (finding 2): hash-tag both keys into one slot (layout unreleased), decide fail-fast complement at unit gate; changelog entry + migration guide section 4 correction"
@@ -123,6 +123,16 @@ units:
     session: null
     deliverables:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
+  U11:
+    issue: null
+    goal: "Addendum (from U1's adversarial pass, confirmed major, unreleased manual-start surface, pre-existing at U1's merge base): pinStartPosition ignores the caller's StartAt. With startAt NOW the pin is written and never read (single-node event skip since registration); with BEGINNING plus default resumeBehavior the pin makes exists() true at start so the first-run replay is silently replaced by resume-from-pin (no manual-mode BEGINNING test exists). Decide and implement the correct pin/StartAt interaction; also fold the register-note twin: the 3-arg factory does not check evaluatesWriteConditions, so an ifAbsent save on a non-evaluating storage fails first-registration boot (CheckpointFencingConfigurationCheck guards only the fencing combination). Dispatch AFTER PR 772 merges (same files)."
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: [U1]
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
   UREG:
     issue: null
     goal: "Register: decline pointers for findings 8/10/12/14, retention-policy issue (finding 7 residual), finding-11 convention note, environment-artifact note; route new arrivals #760 #761 (both released-behavior, non-overlapping)"
