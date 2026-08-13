@@ -78,6 +78,14 @@ pending_actions:
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-13T17:28:00Z
+  - id: act-010
+    type: dispatch-chip
+    target: "U10 chip task_1553430e (docs-site ripple: carried-over join corrections on both held branches, U7 filter-override chapter with the three caveats and the flow-saga cost, U2 Cluster claim sweep, U4/U1 claim sweep), Sonnet/high, base docs/0.33.0-preview in the docs repo, push-never-merge; U11 ripple explicitly excluded, lands as an appendix push later"
+    expected: "Johan starts the chip; corrected held branches pushed, builds clean, report with before/after pairs and rendered-layer greps"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-13T17:35:00Z
 units:
   U1:
     issue: null
