@@ -65,11 +65,27 @@ pending_actions:
   - id: act-013
     type: workflow-dispatch
     target: "U11 implementation subagent (Opus, own worktree off origin/main, branch johan/cdx33b-u11-pin-startat): the approved plan verbatim, seven new tests plus the now()-to-default migration of existing pin tests, mutation table, construction-time refusal, ADR texts committed but flagged wording-pending, changelog corrections, PR via gh"
-    expected: "an open PR with matrix green, suppressed blocks handled, DELIVERY_RESULT with invariant and mutation tables; then adversarial pass, then the queued ADR ruling, then my merge"
-    status: PENDING
+    expected: "an open PR with matrix green, suppressed blocks handled, DELIVERY_RESULT with invariant and mutation tables; then adversarial pass, then the queued ADR ruling, then my merge. VERIFIED: PR 777 delivered at 4ee0dc165, 27/27 by job conclusion, 4 threads resolved, suppressed comment fixed across all four surfaces, full mutation table incl. the statement-order mutant killed by the BEGINNING test alone; two reasoned deviations accepted (independent clone under scratchpad due to the sibling-worktree write hook, three extra pre-502 tests moved plus a positive control in the wiring test)"
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-13T19:55:00Z
+  - id: act-014
+    type: workflow-dispatch
+    target: "Fresh-context adversarial verify of PR 777 (U11) at 4ee0dc165, Opus read-only, seven angles: double-resolution side effects, outermost-context mismatch, BEGINNING oracle race vs pre-PR window, lock interleaving, test-claim truth, factory-refusal completeness, claim surfaces"
+    expected: "verdict per angle; merge additionally holds on the queued ADR wording ruling"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T20:20:00Z
+  - id: act-015
+    type: rerun
+    target: "Copilot re-review requested on PR 777 final head 4ee0dc165 via GraphQL requestReviews (the REST path adds nobody)"
+    expected: "a new review lands on 4ee0dc165; its body and suppressed block read before merge"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T20:18:00Z
   - id: act-012
     type: workflow-dispatch
     target: "U10 executing subagent (Sonnet) in the docs repo via its own git worktrees off the held branches: join corrections both branches, filter-override chapter, Cluster and manual-start/stepWindow claim sweeps, jekyll builds with rendered-layer greps, push never merge"
