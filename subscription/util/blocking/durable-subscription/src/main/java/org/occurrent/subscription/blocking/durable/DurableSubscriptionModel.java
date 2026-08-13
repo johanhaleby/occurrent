@@ -155,10 +155,12 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         // Held for the whole method, not just the opt-out branch, because subscribe, resumeSubscription and
         // cancelSubscription for the same id must stay serialized against notCheckpointedSubscriptions (see the
         // field comment above). It does not cover the checkpoint read and write that generateStartAtPositionFrom's
-        // default case defers to its returned supplier. That runs later, when the delegate evaluates the StartAt,
-        // and the shipped Mongo delegates already serialize it against cancelSubscription's delete under their own
-        // monitor (SpringMongoSubscriptionModel#subscribe, #restartOnce, #cancelSubscription). Any other
-        // CheckpointAwareSubscriptionModel delegate needs to provide that serialization itself.
+        // default case defers to its returned supplier. That runs later, when the delegate evaluates the StartAt.
+        // SpringMongoSubscriptionModel serializes that evaluation against its own cancelSubscription under one
+        // shared monitor (#subscribe, #restartOnce, #cancelSubscription). NativeMongoSubscriptionModel queues the
+        // same evaluation onto its dispatcher executor without that serialization, so its cancelSubscription can
+        // still race a checkpoint write there. Any CheckpointAwareSubscriptionModel delegate that does not already
+        // serialize this itself carries that race.
         synchronized (lockFor(subscriptionId)) {
             StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
             if (startAtToUse == null) {
