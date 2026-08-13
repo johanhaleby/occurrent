@@ -435,7 +435,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             log.log(System.Logger.Level.WARNING,
                     "Subscription " + subscriptionId + " registered at position " + positionToPin.asString() +
                     " but another registration reached storage first and that checkpoint has since been removed, " +
-                    "so where this subscription starts from is decided by whatever is stored when it starts.");
+                    "so the position that won cannot be named here.");
             return;
         }
         if (positionToPin.asString().equals(stored.asString())) {
