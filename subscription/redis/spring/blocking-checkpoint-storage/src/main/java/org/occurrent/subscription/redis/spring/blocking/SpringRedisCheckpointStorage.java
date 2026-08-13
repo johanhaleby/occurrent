@@ -64,8 +64,12 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * writing through {@code opsForValue().set}, exactly as before, leaving the version key untouched.
  * <p>
  * <strong>Redis Cluster.</strong> The version key carries a hash tag built from whatever the checkpoint key itself
- * hashes on, so Cluster places both keys in the same slot and the scripts above, and the two-key {@code DEL} in
- * {@link #delete(String)}, are never refused for crossing slots. A subscription id with no braces of its own hashes
+ * hashes on, so Cluster places both keys in the same slot and the scripts above are never refused for crossing
+ * slots. The two-key {@code DEL} in {@link #delete(String)} is not covered by that same guarantee. It still refuses
+ * a subscription id in the version key's own namespace, same as every method above, but not the one shape below a
+ * conditional {@link #save(String, Checkpoint, CheckpointWriteCondition) save} refuses for slot alignment, so it
+ * falls back to two single-key deletes when Cluster refuses that shape's two-key {@code DEL} for crossing slots.
+ * A subscription id with no braces of its own hashes
  * on its full text either way, and one that already contains a matched, non-empty pair hashes on the text between
  * them, the same substring Cluster would use for the checkpoint key. A SHA-256 digest of the full subscription id
  * follows the tag, outside its braces where Cluster never looks once it has found the closing one, so two ids that

@@ -152,9 +152,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
-        // The whole method runs under subscriptionIdLock, checkpoint-managed path included, not only the opt-out
-        // branch, since generateStartAtPositionFrom can itself write the id's first checkpoint and a concurrent
-        // cancelSubscription's delete for the same id must not race that write.
+        // Held for the whole method, not just the opt-out branch, so subscribe, resumeSubscription and
+        // cancelSubscription for the same id stay serialized against notCheckpointedSubscriptions (see the field
+        // comment above). SpringMongoSubscriptionModel evaluates the returned StartAt synchronously on the first
+        // subscribe, so this lock covers that checkpoint read and write too, and it evaluates the StartAt again on
+        // a later restartOnce, serialized against its own cancelSubscription by one shared monitor instead
+        // (#subscribe, #restartOnce, #cancelSubscription). NativeMongoSubscriptionModel always defers the
+        // evaluation to its dispatcher executor, even on the first subscribe, with no such serialization, so its
+        // cancelSubscription can race a checkpoint write.
         synchronized (lockFor(subscriptionId)) {
             StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
             if (startAtToUse == null) {
