@@ -123,9 +123,12 @@ redelivered, which is within the at-least-once contract this library has always 
 `SpringRedisCheckpointStorage` keeps the checkpoint and its stored version in two differently named keys, and
 Cluster refuses a script that touches keys in different slots. The version key's name carries a hash tag built from
 whatever the checkpoint key itself hashes on, so Cluster places both in the same slot and `notOlderThan` and
-`ifAbsent` work there exactly as they do on a standalone or replicated server. The version key also carries the
-full subscription id after that tag, so two ids that happen to share a hash tag, two tenant-scoped ids under the
-same `{tenant}` for instance, still get their own version key instead of silently sharing one fencing version.
+`ifAbsent` work there exactly as they do on a standalone or replicated server. The version key also carries a
+SHA-256 digest of the subscription id after that tag, so two ids that happen to share a hash tag, two tenant-scoped
+ids under the same `{tenant}` for instance, still get their own version key instead of silently sharing one
+fencing version. A digest rather than a raw or delimited copy of the id, because the tag can itself equal the whole
+subscription id, and two non-cryptographic constructions tried here both let one id's own text be misread as a
+different id's tag plus copy.
 
 One shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no brace
 pair, an unmatched brace, or an empty pair like `{}`) and that whole id contains a closing brace somewhere in it,

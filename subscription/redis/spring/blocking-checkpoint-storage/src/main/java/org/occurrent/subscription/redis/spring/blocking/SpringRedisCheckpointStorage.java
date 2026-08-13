@@ -30,7 +30,10 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.data.redis.serializer.RedisSerializer;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.function.Predicate;
@@ -57,9 +60,14 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * hashes on, so Cluster places both keys in the same slot and the scripts above, and the two-key {@code DEL} in
  * {@link #delete(String)}, are never refused for crossing slots. A subscription id with no braces of its own hashes
  * on its full text either way, and one that already contains a matched, non-empty pair hashes on the text between
- * them, the same substring Cluster would use for the checkpoint key. Two ids that happen to share a hash tag, two
- * ids tenant-scoped under the same {@code "{tenant}"} for instance, still get distinct version keys, since the
- * version key carries the full subscription id too, after the tag and outside its braces where Cluster never looks.
+ * them, the same substring Cluster would use for the checkpoint key. A SHA-256 digest of the full subscription id
+ * follows the tag, outside its braces where Cluster never looks once it has found the closing one, so two ids that
+ * happen to share a hash tag, two ids tenant-scoped under the same {@code "{tenant}"} for instance, still get
+ * distinct version keys instead of silently sharing one fencing version. The digest, not a raw or delimited copy of
+ * the id, is what makes that collision-resistant. The tag can equal the whole subscription id (see the first shape
+ * below), so a raw copy sitting next to it lets one id's own text be misread as a different id's tag plus copy.
+ * Two earlier constructions built this way, a plain separator and a length prefix, both broke on exactly that
+ * doubling during review.
  * <p>
  * One shape this cannot help is a subscription id where Cluster itself falls back to hashing the whole id (no brace
  * pair, an unmatched brace, or an empty pair like {@code {}}) and that whole id contains a closing brace somewhere
@@ -319,19 +327,32 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     }
 
     // The hash tag wraps the same substring Redis Cluster's own slot algorithm would pick out of the checkpoint key
-    // (subscriptionId itself, unprefixed), so the two keys the write scripts touch land in the same slot. The full
-    // subscription id follows it, outside the braces, where Cluster never looks once it has found the hash tag's
-    // closing brace, so two ids that share a hash tag (two tenant-scoped ids under the same "{tenant}" tag, for
-    // instance) still get distinct version keys instead of silently sharing one fencing version. The subscription
-    // id's own length comes first, not a fixed separator, because the tag can itself equal the whole subscription
-    // id (the fallback branch in clusterHashTag), so a separator alone cannot tell where the tag ends and the id
-    // begins: "a}:{a" and "{a}:a}:{a" produced the identical version key under a plain "}:" separator, one whole
-    // subscription id doubling as both its own tag and its own suffix, the other's genuine tag plus suffix landing
-    // on the same bytes. The length prefix fixes the id to the exact trailing substring of that length, which two
-    // different subscription ids can never both be at once. Package-private, not private, so a test can compute it
-    // against an independent Cluster slot implementation.
+    // (subscriptionId itself, unprefixed), so the two keys the write scripts touch land in the same slot. A SHA-256
+    // digest of the full subscription id follows it, outside the braces, where Cluster never looks once it has
+    // found the hash tag's closing brace, so two ids that share a hash tag (two tenant-scoped ids under the same
+    // "{tenant}" tag, for instance) still get distinct version keys instead of silently sharing one fencing
+    // version. The digest, not the raw id or a length-prefixed copy of it, is what makes this collision-resistant:
+    // the tag can equal the whole subscription id (the fallback branch in clusterHashTag), so a raw or delimited
+    // copy of the id sitting next to that tag lets one subscription id's own text be read as a completely different
+    // subscription id's tag-plus-copy. Two adversarially constructed pairs broke that this way in review, a plain
+    // "}:" separator ("a}:{a" vs "{a}:a}:{a") and a length-prefixed one ("a}12:{a" vs "{a}7:a}12:{a}"), both
+    // exploiting the same doubling. A digest carries none of the id's own structure for an adversary to reuse.
+    // Package-private, not private, so a test can compute it against an independent Cluster slot implementation.
     static String versionKey(String subscriptionId) {
-        return VERSION_KEY_PREFIX + "{" + clusterHashTag(subscriptionId) + "}" + subscriptionId.length() + ":" + subscriptionId;
+        return VERSION_KEY_PREFIX + "{" + clusterHashTag(subscriptionId) + "}" + sha256Hex(subscriptionId);
+    }
+
+    // SHA-256 is a JDK-guaranteed algorithm (Java Cryptography Architecture Standard Algorithm Names), so this can
+    // never actually throw. Hex, not the raw digest bytes, because this key is a Java String, and hex keeps it to
+    // characters any reasonable key serializer round-trips cleanly, rather than raw bytes that decode to arbitrary
+    // code points.
+    private static String sha256Hex(String s) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(s.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is a mandatory algorithm for every Java implementation", e);
+        }
     }
 
     // Redis Cluster's own slot algorithm (CLUSTER-SPEC, "Keys hash tags"): the first '{', then the first '}' after

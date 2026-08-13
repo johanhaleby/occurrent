@@ -23,6 +23,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -80,40 +83,65 @@ class SpringRedisCheckpointStorageClusterSlotTest {
      * one reason (an unmatched brace) and one landing there for another (an empty pair like {@code {}}) can both
      * still fail the slot-equality tests above for reasons unrelated to that specific fallback, so those tests
      * alone cannot tell a correct fallback from a broken one. Each fallback branch must wrap the id unchanged and
-     * whole, never a substring of it, and this checks that directly.
+     * whole, hashed as a SHA-256 digest rather than kept as a substring, and this checks that directly.
      */
     @Test
-    void version_key_wraps_the_whole_subscription_id_whenever_cluster_would_fall_back_to_hashing_it_whole() {
+    void version_key_wraps_a_sha256_digest_of_the_whole_subscription_id_whenever_cluster_would_fall_back_to_hashing_it_whole() {
         assertThat(SpringRedisCheckpointStorage.versionKey("orders"))
-                .isEqualTo("occurrent:checkpoint-version:{orders}6:orders");
+                .isEqualTo("occurrent:checkpoint-version:{orders}" + sha256Hex("orders"));
         assertThat(SpringRedisCheckpointStorage.versionKey("{tenant-42}-orders"))
-                .isEqualTo("occurrent:checkpoint-version:{tenant-42}18:{tenant-42}-orders");
+                .isEqualTo("occurrent:checkpoint-version:{tenant-42}" + sha256Hex("{tenant-42}-orders"));
         assertThat(SpringRedisCheckpointStorage.versionKey("{}orders"))
-                .isEqualTo("occurrent:checkpoint-version:{{}orders}8:{}orders");
+                .isEqualTo("occurrent:checkpoint-version:{{}orders}" + sha256Hex("{}orders"));
         assertThat(SpringRedisCheckpointStorage.versionKey("a}b{c"))
-                .isEqualTo("occurrent:checkpoint-version:{a}b{c}5:a}b{c");
+                .isEqualTo("occurrent:checkpoint-version:{a}b{c}" + sha256Hex("a}b{c"));
     }
 
     /**
-     * The specific pair that broke the earlier, separator-only version key ({@code "{" + tag + "}:" + id}, no
-     * length). {@code "a}:{a"} falls back to hashing itself whole, so its own text doubles as its tag, and
-     * {@code "{a}:a}:{a"} genuinely extracts the tag {@code "a"}. The two constructions landed on the identical
-     * bytes, {@code "{a}:{a}:a}:{a"}, a shared fencing version between two different subscriptions. The subscription
-     * id's length, not a separator, is what tells these apart now.
+     * The pair that broke a plain-separator version key ({@code "{" + tag + "}:" + id}) during the first
+     * adversarial review round. {@code "a}:{a"} falls back to hashing itself whole, so its own text doubles as
+     * both its tag and its copy, and {@code "{a}:a}:{a"} genuinely extracts the tag {@code "a"}. Both landed on
+     * the identical bytes, {@code "{a}:{a}:a}:{a"}, a shared fencing version between two different subscriptions.
+     * A SHA-256 digest of the id, not a copy of the id itself, is what keeps them apart now.
      */
     @Test
-    void the_ids_that_broke_a_separator_only_version_key_now_get_distinct_ones() {
+    void the_pair_that_broke_a_plain_separator_version_key_now_gets_distinct_ones() {
         assertThat(SpringRedisCheckpointStorage.versionKey("a}:{a"))
                 .isNotEqualTo(SpringRedisCheckpointStorage.versionKey("{a}:a}:{a"));
     }
 
     /**
+     * The pair that broke a length-prefixed version key ({@code "{" + tag + "}" + len(id) + ":" + id}) during the
+     * second adversarial review round, the length prefix closing the first round's gap without closing the
+     * underlying one. {@code "a}12:{a"} falls back to hashing itself whole again, and {@code "{a}7:a}12:{a"}
+     * genuinely extracts the tag {@code "a"} with a length of 12. Both landed on the identical bytes,
+     * {@code "{a}12:{a}7:a}12:{a"}.
+     */
+    @Test
+    void the_pair_that_broke_a_length_prefixed_version_key_now_gets_distinct_ones() {
+        assertThat(SpringRedisCheckpointStorage.versionKey("a}12:{a"))
+                .isNotEqualTo(SpringRedisCheckpointStorage.versionKey("{a}7:a}12:{a"));
+    }
+
+    // Calls the same JDK digest algorithm SpringRedisCheckpointStorage.sha256Hex does, trusted rather than
+    // reimplemented the way crc16 below is, since what this test checks is where the digest lands in the version
+    // key and what it is computed over, not whether the JDK's SHA-256 is correct.
+    private static String sha256Hex(String s) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(s.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /**
      * Two subscription ids sharing a hash tag are exactly what a Cluster deployment is expected to have, tenant
      * scoping by {@code "{tenant}"} is the documented reason hash tags exist. The tag alone is not a safe version
-     * key, since two such ids would then read and write the same fencing version as each other. The full id after
-     * the tag is what keeps them apart. Each case here appends {@code "-other"} after the id's own closing brace,
-     * so {@code clusterHashTag} extracts the identical tag for both. Confirmed independently before this test was
-     * written that without the full id in the key, these pairs would collide.
+     * key, since two such ids would then read and write the same fencing version as each other. The SHA-256 digest
+     * after the tag is what keeps them apart. Each case here appends {@code "-other"} after the id's own closing
+     * brace, so {@code clusterHashTag} extracts the identical tag for both. Confirmed independently before this
+     * test was written that without a digest of the full id in the key, these pairs would collide.
      */
     @ParameterizedTest
     @ValueSource(strings = {"{tenant}-orders", "orders-{tenant}", "a{b{c}d}e"})
