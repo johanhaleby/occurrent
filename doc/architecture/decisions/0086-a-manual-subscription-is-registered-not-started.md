@@ -109,6 +109,12 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > only where nothing would be recorded otherwise, and recording there can only add a write the unconditional one it
 > replaces already made.
 >
+> It asks classes rather than layers, so it does not resume the walk. A subclassed wrapper answering with a position of
+> its own, where the class it inherits from would have handed the question down, ends the walk there and the model
+> below is never asked. Closing that needs each layer to say which class it resolves against, which belongs on the
+> subscription model interfaces rather than in this wrapper, and reaching it takes a caller who both subclasses a
+> wrapper layer and writes a function answering three different ways down one stack.
+>
 > The walk asks every layer, including one that passes the position down without deciding anything for itself, so a
 > function answering with the model default for such a layer and with something else for the model that does read the
 > checkpoint is read as a position to record when it is not one. Telling the two kinds of layer apart needs the layers
