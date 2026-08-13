@@ -111,8 +111,8 @@ public final class EventTypeExpansion {
 
     /**
      * Refuses an array or a primitive declared event type, and accepts anything else without walking it. The two
-     * reasons differ in strength, and both are given on {@link #expandWhatCanBeFound}, which applies this to every type
-     * it walks.
+     * reasons differ in strength, and both are given on {@link #expandWhatCanBeFound}, which applies this to each
+     * declared type.
      * <p>
      * This is here on its own for a caller that narrows nothing and so has no set to expand, and that still should not
      * accept a declaration nothing can ever match. {@code Saga.create} with an empty {@code eventTypes} is the one such

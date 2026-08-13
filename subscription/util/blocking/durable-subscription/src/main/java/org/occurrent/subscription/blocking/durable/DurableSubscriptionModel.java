@@ -152,9 +152,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
-        // The whole method runs under subscriptionIdLock, checkpoint-managed path included, not only the opt-out
-        // branch, since generateStartAtPositionFrom can itself write the id's first checkpoint and a concurrent
-        // cancelSubscription's delete for the same id must not race that write.
+        // Held for the whole method, not just the opt-out branch, because subscribe, resumeSubscription and
+        // cancelSubscription for the same id must stay serialized against notCheckpointedSubscriptions (see the
+        // field comment above). It does not cover the checkpoint read and write that generateStartAtPositionFrom's
+        // default case defers to its returned supplier. That runs later, when the delegate evaluates the StartAt,
+        // and the shipped Mongo delegates already serialize it against cancelSubscription's delete under their own
+        // monitor (SpringMongoSubscriptionModel#subscribe, #restartOnce, #cancelSubscription). Any other
+        // CheckpointAwareSubscriptionModel delegate needs to provide that serialization itself.
         synchronized (lockFor(subscriptionId)) {
             StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
             if (startAtToUse == null) {
