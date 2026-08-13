@@ -301,9 +301,14 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
+        // Snapshotted before the delegate call, not read again afterward. A fresh subscribe joining the same
+        // counter while this delegate call is running changes its count, so the value comparison below leaves
+        // that counter alone instead of erasing it the way an unconditional remove used to.
+        AtomicInteger before = notCheckpointedSubscriptions.get(subscriptionId);
+        int countBefore = before == null ? 0 : before.get();
         subscriptionModel.cancelSubscription(subscriptionId);
         storage.delete(subscriptionId);
-        notCheckpointedSubscriptions.remove(subscriptionId);
+        notCheckpointedSubscriptions.computeIfPresent(subscriptionId, (id, count) -> count == before && count.get() == countBefore ? null : count);
     }
 
     @Override

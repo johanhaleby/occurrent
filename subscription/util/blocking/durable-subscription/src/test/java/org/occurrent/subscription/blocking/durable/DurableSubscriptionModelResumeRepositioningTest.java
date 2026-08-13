@@ -390,6 +390,47 @@ class DurableSubscriptionModelResumeRepositioningTest {
     }
 
     @Test
+    void a_fresh_subscribe_joining_the_same_counter_while_a_cancel_is_still_in_flight_survives_that_cancels_delayed_removal() throws Exception {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        UnregisteringThenPausingCancelRepositionableSubscriptionModel delegate = new UnregisteringThenPausingCancelRepositionableSubscriptionModel();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
+        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+        }).waitUntilStarted();
+
+        CountDownLatch unregisteredAndPausing = new CountDownLatch(1);
+        CountDownLatch releaseCancel = new CountDownLatch(1);
+        delegate.unregisteredAndPausing = unregisteredAndPausing;
+        delegate.holdReturnUntil = releaseCancel;
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> cancelFuture = pool.submit(() -> model.cancelSubscription(SUBSCRIPTION_ID));
+            assertThat(unregisteredAndPausing.await(10, TimeUnit.SECONDS)).isTrue();
+
+            // The delegate already reports the id as gone, so this fresh subscribe is accepted and joins the same
+            // counter object the paused cancel captured before it started, incrementing the count cancel is about
+            // to compare against.
+            model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+            }).waitUntilStarted();
+
+            releaseCancel.countDown();
+            cancelFuture.get(10, TimeUnit.SECONDS);
+
+            storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+            model.resumeSubscription(SUBSCRIPTION_ID);
+
+            assertThat(delegate.repositionedTo)
+                    .as("the cancel's delayed removal must not erase the fresh subscribe's share just because it "
+                            + "shares the same counter object the cancel captured before it started")
+                    .isNull();
+            assertThat(delegate.plainResumeCalled).isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
     void a_resume_that_already_read_the_checkpoint_does_not_reposition_once_a_concurrent_opt_out_subscribe_is_accepted() throws Exception {
         PausingOnReadCheckpointStorage storage = new PausingOnReadCheckpointStorage();
         CountDownLatch readingCheckpoint = new CountDownLatch(1);
@@ -648,6 +689,31 @@ class DurableSubscriptionModelResumeRepositioningTest {
                 }
             }
             return subscription;
+        }
+    }
+
+    /**
+     * The same repositionable fake, but {@code cancelSubscription} unregisters the id first, then signals
+     * {@code unregisteredAndPausing} and blocks on {@code holdReturnUntil} before returning, standing in for a
+     * delegate that has already forgotten the id but has not yet handed control back to the caller.
+     */
+    private static class UnregisteringThenPausingCancelRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
+        @Nullable CountDownLatch unregisteredAndPausing;
+        @Nullable CountDownLatch holdReturnUntil;
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            super.cancelSubscription(subscriptionId);
+            if (unregisteredAndPausing != null) {
+                unregisteredAndPausing.countDown();
+            }
+            if (holdReturnUntil != null) {
+                try {
+                    assertThat(holdReturnUntil.await(10, TimeUnit.SECONDS)).isTrue();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
         }
     }
 
