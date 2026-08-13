@@ -73,11 +73,19 @@ pending_actions:
   - id: act-014
     type: workflow-dispatch
     target: "Fresh-context adversarial verify of PR 777 (U11) at 4ee0dc165, Opus read-only, seven angles: double-resolution side effects, outermost-context mismatch, BEGINNING oracle race vs pre-PR window, lock interleaving, test-claim truth, factory-refusal completeness, claim surfaces"
-    expected: "verdict per angle; merge additionally holds on the queued ADR wording ruling"
-    status: PENDING
+    expected: "verdict per angle; merge additionally holds on the queued ADR wording ruling. VERIFIED: DEFECTS-FOUND with the mechanism held (angles 1/3/4/5 refuted the attacks, window narrowed not widened, tests non-vacuous). Confirmed: the ADR 86 justifying sentence is false (the shipped annotation DEFAULT dynamic IS the null-for-catchup shape, the starter is safe only by competing-consumer layer order), so a supported custom-bean stack reopens the 772 skip window; guide option 2 false under mode=manual; the factory refusal is an unflagged 0.32-API breaking change; message wider than the storage contract; stale test name; WARNING-claim silent-equal qualifier"
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-13T20:20:00Z
+  - id: act-016
+    type: message-session
+    target: "U11 agent resumed with the fix round: RULED chain-aware registration resolution via SubscriptionModelWrapper descent (regression from starting state on public API rules out the documented-limitation option; interface verified on main), plus guide manual-mode carve-out, Breaking-changes entry for the factory refusal, requirement-stating refusal message, test rename, WARNING qualifier; ADR 86 amendment rewritten so the false sentence disappears by construction"
+    expected: "fix push on PR 777, green matrix, re-review read on the new head, DELIVERY_RESULT updated with the chain-descent invariant and new mutants"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T20:45:00Z
   - id: act-015
     type: rerun
     target: "Copilot re-review requested on PR 777 final head 4ee0dc165 via GraphQL requestReviews (the REST path adds nobody)"
