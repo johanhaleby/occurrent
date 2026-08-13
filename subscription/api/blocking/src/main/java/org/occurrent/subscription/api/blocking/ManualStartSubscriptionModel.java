@@ -415,8 +415,8 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
                         " but another registration reached storage first with " + storedAsString + ". The two " +
                         "positions were captured on different nodes and cannot be compared, so this subscription " +
                         "starts from the stored one, and any events between the two positions may not reach it. " +
-                        "Store " + positionToPin.asString() + " as the checkpoint for " + subscriptionId +
-                        " before starting the subscription if those events matter.");
+                        "Work out which of the two is the earlier position and store that one as the checkpoint " +
+                        "for " + subscriptionId + " before starting the subscription if those events matter.");
             }
         }
     }
