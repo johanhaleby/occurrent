@@ -518,7 +518,7 @@ which for a Spring Boot application is startup. A saga sees this message:
 ```
 java.lang.IllegalArgumentException: the concrete event types dispatch would accept for com.example.OrderEvent cannot all
 be enumerated, so a filter derived from it would miss some of them. Declare the concrete event types instead, make
-OrderEvent and every level below it final or sealed, or set an explicit filter(...), which is used instead of deriving
+OrderEvent and every level below it final or sealed, or set an explicit filter, which is used instead of deriving
 one and is the way out when a CloudEventTypeMapper of your own maps the whole hierarchy onto a single CloudEvent type
 string.
 ```
@@ -651,10 +651,16 @@ Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
 takes one as a trailing argument. A subscription has no equivalent, so for `@Subscription` and its siblings the
 `eventTypes` attribute above is still the answer.
 
-Two things become yours to get right. The filter has to match the saga's start events, because a filter that excludes
-them means no instance is ever created. And the build-time check is switched off for every event type the saga declares,
-not only for the one you could not enumerate, so a filter you set for an unrelated reason also stops you being told about
-a sealed hierarchy that was reopened somewhere else in the same saga.
+Three things become yours to get right. The filter has to match the saga's start events, because a filter that excludes
+them means no instance is ever created. It also has to stay inside what your `CloudEventConverter` can turn into a domain
+event, since every CloudEvent it admits is converted before the saga sees it, and one that fails to convert fails that
+delivery rather than being skipped. And the build-time check is switched off for every event type the saga declares, not
+only for the one you could not enumerate, so a filter you set for an unrelated reason also stops you being told about a
+sealed hierarchy that was reopened somewhere else in the same saga.
+
+A flow saga pays one more cost. It appends every correlated event it receives to the instance's retained history before it
+checks which branch handles the type, so a filter broader than the types the flow names grows that history, and under a
+`stepWindow` cap those events take slots the step's own events would otherwise hold.
 
 ### If you wrote a type mapper that collapses the hierarchy
 

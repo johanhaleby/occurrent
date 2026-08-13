@@ -191,11 +191,18 @@ reach the same `eventTypes()`, so one call at the point each builder produces th
 already matches with `isInstance`, and `FlowSagaImpl` is unchanged because `eventTypes` there is only an accessor.
 
 > **Amended for 0.33.0, under [#751](https://github.com/johanhaleby/occurrent/issues/751).** All three still walk the
-> hierarchy, but there are now two entry points and only one of them refuses. A saga given an explicit `filter(...)`
-> derives no filter, so it calls `EventTypeExpansion.expandWhatCanBeFound` instead of `expand` and reports the concrete
-> types that could be found rather than being refused. The property this ADR is built on is untouched, because it is
-> about the derived filter and an explicit filter is not one. The paragraph below stays true as written, since both
-> entry points expand and correlation coverage still runs over the expanded set.
+> hierarchy, but there are now two entry points and only one of them refuses. A saga given an explicit filter derives no
+> filter, so it calls `EventTypeExpansion.expandWhatCanBeFound` instead of `expand` and reports the concrete types that
+> could be found rather than being refused. An array is refused on either path, because an array is not an event type at
+> all rather than a hierarchy that cannot be enumerated.
+>
+> This paragraph's closing claim that `SagaFilters` and `FlowSagaImpl` are unchanged no longer holds, since #751 changed
+> both. `SagaFilters` reads an explicit filter ahead of deriving one, and `FlowSagaImpl` carries the filter and answers
+> `filter()`. `startEventTypes()` is still unchanged, and still for the reason given.
+>
+> The property this ADR is built on is untouched, because it is about the derived filter and an explicit filter is not
+> one. Correlation coverage still runs over the expanded set on both paths, so the paragraph that says so needs no
+> amendment.
 
 Correlation coverage is checked over the expanded set, which changes nothing and is worth writing down so nobody claims
 otherwise. An expanded type is always a subtype of a declared type, `TypeDispatch` resolves a correlator through

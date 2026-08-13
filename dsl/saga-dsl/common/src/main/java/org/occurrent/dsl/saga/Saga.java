@@ -137,7 +137,7 @@ public interface Saga<E, S extends @Nullable Object, C> {
         return new IllegalArgumentException("the concrete event types dispatch would accept for " + eventType.getName()
                 + " cannot all be enumerated, so a filter derived from it would miss some of them. Declare the concrete "
                 + "event types instead, make " + eventType.getSimpleName() + " and every level below it final or sealed, "
-                + "or set an explicit filter(...), which is used instead of deriving one and is the way out when a "
+                + "or set an explicit filter, which is used instead of deriving one and is the way out when a "
                 + "CloudEventTypeMapper of your own maps the whole hierarchy onto a single CloudEvent type string.");
     }
 
@@ -168,19 +168,24 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * because nothing is derived. The case that needs it is a {@code CloudEventTypeMapper} of your own that maps a whole
      * hierarchy onto a single CloudEvent type string.
      * <p>
-     * Two things follow, and both are yours to get right rather than Occurrent's to check. A filter that does not admit
-     * the {@link #startEventTypes()} means no instance is ever created, the same way a filter narrower than a
-     * projection's handlers starves them. And the build-time refusal is switched off for <em>every</em> declared type on
-     * this saga rather than only the one you could not enumerate, so a filter set for an unrelated reason, narrowing by
-     * subject say, also stops you being told about a sealed hierarchy that was reopened somewhere below the type you
-     * declared.
+     * Three things are yours to get right rather than Occurrent's to check.
      * <p>
-     * Keep the filter inside the saga's own event hierarchy. Every CloudEvent it admits is converted to a domain event
-     * before the saga sees it, so one the converter cannot turn into an {@code E} fails that delivery rather than being
-     * ignored. Inside the hierarchy the two builders differ. A saga from {@link Builder} leaves its state untouched for
-     * an event type it registered no handler for. A flow saga appends every correlated event it receives to the
+     * The filter has to admit the {@link #startEventTypes()}, because a filter that excludes them means no instance is
+     * ever created, the same way a filter narrower than a projection's handlers starves them.
+     * <p>
+     * Every CloudEvent the filter admits is converted to a domain event before the saga sees it, so keep the filter
+     * inside what the converter can turn into an {@code E}. One it cannot fails that delivery rather than being ignored,
+     * and a subscription that keeps redelivering a failing event holds up everything queued behind it.
+     * <p>
+     * The build-time refusal is switched off for <em>every</em> declared type on this saga rather than only the one you
+     * could not enumerate, so a filter set for an unrelated reason, narrowing by subject say, also stops you being told
+     * about a sealed hierarchy that was reopened somewhere below the type you declared.
+     * <p>
+     * Within those, a converted event the saga has no handler for costs the two builders differently. A saga from
+     * {@link Builder} leaves its state untouched. A flow saga appends every correlated event it receives to the
      * instance's retained history before it looks at which branch handles it, so a filter broader than the types the
-     * flow names grows that history with events no step will ever match.
+     * flow names grows that history, and under a {@code stepWindow} cap those events take slots the step's own events
+     * would otherwise hold.
      */
     default @Nullable Filter filter() {
         return null;

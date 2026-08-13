@@ -239,7 +239,7 @@ class SagaFilterOverrideTest {
                 .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Declare the concrete event types instead")
-                .hasMessageContaining("set an explicit filter(...)");
+                .hasMessageContaining("set an explicit filter");
     }
 
     @Test
