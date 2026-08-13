@@ -123,9 +123,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * to overlap, both attempt this write, and only the first to reach storage succeeds. A node that already finds a
      * checkpoint stored when it registers accepts it, which costs it nothing as long as {@code positionSource} hands
      * out positions in the order it is asked for them, as the MongoDB subscription models do. A node whose write is
-     * refused by a checkpoint that arrived while it was registering accepts it too and logs a warning, because the
-     * two positions were captured on different nodes and {@link Checkpoint} gives this class no way to tell which of
-     * them is earlier. Events written between the two positions may not reach the subscription.
+     * refused by a checkpoint that arrived while it was registering accepts it too, and logs a warning when that
+     * checkpoint holds a position other than the one it captured itself, because the two were captured on different
+     * nodes and {@link Checkpoint} gives this class no way to tell which of them is earlier. Events written between
+     * the two positions may not reach the subscription.
      * <p>
      * The recorded position only decides where a subscription registered with the default start position begins,
      * since that is the one a wrapped model reads a stored checkpoint for. Registering with an explicit

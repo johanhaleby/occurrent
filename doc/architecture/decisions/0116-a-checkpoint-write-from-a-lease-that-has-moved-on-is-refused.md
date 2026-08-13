@@ -500,8 +500,11 @@ and is unaffected by which family it runs against.
 > A checkpoint that arrives after the capture was taken on another node at an unknown point, `Checkpoint` promises
 > only `asString()`, and neither node can tell which of the two positions is earlier. Overwriting is not the safer
 > choice, since a position that cannot be ordered is as likely to be later as earlier, so the stored position is
-> accepted and the possible loss is logged at `WARNING` with both positions named. Ordering them is something a
-> person can do and this class cannot, but the warning stops at naming them rather than telling anyone to rewind the
+> accepted and the possible loss is logged at `WARNING`, naming both positions whenever it can. Two nodes that
+> captured the same position have nothing to report and stay silent, and a stored position that cannot be read back,
+> or that has been removed by the time the warning reads it, is described instead of named. Ordering them is
+> something a person can do and this class cannot, but the warning stops at naming them rather than telling anyone
+> to rewind the
 > checkpoint, because `subscribe` records the position on a model that is already running too, and there the
 > subscription may already be advancing that same checkpoint while the warning is being read. A stored position that
 > happens to be the earlier one redelivers instead, which is why the warning says the events may not reach the
