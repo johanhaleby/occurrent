@@ -480,10 +480,11 @@ and is unaffected by which family it runs against.
 > capture was taken on another node at an unknown point, `Checkpoint` promises only `asString()`, and neither node
 > can tell which of the two positions is earlier. Overwriting is not the safer choice, since a position that
 > cannot be ordered is as likely to be later as earlier, so the stored position is accepted and the possible loss
-> is logged at `WARNING` with both positions named, since an operator can work out which of the two is earlier and
-> store that one, which is exactly what this class cannot do. A stored position that happens to be the earlier one
-> redelivers instead, which is why the warning says the events may not reach the subscription rather than that they
-> were lost.
+> is logged at `WARNING` with both positions named. Ordering them is something a person can do and this class
+> cannot, but the warning stops at naming them rather than telling anyone to rewind the checkpoint, because
+> `subscribe` pins on a model that is already running too, and there the subscription may be advancing that same
+> checkpoint while the warning is being read. A stored position that happens to be the earlier one redelivers
+> instead, which is why the warning says the events may not reach the subscription rather than that they were lost.
 >
 > Closing the window needs either an ordering on the positions, which `Checkpoint`'s single `asString()` method
 > and its implementations outside this repository rule out, or agreement between the nodes before any position is

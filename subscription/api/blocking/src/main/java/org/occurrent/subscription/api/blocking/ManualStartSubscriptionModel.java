@@ -393,9 +393,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         if (positionSource == null || checkpointStorage == null) {
             return;
         }
-        // Read before the position is captured, which is what makes accepting a refusal safe. A checkpoint already
-        // stored at this point was written no later than the capture that follows, so starting from it skips
-        // nothing. One that arrives after the capture can be a later position than this node's own.
+        // Read before the position is captured, which is what tells a checkpoint that was already there apart from
+        // one that arrived during this registration. A checkpoint already stored at this point was written no later
+        // than the capture that follows, so starting from it skips nothing. One that arrives after the capture can
+        // be a later position than this node's own.
         boolean checkpointAlreadyExisted = checkpointStorage.exists(subscriptionId);
         @Nullable Checkpoint positionToPin = positionSource.globalCheckpoint();
         if (positionToPin == null) {
@@ -415,8 +416,8 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
                         " but another registration reached storage first with " + storedAsString + ". The two " +
                         "positions were captured on different nodes and cannot be compared, so this subscription " +
                         "starts from the stored one, and any events between the two positions may not reach it. " +
-                        "Work out which of the two is the earlier position and store that one as the checkpoint " +
-                        "for " + subscriptionId + " before starting the subscription if those events matter.");
+                        "Recovering them means replaying that interval, which is only safe while this " +
+                        "subscription is not running anywhere.");
             }
         }
     }
