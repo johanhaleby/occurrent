@@ -136,20 +136,27 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
         if (startAtToUse == null) {
             // Not allowed to start, delegate to the wrapped subscription instead. Counted in before the delegate
-            // call so a concurrent resumeSubscription sees the opt-out too, and released again if the delegate
-            // throws so a failing attempt leaves no marker behind for a later resubscribe to inherit, without
-            // touching another still-active or still in-flight attempt for the same id. The increment has to run
-            // inside compute(), not after a separate computeIfAbsent() returns the counter, or a decrement for the
-            // same id can remove the entry in between and strand the increment on a counter the map no longer holds.
-            notCheckpointedSubscriptions.compute(subscriptionId, (id, count) -> {
+            // call so a concurrent resumeSubscription sees the opt-out too, released again if the delegate throws
+            // so a failing attempt leaves no marker behind for a later resubscribe to inherit, and reinstated if a
+            // concurrent cancelSubscription removed it while the delegate call was still running, since a
+            // subscription this call just started must stay opted out regardless. The increment has to run inside
+            // compute(), not after a separate computeIfAbsent() returns the counter, or a decrement for the same id
+            // can remove the entry in between and strand the increment on a counter the map no longer holds.
+            // "mine" identifies this call's own counter object, so a cancelSubscription-then-resubscribe cycle that
+            // replaced it with a fresh one is never mistaken for this call's own share on either path below: the
+            // wrapped model refuses a second live registration for the same id, so anything other than "mine" or
+            // absent cannot belong to a subscription that is also active right now.
+            AtomicInteger mine = notCheckpointedSubscriptions.compute(subscriptionId, (id, count) -> {
                 AtomicInteger current = count == null ? new AtomicInteger() : count;
                 current.incrementAndGet();
                 return current;
             });
             try {
-                return getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+                Subscription subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+                notCheckpointedSubscriptions.compute(subscriptionId, (id, count) -> count == null ? mine : count);
+                return subscription;
             } catch (Throwable t) {
-                notCheckpointedSubscriptions.computeIfPresent(subscriptionId, (id, count) -> count.decrementAndGet() <= 0 ? null : count);
+                notCheckpointedSubscriptions.computeIfPresent(subscriptionId, (id, count) -> count != mine ? count : (count.decrementAndGet() <= 0 ? null : count));
                 throw t;
             }
         }
