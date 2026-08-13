@@ -33,6 +33,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.OptionalLong;
@@ -102,9 +103,16 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * which a later {@code notOlderThan} write would then accept unconditionally, letting a lease-holder that has
  * already moved on win a write it should have lost.
  * <p>
- * This also assumes the {@link RedisOperations} passed in serializes a key to its own literal bytes, the same
- * assumption the checkpoint's plain {@code GET} already makes. A key serializer that reshapes the string changes
- * what Cluster actually hashes, and nothing in this class can see that reshaping to compensate for it.
+ * Every hash tag above is a position in the subscription id's own Java text, which only lines up with what Cluster
+ * actually hashes if the {@link RedisOperations} passed in serializes a {@link String} key to its own UTF-8 bytes
+ * unchanged. {@code RedisTemplate}'s default, used whenever nothing sets a key serializer explicitly, is Java
+ * serialization instead, which wraps a key in a class descriptor and a length-prefixed envelope before the text
+ * itself, so the brace this class placed at one position in the string is no longer at a matching position in the
+ * bytes Cluster sees, and the two keys can land in different slots regardless of anything above. Both constructors
+ * check this once, by serializing a probe string and comparing the result byte for byte against its own UTF-8
+ * encoding, and refuse with an {@link IllegalArgumentException} naming the fix, {@code RedisSerializer.string()} on
+ * the key serializer, or a {@code StringRedisTemplate}, rather than leaving a Cluster deployment to find out from a
+ * {@code CROSSSLOT} failure on its first conditional write, the same gap this class exists to close.
  */
 @NullMarked
 public class SpringRedisCheckpointStorage implements CheckpointStorage {
@@ -198,6 +206,8 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
      * each retry when reading/saving/deleting the checkpoint.
      *
      * @param redis The {@link RedisOperations} that'll be used to store the checkpoint
+     * @throws IllegalArgumentException if {@code redis}'s key serializer does not pass a {@link String} key through
+     *                                  as its own UTF-8 bytes, see the class javadoc.
      */
     public SpringRedisCheckpointStorage(RedisOperations<String, String> redis) {
         this(redis, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f));
@@ -208,13 +218,46 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
      *
      * @param redis         The {@link RedisOperations} that'll be used to store the checkpoint
      * @param retryStrategy A custom retry strategy to use if there's a problem reading/saving/deleting the checkpoint to the Redis storage.
+     * @throws IllegalArgumentException if {@code redis}'s key serializer does not pass a {@link String} key through
+     *                                  as its own UTF-8 bytes, see the class javadoc.
      */
     public SpringRedisCheckpointStorage(RedisOperations<String, String> redis, RetryStrategy retryStrategy) {
         requireNonNull(redis, "Redis operations cannot be null");
         requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
+        requireByteIdentityKeySerializer(redis);
         this.retryStrategy = retryStrategy;
         this.redis = redis;
         this.conditionArgsSerializer = conditionArgsSerializer(redis);
+    }
+
+    // Every hash-tag position this class computes is a position in the subscription id's own Java text, and the
+    // whole Cluster-slot argument in the class javadoc only holds if Redis Cluster sees that same text as the
+    // key's literal UTF-8 bytes. A key serializer that wraps or reshapes it, JDK serialization being the default a
+    // plain RedisTemplate falls back to when nobody sets one, hashes different bytes than the ones this class
+    // reasoned about, silently reopening the exact startup-passes-first-write-fails gap this class exists to close.
+    // Probed rather than type-checked, so any serializer that happens to pass bytes through untouched satisfies
+    // this, not only the specific classes this library recognizes.
+    private static void requireByteIdentityKeySerializer(RedisOperations<String, String> redis) {
+        String probe = "{redis-cluster-slot-probe}";
+        byte[] expected = probe.getBytes(StandardCharsets.UTF_8);
+        byte[] actual;
+        try {
+            actual = serializeKey(redis, probe);
+        } catch (RuntimeException e) {
+            actual = null;
+        }
+        if (!Arrays.equals(expected, actual)) {
+            throw new IllegalArgumentException("The RedisOperations passed to " + SpringRedisCheckpointStorage.class.getSimpleName() +
+                    " must serialize a String key to its own UTF-8 bytes unchanged, since Redis Cluster hashes the literal bytes it " +
+                    "receives and this storage's Cluster-slot alignment assumes those bytes match the subscription id's own text. " +
+                    "Call redis.setKeySerializer(RedisSerializer.string()) before constructing this storage, or hand it a " +
+                    "StringRedisTemplate.");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static byte[] serializeKey(RedisOperations<String, String> redis, String value) {
+        return ((RedisSerializer<Object>) redis.getKeySerializer()).serialize(value);
     }
 
     /**

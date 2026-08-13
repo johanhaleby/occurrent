@@ -253,6 +253,30 @@ class SpringRedisCheckpointStorageTest {
     }
 
     @Test
+    void construction_refuses_a_redis_operations_whose_key_serializer_wraps_a_string_instead_of_passing_it_through() {
+        // RedisTemplate's own default. Java serialization wraps a key in a class descriptor and a length-prefixed
+        // envelope before the string's own bytes, so a brace this class places at one position in the text is no
+        // longer at a matching position in what Cluster actually hashes.
+        @SuppressWarnings("unchecked")
+        RedisOperations<String, String> redis = mock(RedisOperations.class);
+        when(redis.getKeySerializer()).thenReturn((RedisSerializer) RedisSerializer.java());
+
+        assertThatThrownBy(() -> new SpringRedisCheckpointStorage(redis))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("UTF-8 bytes");
+    }
+
+    @Test
+    void construction_refuses_a_redis_operations_with_no_key_serializer_configured_at_all() {
+        @SuppressWarnings("unchecked")
+        RedisOperations<String, String> redis = mock(RedisOperations.class);
+
+        assertThatThrownBy(() -> new SpringRedisCheckpointStorage(redis))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("UTF-8 bytes");
+    }
+
+    @Test
     void a_refused_conditional_write_escapes_retry_immediately_instead_of_hanging_the_calling_thread() {
         // Given a retry strategy whose backoff is longer than this test's own timeout and whose max attempts is the
         // exponentialBackoff default, infinite. If the refusal below were retried even once, this test would still
@@ -277,6 +301,7 @@ class SpringRedisCheckpointStorageTest {
         @SuppressWarnings("unchecked")
         RedisOperations<String, String> redis = mock(RedisOperations.class);
         when(redis.getValueSerializer()).thenReturn((RedisSerializer) RedisSerializer.string());
+        when(redis.getKeySerializer()).thenReturn((RedisSerializer) RedisSerializer.string());
         // The outer message is the generic Spring wrapper text, not the CROSSSLOT one, so this only passes if the
         // cause chain is actually walked down to the driver exception. The two messages being identical here once
         // let a broken walk (checking only the outer exception) pass anyway.
@@ -357,6 +382,7 @@ class SpringRedisCheckpointStorageTest {
         @SuppressWarnings("unchecked")
         RedisOperations<String, String> redis = mock(RedisOperations.class);
         when(redis.getValueSerializer()).thenReturn((RedisSerializer) RedisSerializer.string());
+        when(redis.getKeySerializer()).thenReturn((RedisSerializer) RedisSerializer.string());
         RuntimeException crossSlot = new RedisSystemException("Redis exception",
                 new RedisCommandExecutionException("CROSSSLOT Keys in request don't hash to the same slot"));
         when(redis.delete(anyList())).thenThrow(crossSlot);
@@ -422,6 +448,7 @@ class SpringRedisCheckpointStorageTest {
         connectionFactory.afterPropertiesSet();
         RedisTemplate<String, String> redisTemplate = new RedisTemplate<>();
         redisTemplate.setConnectionFactory(connectionFactory);
+        redisTemplate.setKeySerializer(RedisSerializer.string());
         redisTemplate.afterPropertiesSet();
         return redisTemplate;
     }

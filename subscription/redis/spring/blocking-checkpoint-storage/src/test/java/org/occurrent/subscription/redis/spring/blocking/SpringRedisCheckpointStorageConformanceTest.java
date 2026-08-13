@@ -32,6 +32,7 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.serializer.RedisSerializer;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -59,6 +60,7 @@ class SpringRedisCheckpointStorageConformanceTest extends CheckpointStorageConfo
         connectionFactory.afterPropertiesSet();
         RedisTemplate<String, String> template = new RedisTemplate<>();
         template.setConnectionFactory(connectionFactory);
+        template.setKeySerializer(RedisSerializer.string());
         template.afterPropertiesSet();
         redisTemplate = template;
     }

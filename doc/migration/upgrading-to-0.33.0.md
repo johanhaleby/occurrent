@@ -144,8 +144,15 @@ through `any()`, since a conditional write already refuses one before touching R
 exist to strand. On a `CROSSSLOT` failure `delete` falls back to two single-key deletes instead, which is provably
 safe for that reason and not merely convenient.
 
-This also assumes the `RedisOperations` passed in serializes a key to its own literal bytes, the same assumption
-the checkpoint's plain `GET` already makes.
+Both constructors now also check that the `RedisOperations` passed in serializes a `String` key to its own UTF-8
+bytes, unchanged, and refuse it with an `IllegalArgumentException` otherwise. `RedisTemplate`'s own default, in
+effect whenever nothing calls `setKeySerializer`, is Java serialization, which wraps a key in a class descriptor
+and a length-prefixed envelope before the string's own bytes, so the brace this class places at one position in
+the text is no longer at a matching position in what Cluster actually hashes, and the two keys can land in
+different slots regardless of everything above. If construction throws naming this, call
+`redis.setKeySerializer(RedisSerializer.string())` on your `RedisTemplate` before passing it in, or construct this
+storage with a `StringRedisTemplate` instead. This affects every version of this storage, not only Cluster
+deployments, since 0.32.0 accepted any key serializer without checking it.
 
 `read`, `save`, `delete`, and `exists` also refuse a subscription id that starts with the version key's own
 reserved prefix (`occurrent:checkpoint-version:`), with an `IllegalArgumentException`. This is a Cluster-independent
