@@ -716,6 +716,49 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_registration_whose_write_is_delayed_past_a_later_ones_starts_from_that_later_position_and_warns() throws Exception {
+        // The node that captures first stalls before writing, so the other node's later position reaches storage
+        // first and wins. Neither node can order the two positions afterwards, so the earlier one starts from the
+        // later position and the events between the two never reach the subscription.
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        CountDownLatch earlierNodeCaptured = new CountDownLatch(1);
+        CountDownLatch laterNodeWrote = new CountDownLatch(1);
+        GlobalCheckpointSource<@Nullable Checkpoint> earlierPositionSource = () -> {
+            earlierNodeCaptured.countDown();
+            awaitOrFail(laterNodeWrote);
+            return new StringCheckpoint("earlier-position");
+        };
+        GlobalCheckpointSource<@Nullable Checkpoint> laterPositionSource = () -> new StringCheckpoint("later-position");
+        ManualStartSubscriptionModel earlierNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), earlierPositionSource, storage);
+        ManualStartSubscriptionModel laterNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), laterPositionSource, storage);
+
+        CapturingLogHandler logHandler = CapturingLogHandler.attached();
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> earlierRegistration = pool.submit(() -> earlierNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            }));
+            awaitOrFail(earlierNodeCaptured);
+            laterNode.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+            });
+            laterNodeWrote.countDown();
+            earlierRegistration.get(10, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+            logHandler.detach();
+        }
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString())
+                .as("the write that reached storage first wins, whichever node captured its position first")
+                .isEqualTo("later-position");
+        assertThat(logHandler.records())
+                .as("this is the one case that skips events, so it is named at WARNING with both positions rather than accepted quietly")
+                .anySatisfy(record -> {
+                    assertThat(record.getLevel()).isEqualTo(java.util.logging.Level.WARNING);
+                    assertThat(record.getMessage()).contains("earlier-position", "later-position");
+                });
+    }
+
+    @Test
     void an_earlier_registrant_always_wins_the_pin_even_when_a_later_registrant_starts_first() {
         // Stands for a rolling deploy where one node registers, the source position moves on, and a second node
         // registers the same subscription id minutes later. A duplicate id on the same model would throw, so a

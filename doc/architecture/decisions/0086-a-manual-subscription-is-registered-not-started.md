@@ -68,7 +68,10 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > skipping events between the two registrations (see #669 and ADR 116's amendments). The wrapper now writes
 > at registration, which is not a safer ordering chosen on its own terms. It is what makes this wrapper a
 > faithful stand-in for the `subscribe` call it withholds, matching what this section's opening sentence
-> already promised.
+> already promised. The one case that promise does not cover is two nodes registering the same subscription
+> for the first time at the same moment, since only one of the two positions can be stored and neither node
+> can tell which of them is earlier. ADR 116's third amendment states what happens then, and #771 tracks the
+> question of closing it.
 
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same
