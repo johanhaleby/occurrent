@@ -147,8 +147,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * @param checkpointStorage Where the recorded position is written, which must be the storage the wrapped models read.
      * @throws IllegalArgumentException If {@code checkpointStorage} does not
      *                                  {@link CheckpointStorage#evaluatesWriteConditions() evaluate write conditions},
-     *                                  since the write this model makes at registration would then overwrite a
-     *                                  checkpoint another node had already stored.
+     *                                  since the {@code ifAbsent()} write this model makes at registration is then
+     *                                  either refused outright or carried out over a checkpoint another node had
+     *                                  already stored.
      */
     public static ManualStartSubscriptionModel stoppedByDefault(SubscriptionModel delegate, GlobalCheckpointSource<@Nullable Checkpoint> positionSource,
                                                                 CheckpointStorage checkpointStorage) {
@@ -156,8 +157,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         requireNonNull(checkpointStorage, CheckpointStorage.class.getSimpleName() + " cannot be null");
         if (!checkpointStorage.evaluatesWriteConditions()) {
             throw new IllegalArgumentException(checkpointStorage.getClass().getName() + " does not evaluate checkpoint write " +
-                                               "conditions, so recording a start position at registration would overwrite a " +
-                                               "checkpoint another node had already stored. Use " +
+                                               "conditions, so the ifAbsent() write that records a start position at " +
+                                               "registration is either refused outright or carried out over a checkpoint " +
+                                               "another node had already stored. Use " +
                                                ManualStartSubscriptionModel.class.getSimpleName() +
                                                ".stoppedByDefault(SubscriptionModel) instead, or a checkpoint storage that " +
                                                "evaluates them.");

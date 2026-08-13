@@ -89,11 +89,22 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > than it used to, which `StartAt.dynamic` already allows for, and the wrapped model still receives the caller's own
 > `StartAt` object.
 >
+> The rule can be wrong in one case, and it is worth naming. A dynamic position is resolved against the model this
+> wrapper was handed, and the function may answer differently for a layer below that one. A function answering with
+> nothing for the competing consumer layer and with the model default for the durable layer under it reads here as
+> nothing to record, and the durable layer then resolves it to its own default at start and captures whatever position
+> it finds by then, which is the skip this write exists to prevent. Nothing Occurrent builds has that shape, since the
+> start positions that answer with nothing answer that way for the durable layer too, so it takes a function written by
+> hand. Resolving against every model in the wrapped chain would cover it and was rejected for now, because it calls the
+> function once per layer and functions like the one `StartPosition.BEGINNING` builds read the checkpoint storage on
+> every call.
+>
 > The three-argument factory also refuses a `CheckpointStorage` that answers false to `evaluatesWriteConditions()`.
-> Recording a position through one of those overwrites whatever another node stored first, which is the write this
-> wrapper exists to make safe, and a refusal at wiring time is cheaper than finding out from a subscription that
-> resumed from the wrong position. The one-argument factory is the way to keep such a storage, at the cost of a first
-> run starting from the moment it is started.
+> That answer covers a storage that refuses `ifAbsent()` and one that writes through it regardless, and neither gives
+> this wrapper the conditional write it needs, so a position recorded through one is either lost to an exception or
+> written over whatever another node stored first. A refusal at wiring time is cheaper than finding out from a
+> subscription that resumed from the wrong position. The one-argument factory is the way to keep such a storage, at the
+> cost of a first run starting from the moment it is started.
 
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same
