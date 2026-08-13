@@ -244,8 +244,8 @@ class SagaFilterOverrideTest {
 
     @Test
     void does_not_excuse_a_start_type_nothing_can_be_an_instance_of_on_the_empty_selector_factory_path() {
-        // An empty eventTypes narrows nothing, so no filter is derived and no hierarchy is walked. That branch used to
-        // check the start types either, so this saga built and could never create an instance. It is the same with and
+        // An empty eventTypes narrows nothing, so no filter is derived and no hierarchy is walked. That branch never
+        // checked the start types, so this saga built and could never create an instance. It is the same with and
         // without a filter, because the filter was never what skipped the check.
         for (Filter filter : new Filter[]{SUBJECT_FILTER, null}) {
             assertThatThrownBy(() -> Saga.create(null, e -> "order-1", Set.of(int.class), Set.of(),
@@ -262,7 +262,8 @@ class SagaFilterOverrideTest {
 
     @Test
     void still_reports_no_event_types_for_a_usable_start_type_on_the_empty_selector_factory_path() {
-        // The refusal above must not turn into a walk. An empty eventTypes still means "no type narrowing".
+        // Refusing an unmatchable start type must not turn the empty branch into a walk. An empty eventTypes still
+        // means "no type narrowing".
         Saga<OrderEvent, String, OrderCommand> saga = Saga.create(null, OrderEvent::orderId, Set.of(OrderPlaced.class),
                 Set.of(), (state, input) -> state, (state, input) -> List.of(), SUBJECT_FILTER);
 
