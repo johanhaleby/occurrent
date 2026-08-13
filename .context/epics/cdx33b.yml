@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 11
-updated_at: 2026-08-13T06:48:00Z
-updated_by: "orchestrator session faee3625 (U7 report banked incomplete, its adversarial pass dispatched)"
+revision: 12
+updated_at: 2026-08-13T07:05:00Z
+updated_by: "orchestrator session faee3625 (U1 rework complete, sole gate is the ADR ruling)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -32,7 +32,7 @@ units:
     depends_on: []
     session: "local_6d655966"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "772", met: false, evidence: "OPEN, sent back 2026-08-13 ~06:35 after the blocker adversarial pass. Mechanism and new test HELD (angle f clean); 4 confirmed defects routed: same-moment prose narrower than the capture-to-write window in 4 places (the PR's own ADR 116 amendment contradicts it), provably-safe overclaim needing an unnamed monotonicity premise GlobalCheckpointSource does not promise, delete-driven misclassification (cancelSubscription deletes checkpoints, making checkpointAlreadyExisted stale, silent adopt of a later capture; fix is read() pre-capture instead of exists() plus a hardened refusal path), and startAt scoping (pin ignored for non-default StartAt, prose must scope; BEHAVIOR split to addendum unit U11, pre-existing at merge base). ADR wording gate HELD until the corrected text is in front of Johan, so he rules once. Earlier bank: 3 mutation rounds, finding 13 declined with mutation-backed reason, #771 filed."}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "772", met: false, evidence: "OPEN, rework COMPLETE at head 74b2d37f4 (28/28, 9th Copilot review clean with no suppressed block, 0 threads). Adversarial findings: 1/2/4 fixed (simultaneity framing dropped in 4 places, provably-safe restated as a shipped-Mongo-source property with the monotonicity premise named, promise scoped to default StartAt); 3 PARTLY DECLINED with a verified reason the orchestrator accepts: value-comparison pre-read would warn on every busy-elsewhere registration because DurableSubscriptionModel defaults to everyEvent() checkpointing, so telling race from routine needs the ordering #771 tracks; both holes recorded in ADR 116 third amendment and on #771, and both hardening items taken with mutation-tested tests (5 mutations killed total). 5 more suppressed Copilot findings fixed across later heads, all prose-wider-than-code. SOLE REMAINING GATE: Johan's ADR 116/86 wording ruling, now in front of him in U1's session; then the orchestrator's own read of 74b2d37f4 and merge."}
   U2:
     issue: null
     goal: "Redis Cluster hash slots (finding 2): hash-tag both keys into one slot (layout unreleased), decide fail-fast complement at unit gate; changelog entry + migration guide section 4 correction"
