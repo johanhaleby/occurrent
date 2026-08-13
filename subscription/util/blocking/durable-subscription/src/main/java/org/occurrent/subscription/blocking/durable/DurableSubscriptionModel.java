@@ -60,8 +60,30 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // subscribe(..) records a subscription id here when its StartAt resolved to null, opting it out of this model's
     // checkpoint management (the same "not allowed to start" case CompetingConsumerSubscriptionModel has its own
     // set for). resumeSubscription reads this so it forwards such a subscription unchanged too, rather than
-    // resuming it from a checkpoint this model was never asked to manage.
+    // resuming it from a checkpoint this model was never asked to manage. A plain set is safe here only because
+    // subscribe, cancelSubscription and resumeSubscription all run under subscriptionIdLock, which makes at most
+    // one of them active for a given id at a time, so no two attempts for the same id are ever both live against
+    // this set.
     private final Set<String> notCheckpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
+    // Striped rather than one lock object per id, since subscriptionId is caller-supplied to public methods
+    // (cancelSubscription, resumeSubscription) and an unknown or made-up id must not grow this without bound. A
+    // fixed number of locks bounds memory for good and needs no lifecycle bookkeeping to remove an entry once its
+    // holder is gone, at the cost of occasional cross-id serialization when two ids hash to the same stripe. These
+    // are startup and reconfiguration calls rather than the event path, so that cost is ordinarily microseconds,
+    // but if the delegate or checkpoint storage hangs inside one id's call, every other id sharing its stripe
+    // blocks too until it returns.
+    private static final int SUBSCRIPTION_ID_LOCK_STRIPES = 1024;
+    private final Object[] subscriptionIdLocks = new Object[SUBSCRIPTION_ID_LOCK_STRIPES];
+
+    {
+        for (int i = 0; i < subscriptionIdLocks.length; i++) {
+            subscriptionIdLocks[i] = new Object();
+        }
+    }
+
+    private Object lockFor(String subscriptionId) {
+        return subscriptionIdLocks[Math.floorMod(subscriptionId.hashCode(), subscriptionIdLocks.length)];
+    }
 
     /**
      * Create a subscription that combines a {@link CheckpointAwareSubscriptionModel} with a {@link CheckpointStorage} to automatically
@@ -130,24 +152,36 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
-        StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
-        if (startAtToUse == null) {
-            // Not allowed to start, delegate to the wrapped subscription instead. Recorded only once the delegate
-            // has accepted the subscription, so a delegate that throws leaves no opt-out marker behind for a later
-            // resubscribe with the same id to inherit.
-            Subscription subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
-            notCheckpointedSubscriptions.add(subscriptionId);
-            return subscription;
-        }
-
-        return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
-                    action.accept(cloudEvent);
-                    if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
-                        Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
-                        storage.save(subscriptionId, checkpoint, writeConditionFor(subscriptionId));
+        // The whole method runs under subscriptionIdLock, checkpoint-managed path included, not only the opt-out
+        // branch, since generateStartAtPositionFrom can itself write the id's first checkpoint and a concurrent
+        // cancelSubscription's delete for the same id must not race that write.
+        synchronized (lockFor(subscriptionId)) {
+            StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
+            if (startAtToUse == null) {
+                // Not allowed to start, delegate to the wrapped subscription instead. Whether it was already
+                // marked is captured before marking it, so a duplicate attempt against an already-active,
+                // opted-out id releases nothing on failure.
+                boolean alreadyMarked = notCheckpointedSubscriptions.contains(subscriptionId);
+                notCheckpointedSubscriptions.add(subscriptionId);
+                try {
+                    return getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
+                } catch (Throwable t) {
+                    if (!alreadyMarked) {
+                        notCheckpointedSubscriptions.remove(subscriptionId);
                     }
+                    throw t;
                 }
-        );
+            }
+
+            return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
+                        action.accept(cloudEvent);
+                        if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
+                            Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
+                            storage.save(subscriptionId, checkpoint, writeConditionFor(subscriptionId));
+                        }
+                    }
+            );
+        }
     }
 
     // A version from writeVersionSource stamps notOlderThan. An empty answer or no source stamps any(). Always the
@@ -231,16 +265,20 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      */
     @Override
     public Subscription resumeSubscription(String subscriptionId) {
-        if (!notCheckpointedSubscriptions.contains(subscriptionId)) {
-            Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel());
-            if (repositionable.isPresent()) {
-                Checkpoint checkpoint = storage.read(subscriptionId);
-                if (checkpoint != null) {
-                    return repositionable.get().resumeSubscription(subscriptionId, StartAt.checkpoint(checkpoint));
+        // Held for the whole decision, reposition call included, so a concurrent subscribe or cancelSubscription
+        // for this id cannot land between the marker check and acting on it.
+        synchronized (lockFor(subscriptionId)) {
+            if (!notCheckpointedSubscriptions.contains(subscriptionId)) {
+                Optional<RepositionableSubscriptions> repositionable = RepositionableSubscriptions.findIn(getWrappedSubscriptionModel());
+                if (repositionable.isPresent()) {
+                    Checkpoint checkpoint = storage.read(subscriptionId);
+                    if (checkpoint != null) {
+                        return repositionable.get().resumeSubscription(subscriptionId, StartAt.checkpoint(checkpoint));
+                    }
                 }
             }
+            return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
         }
-        return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
     }
 
     @Override
@@ -256,9 +294,11 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      */
     @Override
     public void cancelSubscription(String subscriptionId) {
-        subscriptionModel.cancelSubscription(subscriptionId);
-        storage.delete(subscriptionId);
-        notCheckpointedSubscriptions.remove(subscriptionId);
+        synchronized (lockFor(subscriptionId)) {
+            subscriptionModel.cancelSubscription(subscriptionId);
+            storage.delete(subscriptionId);
+            notCheckpointedSubscriptions.remove(subscriptionId);
+        }
     }
 
     @Override
