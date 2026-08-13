@@ -966,6 +966,25 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_dynamic_start_position_asking_for_the_model_type_by_equality_is_pinned_for_a_subclassed_model() {
+        // A model resolves the position against its own class literal, so a subclass or a Spring proxy of it would be
+        // asked about here under a name hasSubscriptionModelType does not match. Answering that with anything but the
+        // model default records nothing, and the model below records a position when the subscription starts instead,
+        // which is the skip this write exists to prevent.
+        SubclassedSubscriptionModel delegate = new SubclassedSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        delegate.globalCheckpoint = new StringCheckpoint("at-registration");
+        StartAt startAt = StartAt.dynamic(context -> context.hasSubscriptionModelType(RecordingSubscriptionModel.class)
+                ? StartAt.subscriptionModelDefault() : StartAt.now());
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, startAt, __ -> {
+        });
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
+    }
+
+    @Test
     void a_dynamic_start_position_that_resolves_to_nothing_is_not_pinned() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
@@ -1102,7 +1121,7 @@ class ManualStartSubscriptionModelTest {
     // Records what it is asked to do rather than doing anything, since these tests are about which calls reach the
     // wrapped model and when. parkOnSubscribe stands in for a model whose feed is stopped, which registers a paused
     // subscription instead of a running one.
-    private static final class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions {
+    private static class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions {
         final List<SubscribeCall> subscribeCalls = new CopyOnWriteArrayList<>();
         final Map<String, Subscription> subscriptions = new HashMap<>();
         final List<String> resumeCalls = new CopyOnWriteArrayList<>();
@@ -1221,6 +1240,11 @@ class ManualStartSubscriptionModelTest {
         public void shutdown() {
             shutdownCalls++;
         }
+    }
+
+    // Stands for a model a caller has subclassed, or that Spring has handed back as a proxy, either of which shows up
+    // under a class the model itself never names when it resolves a start position.
+    private static final class SubclassedSubscriptionModel extends RecordingSubscriptionModel {
     }
 
     // Stands for a layer that replays history of its own, the position the wrapped model below it reads a checkpoint
