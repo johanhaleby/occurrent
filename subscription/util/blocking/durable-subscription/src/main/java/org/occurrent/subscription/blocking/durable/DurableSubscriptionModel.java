@@ -34,7 +34,6 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
@@ -66,13 +65,21 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // one of them active for a given id at a time, so no two attempts for the same id are ever both live against
     // this set.
     private final Set<String> notCheckpointedSubscriptions = Collections.newSetFromMap(new ConcurrentHashMap<>());
-    // One lock object per subscription id, created on first use and never removed. Subscription ids are a small,
-    // application-defined set (the same population the wrapped model itself tracks per id), so this does not grow
-    // in proportion to events or requests.
-    private final ConcurrentMap<String, Object> subscriptionIdLocks = new ConcurrentHashMap<>();
+    // Striped rather than one lock object per id, since subscriptionId is caller-supplied to public methods
+    // (cancelSubscription, resumeSubscription) and an unknown or made-up id must not grow this without bound. A
+    // fixed number of locks bounds memory for good, at the cost of occasional cross-id serialization when two ids
+    // hash to the same stripe, harmless for control-plane calls like these.
+    private static final int SUBSCRIPTION_ID_LOCK_STRIPES = 1024;
+    private final Object[] subscriptionIdLocks = new Object[SUBSCRIPTION_ID_LOCK_STRIPES];
+
+    {
+        for (int i = 0; i < subscriptionIdLocks.length; i++) {
+            subscriptionIdLocks[i] = new Object();
+        }
+    }
 
     private Object lockFor(String subscriptionId) {
-        return subscriptionIdLocks.computeIfAbsent(subscriptionId, id -> new Object());
+        return subscriptionIdLocks[Math.floorMod(subscriptionId.hashCode(), subscriptionIdLocks.length)];
     }
 
     /**
@@ -142,13 +149,15 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
-        StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
-        if (startAtToUse == null) {
-            // Not allowed to start, delegate to the wrapped subscription instead. Held under subscriptionIdLock so
-            // no resumeSubscription or cancelSubscription for this id can observe this attempt half-done, and
-            // whether it was already marked is captured before marking it, so a duplicate attempt against an
-            // already-active, opted-out id releases nothing on failure.
-            synchronized (lockFor(subscriptionId)) {
+        // The whole method runs under subscriptionIdLock, checkpoint-managed path included, not only the opt-out
+        // branch, since generateStartAtPositionFrom can itself write the id's first checkpoint and a concurrent
+        // cancelSubscription's delete for the same id must not race that write.
+        synchronized (lockFor(subscriptionId)) {
+            StartAt startAtToUse = generateStartAtPositionFrom(subscriptionId, startAt);
+            if (startAtToUse == null) {
+                // Not allowed to start, delegate to the wrapped subscription instead. Whether it was already
+                // marked is captured before marking it, so a duplicate attempt against an already-active,
+                // opted-out id releases nothing on failure.
                 boolean alreadyMarked = notCheckpointedSubscriptions.contains(subscriptionId);
                 notCheckpointedSubscriptions.add(subscriptionId);
                 try {
@@ -160,16 +169,16 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                     throw t;
                 }
             }
-        }
 
-        return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
-                    action.accept(cloudEvent);
-                    if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
-                        Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
-                        storage.save(subscriptionId, checkpoint, writeConditionFor(subscriptionId));
+            return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
+                        action.accept(cloudEvent);
+                        if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
+                            Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
+                            storage.save(subscriptionId, checkpoint, writeConditionFor(subscriptionId));
+                        }
                     }
-                }
-        );
+            );
+        }
     }
 
     // A version from writeVersionSource stamps notOlderThan. An empty answer or no source stamps any(). Always the

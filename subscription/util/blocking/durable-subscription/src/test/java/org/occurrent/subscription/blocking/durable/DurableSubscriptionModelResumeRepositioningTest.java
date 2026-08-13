@@ -334,6 +334,56 @@ class DurableSubscriptionModelResumeRepositioningTest {
         }
     }
 
+    @Test
+    void a_checkpoint_managed_subscribe_blocks_behind_an_in_flight_cancel_too_and_then_writes_its_checkpoint_cleanly() throws Exception {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        UnregisteringThenPausingCancelRepositionableSubscriptionModel delegate = new UnregisteringThenPausingCancelRepositionableSubscriptionModel();
+        delegate.globalCheckpoint = new StringBasedCheckpoint("global-checkpoint");
+        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
+        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+        }).waitUntilStarted();
+
+        CountDownLatch unregisteredAndPausing = new CountDownLatch(1);
+        CountDownLatch releaseCancel = new CountDownLatch(1);
+        delegate.unregisteredAndPausing = unregisteredAndPausing;
+        delegate.holdReturnUntil = releaseCancel;
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> cancelFuture = pool.submit(() -> model.cancelSubscription(SUBSCRIPTION_ID));
+            assertThat(unregisteredAndPausing.await(10, TimeUnit.SECONDS)).isTrue();
+
+            // A checkpoint-managed subscribe (not opt-out) reusing this id, racing the same in-flight cancel. Its
+            // own generateStartAtPositionFrom writes this id's first checkpoint, which a concurrent cancel's
+            // delete for the same id must not race.
+            Future<Subscription> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), event -> {
+            }));
+
+            assertThatThrownBy(() -> subscribeFuture.get(200, TimeUnit.MILLISECONDS))
+                    .as("a checkpoint-managed subscribe for this id must wait for the in-flight cancel's lock too, "
+                            + "not only an opt-out one")
+                    .isInstanceOf(TimeoutException.class);
+
+            releaseCancel.countDown();
+            cancelFuture.get(10, TimeUnit.SECONDS);
+            subscribeFuture.get(10, TimeUnit.SECONDS);
+
+            assertThat(storage.read(SUBSCRIPTION_ID))
+                    .as("the checkpoint-managed subscribe's own checkpoint write must survive, since the cancel it "
+                            + "waited out had already deleted whatever was there before this subscribe could write")
+                    .isEqualTo(delegate.globalCheckpoint);
+
+            model.resumeSubscription(SUBSCRIPTION_ID);
+            assertThat(delegate.repositionedTo).isInstanceOf(StartAt.StartAtCheckpoint.class);
+            assertThat(((StartAt.StartAtCheckpoint) delegate.repositionedTo).checkpoint)
+                    .as("the freshly written checkpoint must still be there for a later resume to reposition from")
+                    .isEqualTo(delegate.globalCheckpoint);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     /**
      * Records whether {@link #resumeSubscription(String)} was called, and answers something for every other
      * {@link CheckpointAwareSubscriptionModel} member, since {@link DurableSubscriptionModel} requires a whole one
@@ -343,6 +393,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
      */
     private static class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel {
         boolean plainResumeCalled = false;
+        @Nullable Checkpoint globalCheckpoint = null;
         private final Set<String> registeredIds = ConcurrentHashMap.newKeySet();
 
         @Override
@@ -353,7 +404,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
 
         @Override
         public @Nullable Checkpoint globalCheckpoint() {
-            return null;
+            return globalCheckpoint;
         }
 
         @Override
@@ -493,6 +544,15 @@ class DurableSubscriptionModelResumeRepositioningTest {
     private static class UnregisteringThenPausingCancelRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
         @Nullable CountDownLatch unregisteredAndPausing;
         @Nullable CountDownLatch holdReturnUntil;
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            // A real delegate resolves a dynamic StartAt's supplier while subscribing, which is what actually
+            // performs a first checkpoint write for the "default" case. This fake mirrors that instead of leaving
+            // the supplier uninvoked, the way a dumb stub would.
+            startAt.get(new StartAt.SubscriptionModelContext(RecordingSubscriptionModel.class));
+            return super.subscribe(subscriptionId, filter, startAt, action);
+        }
 
         @Override
         public void cancelSubscription(String subscriptionId) {
