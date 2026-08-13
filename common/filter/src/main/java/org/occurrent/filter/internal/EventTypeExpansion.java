@@ -46,9 +46,9 @@ import static java.util.Objects.requireNonNull;
  * different things to say about the type they were given.
  * <p>
  * The rule above governs {@link #expand} and {@link #concreteTypesOf}, the two entry points a derived filter is built
- * from. {@link #expandWhatCanBeFound} walks the same hierarchy and refuses only an array, for a caller that was handed
- * an explicit filter and so derives none. Nothing here relaxes the rule, because a caller with no derived filter has no
- * filter for it to be true of.
+ * from. {@link #expandWhatCanBeFound} walks the same hierarchy for a caller that was handed an explicit filter and so
+ * derives none, and it refuses only what no event can arrive as, an array or a primitive. Nothing here relaxes the rule,
+ * because a caller with no derived filter has no filter for it to be true of.
  */
 public final class EventTypeExpansion {
 
