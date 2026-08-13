@@ -45,7 +45,6 @@ import org.springframework.data.mongodb.core.query.Query;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 
@@ -116,21 +115,31 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // rather than hardcoding a duplicate of the number here.
     static final int RETAINED_EVENT_WARNING_THRESHOLD = 1_000;
 
-    // Bounds the latch's total SIZE, not any one entry's lifetime: an entry is removed when its instance drops below
-    // the threshold or is deleted (see delete(String)), but an instance that stays above the threshold forever without
-    // either keeps its entry for as long as the store itself runs. At capacity, a never-before-seen saga id is left
-    // untracked rather than evicting an existing entry, so that instance warns on every save until a tracked instance
-    // frees a slot, but no already-tracked instance is ever forced to re-warn. Evicting an active instance to admit
-    // another only moves the problem: under sustained load it can chain through the whole tracked set. Package-private
-    // for the same reason as the threshold above: a test exercising the capacity backstop builds exactly this many
-    // tracked instances instead of duplicating the number.
+    // Bounds the latch's total SIZE. An entry is removed when its instance drops below the threshold, or explicitly on
+    // delete(String), but SagaStateStore.delete's own javadoc says the recommended default is to let a completed
+    // instance expire via MongoDB TTL instead, which happens entirely inside the database with no call this store ever
+    // sees. So an instance that stays above the threshold and is retired that way keeps its entry until something else
+    // reclaims the slot. That reclaiming is the eviction the latch does on access order (see the field below): as long
+    // as an instance keeps being saved, its entry stays live, so a store built up entirely of instances abandoned
+    // (deleted, TTL-expired, or just never saved again) is what gets evicted first, never a currently active one.
+    // Package-private for the same reason as the threshold above: a test exercising the capacity backstop builds
+    // exactly this many tracked instances instead of duplicating the number.
     static final int RETAINED_EVENT_WARNING_LATCH_CAPACITY = 10_000;
 
-    // Edge-triggered latch, keyed by saga id: present and true means "already warned while at or above the threshold".
-    // An instance is removed the moment it drops back below the threshold (typically after a stepWindow trim), so a later
-    // re-crossing warns again. This keeps the map's steady-state population close to the number of instances currently
-    // above the threshold, not the number that ever existed.
-    private final Map<String, Boolean> retainedEventWarningLatch = new ConcurrentHashMap<>();
+    // Edge-triggered, least-recently-used latch, keyed by saga id: present and true means "already warned while at or
+    // above the threshold". An instance is removed the moment it drops back below the threshold (typically after a
+    // stepWindow trim) or is deleted, so a later re-crossing warns again. Access-ordered (see the constructor) and
+    // capped at RETAINED_EVENT_WARNING_LATCH_CAPACITY: every check or insert counts as an access, so an instance that
+    // keeps being saved is never the one capacity eviction picks, no matter how long it stays above the threshold or
+    // how it eventually goes away. Not a ConcurrentHashMap: LinkedHashMap's access-order mode is what gives the LRU
+    // property, and every access to this field goes through the synchronized block in
+    // warnIfRetainedSizeCrossesThreshold or delete(String).
+    private final Map<String, Boolean> retainedEventWarningLatch = new LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+            return size() > RETAINED_EVENT_WARNING_LATCH_CAPACITY;
+        }
+    };
 
     private final MongoOperations mongoOperations;
     private final String collectionName;
@@ -247,7 +256,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     public void delete(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
         mongoOperations.remove(Query.query(where(ID).is(sagaId)), collectionName);
-        retainedEventWarningLatch.remove(sagaId);
+        synchronized (retainedEventWarningLatch) {
+            retainedEventWarningLatch.remove(sagaId);
+        }
     }
 
     private Document toDocument(String sagaId, SagaEnvelope<S> envelope) {
@@ -333,24 +344,22 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // counts, instead of building enough real retained events to cross the threshold thousands of times over.
     void warnIfRetainedSizeCrossesThreshold(String sagaId, int retainedEventCount) {
         boolean shouldWarn;
-        // The check and insert below are not individually atomic on a ConcurrentHashMap, and SagaStateStore supports
-        // concurrent saves, so two saves for fresh saga ids near capacity could both pass the size check and both
-        // insert, pushing the latch past its cap. Locking the whole decision keeps the cap and the once-per-crossing
-        // guarantee exact under concurrent saves. It costs a monitor per save, which is negligible next to the Mongo
-        // round trip compareAndSave already pays.
+        // LinkedHashMap is not thread-safe, and SagaStateStore supports concurrent saves, so the whole read-modify
+        // decision is locked rather than just the individual map calls. It costs a monitor per save, negligible next
+        // to the Mongo round trip compareAndSave already pays.
         synchronized (retainedEventWarningLatch) {
             if (retainedEventCount < RETAINED_EVENT_WARNING_THRESHOLD) {
                 retainedEventWarningLatch.remove(sagaId);
                 return;
             }
-            if (retainedEventWarningLatch.containsKey(sagaId)) {
+            // get(), not containsKey(): get() is what LinkedHashMap's access-order mode uses to mark this instance as
+            // recently used, so an already-tracked instance that keeps being saved is never the eviction target below.
+            if (retainedEventWarningLatch.get(sagaId) != null) {
                 shouldWarn = false;
-            } else if (retainedEventWarningLatch.size() >= RETAINED_EVENT_WARNING_LATCH_CAPACITY) {
-                // At capacity: leave this new instance untracked rather than evicting a tracked one. See
-                // RETAINED_EVENT_WARNING_LATCH_CAPACITY above for why.
-                shouldWarn = true;
             } else {
-                shouldWarn = retainedEventWarningLatch.putIfAbsent(sagaId, Boolean.TRUE) == null;
+                // put() may evict the least-recently-used entry via removeEldestEntry if the latch is at capacity.
+                retainedEventWarningLatch.put(sagaId, Boolean.TRUE);
+                shouldWarn = true;
             }
         }
         if (shouldWarn) {
@@ -362,9 +371,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     // Package-private so a test can assert the capacity backstop's actual guarantee, that the latch never grows past
-    // RETAINED_EVENT_WARNING_LATCH_CAPACITY.
+    // RETAINED_EVENT_WARNING_LATCH_CAPACITY. Synchronized like every other access to this LinkedHashMap.
     int retainedEventWarningLatchSize() {
-        return retainedEventWarningLatch.size();
+        synchronized (retainedEventWarningLatch) {
+            return retainedEventWarningLatch.size();
+        }
     }
 
     private SagaEnvelope<S> toEnvelope(Document document) {

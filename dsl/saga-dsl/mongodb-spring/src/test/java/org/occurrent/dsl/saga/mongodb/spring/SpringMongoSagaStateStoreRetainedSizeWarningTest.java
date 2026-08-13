@@ -193,57 +193,85 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
     // the real capacity that would mean building and CloudEvent-serializing 1,000+ retained events for over 10,000
     // instances, which is too slow for a unit test and tests nothing extra over the smaller counts used here.
     @Test
-    void a_new_instance_past_capacity_warns_on_every_save_but_is_never_tracked() {
+    void a_new_instance_past_capacity_evicts_the_least_recently_used_entry() {
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
             store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
         int warningsAtCapacity = warnings().size();
 
-        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
-        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
         store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
 
         assertThat(warningsAtCapacity).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
-        assertThat(warnings().size()).as("every save of the untracked instance warns").isEqualTo(warningsAtCapacity + 3);
-        assertThat(store.retainedEventWarningLatchSize()).as("the untracked instance never entered the latch").isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
+        assertThat(warnings().size()).isEqualTo(warningsAtCapacity + 1);
+        assertThat(store.retainedEventWarningLatchSize()).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
     }
 
-    // The property the capacity backstop actually promises: instances already tracked before saturation are immune
-    // to whatever happens with instances arriving after the cap is full, unlike an eviction-based policy where an
-    // arriving instance can force an already-tracked one out and make it re-warn.
+    // Every save of an already-tracked instance is itself an access under the latch's access-order mode, so it never
+    // becomes the eviction target while it keeps being saved. This is what keeps a currently active instance safe
+    // regardless of how many other instances cycle through the cache around it.
     @Test
-    void already_tracked_instances_keep_not_re_warning_while_new_arrivals_are_untracked_at_capacity() {
+    void resaving_already_tracked_instances_never_makes_them_re_warn() {
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
             store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
-        int warningsAtCapacity = warnings().size();
-
+        // Evicts s0, the least recently used entry.
         store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
+        int warningsAfterOverflow = warnings().size();
+
+        for (int i = 1; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
+            store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+        }
+
+        assertThat(warnings().size()).as("every one of these instances was already tracked, so none re-warn")
+                .isEqualTo(warningsAfterOverflow);
+        assertThat(store.retainedEventWarningLatchSize()).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
+    }
+
+    // Distinguishes access order from plain insertion order: an instance saved first but kept warm by every later
+    // save must never be the eviction target, even while capacity is filled entirely by instances inserted after it.
+    // Counts every warning naming s0 across the whole run, not just after it: under plain insertion order s0 gets
+    // evicted and re-tracked partway through the loop below, which would otherwise hide behind a resave that happens
+    // to land after that silent extra warning instead of before it.
+    @Test
+    void repeatedly_resaving_an_instance_protects_it_from_eviction_by_later_arrivals() {
+        for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
+            store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+        }
+        for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
+            store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
+            store.warnIfRetainedSizeCrossesThreshold("new" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+        }
         store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
 
-        assertThat(warnings().size()).as("s0 was already latched, so only the untracked overflow warns again")
-                .isEqualTo(warningsAtCapacity + 1);
+        long s0Warnings = warnings().stream().filter(event -> event.getFormattedMessage().contains("'s0'")).count();
+        assertThat(s0Warnings).as("s0 was kept warm throughout and never evicted, so it only ever warned once, at the start")
+                .isEqualTo(1);
     }
 
-    // Once a tracked instance drops below the threshold, its slot frees up, so an instance that was warning on every
-    // save because it arrived at capacity can be tracked from then on and stop re-warning.
+    // The property that fixes the case SagaStateStore.delete's own javadoc describes as the recommended default: a
+    // completed instance retired by letting MongoDB's TTL expire it, never through delete(String). No call ever
+    // reaches this store for that removal, so without eviction the instance's latch entry would survive forever.
+    // Here it stops being saved (simulating exactly that), and once enough other instances have cycled through the
+    // cache, its entry is evicted and it can warn again on its own, with no delete() call at all.
     @Test
-    void a_slot_freed_by_a_tracked_instance_dropping_below_the_threshold_lets_a_new_instance_get_tracked() {
+    void an_instance_that_stops_being_saved_is_eventually_evicted_and_warns_again_without_delete() {
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
             store.warnIfRetainedSizeCrossesThreshold("s" + i, RETAINED_EVENT_WARNING_THRESHOLD);
         }
-        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
-        store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD - 1);
+        // s0 is now abandoned: never saved again. Enough new instances arrive to cycle the whole cache, which must
+        // evict s0 along the way since it is the least recently used entry throughout.
+        for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
+            store.warnIfRetainedSizeCrossesThreshold("t" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+        }
+        int warningsBeforeResave = warnings().size();
 
-        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
-        int warningsAfterOverflowIsTracked = warnings().size();
-        store.warnIfRetainedSizeCrossesThreshold("overflow", RETAINED_EVENT_WARNING_THRESHOLD);
+        store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
 
-        assertThat(warnings().size()).as("overflow is now latched, so this save does not re-warn")
-                .isEqualTo(warningsAfterOverflowIsTracked);
+        assertThat(warnings().size()).as("s0's entry was evicted while abandoned, so this is a fresh crossing")
+                .isEqualTo(warningsBeforeResave + 1);
     }
 
-    // Concurrent saves for fresh saga ids near capacity could each pass the size check before either was added,
+    // Concurrent saves for fresh saga ids near capacity could each pass the size check before either was inserted,
     // pushing the latch past its cap. Threads race on distinct ids past RETAINED_EVENT_WARNING_LATCH_CAPACITY, so if
     // the check-and-insert sequence were not serialized, the assertion below would intermittently fail.
     @Test
