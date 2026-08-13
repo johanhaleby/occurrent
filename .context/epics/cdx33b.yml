@@ -264,13 +264,13 @@ units:
   U12:
     issue: null
     goal: "Fixpoint round 1 corrections: the MAJOR DurableSubscriptionModel lock-scope comment rewrite (the comment names a supplier-internal checkpoint write the lock does not cover) plus four one-clause prose truth fixes on unreleased text; no behavior changes. Register-only residuals: evaluatesWriteConditions vs id-shape refusal, writeVersion/read/exists guard asymmetries, Lua tonumber above 2^53, the Kotlin codegen-pinned identity test"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "778", met: true, evidence: "MERGED 2026-08-14 as f117cf9e5, CAS on exact head b8566d923 (25/25 jobs across runs, 0 threads, CLEAN, final review verified bare by the orchestrator). Three review rounds refined the lock comment in both directions; all five items delivered with before/after pairs; native-model cancel race banked in the register for 0.34"}
   UREG:
     issue: null
     goal: "Register: decline pointers for findings 8/10/12/14, retention-policy issue (finding 7 residual), finding-11 convention note, environment-artifact note; route new arrivals #760 #761 (both released-behavior, non-overlapping). ADDED 2026-08-13: the broader-filter-is-safe house claim on shipped Projection.java (:39, :301) is falsifiable at the converter exactly as U7 pass defect 1 showed for Saga; released surface, so a register note or 0.34 issue, not a pre-tag fix"
