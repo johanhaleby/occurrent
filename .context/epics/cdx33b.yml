@@ -57,11 +57,19 @@ pending_actions:
   - id: act-011
     type: workflow-dispatch
     target: "U11 planning subagent (Opus, read-only, base origin/main): produces the StartAt-variant pin table, design alternatives argued from AGENTS.md and the ADR 86/116 amendments, defect-2 fix shape, ADR impact, test plan. Gate content returns to the orchestrator; principle-settled parts decided here, taste parts to Johan via AskUserQuestion in this session"
-    expected: "a plan report; then the design gate, then an implementing dispatch"
-    status: PENDING
+    expected: "a plan report; then the design gate, then an implementing dispatch. VERIFIED: plan returned with file:line ground truth (model is in subscription/api/blocking, StartAt is sealed with four variants, the shipped DEFAULT path is a Dynamic so isDefault() keying would regress #481, BEGINNING is a Dynamic exists()-oracle). Gate RULED by the orchestrator under Unattended terms, approved as principle-settled: rule c-prime (pin iff registration-time resolution to Default, resolve before the existence read), option b violates no-design-may-lose-events, option a refuted by fact, the pin-marking optimum named and declined as a storage-format break for an unreleased defect with the path left open. ADR WORDING QUEUED for Johan (decision queue in ORCHESTRATOR.md): ADR 86 amendment + ADR 116 INFO-vs-WARNING correction; merge holds on it"
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-13T19:35:00Z
+  - id: act-013
+    type: workflow-dispatch
+    target: "U11 implementation subagent (Opus, own worktree off origin/main, branch johan/cdx33b-u11-pin-startat): the approved plan verbatim, seven new tests plus the now()-to-default migration of existing pin tests, mutation table, construction-time refusal, ADR texts committed but flagged wording-pending, changelog corrections, PR via gh"
+    expected: "an open PR with matrix green, suppressed blocks handled, DELIVERY_RESULT with invariant and mutation tables; then adversarial pass, then the queued ADR ruling, then my merge"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T19:55:00Z
   - id: act-012
     type: workflow-dispatch
     target: "U10 executing subagent (Sonnet) in the docs repo via its own git worktrees off the held branches: join corrections both branches, filter-override chapter, Cluster and manual-start/stepWindow claim sweeps, jekyll builds with rendered-layer greps, push never merge"
