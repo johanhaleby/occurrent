@@ -60,8 +60,8 @@ import static org.occurrent.dsl.saga.mongodb.spring.SpringMongoSagaStateStore.RE
 
 /**
  * Docker-free: {@code compareAndSave} only needs {@code MongoOperations.insert} to return without throwing, which a mock
- * gives for free, so the retained-size warning ({@code flowStateToDocument}, around SpringMongoSagaStateStore.java:270)
- * is exercised without a real MongoDB. Follows the {@code ListAppender} convention from
+ * gives for free, so the retained-size warning in {@code flowStateToDocument} is exercised without a real MongoDB.
+ * Follows the {@code ListAppender} convention from
  * {@code SagaExecutionSupportTest.UnmatchedTimer}.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -155,6 +155,18 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
         save("s1", RETAINED_EVENT_WARNING_THRESHOLD + 2);
 
         assertThat(warnings()).hasSize(1);
+    }
+
+    // Deleting a saga instance that was never trimmed back below the threshold is the only lifecycle hook this store
+    // gets for it, so without this the latch entry would otherwise survive for the store's lifetime.
+    @Test
+    void deleting_an_instance_still_above_the_threshold_frees_its_latch_entry() {
+        save("s1", RETAINED_EVENT_WARNING_THRESHOLD);
+        store.delete("s1");
+
+        save("s1", RETAINED_EVENT_WARNING_THRESHOLD);
+
+        assertThat(warnings()).as("the delete cleared the latch, so the next save above the threshold warns again").hasSize(2);
     }
 
     @Test

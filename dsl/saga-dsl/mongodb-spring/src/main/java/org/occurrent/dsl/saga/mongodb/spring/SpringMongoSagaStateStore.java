@@ -116,16 +116,14 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // rather than hardcoding a duplicate of the number here.
     static final int RETAINED_EVENT_WARNING_THRESHOLD = 1_000;
 
-    // Bounds the latch below so an instance that crosses the threshold and is then abandoned (completed, or simply never
-    // saved again) cannot hold its entry forever. At capacity, a never-before-seen saga id is left untracked rather
-    // than evicting an existing entry to make room for it, so that instance warns on every save until a tracked
-    // instance drops below the threshold and frees a slot, but no already-tracked instance is ever forced to re-warn.
-    // Evicting an active instance to admit another only moves the problem: under sustained load it can chain through
-    // the whole tracked set. The map's SIZE never exceeds this cap, which combined with never evicting a tracked
-    // instance is the actual memory and correctness guarantee this backstop makes. In the ordinary case the latch
-    // stays far smaller than the cap, since an entry is removed as soon as its instance drops back below the threshold
-    // (see warnIfRetainedSizeCrossesThreshold). Package-private for the same reason as the threshold above: a test
-    // exercising the capacity backstop builds exactly this many tracked instances instead of duplicating the number.
+    // Bounds the latch's total SIZE, not any one entry's lifetime: an entry is removed when its instance drops below
+    // the threshold or is deleted (see delete(String)), but an instance that stays above the threshold forever without
+    // either keeps its entry for as long as the store itself runs. At capacity, a never-before-seen saga id is left
+    // untracked rather than evicting an existing entry, so that instance warns on every save until a tracked instance
+    // frees a slot, but no already-tracked instance is ever forced to re-warn. Evicting an active instance to admit
+    // another only moves the problem: under sustained load it can chain through the whole tracked set. Package-private
+    // for the same reason as the threshold above: a test exercising the capacity backstop builds exactly this many
+    // tracked instances instead of duplicating the number.
     static final int RETAINED_EVENT_WARNING_LATCH_CAPACITY = 10_000;
 
     // Edge-triggered latch, keyed by saga id: present and true means "already warned while at or above the threshold".
@@ -249,6 +247,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     public void delete(String sagaId) {
         Objects.requireNonNull(sagaId, "sagaId cannot be null");
         mongoOperations.remove(Query.query(where(ID).is(sagaId)), collectionName);
+        retainedEventWarningLatch.remove(sagaId);
     }
 
     private Document toDocument(String sagaId, SagaEnvelope<S> envelope) {
