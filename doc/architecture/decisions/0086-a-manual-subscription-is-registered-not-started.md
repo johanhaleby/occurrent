@@ -100,6 +100,15 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > record nothing and leave the durable model to record a position when the subscription starts, which is the skip #669
 > was about.
 >
+> The walk asks every layer, including one that passes the position down without deciding anything for itself, so a
+> function answering with the model default for such a layer and with something else for the model that does read the
+> checkpoint is read as a position to record when it is not one. Telling the two kinds of layer apart needs the layers
+> to say which of them consumes a start position, which is a capability `SubscriptionModel` does not have, and no start
+> position Occurrent builds answers that way, since they either ignore the model type or branch on the catch-up,
+> competing consumer and durable layers, all three of which do decide for themselves. Recording a position that is not
+> read back costs a subscription nothing that writing one unconditionally, which is what this wrapper did until now,
+> did not already cost it.
+>
 > The three-argument factory also refuses a `CheckpointStorage` that answers false to `evaluatesWriteConditions()`. The
 > position is written with `ifAbsent()`, so this wrapper needs a storage that evaluates that condition, and that method
 > is the only thing it has to ask. Refusing at wiring time is cheaper than finding out later, either on the first

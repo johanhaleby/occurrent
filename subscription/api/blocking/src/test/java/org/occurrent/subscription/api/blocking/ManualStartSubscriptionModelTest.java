@@ -1333,9 +1333,9 @@ class ManualStartSubscriptionModelTest {
         }
     }
 
-    // Writes every checkpoint unconditionally, which is what a storage that answers false to evaluatesWriteConditions()
-    // does with an ifAbsent() write, so recording a start position against it would overwrite whatever another node
-    // stored first.
+    // This one ignores the condition and writes anyway, and it leaves evaluatesWriteConditions() at its default of
+    // false, which is the only thing the factory asks about. Another storage answering false may refuse the write
+    // instead.
     private static final class UnconditionalCheckpointStorage implements CheckpointStorage {
         final Map<String, Checkpoint> checkpoints = new HashMap<>();
 

@@ -40,8 +40,8 @@ import static org.mockito.Mockito.mock;
 
 /**
  * {@code occurrent.subscription.mode=manual} records a start position at registration with a conditional write, so the
- * starter refuses a checkpoint storage that cannot evaluate one instead of letting that write overwrite a checkpoint
- * another node had already stored. Container-free, the way {@link CompetingConsumerFencingWiringTest} is, since nothing
+ * starter refuses a checkpoint storage that cannot evaluate one rather than leaving that to the first registration.
+ * Container-free, the way {@link CompetingConsumerFencingWiringTest} is, since nothing
  * here reaches MongoDB. The competing-consumer fence is turned off in both tests so that the storage reaches this
  * refusal rather than the fence's own.
  */
@@ -83,8 +83,9 @@ class SubscriptionModeManualWiringTest {
                 });
     }
 
-    // Writes every checkpoint whatever the condition says, which is what a storage answering false to
-    // evaluatesWriteConditions() does.
+    // This one ignores the condition and writes anyway, and it leaves evaluatesWriteConditions() at its default of
+    // false, which is the only thing the factory asks about. Another storage answering false may refuse the write
+    // instead.
     private static class UnconditionalCheckpointStorage implements CheckpointStorage {
         final Map<String, Checkpoint> checkpoints = new HashMap<>();
 

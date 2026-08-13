@@ -434,7 +434,7 @@ The second way out does not apply under `occurrent.subscription.mode=manual`. Th
 happens whatever the fencing setting says, so the storage has to evaluate `ifAbsent` regardless, and the model throws
 `IllegalArgumentException` naming the storage class during startup when it does not. Answer `true` from
 `evaluatesWriteConditions()` on a storage that does evaluate it, or declare the subscription model bean yourself and
-build it with the two-argument `ManualStartSubscriptionModel.stoppedByDefault(SubscriptionModel)`, which records no
+build it with the one-argument `ManualStartSubscriptionModel.stoppedByDefault(SubscriptionModel)`, which records no
 position at all and lets a subscription's first run start from the moment you start it.
 
 ## 9. A flow saga can cap the events of the step it is parked in
