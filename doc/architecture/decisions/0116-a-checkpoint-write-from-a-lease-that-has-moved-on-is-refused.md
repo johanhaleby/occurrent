@@ -487,9 +487,9 @@ and is unaffected by which family it runs against.
 >
 > Closing the window needs either an ordering on the positions, which `Checkpoint`'s single `asString()` method
 > and its implementations outside this repository rule out, or agreement between the nodes before any position is
-> captured, which nothing here can arrange because this runs before a competing consumer is registered. Both are larger
-> decisions than a wrapper should make. #771 tracks that question, together with #738 for the reactor stack, so
-> it is settled once for both. See `ManualStartSubscriptionModelTest`.
+> captured, which nothing here can arrange because this runs before a competing consumer is registered. Both
+> are larger decisions than a wrapper should make. #771 tracks that question, together with #738 for the reactor
+> stack, so it is settled once for both. See `ManualStartSubscriptionModelTest`.
 
 The blocking in-memory storage implements the capability too, which is a few lines and gives the new
 conformance suite something to run without a container.
