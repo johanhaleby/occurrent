@@ -119,28 +119,26 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // delete(String), but SagaStateStore.delete's own javadoc says the recommended default is to let a completed
     // instance expire via MongoDB TTL instead, which happens entirely inside the database with no call this store ever
     // sees. So an instance that stays above the threshold and is retired that way keeps its entry until something else
-    // reclaims the slot. That reclaiming is the eviction the latch does on access order (see the field below): as long
-    // as the number of instances simultaneously above the threshold stays at or below this cap, whichever ones are
-    // abandoned (deleted, TTL-expired, or just never saved again) are what get evicted, never a currently active one.
-    // Past this cap the latch cannot tell "abandoned" from "active" anymore, since every entry keeps being touched, so
-    // the diagnostic degrades into a warning on every save for the excess rather than staying silent for them. Package-
-    // private for the same reason as the threshold above: a test exercising the capacity backstop builds exactly this
-    // many tracked instances instead of duplicating the number.
+    // reclaims the slot. That reclaiming is the eviction the latch does on access order (see the field below): whichever
+    // saga id has gone the longest without being checked is what gets evicted when a new one arrives at capacity. That
+    // is a statement about recency of check, not about which instance is still active: a continuously active instance
+    // that is not saved again for RETAINED_EVENT_WARNING_LATCH_CAPACITY other distinct ids' worth of checks is evicted
+    // just like an abandoned one would be, and re-warns on its next save. Package-private for the same reason as the
+    // threshold above: a test exercising the capacity backstop builds exactly this many tracked instances instead of
+    // duplicating the number.
     static final int RETAINED_EVENT_WARNING_LATCH_CAPACITY = 10_000;
 
-    // Edge-triggered, least-recently-used latch, keyed by saga id: present and true means "already warned while at or
-    // above the threshold". An instance is removed the moment it drops back below the threshold (typically after a
+    // Edge-triggered, least-recently-checked latch, keyed by saga id: present and true means "already warned while at
+    // or above the threshold". An instance is removed the moment it drops back below the threshold (typically after a
     // stepWindow trim) or is deleted, so a later re-crossing warns again. Access-ordered (see the constructor) and
-    // capped at RETAINED_EVENT_WARNING_LATCH_CAPACITY: every check or insert counts as an access, so an instance that
-    // keeps being saved is never the eviction target as long as the number of simultaneously active oversized
-    // instances stays at or below the cap. That guarantee does not extend past the cap: if that population sustains
-    // itself above RETAINED_EVENT_WARNING_LATCH_CAPACITY (every one saved repeatedly, none of them idle), the excess
-    // keeps cycling through eviction and re-admission, so those instances do re-warn on every save. This is an
-    // accepted trade-off for keeping a hard memory bound rather than an unbounded, idle-expiry-only cache: the
-    // diagnostic degrades into noise only when the truly-simultaneous oversized population exceeds 10,000, which is
-    // itself already a large-scale symptom. Not a ConcurrentHashMap: LinkedHashMap's access-order mode is what gives
-    // the LRU property, and every access to this field goes through the synchronized block in
-    // warnIfRetainedSizeCrossesThreshold or delete(String).
+    // capped at RETAINED_EVENT_WARNING_LATCH_CAPACITY, protecting the RETAINED_EVENT_WARNING_LATCH_CAPACITY most
+    // recently checked saga ids from eviction, not every instance that will eventually be saved again. A saga id not
+    // checked again before that many OTHER distinct ids have been checked is evicted regardless of whether it is
+    // still active, and re-warns on its own next save. This is an accepted trade-off for keeping a hard memory bound
+    // rather than an unbounded, idle-expiry-only cache: the cost is a spurious re-warn under high churn, never a
+    // missed one. Not a ConcurrentHashMap: LinkedHashMap's access-order mode is what gives the LRU property, and every
+    // access to this field goes through the synchronized block in warnIfRetainedSizeCrossesThreshold or
+    // delete(String).
     private final Map<String, Boolean> retainedEventWarningLatch = new LinkedHashMap<>(16, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {

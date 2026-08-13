@@ -206,9 +206,11 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
         assertThat(store.retainedEventWarningLatchSize()).isEqualTo(RETAINED_EVENT_WARNING_LATCH_CAPACITY);
     }
 
-    // Every save of an already-tracked instance is itself an access under the latch's access-order mode, so it never
-    // becomes the eviction target while it keeps being saved. This is what keeps a currently active instance safe
-    // regardless of how many other instances cycle through the cache around it.
+    // Every save of an already-tracked instance is itself an access under the latch's access-order mode, so it is
+    // never the eviction target on a save that immediately follows its own previous one, with nothing else arriving
+    // in between. See a_population_sustained_one_above_capacity_re_warns_on_every_save_for_the_whole_round and
+    // continuously_active_instance_can_still_be_evicted_by_enough_churn_between_its_own_saves for the two ways that
+    // protection stops holding once other saves get interleaved.
     @Test
     void resaving_already_tracked_instances_never_makes_them_re_warn() {
         for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
@@ -271,10 +273,9 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
                 .isEqualTo(warningsBeforeResave + 1);
     }
 
-    // The limit of the LRU guarantee: it protects an active instance from eviction only while the number of
-    // simultaneously active oversized instances stays at or below capacity. One more than that, cycled round-robin
-    // with none of them ever idle, means every save evicts and re-admits the id about to be needed next, so the
-    // excess re-warns on every single save. This is the accepted cost of keeping a hard memory bound rather than an
+    // One way the LRU guarantee stops holding: a working set of capacity-plus-one ids, cycled round-robin with none
+    // of them ever idle, means every save evicts and re-admits the id about to be needed next, so the excess
+    // re-warns on every single save. This is the accepted cost of keeping a hard memory bound rather than an
     // unbounded, idle-expiry-only cache, see RETAINED_EVENT_WARNING_LATCH_CAPACITY's comment.
     @Test
     void a_population_sustained_one_above_capacity_re_warns_on_every_save_for_the_whole_round() {
@@ -288,6 +289,24 @@ class SpringMongoSagaStateStoreRetainedSizeWarningTest {
 
         assertThat(warnings().size()).as("every save in every round warns, not just the first round's crossings")
                 .isEqualTo(3L * populationSize);
+    }
+
+    // The other, sharper way it stops holding: the latch protects the RETAINED_EVENT_WARNING_LATCH_CAPACITY most
+    // recently checked ids, not every instance that will eventually be saved again. A single continuously active
+    // instance, never saved for that many other distinct ids' worth of checks, is evicted exactly like an abandoned
+    // one, and re-warns on its own very next save, even though it never stopped being active.
+    @Test
+    void continuously_active_instance_can_still_be_evicted_by_enough_churn_between_its_own_saves() {
+        store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
+        for (int i = 0; i < RETAINED_EVENT_WARNING_LATCH_CAPACITY; i++) {
+            store.warnIfRetainedSizeCrossesThreshold("oneShot" + i, RETAINED_EVENT_WARNING_THRESHOLD);
+        }
+        int warningsBeforeResavingS0 = warnings().size();
+
+        store.warnIfRetainedSizeCrossesThreshold("s0", RETAINED_EVENT_WARNING_THRESHOLD);
+
+        assertThat(warnings().size()).as("s0 was evicted by the churn even though it was continuously active")
+                .isEqualTo(warningsBeforeResavingS0 + 1);
     }
 
     // Concurrent saves for fresh saga ids near capacity could each pass the size check before either was inserted,
