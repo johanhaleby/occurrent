@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 7
-updated_at: 2026-08-13T05:57:00Z
-updated_by: "orchestrator session faee3625 (U5 merged, U7 rebase window opened)"
+revision: 8
+updated_at: 2026-08-13T06:05:00Z
+updated_by: "orchestrator session faee3625 (U3 merge held on suppressed-block findings)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -44,7 +44,7 @@ units:
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "768", met: false, evidence: "OPEN. Adversarial verify found a CONFIRMED regression: catch(RuntimeException) misses Error, so the marker leaks permanently on an Error-throwing delegate, the exact PR 733 bug reopened. Sent back with the catch(Throwable) fix and an Error-path test. Other three angles held, the latched race test verified deterministic against the old ordering."}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "768", met: false, evidence: "OPEN, merge HELD 2026-08-13 ~06:00 despite 27/27 green and 0 threads on head 505dcc471: Copilot's suppressed block on the FINAL head carries 2 findings against the reference-counting invariant (paused-subscription duplicate increments the marker before the delegate refuses, letting a concurrent resume misclassify; success-path reinstate resurrects the marker after a cancel that landed post-acceptance, a permanent stale-marker leak). Routed to U3 as adversarial findings: fix with failing-first test or refute with a delegate-contract trace. Earlier adversarial verify already caught and fixed the catch(RuntimeException)-misses-Error leak; its DELIVERY_RESULT (7-case invariant, 5 mutation rounds incl. an honestly-reported closed-by-construction round) is banked but must be updated."}
   U4:
     issue: null
     goal: "stepWindow pre-progress trap (finding 4): derive fallback counts pre-trim, pass STORED windowStart to droppedFromTheCurrentStep; regression tests incl. hand-seeded pre-progress document; aligns implementation with ADR 123's stated contract"
