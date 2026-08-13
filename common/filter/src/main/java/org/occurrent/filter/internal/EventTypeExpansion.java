@@ -47,8 +47,8 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * The rule above governs {@link #expand} and {@link #concreteTypesOf}, the two entry points a derived filter is built
  * from. {@link #expandWhatCanBeFound} walks the same hierarchy for a caller that was handed an explicit filter and so
- * derives none, and it refuses only what no event can arrive as, an array or a primitive. Nothing here relaxes the rule,
- * because a caller with no derived filter has no filter for it to be true of.
+ * derives none, and it still refuses an array or a primitive. Nothing here relaxes the rule, because a caller with no
+ * derived filter has no filter for it to be true of.
  */
 public final class EventTypeExpansion {
 
@@ -84,12 +84,15 @@ public final class EventTypeExpansion {
      * none, and still wants to report which event types it handles. The saga DSL's {@code filter(Filter)} override is
      * the one such caller.
      * <p>
-     * An array and a primitive are still refused, through {@code cannotExpand}, because neither is a type an event can
-     * arrive as, rather than a hierarchy this cannot enumerate. No event is stored under an array's name, and
-     * {@code int.class.isInstance(..)} is false for every object, so a saga declaring one could never match anything.
-     * Accepting them would mean saying nothing about a declaration that is always a mistake. An interface or an abstract
-     * class is different, since an event really can be an instance of one, and that is the case this method is lenient
-     * about.
+     * An array and a primitive are still refused, through {@code cannotExpand}, and for two different strengths of
+     * reason worth keeping apart. A primitive can match nothing at all, since {@code int.class.isInstance(..)} is false
+     * for every object, so a saga declaring one would build and then never start an instance. An array is refused for
+     * consistency rather than impossibility, because an object really can be an instance of an array type, and the
+     * reason not to accept one here is that {@link #expand} and the subscription annotations both refuse a declared
+     * array, so this path is not the place to become the single exception.
+     * <p>
+     * An interface or an abstract class is different from both, since a hierarchy whose concrete types cannot all be
+     * found is exactly the case this method exists to be lenient about.
      *
      * @param cannotExpand builds the exception to throw for an array or a primitive
      */
