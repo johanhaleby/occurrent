@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 4
+revision: 5
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -100,7 +100,7 @@ units:
       the standard internal warning and expandWhatCanBeFound support status (@NullMarked per sibling convention makes this
       a COMPILED change: normal CI, never [ci skip]). Review-finding 11 is DECLINED (the exists read is load-bearing, timed
       before position capture); finding 8''s placement half DECLINED per the cdx33b finding-11 convention ruling'
-    phase: READY
+    phase: PLANNED
     health: PROGRESSING
     swept: false
     depends_on:
@@ -118,7 +118,7 @@ units:
       blocking-only ruling with the conflict surfaced): bring ReactorDurableSubscriptionModel''s registration pin from read-then-unconditional-write
       to ifAbsent parity plus whatever refusal shape C1''s design gate decides, applied per #771''s decide-once constraint;
       the tag waits for it'
-    phase: READY
+    phase: PLANNED
     health: PROGRESSING
     swept: false
     depends_on:
@@ -136,7 +136,7 @@ units:
       the blocker ruling recorded with the reviewer''s rank and the narrowing fact; stopping-rule exceptions as ruled; issue-less
       declines (finding 7 incl. the knowingly-closed window note, finding 8 placement, review-finding 11) in ORCHESTRATOR.md''s
       register; declines by pointer for findings 3, 6, 9, 10, 12'
-    phase: READY
+    phase: PLANNED
     health: PROGRESSING
     swept: false
     depends_on:
