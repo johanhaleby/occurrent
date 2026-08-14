@@ -170,9 +170,10 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > a layer that says so. Such a layer no longer ends the walk with an answer it does not act on, and no position is
 > recorded off its answer either, since it is not asked for one.
 >
-> Two shapes are left rather than none, and they fail in opposite directions. A wrapper that decides something else
-> and does not say so, which is one written outside this repository, is read the way each layer was read before, so it
-> ends the walk and leaves the model below to record a position when the subscription starts. And the walk asks a
+> Two shapes are left rather than none, and they fail in opposite directions. A wrapper written outside this
+> repository whose own answer is not what decides the start, whether it resolves the position for a decision of its
+> own or hands it down without resolving it at all, and that does not say so, is read the way each layer was read
+> before, so it ends the walk and leaves the model below to record a position when the subscription starts. And the walk asks a
 > layer under its runtime class while a model resolves the position under a class literal of its own, so a function
 > answering the model default for a named subclass and something else for the class that subclass extends has a
 > position recorded from an answer the model below never acts on. That second one is the cost the amendment above

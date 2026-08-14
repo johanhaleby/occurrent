@@ -51,9 +51,10 @@ public interface SubscriptionModelWrapper extends SubscriptionModelCapability {
 
     /**
      * Whether what the caller's {@link StartAt} resolves to under this wrapper's own class is what decides where the
-     * subscription starts. Answer {@code false} only when that resolution decides something else, the way a competing
-     * consumer model resolves the position to work out whether to compete for the subscription and leaves where the
-     * subscription starts to the model below it.
+     * subscription starts. Answer {@code false} whenever it is not, which covers two shapes. One is a wrapper that
+     * resolves the position for a decision of its own, the way a competing consumer model works out whether to
+     * compete for the subscription and leaves where it starts to the model below. The other is a wrapper that hands
+     * the caller's position down without resolving it at all, which decides nothing here either.
      * <p>
      * Handing the caller's own {@code StartAt} object down is not what this asks about. A catch-up model does that
      * and still answers {@code true}, because the model it hands the object to resolves it under the catch-up model's
