@@ -1,10 +1,10 @@
 schema_version: 2
 epic: cdx33c
-revision: 31
-updated_at: 2026-08-14 18:30:00+00:00
-updated_by: 'orchestrator: C8 DONE (PR 792 merged as 8313585, CAS 0423a98, verified on the exact head incl. clean final Copilot
-  review and marker-free squash body); watcher-002 RETIRED in the same sweep per no_unmet_pr_advanceable_deliverables; act-010
-  dispatches fixpoint round 2, THE LAST'
+revision: 32
+updated_at: 2026-08-14 18:50:00+00:00
+updated_by: 'orchestrator: round-2 verdict journaled (2 MAJOR + 1 minor, CAP REACHED, Johan ruled fix-both-close-capped
+  before going Unattended); C10 registered RUNNING with both docs deliverables already met and verified, library PR 793 open
+  awaiting Copilot'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -145,8 +145,13 @@ pending_actions:
   target: 'Fixpoint ROUND 2, THE LAST (cap 2): fresh-context Opus adversarial review of the C8/C9 addendum diffs (library
     squash 8313585; docs preview 381ca8b to ea3f616, fencing b256a50 to 756c8b6) together with the complete 0.33.0 state'
   expected: 'verdict: CLEAN (nothing above minor) = convergence declared; any above-minor finding = cap reached, loop ENDS,
-    remainder routed to Johan as one structured ask, outcome reported as CAPPED never convergence'
-  status: PENDING
+    remainder routed to Johan as one structured ask, outcome reported as CAPPED never convergence. RESOLVED: 2026-08-14: verdict
+    2 CONFIRMED MAJOR (both re-verified by the orchestrator on the exact refs: the docs-branch though-only clause C9 added,
+    falsified by ReactorDurableSubscriptionModel.pinStartPosition line 335; the guide one-place claim, falsified by ManualStartSubscriptionModel.stoppedByDefault
+    line 199) + 1 minor (javadoc CROSSSLOT referent), everything else clean incl. the recipe description and the news-post
+    enumeration. CAP REACHED, loop ended, main matrix on 8313585 green 25/25. Johan ruled fix-both-plus-minor-close-capped
+    by AskUserQuestion before switching to Unattended; remediation runs as C10 with NO round 3'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-14T18:30:00Z'
@@ -388,6 +393,36 @@ units:
         caveat at news:28 and docs.md:3583; fix-3 coverage at docs.md:2913-2919 and :3608 written self-contained (no Cluster
         id-shape reference) because this branch''s older Cluster section would contradict it, a flagged deviation the orchestrator
         ratified as correct rather than drift'
+  C10:
+    issue: null
+    goal: 'Capped-close remediation, ruled by Johan (fix both plus the minor, close capped): round-2 finding 1 (both docs
+      branches falsely claim only the blocking starter reads evaluatesWriteConditionsFor), finding 2 (guide claims one place
+      acts on a false evaluatesWriteConditions answer when ManualStartSubscriptionModel.stoppedByDefault also refuses), finding
+      3 (javadoc CROSSSLOT sentence hung on ifAbsent as nearest subject instead of standalone mode). No round 3: fixes verified
+      mechanically against the named falsifying facts'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      repo: johanhaleby/occurrent
+      ref: '793'
+      met: false
+      evidence: null
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-preview
+      met: true
+      evidence: 'Pushed ea3f616 -> 9b7c378, verified on the origin ref: the though-only claim gone, the corrected sentence
+        (starter fencing check at startup plus ReactorDurableSubscriptionModel before recording a first position, false answer
+        keeps the unconditional write with a WARN) present exactly once, writing gates run literally on the diff'
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/checkpoint-fencing
+      met: true
+      evidence: 'Pushed 756c8b6 -> 13e128f, same correction and verification as the preview branch'
 watchers:
 - id: watcher-001
   kind: github-work-item-monitor
