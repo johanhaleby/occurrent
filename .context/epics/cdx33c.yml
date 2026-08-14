@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 24
+revision: 25
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -236,10 +236,12 @@ units:
       repo: johanhaleby/occurrent
       ref: '790'
       met: false
-      evidence: 'DELIVERED done at 45f912f, merge HELD for Johan (ADR-bearing PR + queued blast-radius ratification). Docs
-        branches pushed additive-only per instruction. Two docs findings: the duplicated diverging captured-position paragraph
-        on both branches (NEW, queued into the docs coordination item), the checkpoint-fencing kramdown blank-line defect
-        (already recorded in the 0.33.0 release checklist)'
+      evidence: 'DELIVERED to hold at final head f94d595 ([ci skip] prose tail; code verdict 27/27 on 45f912f by the recorded
+        compare convention). Adversarial pass: behavior refuted on every angle, 4 prose majors fixed in one round plus 2 more
+        instances of the same class the worker sweep itself caught (ADR 89 and the guide heading, corrections overclaiming
+        like the corrected text, caught by the absolutes grep). Docs branches at b4bee65 (preview) and 93ecd07 (checkpoint-fencing),
+        held. #791 filed with marker and routed 0.34 (the elevated remove-by-key race). Three threads: two resolved, one open
+        reasoned (the Q1 derivation). MERGE HELD for Johan: ADR wordings + blast-radius ratification in the return queue'
   CREG:
     issue: null
     goal: 'Register and routing: orchestrator-routing markers on every touched issue; finding-2 new evidence on #771''s family;
