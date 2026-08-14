@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 11
+revision: 12
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -192,7 +192,7 @@ units:
       saga filter and its C2 split (narrowingFilter composes with derived types and keeps hierarchy checks on, replacementFilter
       carries replacement semantics, filter deleted) on docs/0.33.0-preview; push the held branch only, never merge; closes
       #785 before the tag per the docs-ship-with-change convention'
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on:
@@ -202,8 +202,11 @@ units:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-preview
-      met: false
-      evidence: null
+      met: true
+      evidence: 'DONE 2026-08-14: docs/0.33.0-preview pushed to 372d45a (verified by orchestrator ls-remote + origin-ref grep:
+        8 narrowing/replacement occurrences, stable saga-explicit-filter anchor rewritten in place, zero bare filter( references
+        in the section), Jekyll build exit 0 twice, writing gate ran with two semicolon and two colon-reveal catches fixed,
+        diff pages/docs/docs.md alone, primary checkout and docs main untouched. #785 closed with the held-branch pointer'
 watchers:
 - id: watcher-001
   kind: github-work-item-monitor
