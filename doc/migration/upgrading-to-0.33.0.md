@@ -471,11 +471,17 @@ to `occurrent.subscription.competing-consumer.fence-checkpoints=false`. That thi
 runs whatever this setting is, so disabling the fence only trades this exception's own message for a less specific
 one from the storage itself, once that write is attempted.
 
-Manual mode has one more way to fail at startup, and this one depends on timing rather than on wiring. Two nodes
-registering a brand new subscription at the same moment both read a start position and both try to record it, only the
-first write is kept, and the node whose position was not kept now fails with `StartPositionAlreadyPinnedException`
-instead of starting the subscription from a position it never read. The two positions were read on different machines
-and nothing can order them, so accepting the stored one risks starting past the events written between them.
+None of the three above covers what manual mode can also do at startup, because this one is about timing rather than
+wiring. Two nodes registering a brand new subscription at the same moment both read a start position and both try to
+record it, only the first write is kept, and the node whose position was not kept now fails with
+`StartPositionAlreadyPinnedException` instead of starting the subscription from a position it never read. The two
+positions were read on different machines and nothing can order them, so accepting the stored one risks starting past
+the events written between them.
+
+One node on its own can hit the same exception with nobody else registering, when its checkpoint storage answers the
+question of whether a checkpoint exists, or reads one back, from a replica that has not caught up with the write. The
+remedy below is the same either way, so the exception is a reason to start the node again rather than a reason to go
+looking for a second one.
 
 Start that node again. It finds the recorded position already there, takes it, and starts, which is what a node
 registering a subscription somebody else already registered has done since this write was added. The events between

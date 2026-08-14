@@ -223,7 +223,8 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > already states, and it was still settling it here.
 >
 > **Such a registration is now refused, with `StartPositionAlreadyPinnedException`.** The refusal is confined to the
-> branch where nothing was stored when this registration read for it, which is the genuine first registration. A
+> branch where nothing was stored when this registration read for it, which is ordinarily the genuine first
+> registration, and is whatever that read answered when it was served from behind the write. A
 > checkpoint that was already there stays accepted in silence, so a node starting behind a leader election long
 > after another has been running the subscription is untouched, which is the case the first amendment protected
 > when it said refusing would be worse than the bug. That case could not be told apart from a race when this was

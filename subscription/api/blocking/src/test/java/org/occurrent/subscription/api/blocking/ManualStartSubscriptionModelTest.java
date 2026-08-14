@@ -863,7 +863,7 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
-    void a_stored_position_that_is_removed_before_it_can_be_read_is_refused_without_being_named_as_null() {
+    void a_stored_position_that_reads_back_as_nothing_is_refused_without_being_named_as_null() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         CheckpointStorage emptyAfterRefusal = refusingStorage(() -> null);
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate,
@@ -871,8 +871,9 @@ class ManualStartSubscriptionModelTest {
 
         assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
         }))
+                .as("a read that finds nothing does not show the checkpoint was removed, since a read served from behind the write answers the same way")
                 .isInstanceOf(StartPositionAlreadyPinnedException.class)
-                .hasMessageContaining("has since been removed")
+                .hasMessageContaining("found nothing")
                 .hasMessageNotContaining("null")
                 .hasNoCause();
     }
