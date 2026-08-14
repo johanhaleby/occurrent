@@ -104,8 +104,9 @@ same as it always accepted every subscription id outside the version key's own r
 
 A store whose answer to a conditional write depends on the subscription id, the way the two Redis modes above do, can
 say so precisely with `evaluatesWriteConditionsFor(String subscriptionId)`, a second new default method that answers
-`evaluatesWriteConditions()` for every id unless overridden. The Spring Boot starter's own fencing check reads it too,
-see section 8.
+`evaluatesWriteConditions()` for every id unless overridden. The blocking Spring Boot starter's own fencing check
+reads it too, see section 8. No such check exists on the reactor stack yet, so a reactor `CheckpointStorage`
+implementer overrides it only for callers that ask directly.
 
 If your store can evaluate a condition for real, the two rules that matter are the same two the TCK asserts on every
 storage that declares it supports them. `any()` must leave whatever version is stored untouched, carrying it
@@ -458,14 +459,17 @@ position at all and lets a subscription's first run start from the moment you st
 wired next to a strategy.** `evaluatesWriteConditions()` answering `true` is not the last word once
 `evaluatesWriteConditionsFor(String)` exists. `SpringRedisCheckpointStorage`'s Cluster-safe mode is exactly this
 case, answering `true` overall while refusing the one subscription id shape in section 4 for a conditional write. Once
-every singleton exists, the starter asks `evaluatesWriteConditionsFor` for every subscription id whose own
-registration path actually reaches `CheckpointStorage`, and throws
-`CheckpointStorageCannotFenceSubscriptionException` naming the storage and every refused id when the answer is
-`false` for at least one. `CheckpointStorageCannotFenceSubscriptionException`'s own javadoc says exactly which ids
-that is, and which are left out, a `@SynchronousSubscription` among them, since it never writes a checkpoint at all.
+every singleton exists, the starter asks `evaluatesWriteConditionsFor` for the subscription ids
+`CheckpointStorageCannotFenceSubscriptionException`'s own javadoc names precisely, and throws that exception naming
+the storage and every refused id when the answer is `false` for at least one. That javadoc also says which ids are
+left out even though the storage might refuse them, a `@SynchronousSubscription` among them since it never writes a
+checkpoint at all, and which are asked about even though the storage refusing them would never matter.
 Rename the affected id to a shape the storage accepts, use a storage that evaluates write
 conditions for it (`forStandalone(..)` on `SpringRedisCheckpointStorage`, if the deployment allows it), or fall back
-to `occurrent.subscription.competing-consumer.fence-checkpoints=false`, the same as the second way out above.
+to `occurrent.subscription.competing-consumer.fence-checkpoints=false`. That third way out has the same limit under
+`occurrent.subscription.mode=manual` as the second way out above. A first-run `ifAbsent()` write for the affected id
+runs whatever this setting is, so disabling the fence only trades this exception's own message for a less specific
+one from the storage itself, once that write is attempted.
 
 ## 9. A flow saga can cap the events of the step it is parked in
 

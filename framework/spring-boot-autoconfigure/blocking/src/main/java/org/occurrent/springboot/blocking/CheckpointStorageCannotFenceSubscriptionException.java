@@ -33,8 +33,14 @@ import java.util.List;
  * every singleton exists and before any of them registers. A {@code @SynchronousSubscription} never reaches it, and
  * neither does a {@code @Projection} or {@code @Snapshot} in synchronous mode, or a {@code @Projection} or
  * {@code @Saga} whose push feed catches up from nothing, so none of those ids are ever named here even when the
- * storage would refuse them. A {@code @Projection(source = PUSH)} fed by a domain-event feed rather than a plain
- * push feed also never reaches it, a gap this check does not close yet.
+ * storage would refuse them.
+ * <p>
+ * A {@code @Projection(source = PUSH)} fed by a domain-event feed is the opposite mistake, over-coverage rather than
+ * under. It is still asked about, even though its optional catch-up marker, when the feed bean has one, only ever
+ * calls {@code exists} and the unconditional two-argument {@code save}, never the conditional write this check is
+ * about, so a storage that refuses this id for a conditional write never actually refuses anything this projection
+ * writes. That makes a startup failure over an id like this a false one, not a real one this check is right to
+ * raise (see #788).
  * <p>
  * A subscription id built or read only at runtime is outside what this check can enumerate at all. So is one an
  * annotation declares whose registration writes a checkpoint before this check runs, which {@code @Subscription},
@@ -54,7 +60,10 @@ public final class CheckpointStorageCannotFenceSubscriptionException extends Ill
                "that storage refuses it with an exception specific to that storage on the first write after a lease " +
                "is acquired. Change the affected subscription id(s) to a shape the storage accepts, use a %s that " +
                "evaluates write conditions for them, or set " +
-               "occurrent.subscription.competing-consumer.fence-checkpoints=false.")
+               "occurrent.subscription.competing-consumer.fence-checkpoints=false. That third way out does not apply " +
+               "under occurrent.subscription.mode=manual, where a first-run ifAbsent() write for the same id runs " +
+               "whatever this setting is, and would then fail with a less specific exception from the storage " +
+               "itself instead.")
                 .formatted(storageType.getName(), unsupportedSubscriptionIds.size(), String.join(", ", unsupportedSubscriptionIds), CheckpointStorage.class.getSimpleName()));
         this.storageType = storageType;
         this.unsupportedSubscriptionIds = List.copyOf(unsupportedSubscriptionIds);
