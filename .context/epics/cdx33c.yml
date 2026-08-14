@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33c
-revision: 2
+revision: 3
 updated_at: 2026-08-14T19:00:00Z
 updated_by: "orchestrator (successor session, worktree api-review-verification-c3b0ea): registered from the approved plan /Users/johan/.claude/plans/harmonic-spinning-peach.md"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -10,7 +10,8 @@ pending_actions:
     type: dispatch-chip
     target: "C1 chip task_9c342d4d (registration-race fix, plan-first, Opus/high, venue session) and C2 chip task_6ad11625 (saga filter split, plan-first, Opus/high, venue session), both self-contained briefs off origin/main 480c695"
     expected: "Johan clicks each chip; each presents its plan gate in its own session, delivers a PR and a DELIVERY_RESULT; C1 owns pinStartPosition exclusively"
-    status: PENDING
+    status: VERIFIED
+    verified: "2026-08-14: both chips started by Johan in separate local sessions (host notices received); delivery obligations now tracked per unit"
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-14T19:10:00Z
@@ -18,7 +19,8 @@ pending_actions:
     type: workflow-dispatch
     target: "C3 planning subagent (Sonnet, read-only, plan_approval_venue orchestrator): id-aware capability shape, boot validation siting, standalone-vs-Cluster gate question, ripple + test plan"
     expected: "a plan handed back; the standalone question goes to Johan through the orchestrator; implementation dispatched separately after the gate"
-    status: PENDING
+    status: VERIFIED
+    verified: "2026-08-14: plan returned with full evidence incl. the pre-existing boot-check ordering gap; gate ruled direction A (explicit standalone mode) under Johan's long-term rule; implementation subagent dispatched Sonnet/high"
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-14T19:10:00Z
@@ -63,13 +65,23 @@ units:
     session: null
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+  C5:
+    issue: "738"
+    goal: "Reactor pin-race parity, promoted by Johan 2026-08-14 under the no-severity-ladder principle (reversing his same-day blocking-only ruling with the conflict surfaced): bring ReactorDurableSubscriptionModel's registration pin from read-then-unconditional-write to ifAbsent parity plus whatever refusal shape C1's design gate decides, applied per #771's decide-once constraint; the tag waits for it"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: [C1]
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
   CREG:
     issue: null
     goal: "Register and routing: orchestrator-routing markers on every touched issue; finding-2 new evidence on #771's family; the blocker ruling recorded with the reviewer's rank and the narrowing fact; stopping-rule exceptions as ruled; issue-less declines (finding 7 incl. the knowingly-closed window note, finding 8 placement, review-finding 11) in ORCHESTRATOR.md's register; declines by pointer for findings 3, 6, 9, 10, 12"
     phase: READY
     health: PROGRESSING
     swept: false
-    depends_on: [C1, C2, C3]
+    depends_on: [C1, C2, C3, C5]
     session: null
     deliverables:
       - {check: branch_pushed, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
