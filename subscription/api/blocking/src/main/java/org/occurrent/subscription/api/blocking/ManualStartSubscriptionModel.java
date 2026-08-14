@@ -151,9 +151,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * its own and a subclass of it, including a proxy built by subclassing, is otherwise asked under a name
      * {@link StartAt.SubscriptionModelContext#hasSubscriptionModelType(Class)} does not match. A walk that ended on
      * its first ask has that one layer to ask again. The model default from any of those answers records the
-     * position. A dynamic function therefore runs once for each layer the walk asked, plus once for each class those
-     * layers inherit from when that second pass runs, on top of the calls it already gets when the subscription
-     * starts. Two shapes are
+     * position. A dynamic function therefore runs at most once for each layer the walk asked, plus at most once for
+     * each class those layers inherit from when that second pass runs, on top of the calls it already gets when the
+     * subscription starts. Two shapes are
      * still read differently here than the model that starts the subscription reads it. A layer that passes the
      * position down without deciding where the subscription starts and does not say so is asked all the same, and a
      * proxy that only implements a model's interfaces never shows that model's own class here, so a function naming
