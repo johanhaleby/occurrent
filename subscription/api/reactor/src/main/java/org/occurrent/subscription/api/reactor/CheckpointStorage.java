@@ -99,6 +99,26 @@ public interface CheckpointStorage {
     }
 
     /**
+     * Whether this storage evaluates {@link CheckpointWriteCondition#notOlderThan(long)} and
+     * {@link CheckpointWriteCondition#ifAbsent()} for real for the given {@code subscriptionId}, rather than
+     * signalling an error specific to this implementation.
+     * <p>
+     * Most storages answer the same for every id, so the default delegates to {@link #evaluatesWriteConditions()}.
+     * A storage overrides this instead when its answer depends on the id itself, for example one that reserves a
+     * shape of id it cannot evaluate a condition for while accepting that same shape for {@link
+     * CheckpointWriteCondition#any()}. Answering per id is what lets a caller ask, for the exact ids it plans to
+     * use, before it wires anything up, the same "ask before you wire anything up" promise
+     * {@link #evaluatesWriteConditions()} already makes for a storage whose answer never varies by id.
+     *
+     * @param subscriptionId The id to ask about
+     * @return {@code true} if both {@code notOlderThan} and {@code ifAbsent} are evaluated for this id, {@code false}
+     * if either of them is refused for it
+     */
+    default boolean evaluatesWriteConditionsFor(String subscriptionId) {
+        return evaluatesWriteConditions();
+    }
+
+    /**
      * Read the version currently stored for the supplied subscriptionId, the one a {@link CheckpointWriteCondition}
      * is evaluated against.
      * <p>

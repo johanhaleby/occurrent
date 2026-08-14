@@ -24,6 +24,9 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.context.ApplicationContext;
 
+import java.util.List;
+import java.util.Set;
+
 /**
  * Refuses to finish startup when the competing-consumer fence cannot do what the configuration implies, rather than
  * letting a subscription find out on a checkpoint write hours later.
@@ -31,9 +34,16 @@ import org.springframework.context.ApplicationContext;
  * A {@link SmartInitializingSingleton} because it runs after every singleton exists, so asking for a strategy bean here
  * cannot pull one into existence early and close the construction cycle
  * {@link CompetingConsumerCheckpointWriteVersionSource} resolves lazily to avoid. That callback is the one for an
- * application with no annotations to register. {@link OccurrentBlockingAnnotationBeanPostProcessor} calls
- * {@link #check(ApplicationContext)} itself before it registers anything, since a push projection or saga writes a
- * checkpoint while catching up and would reach that write first.
+ * application with no annotations to register, and it only ever runs the storage-wide check below, since it has no
+ * subscription id of its own to ask about. {@link OccurrentBlockingAnnotationBeanPostProcessor} calls
+ * {@link #check(ApplicationContext, Set)} itself before it registers anything, since a push projection or saga writes
+ * a checkpoint while catching up and would reach that write first, and passes every subscription id an annotation on
+ * the classpath declares, so the id-specific check below runs too.
+ * <p>
+ * That id list is only ever what an annotation ({@code @Subscription}, {@code @StreamSubscription},
+ * {@code @SynchronousSubscription}, {@code @DcbSubscription}, {@code @Projection}, {@code @Snapshot}, {@code @Saga})
+ * declares. A subscription id built or read some other way, at runtime or through a wiring this starter does not
+ * scan, is outside what this check can enumerate and finds out the same way it always has, from a refused write.
  */
 class CheckpointFencingConfigurationCheck implements SmartInitializingSingleton {
 
@@ -49,14 +59,15 @@ class CheckpointFencingConfigurationCheck implements SmartInitializingSingleton 
     }
 
     /**
-     * Runs the same two checks for a caller that holds a context and has to run them at a moment of its own choosing.
+     * Runs the same checks for a caller that holds a context and has to run them at a moment of its own choosing,
+     * against every subscription id it can enumerate.
      * <p>
      * Reads beans rather than creating any, so running it a second time from the callback below costs nothing.
      */
-    static void check(ApplicationContext applicationContext) {
+    static void check(ApplicationContext applicationContext, Set<String> subscriptionIds) {
         new CheckpointFencingConfigurationCheck(applicationContext.getBeanProvider(CompetingConsumerStrategy.class),
                 applicationContext.getBeanProvider(CheckpointStorage.class),
-                applicationContext.getBeanProvider(OccurrentProperties.class)).afterSingletonsInstantiated();
+                applicationContext.getBeanProvider(OccurrentProperties.class)).check(subscriptionIds);
     }
 
     private final ObjectProvider<CompetingConsumerStrategy> strategyProvider;
@@ -71,8 +82,14 @@ class CheckpointFencingConfigurationCheck implements SmartInitializingSingleton 
         this.propertiesProvider = propertiesProvider;
     }
 
+    // The bean's own SmartInitializingSingleton callback, with no subscription id to ask about, see the class
+    // javadoc for when this is the only invocation that runs.
     @Override
     public void afterSingletonsInstantiated() {
+        check(Set.of());
+    }
+
+    private void check(Set<String> subscriptionIds) {
         // Throws when several strategy beans compete, whatever the fencing property says, because the strategy also
         // decides which node delivers events and which one polls a saga's timers.
         CompetingConsumerStrategy strategy = CompetingConsumerStrategies.resolveUnique(strategyProvider);
@@ -80,8 +97,21 @@ class CheckpointFencingConfigurationCheck implements SmartInitializingSingleton 
             return;
         }
         @Nullable CheckpointStorage storage = storageProvider.getIfUnique();
-        if (storage != null && !storage.evaluatesWriteConditions()) {
+        if (storage == null) {
+            return;
+        }
+        if (!storage.evaluatesWriteConditions()) {
             throw new CheckpointStorageCannotFenceException(storage.getClass());
+        }
+        // The storage-wide answer above is true, so a caller wiring the pair together has been told this storage can
+        // fence. Ask it again for each id specifically, since a storage can answer true overall while refusing one
+        // shape of id, and collect every failure into one exception rather than stopping at the first.
+        List<String> unsupportedSubscriptionIds = subscriptionIds.stream()
+                .filter(id -> !storage.evaluatesWriteConditionsFor(id))
+                .sorted()
+                .toList();
+        if (!unsupportedSubscriptionIds.isEmpty()) {
+            throw new CheckpointStorageCannotFenceSubscriptionException(storage.getClass(), unsupportedSubscriptionIds);
         }
     }
 }

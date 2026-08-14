@@ -79,13 +79,18 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // @Projection factory methods are registered after all singletons are instantiated, not in
     // postProcessBeforeInitialization: the factory has to be invoked to obtain the descriptor, and its collaborators
     // (the store, the subscription model) must already be wired. First collect every subscription id so a projection
-    // cannot reuse one, then register each projection.
+    // cannot reuse one and so the fencing check below can be asked about each one, then register each projection.
+    //
+    // A @Subscription, @StreamSubscription, @DcbSubscription or @SynchronousSubscription method still registers per
+    // bean in postProcessBeforeInitialization, ahead of this check, so one can already write a checkpoint before
+    // this runs. Pre-existing, not introduced by this reorder. CheckpointStorageCannotFenceSubscriptionException's
+    // javadoc covers it.
     @Override
     public void afterSingletonsInstantiated() {
-        // Before any registration, because a push projection or saga catches up during registration and writes a
-        // checkpoint while doing it. Spring calls SmartInitializingSingleton callbacks in bean creation order, and this
-        // one is created first, so the check's own callback would otherwise run after that write had already failed.
-        CheckpointFencingConfigurationCheck.check(applicationContext);
+        // Reflects over method signatures only, no store access or checkpoint write, so running it before any
+        // registration is safe. Spring creates this bean before CheckpointFencingConfigurationCheck's own bean, so
+        // a check that instead waited for its own SmartInitializingSingleton callback would run after a catch-up
+        // write had already happened.
         List<Object[]> projectionMethods = new ArrayList<>();
         List<Object[]> snapshotMethods = new ArrayList<>();
         List<Object[]> sagaMethods = new ArrayList<>();
@@ -115,6 +120,20 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 }
             }
         }
+        // Not registeredIds itself, which registrars below check-and-add against as each one runs. Seeding it early
+        // with an id its registrar has not reached yet would make that registrar's own add(id) find one already
+        // present and misreport a genuine id as a duplicate.
+        Set<String> idsToCheck = new HashSet<>(registeredIds);
+        for (Object[] pm : projectionMethods) {
+            idsToCheck.add(((org.occurrent.annotation.Projection) pm[2]).id());
+        }
+        for (Object[] sm : snapshotMethods) {
+            idsToCheck.add(((org.occurrent.annotation.Snapshot) sm[2]).id());
+        }
+        for (Object[] gm : sagaMethods) {
+            idsToCheck.add(((org.occurrent.annotation.Saga) gm[2]).id());
+        }
+        CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
         for (Object[] pm : projectionMethods) {
             projectionRegistrar.processProjectionAnnotation(applicationContext.getBean((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
         }

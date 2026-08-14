@@ -327,6 +327,34 @@ class SpringRedisCheckpointStorageTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"", "a}b{c", "{}orders"})
+    void evaluates_write_conditions_for_answers_false_for_a_subscription_id_cluster_cannot_align_in_cluster_safe_mode(String subscriptionId) {
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+
+        assertThat(storage.evaluatesWriteConditionsFor(subscriptionId)).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{tenant}-orders", "a{b", "{", "a{b{c}d}e", "orders"})
+    void evaluates_write_conditions_for_answers_true_for_an_ordinary_subscription_id_in_cluster_safe_mode(String subscriptionId) {
+        CheckpointStorage storage = new SpringRedisCheckpointStorage(redisTemplate);
+
+        assertThat(storage.evaluatesWriteConditionsFor(subscriptionId)).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "a}b{c", "{}orders"})
+    void a_standalone_mode_storage_accepts_a_conditional_save_for_a_subscription_id_cluster_cannot_align(String subscriptionId) {
+        // Standalone Redis has no slot to protect, so forStandalone lifts the restriction entirely rather than
+        // narrowing it, and a real conditional write against the single-node fixture goes through.
+        CheckpointStorage storage = SpringRedisCheckpointStorage.forStandalone(redisTemplate);
+
+        assertThatCode(() -> storage.save(subscriptionId, new StringBasedCheckpoint("first"), CheckpointWriteCondition.notOlderThan(1)))
+                .doesNotThrowAnyException();
+        assertThat(storage.evaluatesWriteConditionsFor(subscriptionId)).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "a}b{c", "{}orders"})
     void an_unconditional_save_accepts_a_subscription_id_a_conditional_write_would_refuse(String subscriptionId) {
         // any() never touches the version key, so none of the reasoning that makes a conditional write refuse
         // these ids applies to it. A checkpoint written this way still has to be deletable, see the delete() tests.
