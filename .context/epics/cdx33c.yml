@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 8
+revision: 9
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -53,6 +53,17 @@ pending_actions:
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-14T13:05:00Z'
+- id: act-004
+  type: workflow-dispatch
+  target: 'C3 adversarial pass on final head 317770e (Opus, fresh context): predict-vs-refuse consistency across id shapes
+    and both Redis modes, the enumerate-clause false negatives/positives, hoisted-ordering lifecycle paths, reactor-side claims,
+    prose truth'
+  expected: 'verdict per angle; C3''s merge waits on it (no Johan wording confirm needed: C3 touches no ADR, direction A was
+    his ruling)'
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-14T13:35:00Z'
 units:
   C1:
     issue: null
@@ -110,8 +121,9 @@ units:
       repo: johanhaleby/occurrent
       ref: '783'
       met: false
-      evidence: 'IN FLIGHT: PR 783 iterating Copilot rounds (latest head 317770e includes excluding synchronous ids and the
-        version-key namespace from the fencing check); DELIVERY_RESULT owed'
+      evidence: 'DELIVERED done at final head 317770e: 27/27 by job conclusion verified, 0 threads, MERGEABLE, 8 real Copilot
+        findings across 3 heads (6 from suppressed blocks) all fixed or tracked as #788 (marker verified), 6 mutation kills,
+        invariant sweep complete, C4 handoff wording for ADR 116 provided. Adversarial pass in flight'
   C4:
     issue: null
     goal: 'Truth fixes: ADR 116 659-660 Redis Cluster sentence (AFTER C3''s gate decides what it must say), ReplayAware.java
