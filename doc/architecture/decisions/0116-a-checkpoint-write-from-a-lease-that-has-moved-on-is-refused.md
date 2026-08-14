@@ -522,6 +522,24 @@ and is unaffected by which family it runs against.
 > exception either way, since the stored position is then this node's own answer arriving second and nothing is logged
 > at all.
 
+> **Amended a fourth time, 2026-08-14, before 0.33.0 shipped.** The amendments above accept the stored position in
+> that branch and report the possible loss at `WARNING`. That is no longer what the code does. A registration that
+> found nothing stored, read its position, and then lost the write to a checkpoint holding a different position is
+> refused with `StartPositionAlreadyPinnedException` rather than started from a position it never read, which is
+> what the second amendment's own rule about a log not settling this asked for. The branch where a checkpoint was
+> already stored before the read is untouched and still says nothing, so a node starting behind a leader election
+> long after another has been running the subscription keeps the answer the first amendment protected. ADR 86's
+> fourth amendment has the reasoning, what the refusal costs, and the two bounds it does not cover. Nothing about
+> the lease fence itself changes here.
+>
+> Two sentences elsewhere in this record no longer hold. The correction above says the code logs at `WARNING` and
+> that `ManualStartSubscriptionModelTest` asserts it, and those tests now assert a refusal instead. And the sentence
+> above about the single shipped caller of `ifAbsent()` swallowing the refusal either way, so that it is unaffected
+> by which family it runs against, holds in neither half. It refuses now, and because `ifAbsent()` lets a storage
+> report a write of the value already stored as success, which the MongoDB storages do and Redis and the in-memory
+> storage do not, two nodes reading the same position reach that refusal path on some storages and not on others.
+> They complete either way.
+
 The blocking in-memory storage implements the capability too, which is a few lines and gives the new
 conformance suite something to run without a container.
 

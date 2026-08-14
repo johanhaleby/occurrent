@@ -471,6 +471,29 @@ to `occurrent.subscription.competing-consumer.fence-checkpoints=false`. That thi
 runs whatever this setting is, so disabling the fence only trades this exception's own message for a less specific
 one from the storage itself, once that write is attempted.
 
+None of the three above covers what manual mode can also do at startup, because this one is about timing rather than
+wiring. Two nodes registering a brand new subscription at the same moment both read a start position and both try to
+record it, only the first write is kept, and the node whose position was not kept now fails with
+`StartPositionAlreadyPinnedException` instead of starting the subscription from a position it never read. The two
+positions were read on different machines and nothing can order them, so accepting the stored one risks starting past
+the events written between them.
+
+Start that node again. It finds the recorded position already there, takes it, and starts, which is what a node
+registering a subscription somebody else already registered has done since this write was added. The events between
+the two positions are a separate question, and replaying that interval is the only way to get them, which is safe
+while the subscription is not running anywhere. A subscription that has run before, or that one node registered
+earlier, does not reach that race, because the position is already recorded before the second node asks about it.
+
+One node on its own can hit the same exception with nobody else registering, and that one does not clear by starting
+again. It happens when the checkpoint storage answers the question of whether a checkpoint exists, or reads one back,
+from a replica that has not caught up with the write, so a `MongoTemplate` reading from a secondary can refuse a
+registration for a subscription with real history. Restarting into the same lagging reader refuses it again. Point the
+storage at a reader that has seen the write, or wait for the replica to catch up, and then start the node.
+
+Telling the two apart is a matter of what the storage holds. A position recorded for this subscription that a primary
+read confirms means the first case, and starting again is the whole of it. No such position, or one only some readers
+can see, means the second.
+
 ## 9. A flow saga can cap the events of the step it is parked in
 
 Nothing here changes unless you ask for it, so you can skip this section if no flow saga of yours idles in one step.

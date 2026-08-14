@@ -214,6 +214,58 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > the walk records the position. The starter's own stack is the case that needs the walk to descend, the same case
 > the corrected sentence said only a hand-wired stack reaches.
 
+> **Amended a fourth time, 2026-08-14, before 0.33.0 shipped.** The amendments above leave one node accepting a
+> position it never read. A registration that finds nothing stored, reads its position, and then loses the write to
+> a checkpoint that arrived in between took that checkpoint and carried on, with a `WARNING` naming both positions.
+> That checkpoint can hold a later position than the one this node read, because the two were read on different
+> machines and nothing here can order them, so the subscription starts past the events written between the two and
+> the only trace is a log line. A log is not what should settle this, which is the rule ADR 116's second amendment
+> already states, and it was still settling it here.
+>
+> **Such a registration is now refused, with `StartPositionAlreadyPinnedException`.** The refusal is confined to the
+> branch where nothing was stored when this registration read for it, which is ordinarily the genuine first
+> registration, and is whatever that read answered when it was served from behind the write. A
+> checkpoint that was already there stays accepted in silence, so a node starting behind a leader election long
+> after another has been running the subscription is untouched, which is the case the first amendment protected
+> when it said refusing would be worse than the bug. That case could not be told apart from a race when this was
+> written at start. Reading whether a checkpoint exists before reading the position is what tells them apart now,
+> which is why that read stays where it is rather than moving into the refusal.
+>
+> One exception inside the refusal. The position that was stored is read back, and a registration whose own
+> position is what came back completes, since the two nodes then agree on where the subscription starts. That read
+> is a second call, so what it returns is what storage holds when it is asked rather than the value that refused the
+> write, which no `CheckpointStorage` reports. A checkpoint that moved on in between therefore refuses a
+> registration that had nothing to lose. `ifAbsent()` also lets a storage report a write of the value already stored
+> as success, which the MongoDB storages do, so this branch is reached by Redis and by the in-memory storage, the
+> ones that answer on existence alone.
+>
+> A checkpoint this class cannot read back to compare at all, because the read failed or found nothing, is refused
+> too, for the weaker reason that nothing here can show the two agree rather than because they are known to
+> differ. Those two are also where one node reaches this with no second node registering, since a storage answering
+> from behind its own write, or retrying a write whose answer it never heard, produces both. A read that finds
+> nothing is therefore not proof that a checkpoint was removed, which is what an earlier wording of the message
+> claimed.
+>
+> **What the refusal costs.** A subscription is registered during Spring's context refresh under
+> `occurrent.subscription.mode=manual`, so this fails the start of an application whose subscription is brand new
+> and whose nodes read different positions at the same moment. Registering again is what clears that one, and a node
+> that does so finds the other position stored and takes it, which is the branch that was always silent. A refusal
+> that came from a read served from behind the write does not clear that way, since the same reader answers the same
+> way again, and it needs a reader that has seen the write instead. So the outcome
+> for the events between the two positions is unchanged. What changes is that nobody starts a subscription believing
+> it covers a window it does not, and the interval can be replayed while the subscription is not running anywhere.
+> A registration on a model that is already running is refused the same way, and there it is dropped rather than
+> handed to the wrapped model, which is a subscription that would have run before. Making the answer depend on
+> whether this model happened to be started would be a worse promise than one answer for both.
+>
+> Two bounds worth naming rather than leaving to be discovered. A storage whose existence read can be served by a
+> replica that has not seen the write yet can answer that nothing is stored for a subscription with real history,
+> and a restart does not clear that one. And a start position that answers differently at registration than it does
+> at start, which `StartAt.dynamic` allows, has this decision taken from the answer it gave at registration, so it
+> can have a position recorded for a start that reads none, or none recorded for a start that reads one. Neither is
+> reachable through a start position Occurrent builds. #771 keeps the question of the ordering that would close the
+> window itself, and #738 the reactor stack.
+
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same
 reason the wrapper reports its own ids from `subscriptionIds()`, merged with the delegate's, since
