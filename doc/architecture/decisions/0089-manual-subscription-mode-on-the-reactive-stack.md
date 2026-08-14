@@ -138,8 +138,10 @@ because neither interface ever extended `SubscriptionModel`.
 > The first is scope. On the blocking stack this lives in `ManualStartSubscriptionModel`, so only
 > `occurrent.subscription.mode=manual` reaches it, and `DurableSubscriptionModel` still records a first position
 > with `any()`. The reactive stack has no such wrapper, by this record's own decision, so the conditional write and
-> the refusal sit in the only durable model there is. Every reactive durable subscription's first run can therefore
-> be refused, not only one registered under `manual`. That is a wider change than the blocking one and it was taken
+> the refusal sit in the only durable model there is. Any reactive durable subscription whose start position resolves
+> to the subscription model default can therefore be refused on its first run, not only one registered under
+> `manual`. A registration naming a position of its own still records nothing and is never refused, which is the same
+> exclusion the blocking model makes. That is a wider change than the blocking one and it was taken
 > deliberately, because the alternative is a model that records a first position two ways depending on how it was
 > configured, and because the rule in `AGENTS.md` says a loss window is a loss whatever its width.
 >

@@ -327,9 +327,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // The read above found nothing, so this is the first position recorded for this subscription id, and the write
-    // is conditional on that still being true when it reaches storage. The read runs before the position is read,
-    // since seed is only subscribed once the read comes back empty. So a refused write means a checkpoint arrived
-    // between the two, written where this model cannot order it against the position it read. See ADR 89.
+    // is conditional on that still being true when it reaches storage. A refused write therefore means a checkpoint
+    // arrived between the read and the write, written where this model cannot order it against the position it read.
+    // That position is read after the storage read on every path but one. A subscription registered while the model
+    // was stopped read it at registration instead, so its window is the wider one ADR 89 records and #771 owns.
     private Mono<Checkpoint> pinStartPosition(String subscriptionId, Checkpoint positionRead) {
         if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
             // Nothing here can make a storage that writes unconditionally do otherwise, so the write is the one

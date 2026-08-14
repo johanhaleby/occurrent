@@ -149,9 +149,9 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
 
     @Test
     void a_write_that_failed_for_some_other_reason_is_reported_as_that_failure_and_not_as_a_refusal() {
-        // Only a refused condition says a position was recorded before this one. A write that failed because the
-        // store could not be reached says nothing of the kind, and reporting it as one would send whoever reads it
-        // looking for a position that was never stored.
+        // Only a refused condition says a position was recorded before this registration's. A write that failed
+        // because the store could not be reached says nothing of the kind, and reporting it as a refusal would send
+        // whoever reads it looking for a position that was never stored.
         RuntimeException unreachable = new IllegalStateException("the checkpoint store is unreachable");
         CheckpointStorage storage = new InMemoryCheckpointStorage() {
             @Override
