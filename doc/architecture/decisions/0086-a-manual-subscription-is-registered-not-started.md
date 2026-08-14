@@ -76,6 +76,79 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > between capturing its position and writing it. ADR 116's third amendment states what happens then, and #771
 > tracks the question of closing it.
 
+> **Amended again, before 0.33.0 shipped.** The amendment above says the write covers a subscription registered with
+> the default start position, and then says a registration with an explicit `StartAt` writes the position anyway. Those
+> two do not fit together, and the second one was what the code did. A checkpoint written for a registration nothing
+> reads a checkpoint for is not harmless. `StartPosition.BEGINNING` under the default resume behaviour asks to replay on
+> a first run and to resume afterwards, and it decides which of the two by asking whether this same storage holds a
+> checkpoint, so a position written at registration answered that question with a resume and the replay the caller asked
+> for never happened. The write now happens only when the caller's start position resolves to the subscription model
+> default, through whatever a dynamic position stands for, since the annotation default is one of those. That
+> resolution comes before the existence read and before the position is captured, which is what leaves a first-run
+> question with nothing of this registration's own to find. A dynamic function therefore runs a few more times than it
+> used to, which `StartAt.dynamic` already allows for, and the wrapped model still receives the caller's own
+> `StartAt` object.
+>
+> **A dynamic position is resolved layer by layer, not once against the model this wrapper was handed.** Each layer is
+> asked for its own answer, a layer answering with nothing leaves the subscription to the model it wraps and the model
+> below is asked next, and the first answer that is not nothing decides. That is what the wrapped models do to the same
+> position when the subscription starts, and reproducing it is the only way this wrapper can tell whether a checkpoint
+> will be read at all. One ask would have been wrong for the start position the annotations build, which answers with
+> nothing for a catch-up layer and with the model default for everything else. The Spring Boot starter's own stack
+> answers on the first ask, since it always puts a competing consumer layer on top, but its subscription model bean is
+> `@ConditionalOnMissingBean` and a stack wired by hand can put the catch-up layer outermost. There, one ask would
+> record nothing and leave the durable model to record a position when the subscription starts, which is the skip #669
+> was about.
+>
+> When the walk ends with nothing to record, every layer is asked again under each class it inherits from, and the
+> model default from any of those answers records the position. A model resolves the position against a class literal
+> of its own, so a subclass of it, including a proxy built by subclassing it, is asked here under a name
+> `hasSubscriptionModelType` does not match, since that method compares for equality. A proxy that only implements the
+> model's interfaces is out of reach either way, since its class inherits from `java.lang.reflect.Proxy` and never
+> names the model at all. Without that second pass, a
+> function written with that method records nothing, whichever way round it is written, and leaves the durable model to
+> record a position at start, which is #669 again and a regression from the write this replaces. The second pass runs
+> only where nothing would be recorded otherwise, and recording there can only add a write the unconditional one it
+> replaces already made.
+>
+> Any inherited class answering with the model default is enough, rather than the nearest one deciding as a layer's own
+> answer does. A model's class literal can be any of the classes its runtime class inherits from, and this cannot tell
+> which, so both rules are wrong for some function written against a subclassed model. The one that records is wrong by
+> writing a position that is read only where the model default is what gets resolved, and the one that stops at the
+> nearest answer is wrong by leaving a subscription to record its position at start, which is the skip this exists to
+> prevent.
+>
+> It asks classes rather than layers, so it does not resume the walk. A subclassed wrapper answering with a position of
+> its own, where the class it inherits from would have handed the question down, ends the walk there and the model
+> below is never asked. Closing that needs each layer to say which class it resolves against, which belongs on the
+> subscription model interfaces rather than in this wrapper, and reaching it takes a caller who both subclasses a
+> wrapper layer and writes a function answering three different ways down one stack.
+>
+> The walk asks every layer, including one that passes the position down without deciding anything for itself, so a
+> function answering with the model default for such a layer and with something else for the model that does read the
+> checkpoint is read as a position to record when it is not one. Telling the two kinds of layer apart needs the layers
+> to say which of them consumes a start position, which is a capability `SubscriptionModel` does not have, and no start
+> position Occurrent builds answers that way, since they either ignore the model type or branch on the catch-up,
+> competing consumer and durable layers, all three of which do decide for themselves. A position recorded off the back
+> of an answer no layer consumes is not harmless either, since a function that reads this storage to decide between
+> replaying and resuming then finds it and resumes. That is the outcome the unconditional write this replaces produced
+> for every registration, so such a function is left where it already was rather than made worse, and every function
+> Occurrent builds is moved out of it.
+>
+> The three-argument factory also refuses a `CheckpointStorage` that answers false to `evaluatesWriteConditions()`. The
+> position is written with `ifAbsent()`, so this wrapper needs a storage that evaluates that condition, and that method
+> is the only thing it has to ask. Refusing at wiring time is cheaper than finding out later, either on the first
+> registration or from a subscription that resumed from a position it should never have started at. The one-argument
+> factory keeps such a storage, at the cost of a first run starting from the moment it is started. A caller that passed
+> a storage of its own in 0.32.0 is refused until it answers true, which the changelog records as a breaking change.
+>
+> That question is coarser than this write needs. `evaluatesWriteConditions()` answers for `notOlderThan` and
+> `ifAbsent` together, so a storage that evaluates `ifAbsent` and refuses `notOlderThan` has to answer false and is
+> refused here even though the write it would be asked for is one it can do. Asking per condition means another method
+> on `CheckpointStorage`, which every implementation outside this repository would then have to answer, and that is a
+> decision for the interface rather than for this wrapper. The refusal names the method it asked and what this model
+> needs, so a caller in that position can see why.
+
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same
 reason the wrapper reports its own ids from `subscriptionIds()`, merged with the delegate's, since

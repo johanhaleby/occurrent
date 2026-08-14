@@ -516,6 +516,12 @@ and is unaffected by which family it runs against.
 > are larger decisions than a wrapper should make. #771 tracks that question, together with #738 for the reactor
 > stack, so it is settled once for both. See `ManualStartSubscriptionModelTest`.
 
+> **One correction to the second amendment, before 0.33.0 shipped.** It says a checkpoint that lands between a node's
+> own check and its own write is logged at `INFO`. The code logs it at `WARNING`, which is what the amendment after it
+> describes and what `ManualStartSubscriptionModelTest` asserts. Two nodes that captured the same position are the
+> exception either way, since the stored position is then this node's own answer arriving second and nothing is logged
+> at all.
+
 The blocking in-memory storage implements the capability too, which is a few lines and gives the new
 conformance suite something to run without a container.
 
