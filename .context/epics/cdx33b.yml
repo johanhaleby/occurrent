@@ -1,7 +1,7 @@
 schema_version: 1
 epic: cdx33b
-revision: 34
-updated_at: 2026-08-14T08:30:00Z
+revision: 35
+updated_at: 2026-08-14T09:05:00Z
 updated_by: "successor orchestrator (worktree api-review-verification-c3b0ea): recovered per handoff, monitors re-armed, act-001 reconciled VERIFIED, U10B registered (U11 docs appendix push), U13 gate going to Johan"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
@@ -155,7 +155,8 @@ pending_actions:
     type: workflow-dispatch
     target: "U10B docs-appendix subagent (fresh general-purpose, Sonnet): sweep pages/docs/docs.md on docs/0.33.0-preview (head 90d2906) for manual-start/pin claims made stale by U11 (PR 777), align with the merged changelog wording on main at 8a57fc319, push the held branch only; worktree off the primary docs checkout, Jekyll build with the LC_ALL workaround, /johan-writing gates on changed lines"
     expected: "either a pushed docs/0.33.0-preview head with corrected claims and build+grep evidence, or a verified-accurate report with grep evidence if no claim is false; never a merge, docs main untouched"
-    status: PENDING
+    status: VERIFIED
+    verified: "2026-08-14: head 6e540e7 confirmed by ls-remote, corrected text and zero stale matches confirmed by grep against the origin ref, docs main and primary checkout untouched"
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-14T08:35:00Z
@@ -291,13 +292,13 @@ units:
   U10B:
     issue: null
     goal: "U11 docs-site appendix push, excluded from U10 by brief and owed since U11 (PR 777) merged: sweep pages/docs/docs.md on docs/0.33.0-preview for manual-start/pin claims (the site's 'position fixed at registration' claim is true only for a registration resolving to the model default post-U11); correct to match the merged changelog wording; push the held branch, never merge; docs main and primary docs checkout untouched"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U11]
     session: null
     deliverables:
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: "docs/0.33.0-preview", met: true, evidence: "DONE 2026-08-14: pushed 6e540e7 (was 90d2906), verified by orchestrator ls-remote + origin-ref grep: both stale unqualified fixed-at-registration claims (docs.md 3669, 6668) corrected to the PR 777 rule (fixed at registration only when resolving to the model default; explicit position writes nothing), zero stale matches remain, Jekyll build exit 0, rendered _site greps confirm, johan-writing gate ran with two pin-word rewrites, docs main untouched at 7c64016, primary checkout clean, worktree removed. Worker finding routed to register: docs.md 3984/3985 near-duplicate reactor paragraphs, pre-existing, leave-for-later"}
   U13:
     issue: null
     goal: "Fixpoint round 2 MAJOR: the registration walk breaks on CompetingConsumerSubscriptionModel's non-default answer, but CC only resolves to decide whether to compete and forwards the ORIGINAL StartAt down in both branches (CompetingConsumerSubscriptionModel.java:112,311,328), so a per-layer function (Default for durable, now() for CC) gets no pin and the durable layer pins at start, the #669 window, a regression vs the pre-U11 unconditional pin; ADR 86's 'all three decide for themselves' is false for CC. Fix direction (predecessor's read, successor's gate): the missing capability now has a confirmed defect justifying it pre-tag. A default method on SubscriptionModelWrapper (api module, interface name new in 0.33 so additive is free) letting a wrapper say it forwards the position unresolved, CC overrides, the walk continues past a forwarding layer's answer. Skip-CC-by-instanceof is blocked by module dependency direction. Documented-bound is ruled out by the same item-1 regression criterion that justified the inheritance fallback. Correct ADR 86's false sentence as part of the fix, and fold round 2's seven minors (all one-clause, mostly the same files: the once-per-layer understatement, the inherits-from bounds, the Proxy/Record ask framing, guide :429 conditional claim, changelog delete-clears-latch clause, two test-comment staleness items)."
