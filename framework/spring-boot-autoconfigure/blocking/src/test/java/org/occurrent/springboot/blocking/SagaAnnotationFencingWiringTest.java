@@ -79,6 +79,9 @@ class SagaAnnotationFencingWiringTest {
         when(strategy.fencingToken(SUBSCRIPTION_ID)).thenReturn(OptionalLong.of(42L));
         CheckpointStorage checkpointStorage = mock(CheckpointStorage.class);
         when(checkpointStorage.evaluatesWriteConditions()).thenReturn(true);
+        // Mockito does not fall back to the interface's own default (which would delegate to the stub above), so
+        // this needs its own stub for the id-specific check the fencing check also runs now.
+        when(checkpointStorage.evaluatesWriteConditionsFor(any())).thenReturn(true);
 
         runner.withBean(CompetingConsumerStrategy.class, () -> strategy)
                 .withBean(CheckpointStorage.class, () -> checkpointStorage)
