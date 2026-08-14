@@ -1399,3 +1399,6 @@ Johan asked why the endgame units ran as subagents in Attended mode. The routing
 
 ## A str.replace memory edit without an assert is a silent no-op (2026-08-14)
 Two ORCHESTRATOR.md additions (the v2 watcher pointer line and a visibility-repair journal entry) never landed because their python replace anchors missed and nothing checked, while the commit messages claimed they had. The intent-first ordering the repair list exists for was defeated by its own write failing invisibly. Rule: every scripted memory edit asserts the anchor exists before and the content exists after, and the commit only claims what a grep just confirmed.
+
+## stat on a task output symlink measures the link, not the transcript (2026-08-14)
+The liveness probe read stat -f %m on tasks/<id>.output, which is a SYMLINK to the real subagent transcript, so every reading was the link's creation time and a healthy worker looked progressively more stalled all session (43 then 73 minutes "silent" while it was pushing commits). Two same-day sweeps escalated on it before the tail-read exposed the contradiction. Rule: liveness mtime probes use stat -L (or stat the resolved path), and a liveness verdict that contradicts observed side effects (pushes, PR heads moving) is re-derived from the transcript before any nudge or kill.
