@@ -438,6 +438,21 @@ what keeps two nodes registering the same subscription from overwriting each oth
 build it with the one-argument `ManualStartSubscriptionModel.stoppedByDefault(SubscriptionModel)`, which records no
 position at all and lets a subscription's first run start from the moment you start it.
 
+Manual mode has one more way to fail at startup, and this one depends on timing rather than on wiring. Two nodes
+registering a brand new subscription at the same moment both read a start position and both try to record it, only the
+first write is kept, and the node whose position was not kept now fails with `StartPositionAlreadyPinnedException`
+instead of starting the subscription from a position it never read. The two positions were read on different machines
+and nothing can order them, so accepting the stored one risks starting past the events written between them.
+
+Start that node again. It finds the recorded position already there, takes it, and starts, which is what a node
+registering a subscription somebody else already registered has done since this write was added. The events between
+the two positions are a separate question, and replaying that interval is the only way to get them, which is safe
+while the subscription is not running anywhere. A subscription that has run before, or that one node registered
+earlier, does not reach this, because the position is already recorded before the second node asks about it. That
+holds as long as the checkpoint storage answers the question of whether a checkpoint exists from somewhere that has
+seen the write, so a `MongoTemplate` reading from a secondary can reach the refusal on a subscription with real
+history, and starting again does not clear that one.
+
 ## 9. A flow saga can cap the events of the step it is parked in
 
 Nothing here changes unless you ask for it, so you can skip this section if no flow saga of yours idles in one step.

@@ -28,6 +28,7 @@ import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.GlobalCheckpointSource;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
+import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 
@@ -38,8 +39,6 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import java.util.logging.Handler;
-import java.util.logging.LogRecord;
 
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.*;
@@ -54,39 +53,6 @@ import static org.assertj.core.api.Assertions.*;
 class ManualStartSubscriptionModelTest {
 
     private static final String SUBSCRIPTION_ID = "someSubscription";
-
-    // System.getLogger(ManualStartSubscriptionModel.class.getName()) backs onto java.util.logging absent another
-    // platform logging bridge, which is what these tests assert against.
-    private static final class CapturingLogHandler extends Handler {
-        private final List<LogRecord> records = new CopyOnWriteArrayList<>();
-
-        @Override
-        public void publish(LogRecord record) {
-            records.add(record);
-        }
-
-        @Override
-        public void flush() {
-        }
-
-        @Override
-        public void close() {
-        }
-
-        static CapturingLogHandler attached() {
-            CapturingLogHandler handler = new CapturingLogHandler();
-            java.util.logging.Logger.getLogger(ManualStartSubscriptionModel.class.getName()).addHandler(handler);
-            return handler;
-        }
-
-        void detach() {
-            java.util.logging.Logger.getLogger(ManualStartSubscriptionModel.class.getName()).removeHandler(this);
-        }
-
-        List<LogRecord> records() {
-            return records;
-        }
-    }
 
     @Test
     void registering_a_subscription_does_not_reach_the_wrapped_model() {
@@ -609,62 +575,53 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
-    void a_subscription_that_has_run_before_keeps_its_own_checkpoint_without_logging_anything() {
+    void a_subscription_that_has_run_before_keeps_its_own_checkpoint_and_registers_without_complaint() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("from-a-previous-run"));
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, delegate, storage);
         delegate.globalCheckpoint = new StringCheckpoint("at-registration");
 
-        CapturingLogHandler logHandler = CapturingLogHandler.attached();
-        try {
-            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
-            });
-        } finally {
-            logHandler.detach();
-        }
+        assertThatCode(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }))
+                .as("a checkpoint that was already stored is the ordinary case of a subscription with history, and a node starting behind a leader election long after another has been running it sees exactly this")
+                .doesNotThrowAnyException();
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("from-a-previous-run");
-        assertThat(logHandler.records())
-                .as("a checkpoint from a previous run winning is the ordinary case, not one worth logging")
-                .isEmpty();
     }
 
     @Test
-    void a_checkpoint_written_between_the_existence_check_and_capturing_the_position_is_treated_as_a_race_not_prior_history() {
+    void a_checkpoint_written_between_the_existence_check_and_reading_the_position_is_refused_rather_than_taken_for_prior_history() {
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
-        // Writes another node's pin as a side effect of answering the position query, standing for that node's
-        // write landing between this node's existence check and its own position capture, both of which now
-        // happen inside subscribe() itself.
+        // Stores another node's position as a side effect of answering the position query, so the write arrives
+        // between this registration's existence check and its own read, both of which happen inside subscribe().
         GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> {
             storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("landed-during-registration"));
             return new StringCheckpoint("this-nodes-own-position");
         };
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
 
-        CapturingLogHandler logHandler = CapturingLogHandler.attached();
-        try {
-            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
-            });
-        } finally {
-            logHandler.detach();
-        }
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }))
+                .as("existence is read before the position is, so this write is a race to compare against rather than prior history to accept in silence")
+                .isInstanceOf(StartPositionAlreadyPinnedException.class)
+                .hasMessageContaining("this-nodes-own-position")
+                .hasMessageContaining("landed-during-registration");
 
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("landed-during-registration");
-        assertThat(logHandler.records())
-                .as("existence is checked before the position is captured, so this write is a race to compare against rather than prior history to accept silently")
-                .anySatisfy(record -> assertThat(record.getMessage())
-                        .contains("this-nodes-own-position", "landed-during-registration"));
+        assertThat(model.subscriptionIds())
+                .as("a refused registration leaves its id free, so the same node can register it again")
+                .doesNotContain(SUBSCRIPTION_ID);
     }
 
     @Test
-    void two_nodes_registering_at_the_same_time_at_different_positions_logs_the_second_nodes_loss_instead_of_leaving_it_silent() {
-        // Two separate model instances stand for two nodes. Their own bookkeeping is independent, but they share the
-        // one resource that matters here: the checkpoint storage both are about to pin the same subscription id in.
-        // The storage's exists() always answers false (see RaceSimulatingCheckpointStorage), standing in for the
-        // race #669 describes, where both nodes' reads land before either has written.
+    void two_nodes_registering_at_the_same_time_at_different_positions_refuses_the_one_whose_position_was_not_stored() {
+        // Two separate model instances stand for two nodes. Their own bookkeeping is independent, but they share
+        // the one resource that matters here, the checkpoint storage both are about to write the same subscription
+        // id in. The storage's exists() always answers false (see RaceSimulatingCheckpointStorage), standing in
+        // for the race #669 describes, where both nodes read before either has written.
         RaceSimulatingCheckpointStorage storage = new RaceSimulatingCheckpointStorage();
         RecordingSubscriptionModel firstDelegate = new RecordingSubscriptionModel();
         RecordingSubscriptionModel secondDelegate = new RecordingSubscriptionModel();
@@ -675,26 +632,23 @@ class ManualStartSubscriptionModelTest {
         firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
         });
 
-        // The pin happens at registration now, so the second node's loss is decided and logged here, not later
-        // when either node actually starts.
-        CapturingLogHandler logHandler = CapturingLogHandler.attached();
-        try {
-            secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
-            });
-        } finally {
-            logHandler.detach();
-        }
+        // The write decides this at registration, so the second node hears about it here rather than later when
+        // either node starts.
+        assertThatThrownBy(() -> secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }))
+                .isInstanceOf(StartPositionAlreadyPinnedException.class)
+                .hasMessageContaining("first-nodes-position")
+                .hasMessageContaining("second-nodes-position");
 
-        assertThatCode(() -> firstNode.resumeSubscription(SUBSCRIPTION_ID)).doesNotThrowAnyException();
-        assertThatCode(() -> secondNode.resumeSubscription(SUBSCRIPTION_ID)).doesNotThrowAnyException();
+        assertThatCode(() -> firstNode.resumeSubscription(SUBSCRIPTION_ID))
+                .as("the node whose position was stored is unaffected")
+                .doesNotThrowAnyException();
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("first-nodes-position");
-        assertThat(logHandler.records())
-                .anySatisfy(record -> assertThat(record.getMessage())
-                        .contains("first-nodes-position", "second-nodes-position"));
+        assertThat(secondNode.subscriptionIds()).doesNotContain(SUBSCRIPTION_ID);
     }
 
     @Test
-    void two_nodes_registering_at_the_same_time_at_the_same_position_logs_nothing() {
+    void two_nodes_registering_at_the_same_time_at_the_same_position_both_complete() {
         RaceSimulatingCheckpointStorage storage = new RaceSimulatingCheckpointStorage();
         RecordingSubscriptionModel firstDelegate = new RecordingSubscriptionModel();
         RecordingSubscriptionModel secondDelegate = new RecordingSubscriptionModel();
@@ -704,30 +658,85 @@ class ManualStartSubscriptionModelTest {
         firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
         });
 
-        CapturingLogHandler logHandler = CapturingLogHandler.attached();
-        try {
-            secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
-            });
-        } finally {
-            logHandler.detach();
-        }
+        assertThatCode(() -> secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }))
+                .as("both nodes read the same position, so the stored one is this node's own answer arriving second and there is nothing to refuse")
+                .doesNotThrowAnyException();
 
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("shared-position");
-        assertThat(logHandler.records())
-                .as("the two nodes captured the same position, so accepting the stored one is exactly this node's own write arriving second")
-                .isEmpty();
+        assertThat(secondNode.subscriptionIds()).contains(SUBSCRIPTION_ID);
     }
 
     @Test
-    void a_registration_whose_write_is_delayed_past_a_later_ones_starts_from_that_later_position_and_warns() throws Exception {
-        // The node that captures first stalls before writing, so the other node's later position reaches storage
-        // first and wins. Neither node can order the two positions afterwards, so the earlier one starts from the
-        // later position and the events between the two never reach the subscription.
+    void two_nodes_at_the_same_position_both_complete_even_when_their_checkpoints_are_of_different_kinds() {
+        RaceSimulatingCheckpointStorage storage = new RaceSimulatingCheckpointStorage();
+        GlobalCheckpointSource<@Nullable Checkpoint> aRecord = () -> new StringCheckpoint("shared-position");
+        // Not a record, so equals() is identity here and only asString() can tell that the two nodes are at the
+        // same position.
+        GlobalCheckpointSource<@Nullable Checkpoint> notARecord = () -> () -> "shared-position";
+        ManualStartSubscriptionModel firstNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), aRecord, storage);
+        ManualStartSubscriptionModel secondNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), notARecord, storage);
+        firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+
+        assertThatCode(() -> secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        })).doesNotThrowAnyException();
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("shared-position");
+    }
+
+    @Test
+    void a_refused_registration_completes_when_it_is_made_again_and_starts_from_the_position_that_was_stored() {
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        AtomicInteger reads = new AtomicInteger();
+        // Another node's write arrives during the first registration only, so the second registration finds it
+        // already stored, which is what a node that registers again after a refusal sees.
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> {
+            if (reads.getAndIncrement() == 0) {
+                storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("the-position-that-was-stored"));
+            }
+            return new StringCheckpoint("this-nodes-own-position");
+        };
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        })).isInstanceOf(StartPositionAlreadyPinnedException.class);
+
+        assertThatCode(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        })).doesNotThrowAnyException();
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("the-position-that-was-stored");
+        assertThatCode(() -> model.resumeSubscription(SUBSCRIPTION_ID)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void a_registration_on_an_already_running_model_is_refused_the_same_way_and_reaches_the_wrapped_model_not_at_all() {
+        RaceSimulatingCheckpointStorage storage = new RaceSimulatingCheckpointStorage();
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        storage.checkpoints.put(SUBSCRIPTION_ID, new StringCheckpoint("another-nodes-position"));
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate,
+                () -> new StringCheckpoint("this-nodes-own-position"), storage);
+        model.start(true);
+
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }))
+                .as("a registration handed straight to the wrapped model is refused for the same reason as one that waits, so which of the two it is does not decide where the subscription starts")
+                .isInstanceOf(StartPositionAlreadyPinnedException.class);
+
+        assertThat(delegate.subscribeCalls).isEmpty();
+        assertThat(model.subscriptionIds()).doesNotContain(SUBSCRIPTION_ID);
+    }
+
+    @Test
+    void a_registration_whose_write_is_delayed_past_a_later_ones_is_refused_rather_than_started_from_that_later_position() throws Exception {
+        // The node that reads its position first stalls before writing, so the other node's later position
+        // reaches storage first. Neither node can order the two afterwards, and starting the earlier one from the
+        // later position would skip the events between them, so its registration is refused instead.
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         CountDownLatch earlierNodeReachedItsWrite = new CountDownLatch(1);
         CountDownLatch laterNodeWrote = new CountDownLatch(1);
-        // Holds the earlier node inside its own save, after it has captured its position, so the later node's write
-        // is the one that reaches storage first.
+        // Holds the earlier node inside its own save, after it has read its position, so the later node's write is
+        // the one that reaches storage first.
         CheckpointStorage sharedStorage = new CheckpointStorage() {
             @Override
             public boolean evaluatesWriteConditions() {
@@ -768,36 +777,34 @@ class ManualStartSubscriptionModelTest {
         ManualStartSubscriptionModel earlierNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), earlierPositionSource, sharedStorage);
         ManualStartSubscriptionModel laterNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), laterPositionSource, sharedStorage);
 
-        CapturingLogHandler logHandler = CapturingLogHandler.attached();
         ExecutorService pool = Executors.newSingleThreadExecutor();
+        Future<?> earlierRegistration;
         try {
-            Future<?> earlierRegistration = pool.submit(() -> earlierNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+            earlierRegistration = pool.submit(() -> earlierNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             }));
             awaitOrFail(earlierNodeReachedItsWrite);
             laterNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             });
             laterNodeWrote.countDown();
-            earlierRegistration.get(10, TimeUnit.SECONDS);
+            assertThatThrownBy(() -> earlierRegistration.get(10, TimeUnit.SECONDS))
+                    .as("this is the one case that skips events, so the registration is refused with both positions named rather than accepted quietly")
+                    .hasCauseInstanceOf(StartPositionAlreadyPinnedException.class)
+                    .hasMessageContaining("earlier-position")
+                    .hasMessageContaining("later-position");
         } finally {
             pool.shutdownNow();
-            logHandler.detach();
         }
 
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString())
-                .as("the write that reached storage first wins, whichever node captured its position first")
+                .as("the write that reached storage first is the one that stands, whichever node read its position first")
                 .isEqualTo("later-position");
-        assertThat(logHandler.records())
-                .as("this is the one case that skips events, so it is named at WARNING with both positions rather than accepted quietly")
-                .anySatisfy(record -> {
-                    assertThat(record.getLevel()).isEqualTo(java.util.logging.Level.WARNING);
-                    assertThat(record.getMessage()).contains("earlier-position", "later-position");
-                });
+        assertThat(earlierNode.subscriptionIds()).doesNotContain(SUBSCRIPTION_ID);
     }
 
     @Test
-    void a_registration_still_completes_when_the_position_that_won_cannot_be_read_back() {
-        // The write has already been refused by the time this read happens, so the registration's outcome is settled
-        // and a storage failure here may only cost the warning its detail.
+    void a_registration_is_refused_when_the_position_that_was_stored_cannot_be_read_back() {
+        // Nothing here can show that the stored position is the one this registration read, so it is refused for
+        // the same reason a differing position is. The failure that stopped it from being read is the cause.
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         CheckpointStorage unreadableAfterRefusal = refusingStorage(() -> {
             throw new IllegalStateException("the checkpoint store is unreachable");
@@ -805,42 +812,31 @@ class ManualStartSubscriptionModelTest {
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate,
                 () -> new StringCheckpoint("this-nodes-position"), unreadableAfterRefusal);
 
-        CapturingLogHandler logHandler = CapturingLogHandler.attached();
-        try {
-            assertThatCode(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
-            })).doesNotThrowAnyException();
-        } finally {
-            logHandler.detach();
-        }
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }))
+                .isInstanceOf(StartPositionAlreadyPinnedException.class)
+                .hasMessageContaining("this-nodes-position")
+                .hasMessageContaining("failed")
+                .hasCauseInstanceOf(IllegalStateException.class);
 
         assertThat(model.isPaused(SUBSCRIPTION_ID))
-                .as("the registration is kept, since the refused write already decided where this subscription starts")
-                .isTrue();
-        assertThat(logHandler.records()).anySatisfy(record -> {
-            assertThat(record.getLevel()).isEqualTo(java.util.logging.Level.WARNING);
-            assertThat(record.getMessage()).contains("this-nodes-position", "failed");
-        });
+                .as("nothing is registered, so there is no withheld subscription to start")
+                .isFalse();
     }
 
     @Test
-    void a_winning_position_that_is_removed_before_it_can_be_read_is_not_named_as_null() {
+    void a_stored_position_that_is_removed_before_it_can_be_read_is_refused_without_being_named_as_null() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         CheckpointStorage emptyAfterRefusal = refusingStorage(() -> null);
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate,
                 () -> new StringCheckpoint("this-nodes-position"), emptyAfterRefusal);
 
-        CapturingLogHandler logHandler = CapturingLogHandler.attached();
-        try {
-            model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
-            });
-        } finally {
-            logHandler.detach();
-        }
-
-        assertThat(logHandler.records()).anySatisfy(record -> {
-            assertThat(record.getLevel()).isEqualTo(java.util.logging.Level.WARNING);
-            assertThat(record.getMessage()).contains("has since been removed").doesNotContain("null");
-        });
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }))
+                .isInstanceOf(StartPositionAlreadyPinnedException.class)
+                .hasMessageContaining("has since been removed")
+                .hasMessageNotContaining("null")
+                .hasNoCause();
     }
 
     @Test
