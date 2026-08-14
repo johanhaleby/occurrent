@@ -1,10 +1,10 @@
 schema_version: 2
 epic: cdx33c
-revision: 32
-updated_at: 2026-08-14 18:50:00+00:00
-updated_by: 'orchestrator: round-2 verdict journaled (2 MAJOR + 1 minor, CAP REACHED, Johan ruled fix-both-close-capped
-  before going Unattended); C10 registered RUNNING with both docs deliverables already met and verified, library PR 793 open
-  awaiting Copilot'
+revision: 33
+updated_at: 2026-08-14 19:40:00+00:00
+updated_by: 'orchestrator: C10 DONE (PR 793 merged d05b3d9, all round-2 fixes verified mechanically on main and both origin
+  docs refs); tracker scan clean from the 10:00Z safety bound, all arrivals fleet-created, markers verified on #786 #788 #791.
+  Closeout waits only on the d05b3d9 main matrix'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -400,7 +400,7 @@ units:
       acts on a false evaluatesWriteConditions answer when ManualStartSubscriptionModel.stoppedByDefault also refuses), finding
       3 (javadoc CROSSSLOT sentence hung on ifAbsent as nearest subject instead of standalone mode). No round 3: fixes verified
       mechanically against the named falsifying facts'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -409,8 +409,12 @@ units:
     - check: pr_merged
       repo: johanhaleby/occurrent
       ref: '793'
-      met: false
-      evidence: null
+      met: true
+      evidence: 'MERGED 2026-08-14 as squash d05b3d9, CAS-pinned to ff2b1f7 (25/25 by job conclusion, Copilot re-review clean
+        with no suppressed block, the one thread accepted-fixed-resolved: Copilot caught the orchestrator''s own In-standalone-mode
+        overclaim, corrected to the server type). All three round-2 fixes verified mechanically on d05b3d9 against the named
+        falsifying facts: One-place claim gone, Two-places sentence present with the stoppedByDefault refusal, CROSSSLOT claim
+        attributed to a standalone or replicated server. Squash body marker-free; main matrix on d05b3d9 watched'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-preview
