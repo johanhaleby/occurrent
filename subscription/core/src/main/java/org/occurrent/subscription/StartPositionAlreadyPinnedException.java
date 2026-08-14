@@ -29,9 +29,13 @@ import static java.util.Objects.requireNonNull;
  * was refused rather than started from a position it never read.
  * <p>
  * Three ways to fail that confirmation. The stored position read back differs from the one this registration
- * read, or the checkpoint was removed again before it could be read, or reading it failed, and the last two are
- * told apart by whether {@link #getCause()} is set. Only the first shows two positions that disagree. The other
- * two are refused because nothing here can show they agree, which is the same answer for a weaker reason.
+ * read, or reading it back found nothing, or reading it failed, and the last two are told apart by whether
+ * {@link #getCause()} is set. Only the first shows two positions that disagree. The other two are refused
+ * because nothing here can show they agree, which is the same answer for a weaker reason.
+ * <p>
+ * A read that finds nothing is not proof the checkpoint was removed. A checkpoint deleted between the write and
+ * the read answers that way, and so does a read served from somewhere that has not caught up with the write, and
+ * this class cannot tell those apart.
  * <p>
  * Two nodes registering the same subscription for the very first time at close to the same moment is the ordinary
  * way to reach this. One of them writes first and the other is refused. The two positions were read on different
@@ -62,8 +66,8 @@ public class StartPositionAlreadyPinnedException extends IllegalStateException {
     public final Checkpoint positionRead;
 
     /**
-     * The position storage held when it was read back after the refusal, or empty when it was removed again, or
-     * could not be read, before it could be named here.
+     * The position storage held when it was read back after the refusal, or empty when that read found nothing or
+     * failed.
      * <p>
      * That read is a second call, and no checkpoint storage reports the value that actually refused the write, so
      * a checkpoint another node advanced in between is what this holds. Treat it as the position stored at the
