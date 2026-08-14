@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 10
+revision: 11
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -59,8 +59,11 @@ pending_actions:
     and both Redis modes, the enumerate-clause false negatives/positives, hoisted-ordering lifecycle paths, reactor-side claims,
     prose truth'
   expected: 'verdict per angle; C3''s merge waits on it (no Johan wording confirm needed: C3 touches no ADR, direction A was
-    his ruling)'
-  status: PENDING
+    his ruling). RESOLVED: verdict 2 CONFIRMED MAJOR, both prose (the fence-checkpoints=false remedy missing the manual-mode
+    exclusion, converting one startup failure into a worse one; the exception javadoc misstating the domain-feed case in both
+    directions), code refuted on every angle incl. full predict-vs-refuse parity; one reactor-prose minor; TCK per-id gap
+    noted for the register. Fix round routed to the worker together with the C2-squash rebase'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-14T13:35:00Z'
@@ -123,7 +126,8 @@ units:
       met: false
       evidence: 'DELIVERED done at final head 317770e: 27/27 by job conclusion verified, 0 threads, MERGEABLE, 8 real Copilot
         findings across 3 heads (6 from suppressed blocks) all fixed or tracked as #788 (marker verified), 6 mutation kills,
-        invariant sweep complete, C4 handoff wording for ADR 116 provided. Adversarial pass in flight'
+        invariant sweep complete, C4 handoff wording for ADR 116 provided. Adversarial pass in flight. Adversarial verdict:
+        code clean, 2 prose majors + 1 minor routed back with the rebase; TCK per-id conformance gap banked for the register'
   C4:
     issue: null
     goal: 'Truth fixes: ADR 116 659-660 Redis Cluster sentence (AFTER C3''s gate decides what it must say), ReplayAware.java
