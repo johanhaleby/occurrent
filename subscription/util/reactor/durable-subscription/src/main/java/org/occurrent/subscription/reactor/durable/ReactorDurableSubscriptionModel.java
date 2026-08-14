@@ -74,8 +74,9 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * path: two durable models sharing one would stop and shut down each other's subscriptions.
  * <p>
  * When the wrapped model offers only the plain (cold)
- * {@link CheckpointAwareSubscriptionModel#subscribe(SubscriptionFilter, StartAt)} primitive, which is what the reactor
- * catch-up models do, this model drives that primitive itself and manages the life cycle. A failing action is not
+ * {@link CheckpointAwareSubscriptionModel#subscribe(SubscriptionFilter, StartAt)} primitive, which is a model written
+ * outside this repository since #547 and #550 made every reactor catch-up model a named one,
+ * this model drives that primitive itself and manages the life cycle. A failing action is not
  * retried on that path and an unsupported filter is reported when the subscription starts rather than when it is
  * created, because there is no named subscription underneath to inherit either from. See issue #547.
  * <p>
