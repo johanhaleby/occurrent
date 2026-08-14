@@ -686,7 +686,9 @@ without the narrowing.
 
 One operational note for a saga that is already running. Adding a narrowing does not replay, so the events it would have
 excluded before you added it are already in the instance's history. Removing one later resumes from the stored
-checkpoint, so the events excluded while it was set are never delivered.
+checkpoint, and that checkpoint only moved for the events the saga actually received. So an excluded event that sits at
+or before it stays skipped for good, while one that arrived after the last event the saga did receive is delivered when
+it resumes.
 
 ### If you wrote a type mapper that collapses the hierarchy
 
