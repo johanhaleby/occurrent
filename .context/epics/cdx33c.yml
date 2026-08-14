@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 21
+revision: 22
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -86,12 +86,27 @@ pending_actions:
   type: workflow-dispatch
   target: 'C5 planning subagent (Opus, read-only, venue orchestrator) after the chip task_4a7f6b9c was withdrawn on the Unattended
     switch: reactor pin parity plan on the settled shape, exception-type module decision, both-held-branches docs ripple plan'
-  expected: a plan handed back; principle-settled parts decided by the orchestrator under the Unattended terms, genuine taste
-    questions QUEUE for Johan's return; implementation dispatched as a separate subagent after the gate
-  status: PENDING
+  expected: 'a plan handed back; principle-settled parts decided by the orchestrator under the Unattended terms, genuine taste
+    questions QUEUE for Johan''s return; implementation dispatched as a separate subagent after the gate. RESOLVED: plan returned
+    registration-grade (flow map, exception reuse decided by pom facts, no exists() twin needed structurally, the path-C ordering
+    window named as #771''s with a documented bound, ten tests + mutation set, eight ripple surfaces incl. the CheckpointStorage
+    javadoc recipe that teaches the defect). Q1 decided by derivation (capability branch), Q2 proceeded with magnitude queued,
+    merge held for the return ask (ADR-bearing PR)'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-14T15:20:00Z'
+- id: act-007
+  type: workflow-dispatch
+  target: 'C5 implementation (same agent, context preserved, Opus/high): exception-factory prefactor + blocking repoint, reactor
+    conditional pin with capability branch, ten tests + fixture fix + mutations, eight ripple surfaces, both held docs branches
+    additive edit, claim-class sweep per commit'
+  expected: 'PR delivered to done then STOP (no unattended merge: ADR-bearing diff waits for Johan''s wording ruling); docs
+    branches pushed; DELIVERY_RESULT with invariant, mutation table, gathering ledger'
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-14T15:55:00Z'
 units:
   C1:
     issue: null
@@ -193,7 +208,7 @@ units:
       and fixed by C1 itself once its final round became a code change.) Note from C1: the manual-start pin sentence needing
       the refusal-outcome company exists on BOTH held docs branches: docs/0.33.0-preview AND occurrent-org.github.io PR 55''s
       docs/checkpoint-fencing.'
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on:
