@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33b
-revision: 44
+revision: 46
 updated_at: 2026-08-14T09:05:00Z
 updated_by: "successor orchestrator (worktree api-review-verification-c3b0ea): recovered per handoff, monitors re-armed, act-001 reconciled VERIFIED, U10B registered (U11 docs appendix push), U13 gate going to Johan"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -239,7 +239,7 @@ units:
   U4:
     issue: null
     goal: "stepWindow pre-progress trap (finding 4): derive fallback counts pre-trim, pass STORED windowStart to droppedFromTheCurrentStep; regression tests incl. hand-seeded pre-progress document; aligns implementation with ADR 123's stated contract"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -249,7 +249,7 @@ units:
   U5:
     issue: null
     goal: "Kotlin predicate identity (finding 6): NamedPredicate wrapper in SagaFlowExtensions.kt with equality on the captured function; Kotlin parity test; fingerprint verified unaffected"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -369,10 +369,10 @@ units:
   UREG:
     issue: null
     goal: "Register: decline pointers for findings 8/10/12/14, retention-policy issue (finding 7 residual), finding-11 convention note, environment-artifact note; route new arrivals #760 #761 (both released-behavior, non-overlapping). ADDED 2026-08-13: the broader-filter-is-safe house claim on shipped Projection.java (:39, :301) is falsifiable at the converter exactly as U7 pass defect 1 showed for Saga; released surface, so a register note or 0.34 issue, not a pre-tag fix"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: "IN PROGRESS 2026-08-13: #775 filed (Projection broader-filter claim, released surface, 0.34); retention residual confirmed already filed as #764 (my #776 was a duplicate, closed with the #773 coupling moved to #764 as a comment); decline register for findings 8/10/11/12/14 plus the environment artifact verified present in ORCHESTRATOR.md from 2026-08-12 routing; #760/#761 routed leave-for-later same day. Marker comments on #760/#761 verified present 2026-08-13 (orchestrator-routing markers from the 08-12 routing). Remaining at closeout: final evidence listing only"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: "IN PROGRESS 2026-08-13: #775 filed (Projection broader-filter claim, released surface, 0.34); retention residual confirmed already filed as #764 (my #776 was a duplicate, closed with the #773 coupling moved to #764 as a comment); decline register for findings 8/10/11/12/14 plus the environment artifact verified present in ORCHESTRATOR.md from 2026-08-12 routing; #760/#761 routed leave-for-later same day. Marker comments on #760/#761 verified present 2026-08-13 (orchestrator-routing markers from the 08-12 routing). Remaining at closeout: final evidence listing only. CLOSED 2026-08-14: closeout scan from the registration cursor returned #775 #773 #771 #764, all fleet-routed 0.34 deferrals, all four repaired with orchestrator-routing marker comments (verified present) after the scan found none carried one. Decline register complete: findings 8/10/11/12/14 with pointers, U11 capability declines in ADR 86, round-1 residuals, U13 residuals (class-identity bound, cycle guard, asString null, reactor question on #738, ADR 86 #669 misattribution at lines 100/110), docs near-duplicate reactor paragraphs, flake-rate escalation flagged. #776 closed as duplicate of #764. #760/#761 markers verified 2026-08-13"}
