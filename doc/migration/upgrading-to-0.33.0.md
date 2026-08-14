@@ -677,6 +677,10 @@ fails that delivery rather than being skipped. And the build-time hierarchy chec
 the saga declares, not only for the one you could not enumerate, so a replacement you set for an unrelated reason also
 stops you being told about a sealed hierarchy that was reopened somewhere else in the same saga.
 
+A saga that declares no event types at all is the exception to the split above. Its derived filter matches everything,
+so a narrowing on it is the whole selector, and the conversion point applies to that narrowing exactly as it does to a
+replacement.
+
 A flow saga pays two more, one for each method. A replacement makes it append every correlated event it receives to the
 instance's retained history before it checks which branch handles the type, so a filter broader than the types the flow
 names grows that history, and under a `stepWindow` cap those events take slots the step's own events would otherwise

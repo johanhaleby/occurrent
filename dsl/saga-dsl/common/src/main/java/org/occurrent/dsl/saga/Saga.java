@@ -180,6 +180,11 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * <p>
      * The build-time check that refuses a declared type whose concrete types cannot all be found still runs here, since
      * a selector is still derived. {@link #replacementFilter()} is what switches it off.
+     * <p>
+     * All of that assumes the saga declares event types. One that declares none derives a selector matching everything,
+     * so its narrowing is the whole selector. For that saga the conversion obligation on {@link #replacementFilter()}
+     * applies to the narrowing as well, and there is no hierarchy to walk in the first place, so nothing is being kept
+     * switched on either.
      */
     default @Nullable Filter narrowingFilter() {
         return null;
