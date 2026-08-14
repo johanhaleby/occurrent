@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33b
-revision: 33
+revision: 34
 updated_at: 2026-08-14T08:30:00Z
 updated_by: "successor orchestrator (worktree api-review-verification-c3b0ea): recovered per handoff, monitors re-armed, act-001 reconciled VERIFIED, U10B registered (U11 docs appendix push), U13 gate going to Johan"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -159,6 +159,14 @@ pending_actions:
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-14T08:35:00Z
+  - id: act-020
+    type: workflow-dispatch
+    target: "U13 implementation subagent (Opus, independent clone under its scratchpad, branch johan/cdx33b-u13-cc-forwarding off origin/main 8a57fc319): the approved SubscriptionModelWrapper forwarding default-method direction, CC override, walk continues past forwarding layers, ADR 86 sentence corrected, the minimal-trigger regression test, seven round-2 minors folded, mutation evidence, PR + pr-fix loop, DELIVERY_RESULT with invariant table"
+    expected: "an open PR with matrix green by job conclusion, suppressed blocks handled at every head, DELIVERY_RESULT with invariant and mutation tables; then adversarial verify pass, then ADR-wording confirm with Johan at the merge gate, then my CAS merge"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-14T08:50:00Z
 units:
   U1:
     issue: null
@@ -293,13 +301,13 @@ units:
   U13:
     issue: null
     goal: "Fixpoint round 2 MAJOR: the registration walk breaks on CompetingConsumerSubscriptionModel's non-default answer, but CC only resolves to decide whether to compete and forwards the ORIGINAL StartAt down in both branches (CompetingConsumerSubscriptionModel.java:112,311,328), so a per-layer function (Default for durable, now() for CC) gets no pin and the durable layer pins at start, the #669 window, a regression vs the pre-U11 unconditional pin; ADR 86's 'all three decide for themselves' is false for CC. Fix direction (predecessor's read, successor's gate): the missing capability now has a confirmed defect justifying it pre-tag. A default method on SubscriptionModelWrapper (api module, interface name new in 0.33 so additive is free) letting a wrapper say it forwards the position unresolved, CC overrides, the walk continues past a forwarding layer's answer. Skip-CC-by-instanceof is blocked by module dependency direction. Documented-bound is ruled out by the same item-1 regression criterion that justified the inheritance fallback. Correct ADR 86's false sentence as part of the fix, and fold round 2's seven minors (all one-clause, mostly the same files: the once-per-layer understatement, the inherits-from bounds, the Proxy/Record ask framing, guide :429 conditional claim, changelog delete-clears-latch clause, two test-comment staleness items)."
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U11]
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: "design gate CLOSED 2026-08-14: Johan approved the recorded direction via AskUserQuestion (Attended); implementation dispatched per act-020"}
   UREG:
     issue: null
     goal: "Register: decline pointers for findings 8/10/12/14, retention-policy issue (finding 7 residual), finding-11 convention note, environment-artifact note; route new arrivals #760 #761 (both released-behavior, non-overlapping). ADDED 2026-08-13: the broader-filter-is-safe house claim on shipped Projection.java (:39, :301) is falsifiable at the converter exactly as U7 pass defect 1 showed for Saga; released surface, so a register note or 0.34 issue, not a pre-tag fix"
