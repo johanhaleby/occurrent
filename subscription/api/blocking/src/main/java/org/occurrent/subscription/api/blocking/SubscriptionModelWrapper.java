@@ -17,6 +17,7 @@
 package org.occurrent.subscription.api.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.StartAt;
 
 /**
  * A subscription model wrapper wraps another subscription model and delegates to it when {@code subscribe}
@@ -46,5 +47,29 @@ public interface SubscriptionModelWrapper extends SubscriptionModelCapability {
             return ((SubscriptionModelWrapper) wrappedSubscriptionModel).getWrappedSubscriptionModelRecursively();
         }
         return wrappedSubscriptionModel;
+    }
+
+    /**
+     * Whether what the caller's {@link StartAt} resolves to under this wrapper's own class is what decides where the
+     * subscription starts. Answer {@code false} whenever it is not, which covers two shapes. One is a wrapper that
+     * resolves the position for a decision of its own, the way a competing consumer model works out whether to
+     * compete for the subscription and leaves where it starts to the model below. The other is a wrapper that hands
+     * the caller's position down without resolving it at all, which decides nothing here either.
+     * <p>
+     * Handing the caller's own {@code StartAt} object down is not what this asks about. A catch-up model does that
+     * and still answers {@code true}, because the model it hands the object to resolves it under the catch-up model's
+     * class rather than its own, so the answer given for this class is the one acted on. So does a durable model that
+     * resolves the position for itself and passes the caller's object on only when its own answer was nothing.
+     * <p>
+     * {@link ManualStartSubscriptionModel} asks this when it works out where a registration will start from. It goes
+     * down the wrapped models asking each of them what the caller's position resolves to, and passes over one that
+     * answers {@code false} here, since nothing that model answers changes where the subscription starts.
+     *
+     * @return {@code true}, the default, for a wrapper whose own resolution settles where the subscription starts.
+     * {@code false} for one that resolves the position for a decision of its own and leaves the start to the model
+     * below it.
+     */
+    default boolean decidesWhereTheSubscriptionStarts() {
+        return true;
     }
 }

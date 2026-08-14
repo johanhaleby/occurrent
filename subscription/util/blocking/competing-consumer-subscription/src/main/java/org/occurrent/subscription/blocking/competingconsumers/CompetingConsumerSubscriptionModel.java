@@ -388,6 +388,19 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
     }
 
     /**
+     * This model resolves the start position to find out whether to compete for the subscription. The model it wraps
+     * receives the caller's own {@link StartAt} either way and resolves it under its own class, so where the
+     * subscription starts is settled there rather than here.
+     *
+     * @return {@code false}
+     * @see SubscriptionModelWrapper#decidesWhereTheSubscriptionStarts()
+     */
+    @Override
+    public boolean decidesWhereTheSubscriptionStarts() {
+        return false;
+    }
+
+    /**
      * @see SubscriptionModelLifeCycle#shutdown()
      */
     @PreDestroy

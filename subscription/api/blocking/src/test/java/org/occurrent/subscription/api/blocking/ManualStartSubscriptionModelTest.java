@@ -479,7 +479,8 @@ class ManualStartSubscriptionModelTest {
             Future<Subscription> registering = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             }));
             assertThat(registrationInProgress.await(10, TimeUnit.SECONDS))
-                    .as("the position is read on every registration, whatever the state looked like on the way in")
+                    .as("this registration asks for the model default, so its position is read whatever the state "
+                            + "looked like on the way in")
                     .isTrue();
             model.stop();
             stopReturned.countDown();
@@ -969,8 +970,8 @@ class ManualStartSubscriptionModelTest {
     void a_dynamic_start_position_asking_for_the_model_type_by_equality_is_pinned_for_a_subclassed_model() {
         // A model resolves the position against its own class literal, so a subclass or a Spring proxy of it would be
         // asked about here under a name hasSubscriptionModelType does not match. Answering that with anything but the
-        // model default records nothing, and the model below records a position when the subscription starts instead,
-        // which is the skip this write exists to prevent.
+        // model default records nothing, and this delegate then records a position when the subscription starts
+        // instead, which is the skip this write exists to prevent.
         SubclassedSubscriptionModel delegate = new SubclassedSubscriptionModel();
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         delegate.globalCheckpoint = new StringCheckpoint("at-registration");
@@ -1063,6 +1064,88 @@ class ManualStartSubscriptionModelTest {
         assertThat(resolutions.get())
                 .as("asked for the outer model, which answered with nothing, and then for the one it wraps")
                 .isEqualTo(2);
+    }
+
+    @Test
+    void a_layer_that_decides_something_other_than_the_start_leaves_the_answer_to_the_model_below() {
+        // The Spring Boot starter's own stack, where the competing consumer layer resolves the position to work out
+        // whether to compete and leaves where the subscription starts to the durable model below it. Stopping at the
+        // competing consumer's answer records nothing, and the durable model then records a position when the
+        // subscription starts, minutes later on a rolling deploy, skipping everything written in between.
+        RecordingSubscriptionModel checkpointReadingModel = new RecordingSubscriptionModel();
+        DeferringSubscriptionModel deferringModel = new DeferringSubscriptionModel(checkpointReadingModel);
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        checkpointReadingModel.globalCheckpoint = new StringCheckpoint("at-registration");
+        List<Class<?>> asked = new CopyOnWriteArrayList<>();
+        StartAt startAt = StartAt.dynamic(context -> {
+            asked.add(context.subscriptionModelType());
+            return context.hasSubscriptionModelType(RecordingSubscriptionModel.class) ? StartAt.subscriptionModelDefault() : StartAt.now();
+        });
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(deferringModel, checkpointReadingModel, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, startAt, __ -> {
+        });
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
+        assertThat(asked)
+                .as("nothing the deferring layer answers changes where the subscription starts, so it is not asked")
+                .containsExactly(RecordingSubscriptionModel.class);
+    }
+
+    @Test
+    void a_layer_that_decides_something_other_than_the_start_records_no_position_of_its_own() {
+        RecordingSubscriptionModel checkpointReadingModel = new RecordingSubscriptionModel();
+        DeferringSubscriptionModel deferringModel = new DeferringSubscriptionModel(checkpointReadingModel);
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        checkpointReadingModel.globalCheckpoint = new StringCheckpoint("at-registration");
+        StartAt startAt = StartAt.dynamic(context -> context.hasSubscriptionModelType(DeferringSubscriptionModel.class)
+                ? StartAt.subscriptionModelDefault() : StartAt.now());
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(deferringModel, checkpointReadingModel, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, startAt, __ -> {
+        });
+
+        assertThat(storage.checkpoints)
+                .as("the model that does read a checkpoint asked to start at now, and a position written here is one "
+                        + "nothing starts from over a subscription the caller asked to replay")
+                .isEmpty();
+    }
+
+    @Test
+    void a_registration_below_a_deferring_layer_that_answers_with_nothing_is_still_recorded() {
+        // Two layers to descend through, one that leaves the start to the model below and one that answers with
+        // nothing, which is the shape a hand-wired stack has when the catch-up layer sits under the competing
+        // consumer one.
+        RecordingSubscriptionModel checkpointReadingModel = new RecordingSubscriptionModel();
+        ReplayingSubscriptionModel replayingModel = new ReplayingSubscriptionModel(checkpointReadingModel);
+        DeferringSubscriptionModel deferringModel = new DeferringSubscriptionModel(replayingModel);
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        checkpointReadingModel.globalCheckpoint = new StringCheckpoint("at-registration");
+        StartAt startAt = StartAt.dynamic(context -> context.hasSubscriptionModelType(ReplayingSubscriptionModel.class)
+                ? null : StartAt.subscriptionModelDefault());
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(deferringModel, checkpointReadingModel, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, startAt, __ -> {
+        });
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
+    }
+
+    @Test
+    void a_registration_under_another_model_of_this_kind_is_recorded_from_the_model_below_both_of_them() {
+        // This model leaves the start to the model below too, so it says so and the outer one of two passes over it.
+        RecordingSubscriptionModel checkpointReadingModel = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        checkpointReadingModel.globalCheckpoint = new StringCheckpoint("at-registration");
+        ManualStartSubscriptionModel inner = ManualStartSubscriptionModel.stoppedByDefault(checkpointReadingModel);
+        StartAt startAt = StartAt.dynamic(context -> context.hasSubscriptionModelType(RecordingSubscriptionModel.class)
+                ? StartAt.subscriptionModelDefault() : StartAt.now());
+        ManualStartSubscriptionModel outer = ManualStartSubscriptionModel.stoppedByDefault(inner, checkpointReadingModel, storage);
+
+        outer.subscribe(SUBSCRIPTION_ID, null, startAt, __ -> {
+        });
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
     }
 
     @Test
@@ -1262,6 +1345,77 @@ class ManualStartSubscriptionModelTest {
     // Stands for a model a caller has subclassed, or that Spring has handed back as a proxy, either of which shows up
     // under a class the model itself never names when it resolves a start position.
     private static final class SubclassedSubscriptionModel extends RecordingSubscriptionModel {
+    }
+
+    // Stands for the competing consumer layer, which resolves the position to work out whether to compete and leaves
+    // where the subscription starts to the model below. A plain class rather than a record, so the classes it
+    // inherits from cannot answer anything the walk itself did not.
+    private static final class DeferringSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper {
+        private final SubscriptionModel wrapped;
+
+        DeferringSubscriptionModel(SubscriptionModel wrapped) {
+            this.wrapped = wrapped;
+        }
+
+        @Override
+        public boolean decidesWhereTheSubscriptionStarts() {
+            return false;
+        }
+
+        @Override
+        public SubscriptionModel getWrappedSubscriptionModel() {
+            return wrapped;
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return wrapped.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public Subscription resumeSubscription(String subscriptionId) {
+            return wrapped.resumeSubscription(subscriptionId);
+        }
+
+        @Override
+        public void pauseSubscription(String subscriptionId) {
+            wrapped.pauseSubscription(subscriptionId);
+        }
+
+        @Override
+        public void cancelSubscription(String subscriptionId) {
+            wrapped.cancelSubscription(subscriptionId);
+        }
+
+        @Override
+        public void stop() {
+            wrapped.stop();
+        }
+
+        @Override
+        public void start(boolean resumeSubscriptionsAutomatically) {
+            wrapped.start(resumeSubscriptionsAutomatically);
+        }
+
+        @Override
+        public boolean isRunning() {
+            return wrapped.isRunning();
+        }
+
+        @Override
+        public boolean isRunning(String subscriptionId) {
+            return wrapped.isRunning(subscriptionId);
+        }
+
+        @Override
+        public boolean isPaused(String subscriptionId) {
+            return wrapped.isPaused(subscriptionId);
+        }
+
+        @Override
+        public void shutdown() {
+            wrapped.shutdown();
+        }
     }
 
     // Stands for a layer that replays history of its own, the position the wrapped model below it reads a checkpoint

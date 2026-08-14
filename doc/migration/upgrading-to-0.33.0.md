@@ -429,9 +429,10 @@ case of one consumer running, not a rare one, so the pair is refused up front wi
    at-least-once contract.
 
 The second way out does not apply under `occurrent.subscription.mode=manual`. There the starter builds a
-`ManualStartSubscriptionModel` that records a subscription's first start position when it is registered, written with
-`ifAbsent()`, and that write is what keeps two nodes registering the same subscription from overwriting each other. It
-happens whatever the fencing setting says, so the storage has to evaluate `ifAbsent` regardless, and the model throws
+`ManualStartSubscriptionModel` that records a subscription's first start position when it is registered, whenever the
+position it was registered with resolves to the subscription model default. That write uses `ifAbsent()`, and it is
+what keeps two nodes registering the same subscription from overwriting each other. The storage has to evaluate
+`ifAbsent` whatever the fencing setting says, and the model throws
 `IllegalArgumentException` naming the storage class during startup when it does not. Answer `true` from
 `evaluatesWriteConditions()` on a storage that does evaluate it, or declare the subscription model bean yourself and
 build it with the one-argument `ManualStartSubscriptionModel.stoppedByDefault(SubscriptionModel)`, which records no
