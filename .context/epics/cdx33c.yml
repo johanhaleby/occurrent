@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 17
+revision: 18
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -175,10 +175,8 @@ units:
       the tag waits for it. PLUS the docs ripple routed from C1''s finding (2026-08-14): the site''s Starting Subscriptions
       Manually section (docs.md ~3667 on docs/0.33.0-preview) presents the registration pin without the two-node refusal outcome;
       after both stacks land, one edit documents the StartPositionAlreadyPinnedException outcome and the restart-takes-stored-position
-      recovery for both, on the held branch, push never merge. PLUS from C1''s merged-head suppressed block (deliberately
-      deferred to keep the delivered head''s checks): guide section 8''s three-ways count now reads as four with C1''s manual-mode
-      paragraph; reword C1''s opener as a manual-mode qualifier rather than a fourth entry (do NOT retitle the heading, three
-      changelog links point at its anchor)'
+      recovery for both, on the held branch, push never merge. (The guide section-8 count nit originally routed here was reclaimed
+      and fixed by C1 itself once its final round became a code change.)'
     phase: PLANNED
     health: PROGRESSING
     swept: false
