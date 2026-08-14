@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 20
+revision: 21
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -82,6 +82,16 @@ pending_actions:
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-14T14:15:00Z'
+- id: act-006
+  type: workflow-dispatch
+  target: 'C5 planning subagent (Opus, read-only, venue orchestrator) after the chip task_4a7f6b9c was withdrawn on the Unattended
+    switch: reactor pin parity plan on the settled shape, exception-type module decision, both-held-branches docs ripple plan'
+  expected: a plan handed back; principle-settled parts decided by the orchestrator under the Unattended terms, genuine taste
+    questions QUEUE for Johan's return; implementation dispatched as a separate subagent after the gate
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-14T15:20:00Z'
 units:
   C1:
     issue: null
