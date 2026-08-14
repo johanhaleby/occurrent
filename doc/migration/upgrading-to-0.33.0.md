@@ -115,10 +115,12 @@ A store whose answer to a conditional write depends on the subscription id, the 
 say so precisely with `evaluatesWriteConditionsFor(String subscriptionId)`, a second new default method that answers
 `evaluatesWriteConditions()` for every id unless overridden. The blocking Spring Boot starter's own fencing check
 reads it too, see section 8. The reactor stack has no startup check like that one, but the override is not merely
-advisory there either. `ReactorDurableSubscriptionModel.pinStartPosition` reads it on every reactive durable
-subscription's first run whose start position resolves to the subscription model default, and the answer decides
-between a conditional `ifAbsent()` write that can refuse a losing race and an unconditional write logged at `WARN`
-that keeps 0.32.0's race open for that subscription. A storage whose `ifAbsent()` otherwise works but whose
+advisory there either. `ReactorDurableSubscriptionModel.pinStartPosition` reads it the first time a reactive
+durable subscription registers with no checkpoint stored yet and a seed position to pin. An existing checkpoint
+skips this path entirely, and so does a seed that resolves to nothing, which `globalCheckpoint()` documents as a
+real, non-hypothetical outcome. When it does run, the answer decides between a conditional `ifAbsent()` write
+that can refuse a losing race and an unconditional write logged at `WARN` that keeps 0.32.0's race open for that
+subscription. A storage whose `ifAbsent()` otherwise works but whose
 predicate stays at the default `false` here does not fail loudly for it. It compiles, runs, and keeps the 0.32.0
 race open with nothing louder than that `WARN`. Leaving the override unanswered is a real choice with a real
 cost, not optional polish, see section 8.

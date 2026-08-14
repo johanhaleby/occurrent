@@ -102,18 +102,21 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * {@link CheckpointWriteCondition#any()} never refuses an id for slot alignment in either mode, since it writes only
  * the checkpoint key and never touches the version key at all.
  * <p>
- * {@link #delete(String)} never refuses one, in either mode, though the two modes get there differently. In
- * Cluster-safe mode, a subscription id of this shape can only ever have had a checkpoint written for it through
- * {@code any()}, since a conditional write already refuses one before touching Redis at all, so its version key
- * can never exist to strand there, and falling back to two single-key deletes on a {@code CROSSSLOT} failure is
- * provably safe for that reason, not merely convenient. {@link #forStandalone(RedisOperations)} carries no such
- * refusal, so a conditional write against it does write a version key for this shape. Nothing strands there
- * either, but for a different reason. A standalone or replicated server has no slots to cross, so the two-key
- * {@code DEL} never fails with {@code CROSSSLOT} in that mode, and the fallback above never runs. The checkpoint
- * key is deleted first regardless, a defensive ordering rather than one either mode's safety depends on. If a
- * version key ever did exist and outlived its checkpoint here, deleting it first and failing before the
- * checkpoint would leave a checkpoint with no stored version, which a later {@code notOlderThan} write would then
- * accept unconditionally, letting a lease-holder that has already moved on win a write it should have lost.
+ * {@link #delete(String)} never refuses one, in either mode, though what the {@code CROSSSLOT} fallback finds
+ * differs between them. Cluster-safe mode's own conditional writes already refuse a subscription id of this shape
+ * before touching Redis at all, so a version key this mode itself wrote for one never exists. One can still be
+ * there if the same Redis data was written earlier through {@link #forStandalone(RedisOperations)}, which does
+ * accept this shape, the case of standalone Redis later migrated into Cluster with the same subscription ids
+ * carried over. The fallback deletes both keys as two single-key commands regardless, which removes a version
+ * key when one is there and is a no-op against one that never was. {@link #forStandalone(RedisOperations)}
+ * carries no refusal of its own, so a conditional write against it does write a version key for this shape
+ * directly, and its own {@code delete} never even reaches {@code CROSSSLOT}. A standalone or replicated server
+ * has no slots to cross, so the two-key {@code DEL} always succeeds there and the fallback above never runs.
+ * The checkpoint key is deleted first regardless, a defensive ordering rather than one either mode's safety
+ * depends on. If a version key ever did exist and outlived its checkpoint here, deleting it first and failing
+ * before the checkpoint would leave a checkpoint with no stored version, which a later {@code notOlderThan}
+ * write would then accept unconditionally, letting a lease-holder that has already moved on win a write it
+ * should have lost.
  * <p>
  * This also assumes the {@link RedisOperations} passed in serializes a key to its own literal bytes, the same
  * assumption the checkpoint's plain {@code GET} already makes. A key serializer that reshapes the string changes
@@ -483,11 +486,13 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
                 // This branch is Cluster-safe-mode-only in practice. A standalone or replicated server behind
                 // forStandalone(..) has no slots to cross, so it never returns CROSSSLOT here in the first place.
                 // In Cluster-safe mode, only the one subscription id shape requireClusterSlotAlignable refuses can
-                // land here, and a conditional write already refuses that shape before ever writing a version
-                // key, so this id's version key can never exist to strand. The second delete below is provably a
-                // no-op, not merely convenient. The checkpoint is still deleted first, defensively. If a version
-                // key ever did exist, deleting it first and failing before the checkpoint would leave a checkpoint
-                // with no stored version, which a later notOlderThan write would then accept unconditionally.
+                // land here. This mode's own conditional writes already refuse that shape before ever writing a
+                // version key, but the same Redis data can carry one in from an earlier forStandalone(..) use that
+                // did accept it, for example after migrating standalone Redis into Cluster. The two deletes below
+                // remove it when it is there and no-op against it otherwise. The checkpoint is still deleted
+                // first, defensively. If a version key ever did exist, deleting it first and failing before the
+                // checkpoint would leave a checkpoint with no stored version, which a later notOlderThan write
+                // would then accept unconditionally.
                 redis.delete(subscriptionId);
                 redis.delete(versionKey(subscriptionId));
                 return 0L;
