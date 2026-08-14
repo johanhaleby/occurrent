@@ -434,6 +434,18 @@ class SpringRedisCheckpointStorageTest {
                 .hasMessageContaining("reserves for its own version keys");
     }
 
+    @Test
+    void evaluates_write_conditions_for_answers_false_for_a_subscription_id_in_the_version_key_namespace_in_either_mode() {
+        // save refuses this id outright, any() included, before it ever looks at the condition, so neither mode can
+        // honestly answer true for it, cluster alignment and standalone's lifted restriction notwithstanding.
+        String subscriptionId = "occurrent:checkpoint-version:{whatever}notarealdigest";
+        CheckpointStorage clusterSafe = new SpringRedisCheckpointStorage(redisTemplate);
+        CheckpointStorage standalone = SpringRedisCheckpointStorage.forStandalone(redisTemplate);
+
+        assertThat(clusterSafe.evaluatesWriteConditionsFor(subscriptionId)).isFalse();
+        assertThat(standalone.evaluatesWriteConditionsFor(subscriptionId)).isFalse();
+    }
+
     private List<CloudEvent> serialize(DomainEvent e) {
         return List.of(CloudEventBuilder.v1()
                 .withId(e.eventId())

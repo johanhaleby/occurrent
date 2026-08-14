@@ -94,6 +94,11 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         List<Object[]> projectionMethods = new ArrayList<>();
         List<Object[]> snapshotMethods = new ArrayList<>();
         List<Object[]> sagaMethods = new ArrayList<>();
+        // Only an id whose registration reaches CheckpointStorage at all. A @SynchronousSubscription writes no
+        // checkpoint, and a @Projection or @Snapshot in mode = SYNCHRONOUS registers with the synchronous model the
+        // same way and skips it too, so none of those ids belong here, only in registeredIds for duplicate
+        // detection. @Saga has no synchronous mode, so every saga id belongs here.
+        Set<String> idsToCheck = new HashSet<>();
         for (String beanName : applicationContext.getBeanDefinitionNames()) {
             Class<?> type;
             try {
@@ -105,33 +110,27 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 continue;
             }
             for (Method method : ClassUtils.getUserClass(type).getDeclaredMethods()) {
-                collectSubscriptionId(method);
+                collectSubscriptionId(method, idsToCheck);
                 org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
                 if (projection != null) {
                     projectionMethods.add(new Object[]{beanName, method, projection});
+                    if (projection.mode() != org.occurrent.annotation.Mode.SYNCHRONOUS) {
+                        idsToCheck.add(projection.id());
+                    }
                 }
                 org.occurrent.annotation.Snapshot snapshot = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Snapshot.class);
                 if (snapshot != null) {
                     snapshotMethods.add(new Object[]{beanName, method, snapshot});
+                    if (snapshot.mode() != org.occurrent.annotation.Mode.SYNCHRONOUS) {
+                        idsToCheck.add(snapshot.id());
+                    }
                 }
                 org.occurrent.annotation.Saga saga = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Saga.class);
                 if (saga != null) {
                     sagaMethods.add(new Object[]{beanName, method, saga});
+                    idsToCheck.add(saga.id());
                 }
             }
-        }
-        // Not registeredIds itself, which registrars below check-and-add against as each one runs. Seeding it early
-        // with an id its registrar has not reached yet would make that registrar's own add(id) find one already
-        // present and misreport a genuine id as a duplicate.
-        Set<String> idsToCheck = new HashSet<>(registeredIds);
-        for (Object[] pm : projectionMethods) {
-            idsToCheck.add(((org.occurrent.annotation.Projection) pm[2]).id());
-        }
-        for (Object[] sm : snapshotMethods) {
-            idsToCheck.add(((org.occurrent.annotation.Snapshot) sm[2]).id());
-        }
-        for (Object[] gm : sagaMethods) {
-            idsToCheck.add(((org.occurrent.annotation.Saga) gm[2]).id());
         }
         CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
         for (Object[] pm : projectionMethods) {
@@ -147,13 +146,25 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
     }
 
-    private void collectSubscriptionId(Method method) {
+    // Every id here goes into registeredIds, the shared duplicate-id registry. Only the three that reach
+    // CheckpointStorage also go into idsToCheck. @SynchronousSubscription writes no checkpoint at all, so its id is
+    // registered for duplicate detection only, never asked about by the fencing check.
+    private void collectSubscriptionId(Method method, Set<String> idsToCheck) {
         StreamSubscription s = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
-        if (s != null) registeredIds.add(s.id());
+        if (s != null) {
+            registeredIds.add(s.id());
+            idsToCheck.add(s.id());
+        }
         Subscription a = AnnotationUtils.findAnnotation(method, Subscription.class);
-        if (a != null) registeredIds.add(a.id());
+        if (a != null) {
+            registeredIds.add(a.id());
+            idsToCheck.add(a.id());
+        }
         DcbSubscription d = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
-        if (d != null) registeredIds.add(d.id());
+        if (d != null) {
+            registeredIds.add(d.id());
+            idsToCheck.add(d.id());
+        }
         SynchronousSubscription sy = AnnotationUtils.findAnnotation(method, SynchronousSubscription.class);
         if (sy != null) registeredIds.add(sy.id());
     }

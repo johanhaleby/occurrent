@@ -19,6 +19,7 @@ package org.occurrent.springboot.blocking;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.annotation.Mode;
 import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.Source;
 import org.occurrent.springboot.common.OccurrentProperties;
@@ -50,6 +51,7 @@ class CheckpointFencingSubscriptionIdWiringTest {
 
     private static final String SUBSCRIPTION_ID_A = "proj-fenced-a";
     private static final String SUBSCRIPTION_ID_B = "proj-fenced-b";
+    private static final String SUBSCRIPTION_ID_SYNC = "proj-sync";
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -93,6 +95,45 @@ class CheckpointFencingSubscriptionIdWiringTest {
                             .hasMessageContaining(SUBSCRIPTION_ID_B);
                     verify(checkpointStorage, never()).save(any(), any(), any());
                 });
+    }
+
+    @Test
+    void a_synchronous_projections_id_is_never_asked_about_even_when_the_storage_would_refuse_it() {
+        // mode = SYNCHRONOUS registers directly with the synchronous subscription model and never reaches
+        // CheckpointStorage at all, so evaluatesWriteConditionsFor must never be asked about its id, whatever
+        // happens to registration once the fencing check has passed. A runner of its own, not the shared "runner"
+        // field, since TwoFencedProjectionsConfiguration would otherwise ride along and its own refused ids would
+        // carry the assertion instead of this one.
+        CompetingConsumerStrategy strategy = mock(CompetingConsumerStrategy.class);
+        CheckpointStorage checkpointStorage = mock(CheckpointStorage.class);
+        when(checkpointStorage.evaluatesWriteConditions()).thenReturn(true);
+        when(checkpointStorage.evaluatesWriteConditionsFor(any())).thenReturn(false);
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(SynchronousProjectionConfiguration.class)
+                .withBean(CompetingConsumerStrategy.class, () -> strategy)
+                .withBean(CheckpointStorage.class, () -> checkpointStorage)
+                .run(context -> verify(checkpointStorage, never()).evaluatesWriteConditionsFor(SUBSCRIPTION_ID_SYNC));
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class SynchronousProjectionConfiguration {
+        @Bean
+        SynchronousProjection synchronousProjection() {
+            return new SynchronousProjection();
+        }
+    }
+
+    static class SynchronousProjection {
+        @Projection(id = SUBSCRIPTION_ID_SYNC, mode = Mode.SYNCHRONOUS)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
     }
 
     @Configuration(proxyBeanMethods = false)

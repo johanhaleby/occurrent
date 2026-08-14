@@ -426,13 +426,19 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
     /**
      * {@inheritDoc}
      * <p>
-     * Answers {@code true} for every subscription id in standalone mode ({@link #forStandalone(RedisOperations)}).
-     * In Cluster-safe mode (the other constructors), answers {@code false} for exactly the one subscription id
-     * shape the class javadoc names Redis Cluster cannot align a slot for, and {@code true} for every other id.
+     * Answers {@code false} for a subscription id in the version key's own reserved namespace, in either mode,
+     * since {@link #save(String, Checkpoint, CheckpointWriteCondition)} refuses that id outright before it looks at
+     * {@code condition} at all, {@code any()} included. Otherwise answers {@code true} for every subscription id in
+     * standalone mode ({@link #forStandalone(RedisOperations)}). In Cluster-safe mode (the other constructors),
+     * answers {@code false} for exactly the one subscription id shape the class javadoc names Redis Cluster cannot
+     * align a slot for, and {@code true} for every other id.
      */
     @Override
     public boolean evaluatesWriteConditionsFor(String subscriptionId) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
+        if (subscriptionId.startsWith(VERSION_KEY_PREFIX)) {
+            return false;
+        }
         return standalone || isClusterSlotAlignable(subscriptionId);
     }
 
