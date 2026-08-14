@@ -1,10 +1,13 @@
 schema_version: 2
 epic: cdx33c
-revision: 33
-updated_at: 2026-08-14 19:40:00+00:00
-updated_by: 'orchestrator: C10 DONE (PR 793 merged d05b3d9, all round-2 fixes verified mechanically on main and both origin
-  docs refs); tracker scan clean from the 10:00Z safety bound, all arrivals fleet-created, markers verified on #786 #788 #791.
-  Closeout waits only on the d05b3d9 main matrix'
+revision: 34
+updated_at: 2026-08-14 20:15:00+00:00
+updated_by: 'orchestrator: EPIC CLOSED as CAPPED-WITH-REMEDIATION, 11 of 11 units DONE and swept, no pending actions
+  unresolved, both watchers RETIRED, heartbeat retired at this closeout. Fixpoint ran its full cap of 2: round 1 five majors
+  (fixed, C8/C9), round 2 two majors + one minor AT THE CAP, loop ended, all three fixed under Johan''s fix-both-close-capped
+  ruling (C10) with no round 3, fixes verified mechanically against the named falsifying facts. Verification of record: main
+  d05b3d9 24/24 green. Held docs heads for release day: docs/0.33.0-preview 9b7c378, docs/checkpoint-fencing 13e128f. The
+  0.33.0 tag and every docs merge are Johan''s manual acts'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -165,7 +168,7 @@ units:
       and start) weighed at the same gate against the unreleased decidesWhereTheSubscriptionStarts shape'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -187,7 +190,7 @@ units:
       naming and shape at the in-session design gate; ADR 124 amendment, changelog, migration guide, tests'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -208,7 +211,7 @@ units:
       gate (through the orchestrator)'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -231,7 +234,7 @@ units:
       before position capture); finding 8''s placement half DECLINED per the cdx33b finding-11 convention ruling'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - C3
     session: null
@@ -258,7 +261,7 @@ units:
       docs/checkpoint-fencing.'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - C1
     session: null
@@ -284,7 +287,7 @@ units:
       register; declines by pointer for findings 3, 6, 9, 10, 12'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - C1
     - C2
@@ -311,7 +314,7 @@ units:
       #785 before the tag per the docs-ship-with-change convention'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - C2
     session: null
@@ -331,7 +334,7 @@ units:
       blank line before ## Synchronous Subscriptions on checkpoint-fencing; held branches, push only, never merge'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -351,7 +354,7 @@ units:
       (port the guide''s qualification to both javadoc sites), the three-members count'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -372,7 +375,7 @@ units:
       coverage'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -402,7 +405,7 @@ units:
       mechanically against the named falsifying facts'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -414,7 +417,7 @@ units:
         with no suppressed block, the one thread accepted-fixed-resolved: Copilot caught the orchestrator''s own In-standalone-mode
         overclaim, corrected to the server type). All three round-2 fixes verified mechanically on d05b3d9 against the named
         falsifying facts: One-place claim gone, Two-places sentence present with the stoppedByDefault refusal, CROSSSLOT claim
-        attributed to a standalone or replicated server. Squash body marker-free; main matrix on d05b3d9 watched'
+        attributed to a standalone or replicated server. Squash body marker-free; main matrix on d05b3d9 GREEN 24/24 after one rerun of test (example-domain, java-25), which failed on a Maven Central HTTP 429 during dependency download, an infrastructure failure unrelated to the diff (same shard green on 8313585)'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-preview
