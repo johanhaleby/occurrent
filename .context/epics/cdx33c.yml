@@ -1,9 +1,10 @@
 schema_version: 2
 epic: cdx33c
-revision: 29
-updated_at: 2026-08-14 19:00:00+00:00
-updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
-  as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
+revision: 30
+updated_at: 2026-08-14 19:55:00+00:00
+updated_by: 'orchestrator: C9 DONE (both held docs branches pushed and verified on origin refs: preview ea3f616, fencing 756c8b6);
+  work-item monitor re-armed as watcher-002 (buyoc3d0a) because C8 will open a PR-advanceable deliverable, baseline 0 open
+  PRs, post-arm sweep clean'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -347,7 +348,7 @@ units:
       self-contradiction, the recipe-stub throwing-placeholder misdescription in four locations incl. the unported Java-only
       caveat, the CheckpointStorage interface block gaining evaluatesWriteConditionsFor plus forStandalone and the boot exception
       coverage'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -355,9 +356,21 @@ units:
     deliverables:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
-      ref: null
-      met: false
-      evidence: null
+      ref: docs/0.33.0-preview
+      met: true
+      evidence: 'Pushed 381ca8b -> ea3f616, head verified by ls-remote and origin-ref greps: line-52 subject list now names
+        the CheckpointStorage break; throwing-placeholder/Filling-the-stub/same-three-members all absent; recipe described
+        as the permanent working fallback with the Java-only caveat at news:28 and docs.md:3598; evaluatesWriteConditionsFor,
+        forStandalone and CheckpointStorageCannotFenceSubscriptionException covered at docs.md:2917-2923 and :3625. Jekyll
+        build exit 0 per worker, diff scope news post + docs.md only'
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/checkpoint-fencing
+      met: true
+      evidence: 'Pushed b256a50 -> 756c8b6, head verified by ls-remote and origin-ref greps: same recipe correction and Java-only
+        caveat at news:28 and docs.md:3583; fix-3 coverage at docs.md:2913-2919 and :3608 written self-contained (no Cluster
+        id-shape reference) because this branch''s older Cluster section would contradict it, a flagged deviation the orchestrator
+        ratified as correct rather than drift'
 watchers:
 - id: watcher-001
   kind: github-work-item-monitor
@@ -368,3 +381,12 @@ watchers:
     kind: no_unmet_pr_advanceable_deliverables
   last_verified_at: '2026-08-14T18:05:00Z'
   last_verified_revision: 27
+- id: watcher-002
+  kind: github-work-item-monitor
+  repository: johanhaleby/occurrent
+  external_id: buyoc3d0a
+  status: READY
+  retirement:
+    kind: no_unmet_pr_advanceable_deliverables
+  last_verified_at: '2026-08-14T19:55:00Z'
+  last_verified_revision: 30
