@@ -97,7 +97,13 @@ another one being faulty.** It applies per consumer, so a shared delivery carryi
 consumers cannot satisfy it whatever else the design has going for it: one consumer that keeps failing holds up the
 acknowledgement, and every consumer behind it either never sees the message or loses it when the broker gives up on
 it. Check a push or fan-out design against this before anything else. It is what decided the one-sink-per-consumer
-topology in ADR 90.
+topology in ADR 90. The rule has no severity ladder either: a loss window that is narrow, documented and warn-logged
+is still a loss. A change that narrows one is a step on a recorded path to closing it, never the accepted end state.
+
+**Safety work finishes in the release that starts it.** A follow-up on something important means shipping another
+version right after this one, so when more work now makes a component safe or complete, prefer doing that work now.
+This is a per-case call, not a mandate: polish and conveniences can wait for the next release, but a known hole in
+correctness is not a follow-up candidate.
 
 **Every component ships production-ready, and that includes surviving a transient outage of the store it talks
 to.** A component that reads or writes an external store (MongoDB, Redis, a broker) accepts a configurable
