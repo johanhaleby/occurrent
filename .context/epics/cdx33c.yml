@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 16
+revision: 17
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -73,8 +73,12 @@ pending_actions:
     first registrations (every node completes with the pinned position equal to its captured one, or is refused visibly, none
     completes having read back a different position), plus the StartPositionAlreadyPinnedException message truth, the narrow-refusal
     branch boundaries, and ADR 86 amendment claims'
-  expected: verdict per angle; merge waits on it plus Johan's ADR 86 wording confirm at the gate
-  status: PENDING
+  expected: 'verdict per angle; merge waits on it plus Johan''s ADR 86 wording confirm at the gate. RESOLVED: verdict 1 CONFIRMED
+    MAJOR (operator-message precision inverted on the two unprovable branches, both reachable single-node; correct wording
+    exists at the @throws tag unpropagated) + 1 minor (ADR 86 unqualified genuine-first-registration equality) + the two-node-framing
+    recommendation; behavior refuted on every angle incl. three-node interleavings, deletion branches, equality semantics.
+    Fix round routed to the C1 session'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-14T14:15:00Z'
