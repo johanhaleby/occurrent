@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33b
-revision: 43
+revision: 44
 updated_at: 2026-08-14T09:05:00Z
 updated_by: "successor orchestrator (worktree api-review-verification-c3b0ea): recovered per handoff, monitors re-armed, act-001 reconciled VERIFIED, U10B registered (U11 docs appendix push), U13 gate going to Johan"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -191,7 +191,8 @@ pending_actions:
     type: workflow-dispatch
     target: "U14 subagent (Sonnet, independent clone, branch johan/cdx33b-u14-adr86-correction off origin/main 8e88c6f): the ADR 86 correction-list sentence plus the three round-3 minors, prose/comment-only"
     expected: "an open PR, green by job conclusion on the exact head (CI is the verification per Johan's directive, no local suites), suppressed blocks read, DELIVERY_RESULT; orchestrator verifies the fix against the falsifying input and CAS-merges"
-    status: PENDING
+    status: VERIFIED
+    verified: "2026-08-14: PR 780 merged as 480c695; the green-by-job-conclusion expectation was superseded mid-flight by Johan's [ci skip] prose-only directive"
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-14T16:05:00Z
@@ -348,13 +349,13 @@ units:
   U14:
     issue: null
     goal: "Round-3 MAJOR-1 plus the three minors, prose/comment-only, no behavior change: add ADR 86 amendment-2's lines 97-99 starter-stack-answers-on-first-ask sentence to amendment 3's quote-and-correct list (post-U13 the CC layer is skipped unasked and the durable layer answers); qualify the two test comments that attribute a hand-written-function skip to the shipped starter stack; recast the ManualStartSubscriptionModel.java:153-156 dynamic-call count as an upper bound"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "780", met: true, evidence: "MERGED 2026-08-14 as 480c695 with [ci skip] in the squash subject (zero workflow runs on main for it, verified), CAS-pinned to a9a7eb5. All four fixes verified by orchestrator against the round-3 falsifying inputs on the branch ref; two extra Copilot grammar fixes; final-head Copilot review requested via GraphQL botIds and returned bare (4/4 files, no comments, no suppressed block); 0 unresolved threads. Matrix deliberately not run per Johan's prose-only [ci skip] directive, verdict carried from green base 8e88c6f. Worker declined the mid-task [ci skip] amend instructions as a possibly compromised channel and reported BLOCKED on the unrun matrix; caution noted as the right failure mode (surface, not obey), override recorded here under Johan's directive"}
   U15:
     issue: null
     goal: "Round-3 MAJOR-2 on the held docs branch: docs.md 3669 and 6674 attribute the registration-pin guarantee to the one-arg stoppedByDefault factory, which passes null storage and never pins; correct both so the one-arg behavior is stated honestly (first run starts from the wrapped model's default at start) and the pin guarantee is scoped to the checkpoint-backed form (three-arg factory / Spring manual mode); push docs/0.33.0-preview only, never merge"
