@@ -170,10 +170,14 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
 
         final AtomicInteger saves = new AtomicInteger();
 
+        // The three-argument overload, because the two-argument one is defined in terms of it, so counting here
+        // counts every write once whichever overload the model calls. Counting the two-argument one instead would
+        // have left these tests passing after the model moved to a conditional write.
         @Override
-        public Mono<org.occurrent.subscription.Checkpoint> save(String subscriptionId, org.occurrent.subscription.Checkpoint checkpoint) {
+        public Mono<org.occurrent.subscription.Checkpoint> save(String subscriptionId, org.occurrent.subscription.Checkpoint checkpoint,
+                                                                org.occurrent.subscription.CheckpointWriteCondition condition) {
             saves.incrementAndGet();
-            return super.save(subscriptionId, checkpoint);
+            return super.save(subscriptionId, checkpoint, condition);
         }
     }
 
