@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 27
+revision: 28
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -298,7 +298,7 @@ units:
     goal: 'Docs bundle ruled fix-now by Johan at the return ask: align PR 55''s docs/checkpoint-fencing stale blanket fixed-at-registration
       claim with the preview wording, deduplicate the diverging captured-position paragraph on both branches, add the missing
       blank line before ## Synchronous Subscriptions on checkpoint-fencing; held branches, push only, never merge'
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -307,8 +307,12 @@ units:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: null
-      met: false
-      evidence: null
+      met: true
+      evidence: 'DONE 2026-08-14 evening: checkpoint-fencing at b256a50 (four commits: claim port, dedup, kramdown blank line,
+        second-claim port), preview at 381ca8b (dedup only, already correct otherwise), verified by orchestrator ls-remote
+        + origin-ref grep (zero unqualified-claim hits on the fencing ref). Page-wide class sweep on both rendered trees:
+        zero hits for every stale pattern. Diffs confined to pages/docs/docs.md, builds exit 0, exact-carry discipline, primary
+        checkout untouched'
 watchers:
 - id: watcher-001
   kind: github-work-item-monitor
