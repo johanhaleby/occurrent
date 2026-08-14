@@ -118,14 +118,15 @@ say so precisely with `evaluatesWriteConditionsFor(String subscriptionId)`, a se
 `evaluatesWriteConditions()` for every id unless overridden. The blocking Spring Boot starter's own fencing check
 reads it too, see section 8. The reactor stack has no startup check like that one, but the override is not merely
 advisory there either. `ReactorDurableSubscriptionModel.pinStartPosition` reads it the first time a reactive
-durable subscription registers with no checkpoint stored yet and a seed position to pin. An existing checkpoint
-skips this path entirely, and so does a seed that resolves to nothing, which `globalCheckpoint()` documents as a
-real, non-hypothetical outcome. When it does run, the answer decides between a conditional `ifAbsent()` write
-that can refuse a losing race and an unconditional write logged at `WARN` that keeps 0.32.0's race open for that
-subscription. A storage whose `ifAbsent()` otherwise works but whose
-predicate stays at the default `false` here does not fail loudly for it. It compiles, runs, and keeps the 0.32.0
-race open with nothing louder than that `WARN`. Leaving the override unanswered is a real choice with a real
-cost, not optional polish, see section 8.
+durable subscription's start position resolves with no checkpoint stored yet and a seed position to pin,
+whether that is at registration on a running model or later, when a subscription registered while the model
+was stopped is actually started or resumed. An existing checkpoint skips this path entirely, and so does a seed
+that resolves to nothing, which `globalCheckpoint()` documents as a real, non-hypothetical outcome. When it does
+run, the answer decides between a conditional `ifAbsent()` write that can refuse a losing race and an
+unconditional write logged at `WARN` that keeps 0.32.0's race open for that subscription. A storage whose
+`ifAbsent()` otherwise works but whose predicate stays at the default `false` here does not fail loudly for it.
+It compiles, runs, and keeps the 0.32.0 race open with nothing louder than that `WARN`. Leaving the override
+unanswered is a real choice with a real cost, not optional polish, see section 8.
 
 If your store can evaluate a condition for real, the two rules that matter are the same two the TCK asserts on every
 storage that declares it supports them. `any()` must leave whatever version is stored untouched, carrying it
@@ -212,11 +213,13 @@ server has. Built that way, `save` accepts that shape too for `notOlderThan` and
 `evaluatesWriteConditionsFor` agrees, answering `true` for it. Do not build a Cluster deployment's storage with
 `forStandalone`. A conditional write for an id the standalone mode accepts but Cluster cannot align a slot for then
 fails with Redis's own `CROSSSLOT` error instead of the refusal above. `any()` never refuses one for slot alignment,
-in either mode, since it writes only the checkpoint key. `delete` never refuses one either. An id of this shape can
-only ever have had a checkpoint written for it through `any()` in Cluster-safe mode, since a conditional write
-already refuses one before touching Redis, so its version key can never exist to strand. On a
-`CROSSSLOT` failure `delete` falls back to two single-key deletes instead, which is provably safe for that reason and
-not merely convenient.
+in either mode, since it writes only the checkpoint key. `delete` never refuses one either. In Cluster-safe mode a
+conditional write already refuses an id of this shape before touching Redis, so a version key this mode itself
+wrote for one never exists. One can still be there if the same Redis data was written earlier through
+`forStandalone`'s `notOlderThan`, the case of standalone Redis later migrated into Cluster (`ifAbsent` never
+writes the version key, in either mode, only `notOlderThan` does). On a `CROSSSLOT` failure `delete` falls back
+to two single-key deletes, which removes a version key a migration like that left behind and is a no-op
+otherwise.
 
 This also assumes the `RedisOperations` passed in serializes a key to its own literal bytes, the same assumption
 the checkpoint's plain `GET` already makes.
