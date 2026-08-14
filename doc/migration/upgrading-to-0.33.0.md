@@ -39,17 +39,28 @@ OptionalLong writeVersion(String subscriptionId);
 default boolean evaluatesWriteConditions() {
     return false;
 }
+
+default boolean evaluatesWriteConditionsFor(String subscriptionId) {
+    return evaluatesWriteConditions();
+}
 ```
 
-The reactor twin gets the same three members, `Mono<Checkpoint> save(String, Checkpoint, CheckpointWriteCondition)`,
-`Mono<Long> writeVersion(String)` and the same `evaluatesWriteConditions()`, with an empty `Mono` meaning no version
-is stored. A refusal on that stack signals `Mono.error`, it never throws from assembly.
+The reactor twin gets the same four members, `Mono<Checkpoint> save(String, Checkpoint, CheckpointWriteCondition)`,
+`Mono<Long> writeVersion(String)`, and the same `evaluatesWriteConditions()` and `evaluatesWriteConditionsFor(String)`,
+with an empty `Mono` meaning no version is stored. A refusal on that stack signals `Mono.error`, it never throws from
+assembly.
 
-`evaluatesWriteConditions()` is the only one of the three with a default, and the default is `false`, so a storage that
-writes unconditionally compiles and keeps working without answering it. Say `true` when your storage accepts and
-refuses `notOlderThan` and `ifAbsent` as documented and leaves a stored version untouched under `any()`. A caller that
-depends on a conditional write asks first, which is how the Spring Boot starter refuses a wiring that would otherwise
-throw on the first checkpoint write. Section 8 covers that failure.
+`evaluatesWriteConditions()` and `evaluatesWriteConditionsFor(String)` are the two of the four with a default.
+`evaluatesWriteConditions()` defaults to `false`. `evaluatesWriteConditionsFor(String)` has no default of its own,
+it delegates to `evaluatesWriteConditions()`, so it inherits `true` for every id once a storage overrides that one,
+unless the storage overrides `evaluatesWriteConditionsFor` too to answer differently by id. A storage that answers
+neither only guarantees that a caller treats it as unable to evaluate a condition. It compiles and keeps working
+either way, whether or not `save` actually does evaluate one without saying so, and section 2 has that case. Say
+`true` from `evaluatesWriteConditions()` when your storage accepts and refuses `notOlderThan` and `ifAbsent` as
+documented and leaves a stored version untouched under `any()`. Override `evaluatesWriteConditionsFor` too when
+that answer varies by subscription id, see section 2. A caller that depends on a conditional write asks first,
+which is how the Spring Boot starter refuses a wiring that would otherwise throw on the first checkpoint write.
+Section 8 covers that failure.
 
 A test double that overrides the two-argument `save` to observe writes stops seeing them, because the subscription
 models now call the three-argument `save` directly, so override that one instead.
@@ -105,8 +116,17 @@ same as it always accepted every subscription id outside the version key's own r
 A store whose answer to a conditional write depends on the subscription id, the way the two Redis modes above do, can
 say so precisely with `evaluatesWriteConditionsFor(String subscriptionId)`, a second new default method that answers
 `evaluatesWriteConditions()` for every id unless overridden. The blocking Spring Boot starter's own fencing check
-reads it too, see section 8. No such check exists on the reactor stack yet, so a reactor `CheckpointStorage`
-implementer overrides it only for callers that ask directly.
+reads it too, see section 8. The reactor stack has no startup check like that one, but the override is not merely
+advisory there either. `ReactorDurableSubscriptionModel.pinStartPosition` reads it the first time a reactive
+durable subscription's start position resolves with no checkpoint stored yet and a seed position to pin,
+whether that is at registration on a running model or later, when a subscription registered while the model
+was stopped is actually started or resumed. An existing checkpoint skips this path entirely, and so does a seed
+that resolves to nothing, which `globalCheckpoint()` documents as a real, non-hypothetical outcome. When it does
+run, the answer decides between a conditional `ifAbsent()` write that can refuse a losing race and an
+unconditional write logged at `WARN` that keeps 0.32.0's race open for that subscription. A storage whose
+`ifAbsent()` otherwise works but whose predicate stays at the default `false` here does not fail loudly for it.
+It compiles, runs, and keeps the 0.32.0 race open with nothing louder than that `WARN`. Leaving the override
+unanswered is a real choice with a real cost, not optional polish, see section 8.
 
 If your store can evaluate a condition for real, the two rules that matter are the same two the TCK asserts on every
 storage that declares it supports them. `any()` must leave whatever version is stored untouched, carrying it
@@ -193,11 +213,13 @@ server has. Built that way, `save` accepts that shape too for `notOlderThan` and
 `evaluatesWriteConditionsFor` agrees, answering `true` for it. Do not build a Cluster deployment's storage with
 `forStandalone`. A conditional write for an id the standalone mode accepts but Cluster cannot align a slot for then
 fails with Redis's own `CROSSSLOT` error instead of the refusal above. `any()` never refuses one for slot alignment,
-in either mode, since it writes only the checkpoint key. `delete` never refuses one either. An id of this shape can
-only ever have had a checkpoint written for it through `any()` in Cluster-safe mode, since a conditional write
-already refuses one before touching Redis, so its version key can never exist to strand. On a
-`CROSSSLOT` failure `delete` falls back to two single-key deletes instead, which is provably safe for that reason and
-not merely convenient.
+in either mode, since it writes only the checkpoint key. `delete` never refuses one either. In Cluster-safe mode a
+conditional write already refuses an id of this shape before touching Redis, so a version key this mode itself
+wrote for one never exists. One can still be there if the same Redis data was written earlier through
+`forStandalone`'s `notOlderThan`, the case of standalone Redis later migrated into Cluster (`ifAbsent` never
+writes the version key, in either mode, only `notOlderThan` does). On a `CROSSSLOT` failure `delete` falls back
+to two single-key deletes, which removes a version key a migration like that left behind and is a no-op
+otherwise.
 
 This also assumes the `RedisOperations` passed in serializes a key to its own literal bytes, the same assumption
 the checkpoint's plain `GET` already makes.

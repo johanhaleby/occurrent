@@ -426,6 +426,16 @@ crossing slots, and the two names cannot be brought into one slot without renami
 checkpoint key. That failure is immediate and reaches only a cluster user who turned the fence on, while
 an unfenced cluster user is untouched.
 
+> **Amended for 0.33.0.** The two names are brought into one slot without renaming the existing
+> checkpoint key after all. The version key's own name carries a hash tag built from whatever the
+> checkpoint key hashes on, so Cluster places both in the same slot and the script never crosses one.
+> `SpringRedisCheckpointStorage`'s two original constructors still refuse one subscription id shape
+> outright for `notOlderThan` and `ifAbsent`, the one Cluster itself would fall back to hashing on the
+> whole id for, so that failure is still immediate where it happens, but it is no longer every id in a
+> fenced cluster. `SpringRedisCheckpointStorage.forStandalone(..)`, new in this release, accepts that
+> shape too, for a deployment where slot alignment is not a concept the server has. An unfenced cluster
+> user remains untouched.
+
 **The same-value edge is storage-dependent.** Mongo's `ifAbsent` gates on presence, not value, so a
 second write offering the exact same checkpoint value as the one already stored is indistinguishable from
 a first write and is reported as success rather than refused, though nothing is stored twice
