@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 15
+revision: 16
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -148,7 +148,7 @@ units:
       the standard internal warning and expandWhatCanBeFound support status (@NullMarked per sibling convention makes this
       a COMPILED change: normal CI, never [ci skip]). Review-finding 11 is DECLINED (the exists read is load-bearing, timed
       before position capture); finding 8''s placement half DECLINED per the cdx33b finding-11 convention ruling'
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on:
@@ -157,9 +157,12 @@ units:
     deliverables:
     - check: pr_merged
       repo: johanhaleby/occurrent
-      ref: null
-      met: false
-      evidence: null
+      ref: '789'
+      met: true
+      evidence: MERGED 2026-08-14 as squash c13b6e8a9f57a909321642ccd31e31716faf1f26, CAS-pinned to 0c359b2 (26/26 by job
+        conclusion verified, 0 threads, MERGEABLE, bare Copilot review with zero suppressed findings). All four truth fixes
+        with before/after verified; ADR 116 amendment wording approved by Johan; squash body confirmed free of skip markers
+        so the matrix runs on main; adversarial pass skipped per the prose-only rule (pre-verified corrections)
   C5:
     issue: '738'
     goal: 'Reactor pin-race parity, promoted by Johan 2026-08-14 under the no-severity-ladder principle (reversing his same-day
