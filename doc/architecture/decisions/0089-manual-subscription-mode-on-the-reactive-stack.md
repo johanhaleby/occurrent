@@ -116,3 +116,56 @@ find it, and they only find it by hanging.
 **Amended for 0.33.0: `IntrospectableSubscriptionModel` is renamed to `IntrospectableSubscriptions`, and
 `DelegatingSubscriptionModel` to `SubscriptionModelWrapper`.** Neither capability changed. Both names moved
 because neither interface ever extended `SubscriptionModel`.
+
+> **Amended again, 2026-08-14, before 0.33.0 shipped, for #738.** This record says the reactive stack needs no
+> wrapper because its layer order already puts the withholding model outermost, and that is still true. What it did
+> not say is where the reactive stack therefore records a subscription's first start position, which is
+> `ReactorDurableSubscriptionModel.resolveStartAt`. That method read storage, found nothing, read a position and
+> wrote it with no condition attached, so two nodes registering a subscription for the very first time at the same
+> moment both found nothing, both wrote, and the second write won without anybody being told. The events between the
+> two positions then reached neither. It is the defect ADR 86's fourth amendment describes on the blocking stack, and
+> #771 says whichever direction wins is decided once and applied to both, so the answer here is the same answer.
+>
+> **The write is conditional now, with `ifAbsent()`, and a registration that loses it is refused with
+> `StartPositionAlreadyPinnedException`.** Everything ADR 86's fourth amendment records about that refusal holds
+> here too, including the one exception inside it. The stored position is read back, and a registration whose own
+> position is what comes back completes rather than failing. A read back that differs, that fails, or that finds
+> nothing is refused, the last two for the weaker reason that nothing here can show the two agree. The exception
+> lives in `subscription/core`, which both stacks already depend on, so no reactive twin of it exists.
+>
+> **Two differences from the blocking stack are worth stating rather than leaving to be found.**
+>
+> The first is scope. On the blocking stack this lives in `ManualStartSubscriptionModel`, so only
+> `occurrent.subscription.mode=manual` reaches it, and `DurableSubscriptionModel` still records a first position
+> with `any()`. The reactive stack has no such wrapper, by this record's own decision, so the conditional write and
+> the refusal sit in the only durable model there is. Every reactive durable subscription's first run can therefore
+> be refused, not only one registered under `manual`. That is a wider change than the blocking one and it was taken
+> deliberately, because the alternative is a model that records a first position two ways depending on how it was
+> configured, and because the rule in `AGENTS.md` says a loss window is a loss whatever its width.
+>
+> The second is where the refusal comes out. The blocking model throws from `subscribe(..)` on every path. The
+> reactive model throws from `subscribe(..)` only when the wrapped model manages named subscriptions of its own,
+> which is the path that already waits for the position inside that call. When this model drives the cold primitive
+> itself it cannot throw there, because resolving the position waits on storage and that call holds the model's
+> monitor, which this model refuses to block for the reason its own comment gives. So the refusal is signalled on
+> `Subscription.waitUntilStarted()` and logged at `ERROR`, which is where that path already reports a start it could
+> not make. A caller that never asks whether the subscription started sees only the log line. A refused subscription
+> is also dropped from the model rather than left registered, so starting again means registering again, not
+> resuming.
+>
+> **A storage that cannot evaluate the condition keeps the write it had.** `CheckpointStorage.evaluatesWriteConditions()`
+> defaults to `false`, and this model is the only durable model the reactive stack has, so requiring the capability
+> would fail every application whose own storage never overrode that method, at the first write and with no startup
+> check to catch it first. The model asks `evaluatesWriteConditionsFor(String)` instead, and a storage answering
+> `false` gets the unconditional write 0.32.0 made, with a `WARN` naming the storage class and what closes the
+> window. Both storages Occurrent ships on this stack answer `true`, so this only reaches a storage written
+> elsewhere. It is a window Occurrent cannot close from here, since the storage is the thing that would have to
+> evaluate the condition, and the way out is for it to.
+>
+> **Two bounds this does not cover.** A subscription registered while the model is stopped reads its position at
+> registration and reads storage when it is started, so a checkpoint written between those two is accepted in
+> silence even though it may hold a later position. That is the same window #771 owns, between one node reading a
+> position and its own write reaching storage, widened here by however long the subscription waits to be started,
+> and closing it needs what #771 needs. And the
+> refusal cannot tell a second node from a storage answering from a reader that has not seen the write, which is
+> why the exception is named for the position rather than for whoever wrote it.

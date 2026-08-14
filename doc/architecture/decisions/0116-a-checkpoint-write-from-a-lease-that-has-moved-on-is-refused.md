@@ -539,6 +539,12 @@ and is unaffected by which family it runs against.
 > report a write of the value already stored as success, which the MongoDB storages do and Redis and the in-memory
 > storage do not, two nodes reading the same position reach that refusal path on some storages and not on others.
 > They complete either way.
+>
+> *(Corrected the same day, for #738. `ManualStartSubscriptionModel` is no longer the only shipped caller of
+> `ifAbsent()`. `ReactorDurableSubscriptionModel` records a subscription's first start position with it too, and
+> refuses the same way, per [ADR 89](0089-manual-subscription-mode-on-the-reactive-stack.md)'s last amendment. That
+> one asks `evaluatesWriteConditionsFor(String)` first and writes unconditionally when the answer is `false`, which
+> the blocking model does not, since it refuses such a storage when it is built instead.)*
 
 The blocking in-memory storage implements the capability too, which is a few lines and gives the new
 conformance suite something to run without a container.
