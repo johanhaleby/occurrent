@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 6
+revision: 7
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -49,7 +49,7 @@ units:
       == false branch, or an opt-in strictness knob); decided shape recorded on #738 for reactor parity (which stays 0.34);
       ADR 86 amendment; finding 2''s new evidence (a stateful/time-dependent caller dynamic function can flip between registration
       and start) weighed at the same gate against the unreleased decidesWhereTheSubscriptionStarts shape'
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -57,15 +57,17 @@ units:
     deliverables:
     - check: pr_merged
       repo: johanhaleby/occurrent
-      ref: null
+      ref: '787'
       met: false
-      evidence: null
+      evidence: 'IN FLIGHT: PR 787 at 6dd2112, narrow-refusal shape + StartPositionAlreadyPinnedException approved by Johan
+        at the in-session gate; finding 2 delegated to the unit and decided (no 0.33 shape change, javadoc + ADR bound); worker
+        in pr-fix loop; its #738-tension finding answered (already ruled as C5)'
   C2:
     issue: null
     goal: 'Review finding 5: split saga filter(Filter) on the unreleased 0.33 surface: an additive predicate combined with
       the derived event types (hierarchy checks stay on) vs a named full-selector override carrying the replacement semantics;
       naming and shape at the in-session design gate; ADR 124 amendment, changelog, migration guide, tests'
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -73,16 +75,20 @@ units:
     deliverables:
     - check: pr_merged
       repo: johanhaleby/occurrent
-      ref: null
+      ref: '784'
       met: false
-      evidence: null
+      evidence: 'DELIVERED done at final head 25f71db: 28/28 by job conclusion verified by orchestrator, MERGEABLE, 1 unresolved
+        thread = the reasoned-decline ORCHESTRATOR.md ask (policy-allowed), final Copilot review bare incl. no suppressed
+        block. Names narrowingFilter/replacementFilter + filter deletion approved by Johan at the session gate. 10 mutants
+        killed. One incidental write accepted (EventTypeExpansion javadoc name ripple). Adversarial pass dispatched against
+        the sharpened invariant; merge waits on it + the ADR 124 amendment wording confirm'
   C3:
     issue: null
     goal: 'Review finding 4: Redis capability honesty on the unreleased CheckpointStorage surface: id-aware validation at
       boot where fencing/manual-start accepts the storage (closes the fail-late gap: CheckpointFencingConfigurationCheck trusts
       the global boolean), capability-contract wording, and the standalone-vs-Cluster id-restriction decision at the unit''s
       gate (through the orchestrator)'
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -90,9 +96,10 @@ units:
     deliverables:
     - check: pr_merged
       repo: johanhaleby/occurrent
-      ref: null
+      ref: '783'
       met: false
-      evidence: null
+      evidence: 'IN FLIGHT: PR 783 iterating Copilot rounds (latest head 317770e includes excluding synchronous ids and the
+        version-key namespace from the fencing check); DELIVERY_RESULT owed'
   C4:
     issue: null
     goal: 'Truth fixes: ADR 116 659-660 Redis Cluster sentence (AFTER C3''s gate decides what it must say), ReplayAware.java
