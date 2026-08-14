@@ -1396,3 +1396,6 @@ The work-item monitor ran an hour past U13's merge, the last PR-bearing unit, an
 
 ## Chips for multi-hour units when Attended, even with every gate pre-closed (2026-08-14)
 Johan asked why the endgame units ran as subagents in Attended mode. The routing was defensible for the bounded ones (results feed the orchestrator's merge gates), but U13 ran 3+ hours and its tail deviations each round-tripped through the orchestrator where a chip session would have asked Johan directly. Ruling recorded in the skill's Attended mode bullet: expected-multi-hour units dispatch as chips when attended, because pre-closing the known gates does not pre-close the mid-flight judgment calls; bounded sub-hour work the orchestrator integrates stays with subagents.
+
+## A str.replace memory edit without an assert is a silent no-op (2026-08-14)
+Two ORCHESTRATOR.md additions (the v2 watcher pointer line and a visibility-repair journal entry) never landed because their python replace anchors missed and nothing checked, while the commit messages claimed they had. The intent-first ordering the repair list exists for was defeated by its own write failing invisibly. Rule: every scripted memory edit asserts the anchor exists before and the content exists after, and the commit only claims what a grep just confirmed.
