@@ -96,9 +96,17 @@ refuses to start when it would pair your store with a competing-consumer lease, 
 that.
 
 Occurrent's own Mongo and Redis checkpoint storages do not need this recipe. They already evaluate `notOlderThan`
-and `ifAbsent` for real, on Redis Cluster too, see section 4. One subscription id shape the Redis storage refuses
-outright for a conditional write is a Cluster-only concept in name, the refusal itself applies on a standalone or
-replicated server exactly the same, since nothing about it depends on which one you run.
+and `ifAbsent` for real, on Redis Cluster too, see section 4. `SpringRedisCheckpointStorage`'s original two
+constructors refuse one subscription id shape outright for a conditional write, whether or not the deployment they
+run against is actually Cluster. `SpringRedisCheckpointStorage.forStandalone(..)`, new in this release, is the other
+mode. A conditional write against a standalone or replicated deployment built that way accepts that shape too, the
+same as it always accepted every subscription id outside the version key's own reserved namespace, see section 4.
+
+A store whose answer to a conditional write depends on the subscription id, the way the two Redis modes above do, can
+say so precisely with `evaluatesWriteConditionsFor(String subscriptionId)`, a second new default method that answers
+`evaluatesWriteConditions()` for every id unless overridden. The blocking Spring Boot starter's own fencing check
+reads it too, see section 8. No such check exists on the reactor stack yet, so a reactor `CheckpointStorage`
+implementer overrides it only for callers that ask directly.
 
 If your store can evaluate a condition for real, the two rules that matter are the same two the TCK asserts on every
 storage that declares it supports them. `any()` must leave whatever version is stored untouched, carrying it
@@ -174,13 +182,22 @@ One shape this cannot help is a subscription id where Cluster itself falls back 
 pair, an unmatched brace, or an empty pair like `{}`) and that whole id is either empty or contains a closing brace
 somewhere in it, for example `""`, `"{}orders"` or `"a}b{c"`.
 
-`save` refuses an id of that shape outright with an `IllegalArgumentException` for `notOlderThan` and `ifAbsent`,
-which is what keeps `evaluatesWriteConditions()` true without exception rather than true for every id except one
-Cluster would otherwise refuse two calls downstream. `any()` never refuses one, since it writes only the checkpoint
-key. `delete` never refuses one either. An id of this shape can only ever have had a checkpoint written for it
-through `any()`, since a conditional write already refuses one before touching Redis, so its version key can never
-exist to strand. On a `CROSSSLOT` failure `delete` falls back to two single-key deletes instead, which is provably
-safe for that reason and not merely convenient.
+Built with either of `SpringRedisCheckpointStorage`'s original two constructors, `save` refuses an id of that shape
+outright with an `IllegalArgumentException` for `notOlderThan` and `ifAbsent`, whether or not the deployment behind
+it is actually Cluster. That is what keeps `evaluatesWriteConditions()` true without exception in that mode, rather
+than true for every id except one Cluster would otherwise refuse two calls downstream, and
+`evaluatesWriteConditionsFor(subscriptionId)` answers `false` for that shape there (and for the version key's own
+reserved namespace below, in both modes) and `true` for every other id. `SpringRedisCheckpointStorage.forStandalone(..)`,
+new in this release, is for a deployment that is standalone or replicated, where slot alignment is not a concept a
+server has. Built that way, `save` accepts that shape too for `notOlderThan` and `ifAbsent`, and
+`evaluatesWriteConditionsFor` agrees, answering `true` for it. Do not build a Cluster deployment's storage with
+`forStandalone`. A conditional write for an id the standalone mode accepts but Cluster cannot align a slot for then
+fails with Redis's own `CROSSSLOT` error instead of the refusal above. `any()` never refuses one for slot alignment,
+in either mode, since it writes only the checkpoint key. `delete` never refuses one either. An id of this shape can
+only ever have had a checkpoint written for it through `any()` in Cluster-safe mode, since a conditional write
+already refuses one before touching Redis, so its version key can never exist to strand. On a
+`CROSSSLOT` failure `delete` falls back to two single-key deletes instead, which is provably safe for that reason and
+not merely convenient.
 
 This also assumes the `RedisOperations` passed in serializes a key to its own literal bytes, the same assumption
 the checkpoint's plain `GET` already makes.
@@ -400,9 +417,9 @@ lobby.step(state, SagaInput.timeout("game-1", stepTimer("awaiting-players")));
 Kotlin has both of those. There is a top-level `stepTimer` next to `saga { }`, and `startTimeout`, `startTimeoutAt`,
 `cancelTimeout`, `evolveOnTimeout` and `reactOnTimeout` each take a `TimerName` as well as a string.
 
-## 8. Two ways the Spring Boot starter now refuses to start
+## 8. Three ways the Spring Boot starter now refuses to start
 
-Both of these used to start and go wrong later, so they are startup failures on purpose. Each message names the beans
+All three used to start and go wrong later, so they are startup failures on purpose. Each message names the beans
 involved and what to do.
 
 **Several `CompetingConsumerStrategy` beans with no `@Primary`.** Adding a strategy of your own used to leave two beans
@@ -437,6 +454,22 @@ what keeps two nodes registering the same subscription from overwriting each oth
 `evaluatesWriteConditions()` on a storage that does evaluate it, or declare the subscription model bean yourself and
 build it with the one-argument `ManualStartSubscriptionModel.stoppedByDefault(SubscriptionModel)`, which records no
 position at all and lets a subscription's first run start from the moment you start it.
+
+**A `CheckpointStorage` that evaluates write conditions overall but refuses one or more declared subscription ids,
+wired next to a strategy.** `evaluatesWriteConditions()` answering `true` is not the last word once
+`evaluatesWriteConditionsFor(String)` exists. `SpringRedisCheckpointStorage`'s Cluster-safe mode is exactly this
+case, answering `true` overall while refusing the one subscription id shape in section 4 for a conditional write. Once
+every singleton exists, the starter asks `evaluatesWriteConditionsFor` for the subscription ids
+`CheckpointStorageCannotFenceSubscriptionException`'s own javadoc names precisely, and throws that exception naming
+the storage and every refused id when the answer is `false` for at least one. That javadoc also says which ids are
+left out even though the storage might refuse them, a `@SynchronousSubscription` among them since it never writes a
+checkpoint at all, and which are asked about even though the storage refusing them would never matter.
+Rename the affected id to a shape the storage accepts, use a storage that evaluates write
+conditions for it (`forStandalone(..)` on `SpringRedisCheckpointStorage`, if the deployment allows it), or fall back
+to `occurrent.subscription.competing-consumer.fence-checkpoints=false`. That third way out has the same limit under
+`occurrent.subscription.mode=manual` as the second way out above. A first-run `ifAbsent()` write for the affected id
+runs whatever this setting is, so disabling the fence only trades this exception's own message for a less specific
+one from the storage itself, once that write is attempted.
 
 Manual mode has one more way to fail at startup, and this one depends on timing rather than on wiring. Two nodes
 registering a brand new subscription at the same moment both read a start position and both try to record it, only the
@@ -543,7 +576,7 @@ which for a Spring Boot application is startup. A saga sees this message:
 ```
 java.lang.IllegalArgumentException: the concrete event types dispatch would accept for com.example.OrderEvent cannot all
 be enumerated, so a filter derived from it would miss some of them. Declare the concrete event types instead, make
-OrderEvent and every level below it final or sealed, or set an explicit filter, which is used instead of deriving
+OrderEvent and every level below it final or sealed, or set a replacementFilter(...), which is used instead of deriving
 one and is the way out when a CloudEventTypeMapper of your own maps the whole hierarchy onto a single CloudEvent type
 string.
 ```
@@ -657,7 +690,7 @@ For an annotation-based subscription, list the concrete types with the annotatio
 the declared supertype, for example `@Subscription(id = "order-subscription", eventTypes = {OrderPlaced.class,
 PaymentReserved.class})`.
 
-### Or, for a saga, set an explicit filter
+### Or, for a saga, set a replacement filter
 
 New in 0.33.0, and the remedy to reach for when the hierarchy is genuinely open and you know what your events are stored
 as. A saga can now say what it subscribes on instead of having it derived from its event types, so nothing is derived and
@@ -668,24 +701,51 @@ Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
         .correlateAll(OrderEvent::orderId)
         .startsOn(OrderEvent.class)
         .react(OrderEvent.class, (state, event) -> ...)
-        .filter(Filter.type("order-event"))
+        .replacementFilter(Filter.type("order-event"))
         .build();
 ```
 
-`FlowSaga.Builder` has the same method, both Kotlin `saga { }` blocks expose it as `filter(...)`, and `Saga.create(...)`
-takes one as a trailing argument. A subscription has no equivalent, so for `@Subscription` and its siblings the
-`eventTypes` attribute above is still the answer.
+`FlowSaga.Builder` has the same method, both Kotlin `saga { }` blocks expose it as `replacementFilter(...)`, and
+`Saga.create(...)` takes one as a trailing argument. A subscription has no equivalent, so for `@Subscription` and its
+siblings the `eventTypes` attribute above is still the answer.
 
-Three things become yours to get right. The filter has to match the saga's start events, because a filter that excludes
-them means no instance is ever created. It also has to stay inside what your `CloudEventConverter` can turn into a domain
-event, since every CloudEvent it admits is converted before the saga sees it, and one that fails to convert fails that
-delivery rather than being skipped. And the build-time check is switched off for every event type the saga declares, not
-only for the one you could not enumerate, so a filter you set for an unrelated reason also stops you being told about a
-sealed hierarchy that was reopened somewhere else in the same saga.
+Reach for this only when the hierarchy is the problem. If all you want is to select on subject, source, data or time
+while keeping your declared event types, use `narrowingFilter(...)` instead, which is combined with the derived filter
+rather than used in place of it, and which leaves the build-time check on. Both builders and both Kotlin blocks have it.
+`Saga.create(...)` does not, and a saga it returns cannot be given one afterwards, since the factory hands back an
+anonymous implementation. Implement `Saga` yourself instead of calling the factory, which is what its own javadoc
+already tells you to do for `onStart` and `isTerminal`. One thing to know if you go that way. The build-time check that
+refuses a type whose concrete types cannot be enumerated belongs to the two builders and the factory, so a saga you
+implement yourself never runs it, and under the type mappers Occurrent ships a supertype in its `eventTypes()` leaves it
+subscribing on a filter that misses events its own handlers would have taken. Declare the concrete types there, which is what a builder would have made you do.
 
-A flow saga pays one more cost. It appends every correlated event it receives to the instance's retained history before it
-checks which branch handles the type, so a filter broader than the types the flow names grows that history, and under a
-`stepWindow` cap those events take slots the step's own events would otherwise hold.
+Four things become yours to get right with a replacement, and the first two apply to a narrowing too. The filter has to
+match the saga's start events, because one that excludes them means no instance is ever created. It also has to admit the
+events that move an instance on, because an instance whose later events are excluded never reaches `isTerminal` and stays
+alive with its timers running. Beyond those, a replacement has to stay inside what your `CloudEventConverter` can turn
+into a domain event, since every CloudEvent it admits is converted before the saga sees it, and one that fails to convert
+fails that delivery rather than being skipped. And the build-time hierarchy check is switched off for every event type
+the saga declares, not only for the one you could not enumerate, so a replacement you set for an unrelated reason also
+stops you being told about a sealed hierarchy that was reopened somewhere else in the same saga.
+
+A saga that declares no event types and sets no replacement is the exception to the split above. Its derived filter
+matches everything, so a narrowing on it is the whole selector, and the conversion point applies to that narrowing
+exactly as it does to a replacement. Set a replacement as well and that replacement is the base instead, so this does
+not arise.
+
+A flow saga pays two more. The first belongs to a replacement, which makes it append every correlated event it receives
+to the instance's retained history before it checks which branch handles the type, so a filter broader than the types
+the flow names grows that history, and under a `stepWindow` cap those events take slots the step's own events would
+otherwise hold. The second belongs to both and is the one that surprises people. A guard reads what has arrived, so a
+selector that excludes an event type changes the answer `received.none(Rejected.class)` gives, and a branch can fire
+that would not have fired otherwise. A narrowing can only remove matches, so that is the only
+direction it can move in. A replacement can be broader or narrower than the flow's types, and does this when it is narrower.
+
+One operational note for a saga that is already running. Adding a narrowing does not replay, so the events it would have
+excluded before you added it are already in the instance's history. Removing one later resumes from the stored
+checkpoint, and that checkpoint only moved for the events the saga actually received. So an excluded event that sits at
+or before it stays skipped for good, while one that arrived after the last event the saga did receive is delivered when
+it resumes.
 
 ### If you wrote a type mapper that collapses the hierarchy
 
@@ -694,7 +754,7 @@ One case genuinely worked in 0.32.0 and now throws, for a saga and for a subscri
 match, because the string the filter asks for is the string every event has. Occurrent cannot tell your mapper apart from
 the default one at build time, which is why the refusal does not make an exception for it.
 
-For a saga, `filter(Filter.type("order-event"))` is the direct answer, since it says the thing reflection could not work
+For a saga, `replacementFilter(Filter.type("order-event"))` is the direct answer, since it says the thing reflection could not work
 out. Declaring the concrete types also keeps working, because under such a mapper they all map to the same string, and it
 is the better choice when you can enumerate them. Reach for the filter when you cannot, which is the case a hierarchy
 other people extend was always going to end up in.

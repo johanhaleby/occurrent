@@ -26,6 +26,8 @@ import org.occurrent.subscription.StartAt;
 
 import java.util.OptionalLong;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * A {@code CheckpointStorage} provides means to read and write the checkpoint to storage.
  * This subscriptions can continue where they left off by passing the {@link Checkpoint} provided by {@link #read(String)}
@@ -103,6 +105,28 @@ public interface CheckpointStorage {
     @NullMarked
     default boolean evaluatesWriteConditions() {
         return false;
+    }
+
+    /**
+     * Whether this storage evaluates {@link CheckpointWriteCondition#notOlderThan(long)} and
+     * {@link CheckpointWriteCondition#ifAbsent()} for real for the given {@code subscriptionId}, rather than
+     * refusing them with an exception specific to this implementation.
+     * <p>
+     * Most storages answer the same for every id, so the default delegates to {@link #evaluatesWriteConditions()}.
+     * A storage overrides this instead when its answer depends on the id itself, for example one that reserves a
+     * shape of id it cannot evaluate a condition for while accepting that same shape for {@link
+     * CheckpointWriteCondition#any()}. Answering per id is what lets a caller ask, for the exact ids it plans to
+     * use, before it wires anything up, the same "ask before you wire anything up" promise
+     * {@link #evaluatesWriteConditions()} already makes for a storage whose answer never varies by id.
+     *
+     * @param subscriptionId The id to ask about
+     * @return {@code true} if both {@code notOlderThan} and {@code ifAbsent} are evaluated for this id, {@code false}
+     * if either of them is refused for it
+     */
+    @NullMarked
+    default boolean evaluatesWriteConditionsFor(String subscriptionId) {
+        requireNonNull(subscriptionId, "Subscription id cannot be null");
+        return evaluatesWriteConditions();
     }
 
     /**

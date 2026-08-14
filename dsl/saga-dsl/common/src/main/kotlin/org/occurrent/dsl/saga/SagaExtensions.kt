@@ -43,7 +43,7 @@ import java.util.function.Predicate
  * ```
  *
  * The registered event types become the saga's [Saga.eventTypes], and the selector it subscribes on is derived from them
- * unless [SagaBuilder.filter] sets one explicitly. Every handled event type needs a correlation, from
+ * unless [SagaBuilder.replacementFilter] sets one explicitly. Every handled event type needs a correlation, from
  * [SagaBuilder.correlate] or a [SagaBuilder.correlateAll] fallback, or [build] throws.
  */
 fun <E : Any, S, C : Any> saga(initialState: S, block: SagaBuilder<E, S, C>.() -> Unit): Saga<E, S, C> {
@@ -140,11 +140,19 @@ class SagaBuilder<E : Any, S, C : Any> @PublishedApi internal constructor(initia
     }
 
     /**
-     * Sets an explicit selector replacing the one derived from the registered event types, so the saga can select on
-     * more than event type. See [Saga.filter] for what it leaves you responsible for. Can be set only once.
+     * Adds a condition every selected event must also match, on top of the selector derived from the registered event
+     * types. See [Saga.narrowingFilter] for what it leaves you responsible for. Can be set only once.
      */
-    fun filter(filter: Filter) {
-        delegate.filter(filter)
+    fun narrowingFilter(narrowingFilter: Filter) {
+        delegate.narrowingFilter(narrowingFilter)
+    }
+
+    /**
+     * Sets an explicit selector used instead of deriving one from the registered event types. See
+     * [Saga.replacementFilter] for what it leaves you responsible for. Can be set only once.
+     */
+    fun replacementFilter(replacementFilter: Filter) {
+        delegate.replacementFilter(replacementFilter)
     }
 
     @PublishedApi

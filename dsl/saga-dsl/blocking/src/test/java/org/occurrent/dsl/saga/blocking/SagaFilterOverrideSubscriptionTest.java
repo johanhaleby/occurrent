@@ -134,7 +134,7 @@ class SagaFilterOverrideSubscriptionTest {
                 .startsOn(OpenOrderEvent.class)
                 .evolve(OpenOrderEvent.class, (state, e) -> e.orderId())
                 .react(OpenOrderEvent.class, (state, e) -> List.of(SagaEffect.issue(new ShipOrder(e.orderId()))))
-                .filter(filter)
+                .replacementFilter(filter)
                 .build();
     }
 

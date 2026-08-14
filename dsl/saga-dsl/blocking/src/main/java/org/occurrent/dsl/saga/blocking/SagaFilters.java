@@ -24,9 +24,10 @@ import org.occurrent.filter.Filter;
 import java.util.List;
 
 /**
- * Works out the plain {@link Filter} a {@link Saga} subscribes on. That is its explicit {@link Saga#filter() filter}
- * when it has one, and otherwise a type filter over its handled event types, resolved to CloudEvent type strings, or
- * {@link Filter#all()} when it declares none. Mirrors the projection DSL's filter derivation.
+ * Works out the plain {@link Filter} a {@link Saga} subscribes on. It starts from the saga's
+ * {@link Saga#replacementFilter() replacementFilter} when it has one, and otherwise derives a type filter over its
+ * handled event types, resolved to CloudEvent type strings, or {@link Filter#all()} when it declares none. A
+ * {@link Saga#narrowingFilter() narrowingFilter} is then combined with that.
  */
 final class SagaFilters {
 
@@ -34,10 +35,22 @@ final class SagaFilters {
     }
 
     static <E> Filter filterFor(CloudEventConverter<E> cloudEventConverter, Saga<E, ?, ?> saga) {
-        Filter explicit = saga.filter();
-        if (explicit != null) {
-            return explicit;
+        Filter replacement = saga.replacementFilter();
+        Filter base = replacement != null ? replacement : derivedFrom(cloudEventConverter, saga);
+        Filter narrowing = saga.narrowingFilter();
+        if (narrowing == null || narrowing instanceof Filter.All) {
+            return base;
         }
+        if (base instanceof Filter.All) {
+            return narrowing;
+        }
+        // The narrowing goes on the right so the cheaper type conditions are evaluated first. An AND is walked left to
+        // right and stops at the first mismatch, so a Filter.data(..) narrowing is not read for an event whose type
+        // already ruled it out.
+        return base.and(narrowing);
+    }
+
+    private static <E> Filter derivedFrom(CloudEventConverter<E> cloudEventConverter, Saga<E, ?, ?> saga) {
         List<Condition<String>> typeConditions = saga.eventTypes().stream()
                 .map(type -> Condition.eq(cloudEventConverter.getCloudEventType(type)))
                 .toList();

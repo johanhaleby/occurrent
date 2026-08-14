@@ -144,11 +144,19 @@ class FlowSagaBuilder<E : Any, C : Any> @PublishedApi internal constructor() {
     }
 
     /**
-     * Sets an explicit selector replacing the one derived from the event types the flow names, so the saga can select on
-     * more than event type. See [Saga.filter] for what it leaves you responsible for. Can be set only once.
+     * Adds a condition every selected event must also match, on top of the selector derived from the event types the
+     * flow names. See [Saga.narrowingFilter] for what it leaves you responsible for. Can be set only once.
      */
-    fun filter(filter: Filter) {
-        delegate.filter(filter)
+    fun narrowingFilter(narrowingFilter: Filter) {
+        delegate.narrowingFilter(narrowingFilter)
+    }
+
+    /**
+     * Sets an explicit selector used instead of deriving one from the event types the flow names. See
+     * [Saga.replacementFilter] for what it leaves you responsible for. Can be set only once.
+     */
+    fun replacementFilter(replacementFilter: Filter) {
+        delegate.replacementFilter(replacementFilter)
     }
 
     /** Adds a step named [name]. */
