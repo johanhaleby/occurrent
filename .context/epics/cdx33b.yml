@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 28
-updated_at: 2026-08-13T19:40:00Z
-updated_by: "orchestrator session faee3625 (vehicle switch at Johan's word from his phone: both chips withdrawn, U11 re-dispatched as plan-first subagent, U10 as executing subagent; gates route through the orchestrator session via AskUserQuestion)"
+revision: 29
+updated_at: 2026-08-14T06:30:00Z
+updated_by: "orchestrator session faee3625 (U11 final: PR 777 frozen at 1dfaed8bd, 28/28, final review bare incl. no suppressed block, rebased over U12; the inheritance-fallback reversal RATIFIED on merits with the process point conceded; merge holds solely on the queued ADR ruling)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -260,7 +260,7 @@ units:
     depends_on: [U1]
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "777", met: false, evidence: "GATE-CLEAN except the queued ADR ruling: frozen at 1dfaed8bd (rebased over U12's f117cf9e5, clean, U12 clauses verified surviving), 28/28 by job conclusion, CLEAN, final Copilot review bare with no suppressed block (verified by the orchestrator). Design rule c-prime implemented with the chain walk PLUS the ratified inheritance-fallback pass (reversal of an accepted decline, defended by my own item-1 criterion, monotone-safe: runs only when the walk records nothing and can only add a pin; both subclass tests plus three fallback mutants). Two remaining declines recorded in ADR 86 (classes-not-walk-resumption, any-inherited-class-not-nearest), both needing the layer resolution-contract capability. No adversarial re-pass for the fallback: monotone argument plus mutation table, and fixpoint round 2 reads the complete 777 diff anyway. Flake: ProjectionAnnotationDurableResumeMongoTest now 3 data points (auto-mode test, reusable container, fixed database name), register item. Merge order: after Johan's ADR 86/116 wording ruling ONLY"}
   U12:
     issue: null
     goal: "Fixpoint round 1 corrections: the MAJOR DurableSubscriptionModel lock-scope comment rewrite (the comment names a supplier-internal checkpoint write the lock does not cover) plus four one-clause prose truth fixes on unreleased text; no behavior changes. Register-only residuals: evaluatesWriteConditions vs id-shape refusal, writeVersion/read/exists guard asymmetries, Lua tonumber above 2^53, the Kotlin codegen-pinned identity test"
