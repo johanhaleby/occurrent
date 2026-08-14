@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 13
+revision: 14
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -114,7 +114,7 @@ units:
       boot where fencing/manual-start accepts the storage (closes the fail-late gap: CheckpointFencingConfigurationCheck trusts
       the global boolean), capability-contract wording, and the standalone-vs-Cluster id-restriction decision at the unit''s
       gate (through the orchestrator)'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -123,11 +123,13 @@ units:
     - check: pr_merged
       repo: johanhaleby/occurrent
       ref: '783'
-      met: false
-      evidence: 'DELIVERED done at final head 317770e: 27/27 by job conclusion verified, 0 threads, MERGEABLE, 8 real Copilot
-        findings across 3 heads (6 from suppressed blocks) all fixed or tracked as #788 (marker verified), 6 mutation kills,
-        invariant sweep complete, C4 handoff wording for ADR 116 provided. Adversarial pass in flight. Adversarial verdict:
-        code clean, 2 prose majors + 1 minor routed back with the rebase; TCK per-id conformance gap banked for the register'
+      met: true
+      evidence: 'MERGED 2026-08-14 as squash 90227159079ef7aca26172da428aba846145b9e8, CAS-pinned to 7ca6d2a (27/27 by job
+        conclusion verified, 0 threads, MERGEABLE). Rebase over C2 squash with byte-identical code content proven against
+        a backup tag; adversarial majors 5a/5b + reactor minor fixed with one more self-caught overclaim; Copilot 4 rounds,
+        final bare except tracked #788; 8 real findings over the unit, 6 from suppressed blocks. Direction A shipped: evaluatesWriteConditionsFor
+        on both stacks, forStandalone mode, per-id boot validation. C4 handoff wording delivered. No ADR touched so no wording
+        confirm owed'
   C4:
     issue: null
     goal: 'Truth fixes: ADR 116 659-660 Redis Cluster sentence (AFTER C3''s gate decides what it must say), ReplayAware.java
