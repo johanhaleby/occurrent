@@ -85,7 +85,7 @@ class CompetingConsumerStartPositionTest {
         // The Spring Boot starter's own stack under occurrent.subscription.mode=manual. A start position answering
         // for each layer separately used to end the walk here, at an answer that does not decide where the
         // subscription starts, and the durable model below then recorded a position when the subscription was
-        // started, skipping everything written since it was registered (#669).
+        // started, skipping everything written since it was registered.
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         ManualStartSubscriptionModel manualStart = ManualStartSubscriptionModel.stoppedByDefault(
                 model, () -> new StringCheckpoint("at-registration"), storage);

@@ -1071,7 +1071,7 @@ class ManualStartSubscriptionModelTest {
         // The Spring Boot starter's own stack, where the competing consumer layer resolves the position to work out
         // whether to compete and leaves where the subscription starts to the durable model below it. Stopping at the
         // competing consumer's answer records nothing, and the durable model then records a position when the
-        // subscription starts, minutes later on a rolling deploy, skipping everything written in between (#669).
+        // subscription starts, minutes later on a rolling deploy, skipping everything written in between.
         RecordingSubscriptionModel checkpointReadingModel = new RecordingSubscriptionModel();
         DeferringSubscriptionModel deferringModel = new DeferringSubscriptionModel(checkpointReadingModel);
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();

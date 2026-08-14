@@ -157,10 +157,11 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > the model below resolves the same position again and is the one that settles where the subscription starts. The
 > walk read that layer's answer as final and stopped there. A function answering for each layer separately, with the
 > model default for the durable layer and something else above it, therefore recorded nothing, and the durable model
-> recorded a position when the subscription started instead. That is #669's skip again, on the Spring Boot starter's
-> own stack, and a regression from the unconditional write this replaces, which covered that input. Every start
-> position Occurrent itself builds is safe, since those answer with nothing or with the model default for the
-> competing consumer layer, so reaching this takes a function written by hand.
+> recorded a position when the subscription started instead. That is the skip this section's decision exists to
+> prevent, on the Spring Boot starter's own stack, and a regression from the unconditional write this replaces, which
+> covered that input. It is not #669, which is two nodes racing a read against a write for a checkpoint neither finds
+> yet. Every start position Occurrent itself builds is safe, since those answer with nothing or with the model default
+> for the competing consumer layer, so reaching this takes a function written by hand.
 >
 > **A layer now says whether its own answer decides where the subscription starts**, with
 > `SubscriptionModelWrapper.decidesWhereTheSubscriptionStarts()`. It answers true by default,
