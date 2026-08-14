@@ -21,6 +21,8 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.Optional;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * A start position was already stored for a subscription id by the time a registration's own write reached
  * storage, and it is not the position that registration read from its position source, so the registration was
@@ -55,8 +57,12 @@ public class StartPositionAlreadyPinnedException extends IllegalStateException {
     public final Checkpoint positionRead;
 
     /**
-     * The position that was stored instead, or empty when it was removed again, or could not be read, before it
-     * could be named here.
+     * The position storage held when it was read back after the refusal, or empty when it was removed again, or
+     * could not be read, before it could be named here.
+     * <p>
+     * That read is a second call, and no checkpoint storage reports the value that actually refused the write, so
+     * a checkpoint another node advanced in between is what this holds. Treat it as the position stored at the
+     * moment it was read rather than as the one that won.
      */
     public final Optional<Checkpoint> positionStored;
 
@@ -66,16 +72,18 @@ public class StartPositionAlreadyPinnedException extends IllegalStateException {
      *
      * @param subscriptionId The id of the subscription whose registration was refused
      * @param positionRead   The position this registration read from its position source
-     * @param positionStored The position that was stored instead
+     * @param positionStored The position storage held when it was read back after the refusal
      */
     public StartPositionAlreadyPinnedException(String subscriptionId, Checkpoint positionRead, Checkpoint positionStored) {
         this(subscriptionId, positionRead, positionStored,
                 "Subscription " + subscriptionId + " was registered at position " + positionRead.asString() +
-                ", but " + positionStored.asString() + " was already stored for it by the time this registration's " +
-                "write reached storage. The two positions were read independently and cannot be compared, so this " +
-                "registration is refused rather than started from a position it never read, and the events between " +
-                "the two may not reach the subscription. Recovering them means replaying that interval, which is " +
-                "only safe while this subscription is not running anywhere.", null);
+                ", but recording it was refused because a position was already stored for this subscription id. " +
+                "Reading that back found " + positionStored.asString() + ", in a second call, so it is what storage " +
+                "held at that moment rather than certainly the position that refused the write. The two positions " +
+                "were read independently and cannot be compared, so this registration is refused rather than " +
+                "started from a position it never read, and the events between them may not reach the " +
+                "subscription. Recovering them means replaying that interval, which is only safe while this " +
+                "subscription is not running anywhere.", null);
     }
 
     /**
@@ -84,7 +92,7 @@ public class StartPositionAlreadyPinnedException extends IllegalStateException {
      *
      * @param subscriptionId The id of the subscription whose registration was refused
      * @param positionRead   The position this registration read from its position source
-     * @param positionStored The position that was stored instead, or {@code null} when it cannot be named
+     * @param positionStored The position storage held when it was read back, or {@code null} when it cannot be named
      * @param message        The message to report
      */
     public StartPositionAlreadyPinnedException(String subscriptionId, Checkpoint positionRead, @Nullable Checkpoint positionStored, String message) {
@@ -97,15 +105,15 @@ public class StartPositionAlreadyPinnedException extends IllegalStateException {
      *
      * @param subscriptionId The id of the subscription whose registration was refused
      * @param positionRead   The position this registration read from its position source
-     * @param positionStored The position that was stored instead, or {@code null} when it cannot be named
+     * @param positionStored The position storage held when it was read back, or {@code null} when it cannot be named
      * @param message        The message to report
      * @param cause          The failure that stopped the stored position from being named, or {@code null}
      */
     public StartPositionAlreadyPinnedException(String subscriptionId, Checkpoint positionRead, @Nullable Checkpoint positionStored,
                                                String message, @Nullable Throwable cause) {
-        super(message, cause);
-        this.subscriptionId = subscriptionId;
-        this.positionRead = positionRead;
+        super(requireNonNull(message, "Message cannot be null"), cause);
+        this.subscriptionId = requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        this.positionRead = requireNonNull(positionRead, Checkpoint.class.getSimpleName() + " read at registration cannot be null");
         this.positionStored = Optional.ofNullable(positionStored);
     }
 }
