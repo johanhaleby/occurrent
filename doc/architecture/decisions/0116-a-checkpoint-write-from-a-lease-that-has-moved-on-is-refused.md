@@ -659,6 +659,13 @@ did it correctly, including the case where `any()` must leave a stored version a
 Redis Cluster is not supported for conditional checkpoint writes, and asking for one there fails at the
 first write rather than quietly. A cluster user who supplies no source is unaffected.
 
+> **Amended for 0.33.0.** Redis Cluster is supported for conditional checkpoint writes after all.
+> `SpringRedisCheckpointStorage`'s original constructors build a Cluster-safe mode that refuses one
+> subscription id shape outright for `notOlderThan` and `ifAbsent`, whether or not the deployment is
+> actually Cluster. `SpringRedisCheckpointStorage.forStandalone(..)` builds a separate mode for a
+> standalone or replicated deployment, where slot alignment is not a concept the server has, and accepts
+> that shape too. A cluster user who supplies no source is still unaffected.
+
 This is the first place in Occurrent where a subscription refuses a checkpoint write made on behalf of
 application code. The exception is deliberately not retried, which is the opposite of how every other
 failure on the delivery path is treated, and the reason is written into the retry predicates rather than

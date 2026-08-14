@@ -80,7 +80,7 @@ reasoning rather than evidence and it is recorded as unverified rather than clai
 
 ### A sealed declared type is joined by the concrete types it permits
 
-`EventTypeExpansion.expand(Set)` (`dsl/saga-dsl/common/src/main/java/org/occurrent/dsl/saga/internal/EventTypeExpansion.java`)
+`EventTypeExpansion.expand(Set)` (`common/filter/src/main/java/org/occurrent/filter/internal/EventTypeExpansion.java`, it did not stay in the saga module, see below)
 walks `getPermittedSubclasses()` transitively and returns the declared types plus every concrete type they permit. A
 saga declaring a sealed `OrderEvent` reports `OrderEvent`, `OrderPlaced` and `PaymentReserved` from `eventTypes()`, and
 its subscription asks for all three.
