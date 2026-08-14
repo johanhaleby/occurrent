@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 23
+revision: 24
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -114,9 +114,13 @@ pending_actions:
   type: workflow-dispatch
   target: 'C5 adversarial pass on 45f912f (Opus, fresh context): re-subscription semantics, capability-fallback scoping, fatal-channel
     replay, three-path reachability, Mongo-shaped storage assumption, prose truth on all surfaces incl. both docs branches'
-  expected: verdict per angle; goes into Johan's return ask beside the ADR wordings and blast-radius ratification; no merge
-    unattended
-  status: PENDING
+  expected: 'verdict per angle; goes into Johan''s return ask beside the ADR wordings and blast-radius ratification; no merge
+    unattended. RESOLVED: verdict 4 CONFIRMED MAJOR, all prose (guide ERROR-either-way false on the delegating path, blast-radius
+    sentence dropping the resolves-to-default qualification on changelog+guide, the pin comment asserting read-before-capture
+    false on the stopped path, the docs-site retry clause promoted to an independent refusal cause), behavior refuted on every
+    angle. Fix round routed to the worker; two register items banked (WARN-cadence comment minors, the pre-existing remove-by-key
+    race elevated by the documented register-again recovery, to be filed with the fleet marker)'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-14T16:40:00Z'
