@@ -1,10 +1,10 @@
 schema_version: 2
 epic: cdx33c
-revision: 30
-updated_at: 2026-08-14 19:55:00+00:00
-updated_by: 'orchestrator: C9 DONE (both held docs branches pushed and verified on origin refs: preview ea3f616, fencing 756c8b6);
-  work-item monitor re-armed as watcher-002 (buyoc3d0a) because C8 will open a PR-advanceable deliverable, baseline 0 open
-  PRs, post-arm sweep clean'
+revision: 31
+updated_at: 2026-08-14 18:30:00+00:00
+updated_by: 'orchestrator: C8 DONE (PR 792 merged as 8313585, CAS 0423a98, verified on the exact head incl. clean final Copilot
+  review and marker-free squash body); watcher-002 RETIRED in the same sweep per no_unmet_pr_advanceable_deliverables; act-010
+  dispatches fixpoint round 2, THE LAST'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -131,12 +131,25 @@ pending_actions:
     scoping, news-post contradiction, recipe-stub misdescription x4 + Java-only unported), all prose, behavior clean on every
     cross-unit angle. NOT convergence; round 2 is the LAST (cap 2). C8 (library) and C9 (docs) dispatched as parallel Sonnet
     addenda'
-  expected: both addenda delivered and verified, then round 2 reads the addendum diffs together with the complete state; clean
-    = convergence, above-minor = CAPPED and routed to Johan as such
-  status: PENDING
+  expected: 'both addenda delivered and verified, then round 2 reads the addendum diffs together with the complete state;
+    clean = convergence, above-minor = CAPPED and routed to Johan as such. RESOLVED: 2026-08-14: C8 merged as 8313585 (CAS
+    0423a98) and C9 verified on both origin refs; round 2 (THE LAST) dispatched as a fresh-context Opus subagent over the
+    addendum diffs plus the complete 0.33.0 state, with the main matrix on 8313585 watched in parallel as the final combined
+    verification'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-14T19:10:00Z'
+- id: act-010
+  type: workflow-dispatch
+  target: 'Fixpoint ROUND 2, THE LAST (cap 2): fresh-context Opus adversarial review of the C8/C9 addendum diffs (library
+    squash 8313585; docs preview 381ca8b to ea3f616, fencing b256a50 to 756c8b6) together with the complete 0.33.0 state'
+  expected: 'verdict: CLEAN (nothing above minor) = convergence declared; any above-minor finding = cap reached, loop ENDS,
+    remainder routed to Johan as one structured ask, outcome reported as CAPPED never convergence'
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-14T18:30:00Z'
 units:
   C1:
     issue: null
@@ -331,7 +344,7 @@ units:
     goal: 'Fixpoint round-1 findings 1-3 + guide section-1 minor: the reactor-check-inert guide sentence C5 falsified, ADR
       116''s uncorrected Cluster-claim twin (quote-and-correct), the Redis delete-safety proof unscoped for forStandalone
       (port the guide''s qualification to both javadoc sites), the three-members count'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -339,9 +352,13 @@ units:
     deliverables:
     - check: pr_merged
       repo: johanhaleby/occurrent
-      ref: null
-      met: false
-      evidence: null
+      ref: '792'
+      met: true
+      evidence: 'MERGED 2026-08-14 as squash 8313585, CAS-pinned to 0423a98 (final head: Copilot review clean with no suppressed
+        block, 0 unresolved threads, MERGEABLE/CLEAN; code verdict from aa9e5e8 26/26 by job conclusion, tail proven markdown-only
+        by compare). Six review rounds; the worker''s own claim-class sweep verified every absolute against source yet caught
+        nothing, while Copilot suppressed blocks caught 6 real residual overclaims incl. the forStandalone-to-Cluster migration
+        counterexample. Squash body verified marker-free; main matrix on 8313585 triggered and tracked as final verification'
   C9:
     issue: null
     goal: 'Fixpoint round-1 findings 4-5 + the C3 coverage gap, held docs branches: the news post''s only-source-breaking
@@ -385,8 +402,8 @@ watchers:
   kind: github-work-item-monitor
   repository: johanhaleby/occurrent
   external_id: buyoc3d0a
-  status: READY
+  status: RETIRED
   retirement:
     kind: no_unmet_pr_advanceable_deliverables
-  last_verified_at: '2026-08-14T19:55:00Z'
-  last_verified_revision: 30
+  last_verified_at: '2026-08-14T18:30:00Z'
+  last_verified_revision: 31
