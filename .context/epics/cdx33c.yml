@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 9
+revision: 10
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -90,7 +90,7 @@ units:
     goal: 'Review finding 5: split saga filter(Filter) on the unreleased 0.33 surface: an additive predicate combined with
       the derived event types (hierarchy checks stay on) vs a named full-selector override carrying the replacement semantics;
       naming and shape at the in-session design gate; ADR 124 amendment, changelog, migration guide, tests'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -99,12 +99,12 @@ units:
     - check: pr_merged
       repo: johanhaleby/occurrent
       ref: '784'
-      met: false
-      evidence: 'DELIVERED done at final head 25f71db: 28/28 by job conclusion verified by orchestrator, MERGEABLE, 1 unresolved
-        thread = the reasoned-decline ORCHESTRATOR.md ask (policy-allowed), final Copilot review bare incl. no suppressed
-        block. Names narrowingFilter/replacementFilter + filter deletion approved by Johan at the session gate. 10 mutants
-        killed. One incidental write accepted (EventTypeExpansion javadoc name ripple). Adversarial pass dispatched against
-        the sharpened invariant; merge waits on it + the ADR 124 amendment wording confirm'
+      met: true
+      evidence: 'MERGED 2026-08-14 as squash 8f1cf1658b5f523f08a723fe23e1c4fe1c1366f2, CAS-pinned to 366b97c (prose head;
+        code verdict carried from 25f71db 28/28 per the recorded convention, prose-only tail proven mechanically). Adversarial
+        pass: 0 behavior defects, 3 prose majors + 2 minors all fixed and verified; the worker re-grep caught 4 of its own
+        new-clause overclaims pre-commit. ADR 124 wording approved by Johan post-fix (AskUserQuestion). One reasoned-decline
+        thread open per policy. Main matrix on the squash pending verification'
   C3:
     issue: null
     goal: 'Review finding 4: Redis capability honesty on the unreleased CheckpointStorage surface: id-aware validation at
