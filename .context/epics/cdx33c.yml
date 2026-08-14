@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 5
+revision: 6
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -149,6 +149,24 @@ units:
     - check: branch_pushed
       repo: johanhaleby/occurrent
       ref: null
+      met: false
+      evidence: null
+  C6:
+    issue: '785'
+    goal: 'Adopted by Johan at the C2 interim report (widening the approved plan by one docs unit): document the explicit
+      saga filter and its C2 split (narrowingFilter composes with derived types and keeps hierarchy checks on, replacementFilter
+      carries replacement semantics, filter deleted) on docs/0.33.0-preview; push the held branch only, never merge; closes
+      #785 before the tag per the docs-ship-with-change convention'
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - C2
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-preview
       met: false
       evidence: null
 watchers:
