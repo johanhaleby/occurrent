@@ -26,6 +26,8 @@ import org.occurrent.subscription.StartAt;
 
 import java.util.OptionalLong;
 
+import static java.util.Objects.requireNonNull;
+
 /**
  * A {@code CheckpointStorage} provides means to read and write the checkpoint to storage.
  * This subscriptions can continue where they left off by passing the {@link Checkpoint} provided by {@link #read(String)}
@@ -123,6 +125,7 @@ public interface CheckpointStorage {
      */
     @NullMarked
     default boolean evaluatesWriteConditionsFor(String subscriptionId) {
+        requireNonNull(subscriptionId, "Subscription id cannot be null");
         return evaluatesWriteConditions();
     }
 

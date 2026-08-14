@@ -93,13 +93,14 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * {@link IllegalArgumentException} naming the reason, whenever the condition is {@link CheckpointWriteCondition#notOlderThan(long)}
  * or {@link CheckpointWriteCondition#ifAbsent()}. That refusal is what keeps {@link #evaluatesWriteConditions()}
  * true without exception in that mode, rather than true for every id except the one shape Cluster would otherwise
- * refuse two calls downstream, and {@link #evaluatesWriteConditionsFor(String)} answers {@code false} for exactly
- * that shape and {@code true} for every other id. {@link #forStandalone(RedisOperations)} builds the other mode
- * instead, for a deployment that is standalone or replicated rather than Cluster, where slot alignment is not a
- * concept a server has, so nothing needs protecting from it. There, a conditional write accepts every subscription
- * id, including the shape the Cluster-safe mode refuses, and {@link #evaluatesWriteConditionsFor(String)} answers
- * {@code true} for every id. {@link CheckpointWriteCondition#any()} never refuses one in either mode, since it
- * writes only the checkpoint key and never touches the version key at all.
+ * refuse two calls downstream, and {@link #evaluatesWriteConditionsFor(String)} answers {@code false} for that shape
+ * (and for the version key's own reserved namespace below, in both modes) and {@code true} for every other id.
+ * {@link #forStandalone(RedisOperations)} builds the other mode instead, for a deployment that is standalone or
+ * replicated rather than Cluster, where slot alignment is not a concept a server has, so nothing needs protecting
+ * from it. There, a conditional write accepts every subscription id the Cluster-safe mode refuses for slot
+ * alignment, and {@link #evaluatesWriteConditionsFor(String)} agrees, answering {@code true} for that shape too.
+ * {@link CheckpointWriteCondition#any()} never refuses an id for slot alignment in either mode, since it writes only
+ * the checkpoint key and never touches the version key at all.
  * <p>
  * {@link #delete(String)} never refuses one. A subscription id of this shape can only ever have had a checkpoint
  * written for it through {@code any()}, since a conditional write already refuses one before touching Redis at
@@ -236,8 +237,9 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
 
     /**
      * Create a {@link CheckpointStorage} for a standalone or replicated Redis deployment, where a conditional write
-     * accepts every subscription id, including the one shape the class javadoc names Cluster cannot align a slot
-     * for. It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms
+     * accepts every subscription id outside the version key's own reserved namespace (see the class javadoc),
+     * including the one shape a conditional write refuses in Cluster-safe mode.
+     * It will by default use a {@link RetryStrategy} for retries, with exponential backoff starting with 100 ms
      * and progressively go up to max 2 seconds wait time between each retry when reading/saving/deleting the
      * checkpoint.
      * <p>
@@ -247,7 +249,8 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
      * javadoc describes for the other constructors.
      *
      * @param redis The {@link RedisOperations} that'll be used to store the checkpoint
-     * @return A {@link CheckpointStorage} that accepts every subscription id for a conditional write
+     * @return A {@link CheckpointStorage} that accepts every subscription id outside the reserved namespace for a
+     * conditional write
      */
     public static SpringRedisCheckpointStorage forStandalone(RedisOperations<String, String> redis) {
         return new SpringRedisCheckpointStorage(redis, RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), true);
@@ -255,8 +258,8 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
 
     /**
      * Create a {@link CheckpointStorage} for a standalone or replicated Redis deployment, where a conditional write
-     * accepts every subscription id, including the one shape the class javadoc names Cluster cannot align a slot
-     * for.
+     * accepts every subscription id outside the version key's own reserved namespace (see the class javadoc),
+     * including the one shape a conditional write refuses in Cluster-safe mode.
      * <p>
      * Do not use this against a Cluster deployment. Nothing here can tell one apart from a standalone or replicated
      * server, and a conditional write for one of the ids this mode accepts fails against Cluster with a
@@ -265,7 +268,8 @@ public class SpringRedisCheckpointStorage implements CheckpointStorage {
      *
      * @param redis         The {@link RedisOperations} that'll be used to store the checkpoint
      * @param retryStrategy A custom retry strategy to use if there's a problem reading/saving/deleting the checkpoint to the Redis storage.
-     * @return A {@link CheckpointStorage} that accepts every subscription id for a conditional write
+     * @return A {@link CheckpointStorage} that accepts every subscription id outside the reserved namespace for a
+     * conditional write
      */
     public static SpringRedisCheckpointStorage forStandalone(RedisOperations<String, String> redis, RetryStrategy retryStrategy) {
         return new SpringRedisCheckpointStorage(redis, retryStrategy, true);

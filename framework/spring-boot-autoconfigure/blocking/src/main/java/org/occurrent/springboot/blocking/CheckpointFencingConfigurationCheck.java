@@ -37,13 +37,10 @@ import java.util.Set;
  * application with no annotations to register, and it only ever runs the storage-wide check below, since it has no
  * subscription id of its own to ask about. {@link OccurrentBlockingAnnotationBeanPostProcessor} calls
  * {@link #check(ApplicationContext, Set)} itself before it registers anything, since a push projection or saga writes
- * a checkpoint while catching up and would reach that write first, and passes every subscription id an annotation on
- * the classpath declares, so the id-specific check below runs too.
- * <p>
- * That id list is only ever what an annotation ({@code @Subscription}, {@code @StreamSubscription},
- * {@code @SynchronousSubscription}, {@code @DcbSubscription}, {@code @Projection}, {@code @Snapshot}, {@code @Saga})
- * declares. A subscription id built or read some other way, at runtime or through a wiring this starter does not
- * scan, is outside what this check can enumerate and finds out the same way it always has, from a refused write.
+ * a checkpoint while catching up and would reach that write first, and passes every subscription id whose own
+ * registration path reaches {@link CheckpointStorage}, so the id-specific check below runs too.
+ * {@link CheckpointStorageCannotFenceSubscriptionException}'s javadoc says exactly which ids that is, and which are
+ * left out.
  */
 class CheckpointFencingConfigurationCheck implements SmartInitializingSingleton {
 

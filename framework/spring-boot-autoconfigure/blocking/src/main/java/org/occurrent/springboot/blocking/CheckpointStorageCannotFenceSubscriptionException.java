@@ -29,13 +29,18 @@ import java.util.List;
  * a lease is acquired, the same way {@link CheckpointStorageCannotFenceException} describes for a storage that
  * cannot fence at all.
  * <p>
- * Only an id an annotation ({@code @Subscription}, {@code @StreamSubscription}, {@code @SynchronousSubscription},
- * {@code @DcbSubscription}, {@code @Projection}, {@code @Snapshot}, {@code @Saga}) declares can be found this way,
- * at the point every singleton exists and before any of them registers. A subscription id built or read only at
- * runtime is outside what this check can enumerate. So is one an annotation declares whose registration writes a
- * checkpoint before this check runs at all, which {@code @Subscription} and its three siblings can, since they
- * register per bean as each bean initializes, ahead of the point every singleton is known to exist. Pre-existing,
- * not something this exception's own check changes.
+ * Only an id whose own registration path actually reaches {@link CheckpointStorage} is asked about, at the point
+ * every singleton exists and before any of them registers. A {@code @SynchronousSubscription} never reaches it, and
+ * neither does a {@code @Projection} or {@code @Snapshot} in synchronous mode, or a {@code @Projection} or
+ * {@code @Saga} whose push feed catches up from nothing, so none of those ids are ever named here even when the
+ * storage would refuse them. A {@code @Projection(source = PUSH)} fed by a domain-event feed rather than a plain
+ * push feed also never reaches it, a gap this check does not close yet.
+ * <p>
+ * A subscription id built or read only at runtime is outside what this check can enumerate at all. So is one an
+ * annotation declares whose registration writes a checkpoint before this check runs, which {@code @Subscription},
+ * {@code @StreamSubscription} and {@code @DcbSubscription} can, since they register per bean as each bean
+ * initializes, ahead of the point every singleton is known to exist. Pre-existing, not something this exception's
+ * own check changes.
  */
 public final class CheckpointStorageCannotFenceSubscriptionException extends IllegalStateException {
 

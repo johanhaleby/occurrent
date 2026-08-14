@@ -99,7 +99,8 @@ Occurrent's own Mongo and Redis checkpoint storages do not need this recipe. The
 and `ifAbsent` for real, on Redis Cluster too, see section 4. `SpringRedisCheckpointStorage`'s original two
 constructors refuse one subscription id shape outright for a conditional write, whether or not the deployment they
 run against is actually Cluster. `SpringRedisCheckpointStorage.forStandalone(..)`, new in this release, is the other
-mode. A conditional write against a standalone or replicated deployment built that way accepts every subscription id.
+mode. A conditional write against a standalone or replicated deployment built that way accepts that shape too, the
+same as it always accepted every subscription id outside the version key's own reserved namespace, see section 4.
 
 A store whose answer to a conditional write depends on the subscription id, the way the two Redis modes above do, can
 say so precisely with `evaluatesWriteConditionsFor(String subscriptionId)`, a second new default method that answers
@@ -184,15 +185,16 @@ Built with either of `SpringRedisCheckpointStorage`'s original two constructors,
 outright with an `IllegalArgumentException` for `notOlderThan` and `ifAbsent`, whether or not the deployment behind
 it is actually Cluster. That is what keeps `evaluatesWriteConditions()` true without exception in that mode, rather
 than true for every id except one Cluster would otherwise refuse two calls downstream, and
-`evaluatesWriteConditionsFor(subscriptionId)` answers `false` for exactly that shape there and `true` for every other
-id. `SpringRedisCheckpointStorage.forStandalone(..)`, new in this release, is for a deployment that is standalone or
-replicated, where slot alignment is not a concept a server has. Built that way, `save` accepts every subscription id
-for `notOlderThan` and `ifAbsent`, and `evaluatesWriteConditionsFor` answers `true` for every id. Do not build a
-Cluster deployment's storage with `forStandalone`. A conditional write for an id the standalone mode accepts but
-Cluster cannot align a slot for then fails with Redis's own `CROSSSLOT` error instead of the refusal above. `any()`
-never refuses one, in either mode, since it writes only the checkpoint key. `delete` never refuses one either. An id
-of this shape can only ever have had a checkpoint written for it through `any()` in Cluster-safe mode, since a
-conditional write already refuses one before touching Redis, so its version key can never exist to strand. On a
+`evaluatesWriteConditionsFor(subscriptionId)` answers `false` for that shape there (and for the version key's own
+reserved namespace below, in both modes) and `true` for every other id. `SpringRedisCheckpointStorage.forStandalone(..)`,
+new in this release, is for a deployment that is standalone or replicated, where slot alignment is not a concept a
+server has. Built that way, `save` accepts that shape too for `notOlderThan` and `ifAbsent`, and
+`evaluatesWriteConditionsFor` agrees, answering `true` for it. Do not build a Cluster deployment's storage with
+`forStandalone`. A conditional write for an id the standalone mode accepts but Cluster cannot align a slot for then
+fails with Redis's own `CROSSSLOT` error instead of the refusal above. `any()` never refuses one for slot alignment,
+in either mode, since it writes only the checkpoint key. `delete` never refuses one either. An id of this shape can
+only ever have had a checkpoint written for it through `any()` in Cluster-safe mode, since a conditional write
+already refuses one before touching Redis, so its version key can never exist to strand. On a
 `CROSSSLOT` failure `delete` falls back to two single-key deletes instead, which is provably safe for that reason and
 not merely convenient.
 
@@ -456,11 +458,12 @@ position at all and lets a subscription's first run start from the moment you st
 wired next to a strategy.** `evaluatesWriteConditions()` answering `true` is not the last word once
 `evaluatesWriteConditionsFor(String)` exists. `SpringRedisCheckpointStorage`'s Cluster-safe mode is exactly this
 case, answering `true` overall while refusing the one subscription id shape in section 4 for a conditional write. Once
-every singleton exists, the starter asks `evaluatesWriteConditionsFor` for every subscription id declared by a
-`@Projection`, `@Snapshot` or `@Saga`, and by a `@Subscription`, `@StreamSubscription`, `@SynchronousSubscription` or
-`@DcbSubscription` whose own registration has not already run ahead of this point, and throws
+every singleton exists, the starter asks `evaluatesWriteConditionsFor` for every subscription id whose own
+registration path actually reaches `CheckpointStorage`, and throws
 `CheckpointStorageCannotFenceSubscriptionException` naming the storage and every refused id when the answer is
-`false` for at least one. Rename the affected id to a shape the storage accepts, use a storage that evaluates write
+`false` for at least one. `CheckpointStorageCannotFenceSubscriptionException`'s own javadoc says exactly which ids
+that is, and which are left out, a `@SynchronousSubscription` among them, since it never writes a checkpoint at all.
+Rename the affected id to a shape the storage accepts, use a storage that evaluates write
 conditions for it (`forStandalone(..)` on `SpringRedisCheckpointStorage`, if the deployment allows it), or fall back
 to `occurrent.subscription.competing-consumer.fence-checkpoints=false`, the same as the second way out above.
 

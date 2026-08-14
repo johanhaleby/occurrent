@@ -40,11 +40,11 @@ import static org.mockito.Mockito.when;
 /**
  * {@link CheckpointStorage#evaluatesWriteConditions()} answering true is not the end of what
  * {@link CheckpointFencingConfigurationCheck} asks. It also asks
- * {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} for every subscription id an annotation on the
- * classpath declares, before {@link OccurrentBlockingAnnotationBeanPostProcessor} registers anything. Neither
- * fixture projection's factory method is ever invoked in the tests below, since the fencing check throws first, so
- * this needs none of the reader, converter or store beans {@link ProjectionAnnotationFencingWiringTest} wires for a
- * projection that actually catches up.
+ * {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} for every subscription id whose own registration
+ * path reaches {@link CheckpointStorage}, before {@link OccurrentBlockingAnnotationBeanPostProcessor} registers
+ * anything. Neither fixture projection's factory method is ever invoked in the tests below, since the fencing check
+ * throws first, so this needs none of the reader, converter or store beans
+ * {@link ProjectionAnnotationFencingWiringTest} wires for a projection that actually catches up.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CheckpointFencingSubscriptionIdWiringTest {
@@ -52,6 +52,7 @@ class CheckpointFencingSubscriptionIdWiringTest {
     private static final String SUBSCRIPTION_ID_A = "proj-fenced-a";
     private static final String SUBSCRIPTION_ID_B = "proj-fenced-b";
     private static final String SUBSCRIPTION_ID_SYNC = "proj-sync";
+    private static final String SUBSCRIPTION_ID_NO_CATCHUP = "proj-no-catchup";
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -117,6 +118,23 @@ class CheckpointFencingSubscriptionIdWiringTest {
                 .run(context -> verify(checkpointStorage, never()).evaluatesWriteConditionsFor(SUBSCRIPTION_ID_SYNC));
     }
 
+    @Test
+    void a_push_projections_id_is_never_asked_about_when_catchup_is_none() {
+        // catchup = NONE uses the bare push feed directly, and no CatchupThenPushSubscriptionModel, the one that
+        // resolves CheckpointStorage, is ever built, so this id must never reach the fencing check either.
+        CompetingConsumerStrategy strategy = mock(CompetingConsumerStrategy.class);
+        CheckpointStorage checkpointStorage = mock(CheckpointStorage.class);
+        when(checkpointStorage.evaluatesWriteConditions()).thenReturn(true);
+        when(checkpointStorage.evaluatesWriteConditionsFor(any())).thenReturn(false);
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(NoCatchupPushProjectionConfiguration.class)
+                .withBean(CompetingConsumerStrategy.class, () -> strategy)
+                .withBean(CheckpointStorage.class, () -> checkpointStorage)
+                .run(context -> verify(checkpointStorage, never()).evaluatesWriteConditionsFor(SUBSCRIPTION_ID_NO_CATCHUP));
+    }
+
     @Configuration(proxyBeanMethods = false)
     @EnableConfigurationProperties(OccurrentProperties.class)
     static class SynchronousProjectionConfiguration {
@@ -128,6 +146,25 @@ class CheckpointFencingSubscriptionIdWiringTest {
 
     static class SynchronousProjection {
         @Projection(id = SUBSCRIPTION_ID_SYNC, mode = Mode.SYNCHRONOUS)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class NoCatchupPushProjectionConfiguration {
+        @Bean
+        NoCatchupPushProjection noCatchupPushProjection() {
+            return new NoCatchupPushProjection();
+        }
+    }
+
+    static class NoCatchupPushProjection {
+        @Projection(id = SUBSCRIPTION_ID_NO_CATCHUP, source = Source.PUSH, catchup = org.occurrent.annotation.Catchup.NONE)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
                     .id(event -> "k")

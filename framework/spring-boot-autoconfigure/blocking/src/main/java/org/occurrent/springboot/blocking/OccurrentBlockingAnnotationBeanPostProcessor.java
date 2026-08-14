@@ -94,10 +94,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         List<Object[]> projectionMethods = new ArrayList<>();
         List<Object[]> snapshotMethods = new ArrayList<>();
         List<Object[]> sagaMethods = new ArrayList<>();
-        // Only an id whose registration reaches CheckpointStorage at all. A @SynchronousSubscription writes no
-        // checkpoint, and a @Projection or @Snapshot in mode = SYNCHRONOUS registers with the synchronous model the
-        // same way and skips it too, so none of those ids belong here, only in registeredIds for duplicate
-        // detection. @Saga has no synchronous mode, so every saga id belongs here.
+        // Only an id whose own registration path reaches CheckpointStorage, kept out of idsToCheck otherwise even
+        // though it stays in registeredIds for duplicate detection.
+        // CheckpointStorageCannotFenceSubscriptionException's javadoc says exactly which ids that is.
         Set<String> idsToCheck = new HashSet<>();
         for (String beanName : applicationContext.getBeanDefinitionNames()) {
             Class<?> type;
@@ -114,7 +113,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
                 if (projection != null) {
                     projectionMethods.add(new Object[]{beanName, method, projection});
-                    if (projection.mode() != org.occurrent.annotation.Mode.SYNCHRONOUS) {
+                    if (projection.mode() != org.occurrent.annotation.Mode.SYNCHRONOUS && checkpointsWhenPush(projection.source(), projection.catchup())) {
                         idsToCheck.add(projection.id());
                     }
                 }
@@ -128,7 +127,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 org.occurrent.annotation.Saga saga = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Saga.class);
                 if (saga != null) {
                     sagaMethods.add(new Object[]{beanName, method, saga});
-                    idsToCheck.add(saga.id());
+                    if (checkpointsWhenPush(saga.source(), saga.catchup())) {
+                        idsToCheck.add(saga.id());
+                    }
                 }
             }
         }
@@ -167,6 +168,13 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         SynchronousSubscription sy = AnnotationUtils.findAnnotation(method, SynchronousSubscription.class);
         if (sy != null) registeredIds.add(sy.id());
+    }
+
+    // True unless source = PUSH and catchup = NONE, the one combination @Projection and @Saga share where the bare
+    // push feed is used directly and no CatchupThenPushSubscriptionModel, the one that resolves CheckpointStorage
+    // for either annotation, is ever built.
+    private static boolean checkpointsWhenPush(org.occurrent.annotation.Source source, org.occurrent.annotation.Catchup catchup) {
+        return source != org.occurrent.annotation.Source.PUSH || catchup != org.occurrent.annotation.Catchup.NONE;
     }
 
     @Override

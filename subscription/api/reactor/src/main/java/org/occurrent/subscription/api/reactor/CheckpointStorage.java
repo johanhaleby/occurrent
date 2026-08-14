@@ -23,6 +23,8 @@ import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import reactor.core.publisher.Mono;
 
+import static java.util.Objects.requireNonNull;
+
 
 /**
  * A {@code CheckpointStorage} provides means to read and write the checkpoint to storage.
@@ -115,6 +117,7 @@ public interface CheckpointStorage {
      * if either of them is refused for it
      */
     default boolean evaluatesWriteConditionsFor(String subscriptionId) {
+        requireNonNull(subscriptionId, "Subscription id cannot be null");
         return evaluatesWriteConditions();
     }
 
