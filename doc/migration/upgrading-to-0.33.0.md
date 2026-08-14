@@ -102,9 +102,10 @@ for a capability it was not built with.
 
 Such a store leaves `evaluatesWriteConditions()` alone, since the default already answers `false` for it. That answer
 is what lets a caller find out before it wires anything up, rather than on the first write, so leaving it at the
-default is part of the recipe rather than an omission. One place acts on it today. The Spring Boot Mongo starter
-refuses to start when it would pair your store with a competing-consumer lease, and section 8 says what to do about
-that.
+default is part of the recipe rather than an omission. Two places refuse such a store today. The Spring Boot
+Mongo starter refuses to start when it would pair it with a competing-consumer lease, and
+`ManualStartSubscriptionModel.stoppedByDefault(..)` throws at construction when it is built with one, because the
+start position it records at registration is written with `ifAbsent()`. Section 8 says what to do about both.
 
 Occurrent's own Mongo and Redis checkpoint storages do not need this recipe. They already evaluate `notOlderThan`
 and `ifAbsent` for real, on Redis Cluster too, see section 4. `SpringRedisCheckpointStorage`'s original two
