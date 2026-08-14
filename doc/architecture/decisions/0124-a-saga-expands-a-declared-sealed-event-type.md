@@ -143,6 +143,9 @@ declared one did.
 > refuse anything. Declaring the concrete types is still named first, because it is the answer whenever the types can be
 > enumerated. The array message is unchanged, since sealing an array is impossible and keeping an array as a declared
 > event type is not worth pointing anyone at.
+>
+> **Amended again on 2026-08-14.** That method is now called `replacementFilter(...)`, and the message names it by that
+> name. The split is in the 2026-08-14 section at the end of this document.
 
 ### One expansion for the whole repository, not a second copy
 
@@ -204,6 +207,9 @@ already matches with `isInstance`, and `FlowSagaImpl` is unchanged because `even
 > The property this ADR is built on is untouched, because it is about the derived filter and an explicit filter is not
 > one. Correlation coverage still runs over the expanded set on both paths, so the paragraph that says so needs no
 > amendment.
+>
+> **Amended again on 2026-08-14.** The method that switches the strict walk off is now `replacementFilter(...)`, and a
+> `narrowingFilter(...)` does not switch it off. See the 2026-08-14 section at the end of this document.
 
 Correlation coverage is checked over the expanded set, which changes nothing and is worth writing down so nobody claims
 otherwise. An expanded type is always a subtype of a declared type, `TypeDispatch` resolves a correlator through
@@ -237,6 +243,10 @@ unknown. Recorded as #751 on its own merits, because an explicit filter is usefu
 > *instead of* expansion, leaving a caller who declares a sealed type to find out from the documentation that they need
 > one. What shipped is an explicit filter *alongside* expansion, for the caller whose hierarchy cannot be enumerated at
 > all.
+>
+> **Amended again on 2026-08-14.** What shipped is now called `Saga#replacementFilter()`, and it gained a sibling,
+> `Saga#narrowingFilter()`, which combines with expansion rather than replacing it. The rejection above still stands
+> against both.
 
 **Put the expansion in `SagaFilters`.** It lives in `dsl/saga-dsl/blocking`, so only the blocking runner would benefit,
 and `eventTypes()` would keep reporting the declared supertype on its own.
@@ -260,11 +270,13 @@ which works under a collapsing mapper too because they all map to the same strin
 callers run such a mapper is unknowable from here, which is exactly why it is written down instead of dismissed.
 
 > **Amended for 0.33.0, under [#751](https://github.com/johanhaleby/occurrent/issues/751).** That caller now has a
-> remedy that says the thing reflection could not work out. `filter(Filter.type("order-event"))` on either builder
-> replaces the derived filter, so the saga is built without deriving one and the refusal never runs. Declaring the
-> concrete types and sealing the hierarchy are still the better answers when either is available. The cost of the new
-> one is that it switches the check off for every event type that saga declares rather than only the one that could not
-> be enumerated, which is stated on `Saga#filter()` itself and in section 10 of the upgrade guide.
+> remedy that says the thing reflection could not work out. `replacementFilter(Filter.type("order-event"))` on either
+> builder is used instead of the derived filter, so the saga is built without deriving one and the refusal never runs.
+> Declaring the concrete types and sealing the hierarchy are still the better answers when either is available. The cost
+> of the new one is that it switches the hierarchy check off for every event type that saga declares rather than only
+> the one that could not be enumerated, which is stated on `Saga#replacementFilter()` itself and in section 10 of the
+> upgrade guide. (The method was called `filter(...)` when this amendment was first written, and was renamed on
+> 2026-08-14.)
 
 **The projection DSL still behaves the other way, and that is recorded rather than left as an accident.** It has the
 same derivation and the same supertype handler lookup, and it documents the constraint instead of fixing it. Two sibling
@@ -292,3 +304,89 @@ of machinery than a marker is worth.
 `EventTypeExpansion` uses nothing but reflection, so whichever module adopts this next can call it directly.
 `ProjectionFilters` re-implements the subscription DSL's derivation on purpose rather than depend on that module, so the
 projection side in #750 can copy it or call it, whichever fits when that work happens.
+
+## Amended on 2026-08-14: the explicit filter splits in two
+
+`filter(Filter)` answered two questions through one name, and only ever gave the answer to the rarer one.
+
+A caller who wants to select on subject, source, data or time *as well as* their declared event types writes
+`filter(Filter.subject("order-1"))` and gets a saga subscribing on every event type with that subject. The declared
+types stop narrowing anything, every admitted CloudEvent goes to the converter, and the build-time hierarchy check is
+switched off for every declared type on the saga. None of that is what the caller asked for, and nothing tells them.
+This repository's own test fixture is the evidence, since it used a subject filter as the example of the replacement.
+
+So the two questions get two methods, on both builders and both Kotlin `saga { }` blocks:
+
+- `narrowingFilter(Filter)` is combined with the selector derived from the event types, so a saga still asks for its own
+  types and also requires the condition.
+- `replacementFilter(Filter)` is used instead of deriving one, which is what `filter(Filter)` did.
+
+`filter` keeps neither meaning. It is deleted rather than repointed, because a name that silently changes meaning is the
+one break a compiler cannot catch, and `AGENTS.md` makes an unreleased member free to remove. ADR 121 settled this shape
+already, when it split `TimerName.parse` from `TimerName.of` rather than overloading one name, on the grounds that
+hiding the difference behind one name puts the API's least obvious rule on the argument count. Both of these take a
+`Filter`, so the difference is invisible in the signature.
+
+### The composition, and why the narrowing keeps the check on
+
+`SagaFilters.filterFor` starts from the replacement when there is one and the derived type filter otherwise, then ANDs
+the narrowing onto it. Both can be set at once, and the result is defined and useful under a mapper that collapses a
+hierarchy, so there is no illegal state and no precedence rule to remember.
+
+**Wherever a filter is derived at all, that is, for a declaration whose `eventTypes()` is non-empty, the strict
+hierarchy walk runs if and only if `replacementFilter()` is null.** A narrowing does not key it, because the selector is
+still derived and so still has to name every type dispatch would accept, which is the property at the top of this
+document. An empty `eventTypes()` derives nothing and never ran that walk, with or without either method, and this
+change does not touch that branch.
+
+The verb matters. The walk *runs*, it does not necessarily refuse, and even a replacement does not switch off
+everything: `expandWhatCanBeFound` still refuses an array or a primitive. What a replacement switches off is the
+hierarchy refusal.
+
+An AND can only remove matches, so a narrowing can never admit an event the base did not. That is what makes it safe to
+leave the check on, and it is the argument for the ruling rather than a precedent, because this is the first ADR here to
+let a configured value combine with a derived default instead of replacing it. The shape does exist in code already, in
+the catch-up subscription models, which AND a capability scope onto the caller's filter.
+
+The narrowing goes on the right of the AND. An AND is walked left to right and stops at the first mismatch, so keeping
+the cheap type conditions first means a `Filter.data(..)` narrowing is not read for an event whose type already ruled it
+out.
+
+### What each method makes the caller responsible for
+
+Both oblige the caller to admit the start event types, and not to starve the saga's own handlers. A saga is worse off
+than a projection here, because an instance whose later events are excluded never reaches `isTerminal` and keeps its
+timers running.
+
+A flow saga adds one that is specific to narrowing, and it is the sharpest of them. A guard reads what has arrived, so
+excluding an event type changes the answer `received.none(Rejected.class)` gives, and a branch can fire that would not
+have fired otherwise. That is the saga taking the wrong action rather than no action, and no monotonicity argument
+removes it, because removing matches is exactly what flips a negative predicate.
+
+A replacement adds two more. Every CloudEvent it admits is converted before the saga sees it, and a flow saga appends
+every correlated event to the instance's retained history before it looks at which branch handles it. A narrowing adds
+neither, relative to the same saga without one, since every event it admits was already admitted by the derived
+selector. That is a relative claim. A saga whose `eventTypes()` is empty derives `Filter.all()`, and its narrowing is
+then the whole selector, and the conversion obligation applies to it in full.
+
+### Rejected: one accessor returning a sealed selector type
+
+A `sealed interface` with a derived case and a replacing case would make the choice explicit in the type. ADR 91 is the
+precedent that would support it, where sealed states made "a cause exists exactly when it failed" true by construction.
+It does not apply, because under the composition above no combination is illegal, so there is nothing to make true by
+construction and the type would only add a name to look up. ADR 70 sets the bar a new public type has to clear, and
+ADR 119 rejected a helper class for the capability walk on the same grounds.
+
+Two nullable accessors also copy across unchanged when #750 fixes the projection DSL, where a sealed selector on the
+saga side alone would make that convergence harder. #750 and #758 should take this vocabulary with them.
+
+### `Saga.create` gets the replacement only
+
+The seven-argument factory keeps one trailing `Filter` and it means the replacement. Two adjacent nullable `Filter`
+parameters would let a caller swap them and get the opposite semantics with no compile error, which is the footgun
+ADR 121 refuses to put on argument count.
+
+That leaves a gap, and `AGENTS.md` is what decides whether the gap is allowed. It says an overload earns its place when
+a user driving the type directly cannot work around its absence, and names `SagaRunner.run` waiting unconditionally as
+the shape of that mistake. This is not that shape, because a `create` caller can override `narrowingFilter()` on the
+interface, which is the route `create`'s own javadoc already sends them down for `onStart` and `isTerminal`.

@@ -528,7 +528,7 @@ which for a Spring Boot application is startup. A saga sees this message:
 ```
 java.lang.IllegalArgumentException: the concrete event types dispatch would accept for com.example.OrderEvent cannot all
 be enumerated, so a filter derived from it would miss some of them. Declare the concrete event types instead, make
-OrderEvent and every level below it final or sealed, or set an explicit filter, which is used instead of deriving
+OrderEvent and every level below it final or sealed, or set a replacementFilter(...), which is used instead of deriving
 one and is the way out when a CloudEventTypeMapper of your own maps the whole hierarchy onto a single CloudEvent type
 string.
 ```
@@ -642,7 +642,7 @@ For an annotation-based subscription, list the concrete types with the annotatio
 the declared supertype, for example `@Subscription(id = "order-subscription", eventTypes = {OrderPlaced.class,
 PaymentReserved.class})`.
 
-### Or, for a saga, set an explicit filter
+### Or, for a saga, set a replacement filter
 
 New in 0.33.0, and the remedy to reach for when the hierarchy is genuinely open and you know what your events are stored
 as. A saga can now say what it subscribes on instead of having it derived from its event types, so nothing is derived and
@@ -653,24 +653,39 @@ Saga.<OrderEvent, OrderState, OrderCommand>builder(null)
         .correlateAll(OrderEvent::orderId)
         .startsOn(OrderEvent.class)
         .react(OrderEvent.class, (state, event) -> ...)
-        .filter(Filter.type("order-event"))
+        .replacementFilter(Filter.type("order-event"))
         .build();
 ```
 
-`FlowSaga.Builder` has the same method, both Kotlin `saga { }` blocks expose it as `filter(...)`, and `Saga.create(...)`
-takes one as a trailing argument. A subscription has no equivalent, so for `@Subscription` and its siblings the
-`eventTypes` attribute above is still the answer.
+`FlowSaga.Builder` has the same method, both Kotlin `saga { }` blocks expose it as `replacementFilter(...)`, and
+`Saga.create(...)` takes one as a trailing argument. A subscription has no equivalent, so for `@Subscription` and its
+siblings the `eventTypes` attribute above is still the answer.
 
-Three things become yours to get right. The filter has to match the saga's start events, because a filter that excludes
-them means no instance is ever created. It also has to stay inside what your `CloudEventConverter` can turn into a domain
-event, since every CloudEvent it admits is converted before the saga sees it, and one that fails to convert fails that
-delivery rather than being skipped. And the build-time check is switched off for every event type the saga declares, not
-only for the one you could not enumerate, so a filter you set for an unrelated reason also stops you being told about a
-sealed hierarchy that was reopened somewhere else in the same saga.
+Reach for this only when the hierarchy is the problem. If all you want is to select on subject, source, data or time
+while keeping your declared event types, use `narrowingFilter(...)` instead, which is combined with the derived filter
+rather than used in place of it, and which leaves the build-time check on. Both builders and both Kotlin blocks have it.
+`Saga.create(...)` does not, so a saga built from that factory narrows by implementing `Saga` and overriding
+`narrowingFilter()`, the same way it would for `onStart` or `isTerminal`.
 
-A flow saga pays one more cost. It appends every correlated event it receives to the instance's retained history before it
-checks which branch handles the type, so a filter broader than the types the flow names grows that history, and under a
-`stepWindow` cap those events take slots the step's own events would otherwise hold.
+Four things become yours to get right with a replacement, and the first two apply to a narrowing too. The filter has to
+match the saga's start events, because one that excludes them means no instance is ever created. It also has to admit the
+events that move an instance on, because an instance whose later events are excluded never reaches `isTerminal` and stays
+alive with its timers running. Beyond those, a replacement has to stay inside what your `CloudEventConverter` can turn
+into a domain event, since every CloudEvent it admits is converted before the saga sees it, and one that fails to convert
+fails that delivery rather than being skipped. And the build-time hierarchy check is switched off for every event type
+the saga declares, not only for the one you could not enumerate, so a replacement you set for an unrelated reason also
+stops you being told about a sealed hierarchy that was reopened somewhere else in the same saga.
+
+A flow saga pays two more, one for each method. A replacement makes it append every correlated event it receives to the
+instance's retained history before it checks which branch handles the type, so a filter broader than the types the flow
+names grows that history, and under a `stepWindow` cap those events take slots the step's own events would otherwise
+hold. A narrowing does the opposite and it is the one that surprises people. A guard reads what has arrived, so excluding
+an event type changes the answer `received.none(Rejected.class)` gives, and a branch can fire that would not have fired
+without the narrowing.
+
+One operational note for a saga that is already running. Adding a narrowing does not replay, so the events it would have
+excluded before you added it are already in the instance's history. Removing one later resumes from the stored
+checkpoint, so the events excluded while it was set are never delivered.
 
 ### If you wrote a type mapper that collapses the hierarchy
 
@@ -679,7 +694,7 @@ One case genuinely worked in 0.32.0 and now throws, for a saga and for a subscri
 match, because the string the filter asks for is the string every event has. Occurrent cannot tell your mapper apart from
 the default one at build time, which is why the refusal does not make an exception for it.
 
-For a saga, `filter(Filter.type("order-event"))` is the direct answer, since it says the thing reflection could not work
+For a saga, `replacementFilter(Filter.type("order-event"))` is the direct answer, since it says the thing reflection could not work
 out. Declaring the concrete types also keeps working, because under such a mapper they all map to the same string, and it
 is the better choice when you can enumerate them. Reach for the filter when you cannot, which is the case a hierarchy
 other people extend was always going to end up in.

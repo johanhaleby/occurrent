@@ -81,7 +81,7 @@ public final class EventTypeExpansion {
      * <strong>Only for a caller that is not deriving a filter.</strong> The rule at the top of this class is enforced by
      * {@link #expand}, and this method does not enforce it, so a filter built from what comes back here can miss event
      * types that dispatch would accept. It exists for a caller that has been given an explicit filter and so derives
-     * none, and still wants to report which event types it handles. The saga DSL's {@code filter(Filter)} override is
+     * none, and still wants to report which event types it handles. The saga DSL's {@code replacementFilter(Filter)} is
      * the one such caller.
      * <p>
      * An array and a primitive are still refused, through {@code cannotExpand}, and for two different strengths of
