@@ -1,11 +1,27 @@
 schema_version: 1
 epic: cdx33c
-revision: 1
+revision: 2
 updated_at: 2026-08-14T19:00:00Z
 updated_by: "orchestrator (successor session, worktree api-review-verification-c3b0ea): registered from the approved plan /Users/johan/.claude/plans/harmonic-spinning-peach.md"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "Plan approved by Johan 2026-08-14 (ExitPlanMode) after a two-round fresh-context review (round 1: 6 MUST-FIX; delta round: 1 MUST-FIX; all folded). Four rulings by AskUserQuestion same day: (1) finding 1 CONFIRMED BLOCKER, C1 pre-tag on the blocking stack only, reactor parity DELIBERATELY out of the tag (offered and declined), shape recorded on #738; (2) C2 promoted as an explicit stopping-rule exception; (3) C3 promoted, overturning the recorded 0.34 routing on the fail-late-at-boot fact; (4) fixpoint cap 2 (budget), stopping rule carried forward (after clean or cap only a confirmed BLOCKER reopens, capped reported as capped), C4+CREG under plan approval without separate gates. Standing grants per .context/orchestrator-policy.yml. The 0.33.0 tag is HELD for this epic; the tag and docs merges are Johan's manual acts. C1 owns pinStartPosition exclusively until it lands. Adversarial verify pass per correctness unit before merge; invariant-first briefs; CAS merges; suppressed blocks read at every head; CI-over-local-suites; [ci skip] only for genuinely prose-only diffs (C4 is NOT one, it runs normal CI); chips for multi-hour units while Attended."
-pending_actions: []
+pending_actions:
+  - id: act-001
+    type: dispatch-chip
+    target: "C1 chip task_9c342d4d (registration-race fix, plan-first, Opus/high, venue session) and C2 chip task_6ad11625 (saga filter split, plan-first, Opus/high, venue session), both self-contained briefs off origin/main 480c695"
+    expected: "Johan clicks each chip; each presents its plan gate in its own session, delivers a PR and a DELIVERY_RESULT; C1 owns pinStartPosition exclusively"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-14T19:10:00Z
+  - id: act-002
+    type: workflow-dispatch
+    target: "C3 planning subagent (Sonnet, read-only, plan_approval_venue orchestrator): id-aware capability shape, boot validation siting, standalone-vs-Cluster gate question, ripple + test plan"
+    expected: "a plan handed back; the standalone question goes to Johan through the orchestrator; implementation dispatched separately after the gate"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-14T19:10:00Z
 units:
   C1:
     issue: null
