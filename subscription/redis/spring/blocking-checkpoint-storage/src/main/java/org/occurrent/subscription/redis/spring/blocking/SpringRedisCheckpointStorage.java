@@ -111,9 +111,9 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * key when one is there and is a no-op against one that never was. {@link #forStandalone(RedisOperations)}
  * carries no refusal of its own, so a conditional {@code notOlderThan} write against it does write a version key
  * for this shape directly. {@code ifAbsent} never writes the version key, in either mode. It may read the
- * stored version to report it back on a refusal, but the checkpoint key is the only one it ever sets. Its own
- * {@code delete} never even reaches {@code CROSSSLOT} in the first place. A standalone or replicated server
- * has no slots to cross, so the two-key {@code DEL} always succeeds there and the fallback above never runs.
+ * stored version to report it back on a refusal, but the checkpoint key is the only one it ever sets. In
+ * standalone mode, {@code delete} never even reaches {@code CROSSSLOT} in the first place. A standalone or
+ * replicated server has no slots to cross, so the two-key {@code DEL} always succeeds there and the fallback above never runs.
  * The checkpoint key is deleted first regardless, a defensive ordering rather than one either mode's safety
  * depends on. If a version key ever did exist here, deleting it first and failing before the checkpoint would
  * leave a checkpoint with no stored version, which a later {@code notOlderThan} write would then accept
