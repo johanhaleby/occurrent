@@ -149,6 +149,40 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > decision for the interface rather than for this wrapper. The refusal names the method it asked and what this model
 > needs, so a caller in that position can see why.
 
+> **Amended a third time, before 0.33.0 shipped.** The amendment above says no start position Occurrent builds
+> records a position off an answer no layer consumes, "since they either ignore the model type or branch on the
+> catch-up, competing consumer and durable layers, all three of which do decide for themselves". That is wrong about
+> the competing consumer layer. `CompetingConsumerSubscriptionModel` resolves the position to find out whether to
+> compete for the subscription, and then hands the caller's own `StartAt` to the model it wraps in both branches, so
+> the model below resolves the same position again and is the one that settles where the subscription starts. The
+> walk read that layer's answer as final and stopped there. A function answering for each layer separately, with the
+> model default for the durable layer and something else above it, therefore recorded nothing, and the durable model
+> recorded a position when the subscription started instead. That is #669's skip again, on the Spring Boot starter's
+> own stack, and a regression from the unconditional write this replaces, which covered that input. Every start
+> position Occurrent itself builds is safe, since those answer with nothing or with the model default for the
+> competing consumer layer, so reaching this takes a function written by hand.
+>
+> **A layer now says whether it hands the caller's position down unresolved**, with
+> `SubscriptionModelWrapper.forwardsStartAtUnresolved()`. It answers false by default,
+> `CompetingConsumerSubscriptionModel` and `ManualStartSubscriptionModel` answer true, and the walk passes over a
+> layer that answers true rather than asking it at all. That closes both directions the amendment above described. A
+> forwarding layer no longer ends the walk with an answer it does not act on, and a position is no longer recorded off
+> an answer no layer consumes either. What is left is a wrapper that forwards and does not say so, which is one
+> written outside this repository, and it is read the way every layer was read before.
+>
+> Naming `CompetingConsumerSubscriptionModel` in the walk was the other way to fix it, and the module dependencies
+> rule it out, since the competing consumer model depends on the subscription api module the wrapper lives in.
+> Documenting the bound rather than fixing it was rejected by the same no-regression rule that justified the second
+> pass over inherited classes.
+>
+> Two things the amendment above says about that second pass are narrower than they sound. Every layer is not asked
+> again, only the ones the walk actually reached, which is a single layer when the walk ended on its first ask. And
+> the classes a layer inherits from stop short of `Object`, which no subscription model resolves its position
+> against. A proxy that only implements the model's interfaces is asked here after all, under
+> `java.lang.reflect.Proxy`, and a wrapper written as a record under `java.lang.Record`. Neither name is one a start
+> position Occurrent builds answers for, so "out of reach either way" is still true of what a subscription gets, but
+> the ask does happen.
+
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same
 reason the wrapper reports its own ids from `subscriptionIds()`, merged with the delegate's, since

@@ -17,6 +17,7 @@
 package org.occurrent.subscription.api.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.StartAt;
 
 /**
  * A subscription model wrapper wraps another subscription model and delegates to it when {@code subscribe}
@@ -46,5 +47,22 @@ public interface SubscriptionModelWrapper extends SubscriptionModelCapability {
             return ((SubscriptionModelWrapper) wrappedSubscriptionModel).getWrappedSubscriptionModelRecursively();
         }
         return wrappedSubscriptionModel;
+    }
+
+    /**
+     * Whether the wrapped {@link SubscriptionModel} receives the {@link StartAt} the caller passed, rather than one
+     * resolved here. A wrapper answering {@code true} may still resolve the position for a decision of its own, such
+     * as a competing consumer model working out whether to compete for the subscription, as long as it hands the
+     * caller's own object down and lets the model below resolve it again.
+     * <p>
+     * {@link ManualStartSubscriptionModel} asks this when it works out where a registration will start from. It goes
+     * down the wrapped models asking each of them what the caller's position resolves to, and passes over a wrapper
+     * that answers {@code true} here, since nothing such a wrapper answers changes where the subscription starts.
+     *
+     * @return {@code true} if the caller's own {@code StartAt} reaches the wrapped model. {@code false}, the default,
+     * for a wrapper that resolves the position and passes down what came out of that.
+     */
+    default boolean forwardsStartAtUnresolved() {
+        return false;
     }
 }
