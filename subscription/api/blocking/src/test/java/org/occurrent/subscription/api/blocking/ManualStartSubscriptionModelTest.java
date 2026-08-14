@@ -686,6 +686,44 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void two_nodes_at_the_same_position_both_complete_on_a_storage_that_reports_a_matching_write_as_success() {
+        // The MongoDB storages tell the two outcomes apart by comparing values, which ifAbsent() allows, so the
+        // second node's write is reported as success and the comparison after a refusal is never reached. Redis
+        // and the in-memory storage answer on existence alone and take that other route.
+        ValueComparingCheckpointStorage storage = new ValueComparingCheckpointStorage();
+        GlobalCheckpointSource<@Nullable Checkpoint> sharedPositionSource = () -> new StringCheckpoint("shared-position");
+        ManualStartSubscriptionModel firstNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), sharedPositionSource, storage);
+        ManualStartSubscriptionModel secondNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(), sharedPositionSource, storage);
+        firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+
+        assertThatCode(() -> secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        })).doesNotThrowAnyException();
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("shared-position");
+        assertThat(secondNode.subscriptionIds()).contains(SUBSCRIPTION_ID);
+    }
+
+    @Test
+    void a_node_at_a_different_position_is_refused_on_a_storage_that_reports_a_matching_write_as_success() {
+        ValueComparingCheckpointStorage storage = new ValueComparingCheckpointStorage();
+        ManualStartSubscriptionModel firstNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(),
+                () -> new StringCheckpoint("first-nodes-position"), storage);
+        ManualStartSubscriptionModel secondNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(),
+                () -> new StringCheckpoint("second-nodes-position"), storage);
+        firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+
+        assertThatThrownBy(() -> secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }))
+                .isInstanceOf(StartPositionAlreadyPinnedException.class)
+                .hasMessageContaining("first-nodes-position")
+                .hasMessageContaining("second-nodes-position");
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("first-nodes-position");
+    }
+
+    @Test
     void a_refused_registration_completes_when_it_is_made_again_and_starts_from_the_position_that_was_stored() {
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
@@ -1556,6 +1594,49 @@ class ManualStartSubscriptionModelTest {
         @Override
         public boolean exists(String subscriptionId) {
             return checkpoints.containsKey(subscriptionId);
+        }
+    }
+
+    // Reports an ifAbsent() write of the value already stored as success rather than refusing it, which
+    // CheckpointWriteCondition allows and the MongoDB storages do. exists() answers false the way the racing
+    // storage below does, so a registration reaches the write with nothing stored as far as it knows.
+    private static final class ValueComparingCheckpointStorage implements CheckpointStorage {
+        final Map<String, Checkpoint> checkpoints = new HashMap<>();
+
+        @Override
+        public boolean evaluatesWriteConditions() {
+            return true;
+        }
+
+        @Override
+        public Checkpoint read(String subscriptionId) {
+            return checkpoints.get(subscriptionId);
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            Checkpoint stored = checkpoints.get(subscriptionId);
+            if (condition instanceof CheckpointWriteCondition.IfAbsent && stored != null
+                && !stored.asString().equals(checkpoint.asString())) {
+                throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.empty(), condition);
+            }
+            checkpoints.put(subscriptionId, checkpoint);
+            return checkpoint;
+        }
+
+        @Override
+        public OptionalLong writeVersion(String subscriptionId) {
+            return OptionalLong.empty();
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            checkpoints.remove(subscriptionId);
+        }
+
+        @Override
+        public boolean exists(String subscriptionId) {
+            return false;
         }
     }
 
