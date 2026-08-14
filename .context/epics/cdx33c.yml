@@ -2,63 +2,53 @@ schema_version: 2
 epic: cdx33c
 revision: 4
 updated_at: 2026-08-14 19:00:00+00:00
-updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
+updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
+  as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
-authority: 'Plan approved by Johan 2026-08-14 (ExitPlanMode) after a two-round fresh-context
-  review (round 1: 6 MUST-FIX; delta round: 1 MUST-FIX; all folded). Four rulings
-  by AskUserQuestion same day: (1) finding 1 CONFIRMED BLOCKER, C1 pre-tag on the
-  blocking stack only, reactor parity DELIBERATELY out of the tag (offered and declined),
-  shape recorded on #738; (2) C2 promoted as an explicit stopping-rule exception;
-  (3) C3 promoted, overturning the recorded 0.34 routing on the fail-late-at-boot
-  fact; (4) fixpoint cap 2 (budget), stopping rule carried forward (after clean or
-  cap only a confirmed BLOCKER reopens, capped reported as capped), C4+CREG under
-  plan approval without separate gates. Standing grants per .context/orchestrator-policy.yml.
-  The 0.33.0 tag is HELD for this epic; the tag and docs merges are Johan''s manual
-  acts. C1 owns pinStartPosition exclusively until it lands. Adversarial verify pass
-  per correctness unit before merge; invariant-first briefs; CAS merges; suppressed
-  blocks read at every head; CI-over-local-suites; [ci skip] only for genuinely prose-only
-  diffs (C4 is NOT one, it runs normal CI); chips for multi-hour units while Attended.'
+authority: 'Plan approved by Johan 2026-08-14 (ExitPlanMode) after a two-round fresh-context review (round 1: 6 MUST-FIX;
+  delta round: 1 MUST-FIX; all folded). Four rulings by AskUserQuestion same day: (1) finding 1 CONFIRMED BLOCKER, C1 pre-tag
+  on the blocking stack only, reactor parity DELIBERATELY out of the tag (offered and declined), shape recorded on #738; (2)
+  C2 promoted as an explicit stopping-rule exception; (3) C3 promoted, overturning the recorded 0.34 routing on the fail-late-at-boot
+  fact; (4) fixpoint cap 2 (budget), stopping rule carried forward (after clean or cap only a confirmed BLOCKER reopens, capped
+  reported as capped), C4+CREG under plan approval without separate gates. Standing grants per .context/orchestrator-policy.yml.
+  The 0.33.0 tag is HELD for this epic; the tag and docs merges are Johan''s manual acts. C1 owns pinStartPosition exclusively
+  until it lands. Adversarial verify pass per correctness unit before merge; invariant-first briefs; CAS merges; suppressed
+  blocks read at every head; CI-over-local-suites; [ci skip] only for genuinely prose-only diffs (C4 is NOT one, it runs normal
+  CI); chips for multi-hour units while Attended.'
 pending_actions:
 - id: act-001
   type: dispatch-chip
-  target: C1 chip task_9c342d4d (registration-race fix, plan-first, Opus/high, venue
-    session) and C2 chip task_6ad11625 (saga filter split, plan-first, Opus/high,
-    venue session), both self-contained briefs off origin/main 480c695
-  expected: Johan clicks each chip; each presents its plan gate in its own session,
-    delivers a PR and a DELIVERY_RESULT; C1 owns pinStartPosition exclusively
-  status: VERIFIED
-  verified: '2026-08-14: both chips started by Johan in separate local sessions (host
+  target: C1 chip task_9c342d4d (registration-race fix, plan-first, Opus/high, venue session) and C2 chip task_6ad11625 (saga
+    filter split, plan-first, Opus/high, venue session), both self-contained briefs off origin/main 480c695
+  expected: 'Johan clicks each chip; each presents its plan gate in its own session, delivers a PR and a DELIVERY_RESULT;
+    C1 owns pinStartPosition exclusively. RESOLVED: 2026-08-14: both chips started by Johan in separate local sessions (host
     notices received); delivery obligations now tracked per unit'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: false
   issued_at: 2026-08-14 19:10:00+00:00
 - id: act-002
   type: workflow-dispatch
-  target: 'C3 planning subagent (Sonnet, read-only, plan_approval_venue orchestrator):
-    id-aware capability shape, boot validation siting, standalone-vs-Cluster gate
-    question, ripple + test plan'
-  expected: a plan handed back; the standalone question goes to Johan through the
-    orchestrator; implementation dispatched separately after the gate
+  target: 'C3 planning subagent (Sonnet, read-only, plan_approval_venue orchestrator): id-aware capability shape, boot validation
+    siting, standalone-vs-Cluster gate question, ripple + test plan'
+  expected: 'a plan handed back; the standalone question goes to Johan through the orchestrator; implementation dispatched
+    separately after the gate. RESOLVED: 2026-08-14: plan returned with full evidence incl. the pre-existing boot-check ordering
+    gap; gate ruled direction A (explicit standalone mode) under Johan''s long-term rule; implementation subagent dispatched
+    Sonnet/high'
   status: VERIFIED
-  verified: '2026-08-14: plan returned with full evidence incl. the pre-existing boot-check
-    ordering gap; gate ruled direction A (explicit standalone mode) under Johan''s
-    long-term rule; implementation subagent dispatched Sonnet/high'
   attempts: 1
   safe_to_repeat: true
   issued_at: 2026-08-14 19:10:00+00:00
 units:
   C1:
     issue: null
-    goal: 'Confirmed-blocker fix (review finding 1, #771 window): refuse-vs-knob shape
-      decided at the in-session design gate, implemented on the blocking stack in
-      ManualStartSubscriptionModel.pinStartPosition (narrow refusal in the checkpointAlreadyExisted
-      == false branch, or an opt-in strictness knob); decided shape recorded on #738
-      for reactor parity (which stays 0.34); ADR 86 amendment; finding 2''s new evidence
-      (a stateful/time-dependent caller dynamic function can flip between registration
-      and start) weighed at the same gate against the unreleased decidesWhereTheSubscriptionStarts
-      shape'
+    goal: 'Confirmed-blocker fix (review finding 1, #771 window): refuse-vs-knob shape decided at the in-session design gate,
+      implemented on the blocking stack in ManualStartSubscriptionModel.pinStartPosition (narrow refusal in the checkpointAlreadyExisted
+      == false branch, or an opt-in strictness knob); decided shape recorded on #738 for reactor parity (which stays 0.34);
+      ADR 86 amendment; finding 2''s new evidence (a stateful/time-dependent caller dynamic function can flip between registration
+      and start) weighed at the same gate against the unreleased decidesWhereTheSubscriptionStarts shape'
     phase: READY
     health: PROGRESSING
     swept: false
@@ -72,11 +62,9 @@ units:
       evidence: null
   C2:
     issue: null
-    goal: 'Review finding 5: split saga filter(Filter) on the unreleased 0.33 surface:
-      an additive predicate combined with the derived event types (hierarchy checks
-      stay on) vs a named full-selector override carrying the replacement semantics;
-      naming and shape at the in-session design gate; ADR 124 amendment, changelog,
-      migration guide, tests'
+    goal: 'Review finding 5: split saga filter(Filter) on the unreleased 0.33 surface: an additive predicate combined with
+      the derived event types (hierarchy checks stay on) vs a named full-selector override carrying the replacement semantics;
+      naming and shape at the in-session design gate; ADR 124 amendment, changelog, migration guide, tests'
     phase: READY
     health: PROGRESSING
     swept: false
@@ -90,11 +78,10 @@ units:
       evidence: null
   C3:
     issue: null
-    goal: 'Review finding 4: Redis capability honesty on the unreleased CheckpointStorage
-      surface: id-aware validation at boot where fencing/manual-start accepts the
-      storage (closes the fail-late gap: CheckpointFencingConfigurationCheck trusts
-      the global boolean), capability-contract wording, and the standalone-vs-Cluster
-      id-restriction decision at the unit''s gate (through the orchestrator)'
+    goal: 'Review finding 4: Redis capability honesty on the unreleased CheckpointStorage surface: id-aware validation at
+      boot where fencing/manual-start accepts the storage (closes the fail-late gap: CheckpointFencingConfigurationCheck trusts
+      the global boolean), capability-contract wording, and the standalone-vs-Cluster id-restriction decision at the unit''s
+      gate (through the orchestrator)'
     phase: READY
     health: PROGRESSING
     swept: false
@@ -108,14 +95,11 @@ units:
       evidence: null
   C4:
     issue: null
-    goal: 'Truth fixes: ADR 116 659-660 Redis Cluster sentence (AFTER C3''s gate decides
-      what it must say), ReplayAware.java 30-31 withdrawn-ADR-0111 citation, ADR 0124
-      line-83 stale module path, org.occurrent.filter.internal package-info with the
-      standard internal warning and expandWhatCanBeFound support status (@NullMarked
-      per sibling convention makes this a COMPILED change: normal CI, never [ci skip]).
-      Review-finding 11 is DECLINED (the exists read is load-bearing, timed before
-      position capture); finding 8''s placement half DECLINED per the cdx33b finding-11
-      convention ruling'
+    goal: 'Truth fixes: ADR 116 659-660 Redis Cluster sentence (AFTER C3''s gate decides what it must say), ReplayAware.java
+      30-31 withdrawn-ADR-0111 citation, ADR 0124 line-83 stale module path, org.occurrent.filter.internal package-info with
+      the standard internal warning and expandWhatCanBeFound support status (@NullMarked per sibling convention makes this
+      a COMPILED change: normal CI, never [ci skip]). Review-finding 11 is DECLINED (the exists read is load-bearing, timed
+      before position capture); finding 8''s placement half DECLINED per the cdx33b finding-11 convention ruling'
     phase: READY
     health: PROGRESSING
     swept: false
@@ -130,11 +114,10 @@ units:
       evidence: null
   C5:
     issue: '738'
-    goal: 'Reactor pin-race parity, promoted by Johan 2026-08-14 under the no-severity-ladder
-      principle (reversing his same-day blocking-only ruling with the conflict surfaced):
-      bring ReactorDurableSubscriptionModel''s registration pin from read-then-unconditional-write
-      to ifAbsent parity plus whatever refusal shape C1''s design gate decides, applied
-      per #771''s decide-once constraint; the tag waits for it'
+    goal: 'Reactor pin-race parity, promoted by Johan 2026-08-14 under the no-severity-ladder principle (reversing his same-day
+      blocking-only ruling with the conflict surfaced): bring ReactorDurableSubscriptionModel''s registration pin from read-then-unconditional-write
+      to ifAbsent parity plus whatever refusal shape C1''s design gate decides, applied per #771''s decide-once constraint;
+      the tag waits for it'
     phase: READY
     health: PROGRESSING
     swept: false
@@ -149,12 +132,10 @@ units:
       evidence: null
   CREG:
     issue: null
-    goal: 'Register and routing: orchestrator-routing markers on every touched issue;
-      finding-2 new evidence on #771''s family; the blocker ruling recorded with the
-      reviewer''s rank and the narrowing fact; stopping-rule exceptions as ruled;
-      issue-less declines (finding 7 incl. the knowingly-closed window note, finding
-      8 placement, review-finding 11) in ORCHESTRATOR.md''s register; declines by
-      pointer for findings 3, 6, 9, 10, 12'
+    goal: 'Register and routing: orchestrator-routing markers on every touched issue; finding-2 new evidence on #771''s family;
+      the blocker ruling recorded with the reviewer''s rank and the narrowing fact; stopping-rule exceptions as ruled; issue-less
+      declines (finding 7 incl. the knowingly-closed window note, finding 8 placement, review-finding 11) in ORCHESTRATOR.md''s
+      register; declines by pointer for findings 3, 6, 9, 10, 12'
     phase: READY
     health: PROGRESSING
     swept: false
@@ -171,12 +152,12 @@ units:
       met: false
       evidence: null
 watchers:
-  - id: watcher-001
-    kind: github-work-item-monitor
-    repository: johanhaleby/occurrent
-    external_id: bc0pn7xie
-    status: READY
-    retirement:
-      kind: no_unmet_pr_advanceable_deliverables
-    last_verified_at: 2026-08-14T20:05:00Z
-    last_verified_revision: 4
+- id: watcher-001
+  kind: github-work-item-monitor
+  repository: johanhaleby/occurrent
+  external_id: bc0pn7xie
+  status: READY
+  retirement:
+    kind: no_unmet_pr_advanceable_deliverables
+  last_verified_at: 2026-08-14 20:05:00+00:00
+  last_verified_revision: 4
