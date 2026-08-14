@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 19
+revision: 20
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -90,7 +90,7 @@ units:
       == false branch, or an opt-in strictness knob); decided shape recorded on #738 for reactor parity (which stays 0.34);
       ADR 86 amendment; finding 2''s new evidence (a stateful/time-dependent caller dynamic function can flip between registration
       and start) weighed at the same gate against the unreleased decidesWhereTheSubscriptionStarts shape'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -99,10 +99,14 @@ units:
     - check: pr_merged
       repo: johanhaleby/occurrent
       ref: '787'
-      met: false
-      evidence: 'IN FLIGHT: PR 787 at 6dd2112, narrow-refusal shape + StartPositionAlreadyPinnedException approved by Johan
-        at the in-session gate; finding 2 delegated to the unit and decided (no 0.33 shape change, javadoc + ADR bound); worker
-        in pr-fix loop; its #738-tension finding answered (already ruled as C5)'
+      met: true
+      evidence: 'MERGED 2026-08-14 as squash f3969d55ab60360472494210a19b5d1849072058, CAS-pinned to 62f42a8 (code verdict
+        carried from 281c960 28/28 by compare, tail verified one changelog line by orchestrator diff), squash body skip-marker-free.
+        Narrow refusal + StartPositionAlreadyPinnedException, ADR 86 wording approved by Johan post-sweep. Seven mutants killed,
+        adversarial pass refuted all behavior attacks, the cause-from-effect claim class corrected eleven times then closed
+        by exhaustive sweep with per-surface hit list. Nine Copilot reviews: 11 of 12 real findings from suppressed blocks.
+        One reasoned-decline thread open per policy. Test change ratified (encoded the false removal claim). Finding 2: no
+        shape change, bound documented. #771 remains open for the ordering design; the narrowed window is closed'
   C2:
     issue: null
     goal: 'Review finding 5: split saga filter(Filter) on the unreleased 0.33 surface: an additive predicate combined with
