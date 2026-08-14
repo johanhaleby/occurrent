@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 12
+revision: 13
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -152,7 +152,10 @@ units:
     goal: 'Reactor pin-race parity, promoted by Johan 2026-08-14 under the no-severity-ladder principle (reversing his same-day
       blocking-only ruling with the conflict surfaced): bring ReactorDurableSubscriptionModel''s registration pin from read-then-unconditional-write
       to ifAbsent parity plus whatever refusal shape C1''s design gate decides, applied per #771''s decide-once constraint;
-      the tag waits for it'
+      the tag waits for it. PLUS the docs ripple routed from C1''s finding (2026-08-14): the site''s Starting Subscriptions
+      Manually section (docs.md ~3667 on docs/0.33.0-preview) presents the registration pin without the two-node refusal outcome;
+      after both stacks land, one edit documents the StartPositionAlreadyPinnedException outcome and the restart-takes-stored-position
+      recovery for both, on the held branch, push never merge'
     phase: PLANNED
     health: PROGRESSING
     swept: false
