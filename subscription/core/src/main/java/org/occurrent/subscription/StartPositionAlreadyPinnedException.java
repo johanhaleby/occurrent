@@ -25,8 +25,13 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * A start position was already stored for a subscription id by the time a registration's own write reached
- * storage, and it is not the position that registration read from its position source, so the registration was
- * refused rather than started from a position it never read.
+ * storage, and the registration could not confirm it to be the position it read from its position source, so it
+ * was refused rather than started from a position it never read.
+ * <p>
+ * Three ways to fail that confirmation. The stored position read back differs from the one this registration
+ * read, or the checkpoint was removed again before it could be read, or reading it failed, and the last two are
+ * told apart by whether {@link #getCause()} is set. Only the first shows two positions that disagree. The other
+ * two are refused because nothing here can show they agree, which is the same answer for a weaker reason.
  * <p>
  * Two nodes registering the same subscription for the very first time at close to the same moment is the ordinary
  * way to reach this. One of them writes first and the other is refused. The two positions were read on different

@@ -209,12 +209,14 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * is the handle to wait on.
      *
      * @throws DuplicateSubscriptionIdException          If {@code subscriptionId} is already registered.
-     * @throws StartPositionAlreadyPinnedException       If this model records start positions and a position other
-     *                                                   than the one it read was stored for this subscription id
-     *                                                   while the registration was under way. The id is left free,
-     *                                                   so registering it again is what a node does once the other
-     *                                                   position is stored. Withheld and passed-through
-     *                                                   registrations answer the same way.
+     * @throws StartPositionAlreadyPinnedException       If this model records start positions, a position was
+     *                                                   stored for this subscription id while the registration was
+     *                                                   under way, and it could not be confirmed to be the one this
+     *                                                   registration read, whether it differed, was removed again,
+     *                                                   or could not be read. The id is left free, so registering
+     *                                                   it again is what a node does once the other position is
+     *                                                   stored. Withheld and passed-through registrations answer
+     *                                                   the same way.
      */
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
