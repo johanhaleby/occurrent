@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 7
+revision: 8
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -41,6 +41,18 @@ pending_actions:
   attempts: 1
   safe_to_repeat: true
   issued_at: 2026-08-14 19:10:00+00:00
+- id: act-003
+  type: workflow-dispatch
+  target: C2 adversarial pass on 25f71db (Opus, fresh context, aimed at the sharpened invariant sentence)
+  expected: 'verdict per angle. RESOLVED: 0 behavior defects (all code angles refuted), 3 prose MAJORS (direct-implementation
+    branch omitted from the invariant and three surfaces, flow-saga guard hazard falsely partitioned to narrowing only, changelog
+    two-obligations claim with one unreachable) + 2 minors (ADR derives-nothing self-contradiction, unconditional carve-out
+    missing the both-members branch); all routed back to the C2 session as one [ci skip]-eligible prose commit with an addendum
+    DELIVERY_RESULT to follow'
+  status: VERIFIED
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-14T13:05:00Z'
 units:
   C1:
     issue: null
