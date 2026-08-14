@@ -664,8 +664,9 @@ siblings the `eventTypes` attribute above is still the answer.
 Reach for this only when the hierarchy is the problem. If all you want is to select on subject, source, data or time
 while keeping your declared event types, use `narrowingFilter(...)` instead, which is combined with the derived filter
 rather than used in place of it, and which leaves the build-time check on. Both builders and both Kotlin blocks have it.
-`Saga.create(...)` does not, so a saga built from that factory narrows by implementing `Saga` and overriding
-`narrowingFilter()`, the same way it would for `onStart` or `isTerminal`.
+`Saga.create(...)` does not, and a saga it returns cannot be given one afterwards, since the factory hands back an
+anonymous implementation. Implement `Saga` yourself instead of calling the factory, which is what its own javadoc
+already tells you to do for `onStart` and `isTerminal`.
 
 Four things become yours to get right with a replacement, and the first two apply to a narrowing too. The filter has to
 match the saga's start events, because one that excludes them means no instance is ever created. It also has to admit the

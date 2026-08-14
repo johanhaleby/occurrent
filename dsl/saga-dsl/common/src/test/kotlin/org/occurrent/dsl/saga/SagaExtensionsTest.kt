@@ -360,6 +360,25 @@ class SagaExtensionsTest {
         }
 
         @Test
+        fun `narrowingFilter sets the extra condition the saga also requires`() {
+            val subject = Filter.subject("game-1")
+
+            val saga = saga<GameEvent, GameState?, GameCommand>(initialState = null) {
+                correlateAll { it.gameId }
+                startsOn<GameStarted>()
+                narrowingFilter(subject)
+            }
+
+            assertThat(saga.narrowingFilter()).isSameAs(subject)
+            assertThat(saga.replacementFilter()).isNull()
+        }
+
+        @Test
+        fun `a saga without one reports no narrowing filter`() {
+            assertThat(gameSaga().narrowingFilter()).isNull()
+        }
+
+        @Test
         fun `filter builds a saga on an open supertype that is otherwise refused`() {
             val saga = saga<OpenGameEvent, GameState?, GameCommand>(initialState = null) {
                 correlateAll { it.gameId }

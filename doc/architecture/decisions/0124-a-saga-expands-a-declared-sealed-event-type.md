@@ -388,5 +388,7 @@ ADR 121 refuses to put on argument count.
 
 That leaves a gap, and `AGENTS.md` is what decides whether the gap is allowed. It says an overload earns its place when
 a user driving the type directly cannot work around its absence, and names `SagaRunner.run` waiting unconditionally as
-the shape of that mistake. This is not that shape, because a `create` caller can override `narrowingFilter()` on the
-interface, which is the route `create`'s own javadoc already sends them down for `onStart` and `isTerminal`.
+the shape of that mistake. This is not that shape, because a caller who wants a narrowing can implement `Saga` instead
+of calling the factory, which is the route `create`'s own javadoc already sends them down for `onStart` and
+`isTerminal`. What they cannot do is add one to a saga the factory already returned, since that is an anonymous
+implementation.

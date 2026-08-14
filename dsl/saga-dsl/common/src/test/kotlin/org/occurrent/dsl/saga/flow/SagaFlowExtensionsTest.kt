@@ -976,6 +976,28 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
+        fun `narrowingFilter sets the extra condition the flow saga also requires`() {
+            val subject = Filter.subject("game-1")
+
+            val saga = saga<GameEvent, GameCommand> {
+                startsOn<GameCreated>()
+                correlateAll { "game-1" }
+                narrowingFilter(subject)
+                step("awaiting-players") {
+                    on<PlayerJoinedGame>(then = end)
+                }
+            }
+
+            assertThat(saga.narrowingFilter()).isSameAs(subject)
+            assertThat(saga.replacementFilter()).isNull()
+        }
+
+        @Test
+        fun `a flow saga without one reports no narrowing filter`() {
+            assertThat(closeAbandonedGameSaga().narrowingFilter()).isNull()
+        }
+
+        @Test
         fun `filter builds a flow saga on an open supertype that is otherwise refused`() {
             val saga = saga<OpenGameEvent, GameCommand> {
                 startsOn<OpenGameCreated>()

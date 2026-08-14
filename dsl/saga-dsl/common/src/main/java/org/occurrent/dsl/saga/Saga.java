@@ -334,9 +334,9 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * nothing is derived and so nothing is refused. {@code eventTypes} is still worth declaring, because it stays the
      * saga's answer to which event types it handles.
      * <p>
-     * There is no {@link #narrowingFilter()} here. Both builders have one, and a saga written against this factory that
-     * wants a narrowing implements the interface and overrides that method, the same way it would for
-     * {@link #onStart(Object, Object)} or {@link #isTerminal(Object)}.
+     * There is no {@link #narrowingFilter()} here, and the saga this returns cannot be given one afterwards, since it is
+     * an anonymous implementation. Both builders have the method. Implement the interface directly for a narrowing, the
+     * same as for {@link #onStart(Object, Object)} and {@link #isTerminal(Object)} above.
      */
     static <E, S extends @Nullable Object, C> Saga<E, S, C> create(S initialState,
                                                                    Function<E, @Nullable String> sagaId,
