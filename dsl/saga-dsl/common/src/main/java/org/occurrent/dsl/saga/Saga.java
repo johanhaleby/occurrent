@@ -172,19 +172,26 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * admit the events that move an instance on, because an instance whose later events are excluded never reaches
      * {@link #isTerminal(Object)} and stays alive with its timers running.
      * <p>
-     * A flow saga adds a third. A guard reads what has arrived, so a condition that excludes an event type changes the
-     * answer {@code received.none(Rejected.class)} gives, and a branch can fire that would not have fired otherwise.
+     * A flow saga adds a third, which {@link #replacementFilter()} has too whenever it is narrower than the declared
+     * types. A guard reads what has arrived, so a selector that excludes an event type changes the answer
+     * {@code received.none(Rejected.class)} gives, and a branch can fire that would not have fired otherwise.
      * <p>
      * A {@code Filter.data(..)} condition is refused when the saga subscribes if the subscription model cannot read
      * event payloads, which is what a push subscription model does by default.
      * <p>
-     * The build-time check that refuses a declared type whose concrete types cannot all be found still runs here, since
-     * a selector is still derived. {@link #replacementFilter()} is what switches it off.
+     * On a saga built by {@link Builder}, {@code FlowSaga.Builder} or {@link #create}, the build-time check that refuses
+     * a declared type whose concrete types cannot all be found still runs under a narrowing, since a selector is still
+     * derived. {@link #replacementFilter()} is what switches it off.
      * <p>
-     * All of that assumes the saga declares event types. One that declares none derives a selector matching everything,
-     * so its narrowing is the whole selector. For that saga the conversion obligation on {@link #replacementFilter()}
-     * applies to the narrowing as well, and there is no hierarchy to walk in the first place, so nothing is being kept
-     * switched on either.
+     * That check belongs to those three, so a saga written by implementing this interface directly never runs it, at any
+     * {@link #eventTypes()}. A filter is still derived for it, so a declared type whose concrete types cannot all be
+     * found leaves that saga subscribing on a filter naming fewer types than its own dispatch accepts, which under the
+     * type mappers Occurrent ships means missing events. Declaring the concrete types is the answer, the same one the
+     * builders would have insisted on.
+     * <p>
+     * A saga declaring no event types and setting no replacement derives a selector matching everything, so its
+     * narrowing is the whole selector. For that saga the conversion obligation on {@link #replacementFilter()} applies
+     * to the narrowing as well.
      */
     default @Nullable Filter narrowingFilter() {
         return null;
@@ -341,7 +348,9 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * <p>
      * There is no {@link #narrowingFilter()} here, and the saga this returns cannot be given one afterwards, since it is
      * an anonymous implementation. Both builders have the method. Implement the interface directly for a narrowing, the
-     * same as for {@link #onStart(Object, Object)} and {@link #isTerminal(Object)} above.
+     * same as for {@link #onStart(Object, Object)} and {@link #isTerminal(Object)} above. A saga written that way runs
+     * no build-time check on its declared types, so declare concrete ones, which is what {@link #narrowingFilter()}
+     * says about that route.
      */
     static <E, S extends @Nullable Object, C> Saga<E, S, C> create(S initialState,
                                                                    Function<E, @Nullable String> sagaId,

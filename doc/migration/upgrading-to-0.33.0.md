@@ -666,7 +666,10 @@ while keeping your declared event types, use `narrowingFilter(...)` instead, whi
 rather than used in place of it, and which leaves the build-time check on. Both builders and both Kotlin blocks have it.
 `Saga.create(...)` does not, and a saga it returns cannot be given one afterwards, since the factory hands back an
 anonymous implementation. Implement `Saga` yourself instead of calling the factory, which is what its own javadoc
-already tells you to do for `onStart` and `isTerminal`.
+already tells you to do for `onStart` and `isTerminal`. One thing to know if you go that way. The build-time check that
+refuses a type whose concrete types cannot be enumerated belongs to the two builders and the factory, so a saga you
+implement yourself never runs it, and under the type mappers Occurrent ships a supertype in its `eventTypes()` leaves it
+subscribing on a filter that misses events its own handlers would have taken. Declare the concrete types there, which is what a builder would have made you do.
 
 Four things become yours to get right with a replacement, and the first two apply to a narrowing too. The filter has to
 match the saga's start events, because one that excludes them means no instance is ever created. It also has to admit the
@@ -677,16 +680,18 @@ fails that delivery rather than being skipped. And the build-time hierarchy chec
 the saga declares, not only for the one you could not enumerate, so a replacement you set for an unrelated reason also
 stops you being told about a sealed hierarchy that was reopened somewhere else in the same saga.
 
-A saga that declares no event types at all is the exception to the split above. Its derived filter matches everything,
-so a narrowing on it is the whole selector, and the conversion point applies to that narrowing exactly as it does to a
-replacement.
+A saga that declares no event types and sets no replacement is the exception to the split above. Its derived filter
+matches everything, so a narrowing on it is the whole selector, and the conversion point applies to that narrowing
+exactly as it does to a replacement. Set a replacement as well and that replacement is the base instead, so this does
+not arise.
 
-A flow saga pays two more, one for each method. A replacement makes it append every correlated event it receives to the
-instance's retained history before it checks which branch handles the type, so a filter broader than the types the flow
-names grows that history, and under a `stepWindow` cap those events take slots the step's own events would otherwise
-hold. A narrowing does the opposite and it is the one that surprises people. A guard reads what has arrived, so excluding
-an event type changes the answer `received.none(Rejected.class)` gives, and a branch can fire that would not have fired
-without the narrowing.
+A flow saga pays two more. The first belongs to a replacement, which makes it append every correlated event it receives
+to the instance's retained history before it checks which branch handles the type, so a filter broader than the types
+the flow names grows that history, and under a `stepWindow` cap those events take slots the step's own events would
+otherwise hold. The second belongs to both and is the one that surprises people. A guard reads what has arrived, so a
+selector that excludes an event type changes the answer `received.none(Rejected.class)` gives, and a branch can fire
+that would not have fired otherwise. A narrowing can only remove matches, so that is the only
+direction it can move in. A replacement can be broader or narrower than the flow's types, and does this when it is narrower.
 
 One operational note for a saga that is already running. Adding a narrowing does not replay, so the events it would have
 excluded before you added it are already in the instance's history. Removing one later resumes from the stored

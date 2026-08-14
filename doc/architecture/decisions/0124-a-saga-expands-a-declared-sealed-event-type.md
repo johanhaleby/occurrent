@@ -333,11 +333,21 @@ hiding the difference behind one name puts the API's least obvious rule on the a
 the narrowing onto it. Both can be set at once, and the result is defined and useful under a mapper that collapses a
 hierarchy, so there is no illegal state and no precedence rule to remember.
 
-**Wherever a filter is derived at all, that is, for a declaration whose `eventTypes()` is non-empty, the strict
-hierarchy walk runs if and only if `replacementFilter()` is null.** A narrowing does not key it, because the selector is
-still derived and so still has to name every type dispatch would accept, which is the property at the top of this
-document. An empty `eventTypes()` derives nothing and never ran that walk, with or without either method, and this
-change does not touch that branch.
+**For a saga produced by `Saga.Builder`, `FlowSaga.Builder` or `Saga.create`, with a non-empty `eventTypes()`, the
+strict hierarchy walk runs if and only if `replacementFilter()` is null.** A narrowing does not key it, because the
+selector is still derived and so still has to name every type dispatch would accept, which is the property at the top
+of this document.
+
+Both halves of that scope do real work. An empty `eventTypes()` never ran the walk, with or without either method,
+and this change does not touch that branch. It still derives a filter, `Filter.all()`, so "derives nothing" would be
+wrong. What it never derives is a *type* filter.
+
+And the walk lives in those three producers alone. A saga written by implementing this interface directly never runs it,
+whatever its `eventTypes()` says, because there is no build step to run it in. `SagaFilters` still derives a type
+filter for such a saga, so it can subscribe on a filter that misses types dispatch would accept, which is the very
+defect this document exists to remove. That is not new, it is the pre-existing shape of a hand-written implementation,
+but the sections below send a caller who wants a narrowing down exactly that route, so it is stated rather than left to
+be discovered.
 
 The verb matters. The walk *runs*, it does not necessarily refuse, and even a replacement does not switch off
 everything: `expandWhatCanBeFound` still refuses an array or a primitive. What a replacement switches off is the
@@ -358,16 +368,20 @@ Both oblige the caller to admit the start event types, and not to starve the sag
 than a projection here, because an instance whose later events are excluded never reaches `isTerminal` and keeps its
 timers running.
 
-A flow saga adds one that is specific to narrowing, and it is the sharpest of them. A guard reads what has arrived, so
-excluding an event type changes the answer `received.none(Rejected.class)` gives, and a branch can fire that would not
-have fired otherwise. That is the saga taking the wrong action rather than no action, and no monotonicity argument
+A flow saga adds one that is sharper than either of those, and it belongs to both members rather than to narrowing
+alone. A guard reads what has arrived, so a selector that excludes an event type changes the answer
+`received.none(Rejected.class)` gives, and a branch can fire that would not have fired otherwise. Either member does this when it excludes an event of a type a
+guard asks about. A narrowing can only remove matches, so that is the only direction it can move in. A replacement can be broader or
+narrower than the declared types, and does this when it is narrower, which the `Filter.subject("order-1")` example
+earlier in this section already is. That is the saga taking the wrong action rather than no action, and no monotonicity argument
 removes it, because removing matches is exactly what flips a negative predicate.
 
 A replacement adds two more. Every CloudEvent it admits is converted before the saga sees it, and a flow saga appends
 every correlated event to the instance's retained history before it looks at which branch handles it. A narrowing adds
 neither, relative to the same saga without one, since every event it admits was already admitted by the derived
-selector. That is a relative claim. A saga whose `eventTypes()` is empty derives `Filter.all()`, and its narrowing is
-then the whole selector, and the conversion obligation applies to it in full.
+selector. That is a relative claim. A saga whose `eventTypes()` is empty and which sets no replacement derives
+`Filter.all()`, so its narrowing is then the whole selector and the conversion obligation applies to it in full. With a
+replacement set, that replacement is the base and this exception does not arise.
 
 ### Rejected: one accessor returning a sealed selector type
 
