@@ -478,19 +478,21 @@ record it, only the first write is kept, and the node whose position was not kep
 positions were read on different machines and nothing can order them, so accepting the stored one risks starting past
 the events written between them.
 
-One node on its own can hit the same exception with nobody else registering, when its checkpoint storage answers the
-question of whether a checkpoint exists, or reads one back, from a replica that has not caught up with the write. The
-remedy below is the same either way, so the exception is a reason to start the node again rather than a reason to go
-looking for a second one.
-
 Start that node again. It finds the recorded position already there, takes it, and starts, which is what a node
 registering a subscription somebody else already registered has done since this write was added. The events between
 the two positions are a separate question, and replaying that interval is the only way to get them, which is safe
 while the subscription is not running anywhere. A subscription that has run before, or that one node registered
-earlier, does not reach this, because the position is already recorded before the second node asks about it. That
-holds as long as the checkpoint storage answers the question of whether a checkpoint exists from somewhere that has
-seen the write, so a `MongoTemplate` reading from a secondary can reach the refusal on a subscription with real
-history, and starting again does not clear that one.
+earlier, does not reach that race, because the position is already recorded before the second node asks about it.
+
+One node on its own can hit the same exception with nobody else registering, and that one does not clear by starting
+again. It happens when the checkpoint storage answers the question of whether a checkpoint exists, or reads one back,
+from a replica that has not caught up with the write, so a `MongoTemplate` reading from a secondary can refuse a
+registration for a subscription with real history. Restarting into the same lagging reader refuses it again. Point the
+storage at a reader that has seen the write, or wait for the replica to catch up, and then start the node.
+
+Telling the two apart is a matter of what the storage holds. A position recorded for this subscription that a primary
+read confirms means the first case, and starting again is the whole of it. No such position, or one only some readers
+can see, means the second.
 
 ## 9. A flow saga can cap the events of the step it is parked in
 

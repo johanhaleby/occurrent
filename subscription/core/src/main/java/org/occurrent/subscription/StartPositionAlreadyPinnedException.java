@@ -85,14 +85,23 @@ public class StartPositionAlreadyPinnedException extends IllegalStateException {
      */
     public StartPositionAlreadyPinnedException(String subscriptionId, Checkpoint positionRead, Checkpoint positionStored) {
         this(subscriptionId, positionRead, positionStored,
-                "Subscription " + subscriptionId + " was registered at position " + positionRead.asString() +
-                ", but recording it was refused because a position was already stored for this subscription id. " +
-                "Reading that back found " + positionStored.asString() + ", in a second call, so it is what storage " +
-                "held at that moment rather than certainly the position that refused the write. The two positions " +
-                "were read independently and cannot be compared, so this registration is refused rather than " +
-                "started from a position it never read, and the events between them may not reach the " +
-                "subscription. Recovering them means replaying that interval, which is only safe while this " +
-                "subscription is not running anywhere.", null);
+                standardMessage(subscriptionId, positionRead, positionStored), null);
+    }
+
+    // Builds the message through the same checks the constructor makes, so a null argument is reported as the
+    // argument it is rather than as a failure to read a position off it.
+    private static String standardMessage(String subscriptionId, Checkpoint positionRead, Checkpoint positionStored) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(positionRead, Checkpoint.class.getSimpleName() + " read at registration cannot be null");
+        requireNonNull(positionStored, Checkpoint.class.getSimpleName() + " read back from storage cannot be null");
+        return "Subscription " + subscriptionId + " was registered at position " + positionRead.asString() +
+               ", but recording it was refused because a position was already stored for this subscription id. " +
+               "Reading that back found " + positionStored.asString() + ", in a second call, so it is what storage " +
+               "held at that moment rather than certainly the position that refused the write. The two positions " +
+               "were read independently and cannot be compared, so this registration is refused rather than " +
+               "started from a position it never read, and the events between them may not reach the " +
+               "subscription. Recovering them means replaying that interval, which is only safe while this " +
+               "subscription is not running anywhere.";
     }
 
     /**
