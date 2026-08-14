@@ -52,6 +52,42 @@ class StartPositionAlreadyPinnedExceptionTest {
     }
 
     @Test
+    void a_refusal_whose_read_back_failed_names_the_failure_as_the_cause_and_no_stored_position() {
+        RuntimeException readFailure = new IllegalStateException("the checkpoint store is unreachable");
+
+        StartPositionAlreadyPinnedException exception = StartPositionAlreadyPinnedException
+                .readingTheStoredPositionBackFailed("someSubscription", READ_AT_REGISTRATION, readFailure);
+
+        assertThat(exception.getMessage()).contains("read-at-registration", "failed");
+        assertThat(exception.positionStored).isEqualTo(Optional.empty());
+        assertThat(exception.getCause()).isSameAs(readFailure);
+    }
+
+    @Test
+    void a_refusal_whose_read_back_found_nothing_says_so_without_claiming_the_checkpoint_was_removed() {
+        StartPositionAlreadyPinnedException exception = StartPositionAlreadyPinnedException
+                .readingTheStoredPositionBackFoundNothing("someSubscription", READ_AT_REGISTRATION);
+
+        assertThat(exception.getMessage())
+                .contains("read-at-registration", "found nothing")
+                .doesNotContain("null");
+        assertThat(exception.positionStored).isEqualTo(Optional.empty());
+        assertThat(exception.getCause()).isNull();
+    }
+
+    @Test
+    void a_factory_reports_a_null_argument_as_the_argument_it_is() {
+        assertThatThrownBy(() -> StartPositionAlreadyPinnedException
+                .readingTheStoredPositionBackFoundNothing("someSubscription", null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("read at registration");
+        assertThatThrownBy(() -> StartPositionAlreadyPinnedException
+                .readingTheStoredPositionBackFailed(null, READ_AT_REGISTRATION, new IllegalStateException("boom")))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("subscriptionId");
+    }
+
+    @Test
     void a_null_position_is_reported_as_the_argument_it_is_rather_than_as_a_failure_to_read_a_position_off_it() {
         assertThatThrownBy(() -> new StartPositionAlreadyPinnedException("someSubscription", READ_AT_REGISTRATION, null))
                 .isInstanceOf(NullPointerException.class)

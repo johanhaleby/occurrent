@@ -105,6 +105,50 @@ public class StartPositionAlreadyPinnedException extends IllegalStateException {
     }
 
     /**
+     * The refusal for a stored position that could not be read back at all, because reading it failed. Built here
+     * rather than where it is thrown, so the wording for what such a refusal can establish has one place to be
+     * right in, whichever caller reaches it.
+     *
+     * @param subscriptionId The id of the subscription whose registration was refused
+     * @param positionRead   The position this registration read from its position source
+     * @param cause          The failure that stopped the stored position from being read
+     * @return The exception to throw, or to signal
+     */
+    public static StartPositionAlreadyPinnedException readingTheStoredPositionBackFailed(String subscriptionId, Checkpoint positionRead,
+                                                                                        Throwable cause) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(positionRead, Checkpoint.class.getSimpleName() + " read at registration cannot be null");
+        return new StartPositionAlreadyPinnedException(subscriptionId, positionRead, null,
+                "Subscription " + subscriptionId + " was registered at position " + positionRead.asString() +
+                ", but recording it was refused because a checkpoint was already stored for this subscription " +
+                "id, and reading that back to find out whether it holds this same position failed. The " +
+                "registration is refused rather than started from a position it cannot show it read. That " +
+                "checkpoint may hold another position, from another node registering at the same moment, or " +
+                "this registration's own, which a storage retrying a write it never heard the answer to can " +
+                "produce on a single node.", cause);
+    }
+
+    /**
+     * The refusal for a stored position that read back as nothing, built here for the same reason
+     * {@link #readingTheStoredPositionBackFailed(String, Checkpoint, Throwable)} is.
+     *
+     * @param subscriptionId The id of the subscription whose registration was refused
+     * @param positionRead   The position this registration read from its position source
+     * @return The exception to throw, or to signal
+     */
+    public static StartPositionAlreadyPinnedException readingTheStoredPositionBackFoundNothing(String subscriptionId, Checkpoint positionRead) {
+        requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        requireNonNull(positionRead, Checkpoint.class.getSimpleName() + " read at registration cannot be null");
+        return new StartPositionAlreadyPinnedException(subscriptionId, positionRead, null,
+                "Subscription " + subscriptionId + " was registered at position " + positionRead.asString() +
+                ", but recording it was refused because a checkpoint was already stored for this subscription " +
+                "id, and reading it back found nothing, so whether it holds this same position cannot be shown " +
+                "here. The registration is refused rather than started from a position it cannot show it read. " +
+                "A checkpoint removed in between reads this way, and so does a read served from somewhere that " +
+                "has not seen the write.");
+    }
+
+    /**
      * Creates an exception with a message of your own, for the cases the standard message cannot name a stored
      * position for.
      *
