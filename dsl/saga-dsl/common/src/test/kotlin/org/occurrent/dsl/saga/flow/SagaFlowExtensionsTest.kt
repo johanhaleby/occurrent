@@ -961,18 +961,40 @@ class SagaFlowExtensionsTest {
             val saga = saga<GameEvent, GameCommand> {
                 startsOn<GameCreated>()
                 correlateAll { "game-1" }
-                filter(subject)
+                replacementFilter(subject)
                 step("awaiting-players") {
                     on<PlayerJoinedGame>(then = end)
                 }
             }
 
-            assertThat(saga.filter()).isSameAs(subject)
+            assertThat(saga.replacementFilter()).isSameAs(subject)
         }
 
         @Test
         fun `a flow saga without one reports no filter`() {
-            assertThat(closeAbandonedGameSaga().filter()).isNull()
+            assertThat(closeAbandonedGameSaga().replacementFilter()).isNull()
+        }
+
+        @Test
+        fun `narrowingFilter sets the extra condition the flow saga also requires`() {
+            val subject = Filter.subject("game-1")
+
+            val saga = saga<GameEvent, GameCommand> {
+                startsOn<GameCreated>()
+                correlateAll { "game-1" }
+                narrowingFilter(subject)
+                step("awaiting-players") {
+                    on<PlayerJoinedGame>(then = end)
+                }
+            }
+
+            assertThat(saga.narrowingFilter()).isSameAs(subject)
+            assertThat(saga.replacementFilter()).isNull()
+        }
+
+        @Test
+        fun `a flow saga without one reports no narrowing filter`() {
+            assertThat(closeAbandonedGameSaga().narrowingFilter()).isNull()
         }
 
         @Test
@@ -980,7 +1002,7 @@ class SagaFlowExtensionsTest {
             val saga = saga<OpenGameEvent, GameCommand> {
                 startsOn<OpenGameCreated>()
                 correlateAll { it.gameId }
-                filter(Filter.type("game-event"))
+                replacementFilter(Filter.type("game-event"))
                 step("awaiting-players") {
                     on<OpenGameEvent>(then = end)
                 }

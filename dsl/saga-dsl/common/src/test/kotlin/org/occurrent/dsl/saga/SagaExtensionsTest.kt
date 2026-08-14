@@ -348,15 +348,34 @@ class SagaExtensionsTest {
             val saga = saga<GameEvent, GameState?, GameCommand>(initialState = null) {
                 correlateAll { it.gameId }
                 startsOn<GameStarted>()
-                filter(subject)
+                replacementFilter(subject)
             }
 
-            assertThat(saga.filter()).isSameAs(subject)
+            assertThat(saga.replacementFilter()).isSameAs(subject)
         }
 
         @Test
         fun `a saga without one reports no filter`() {
-            assertThat(gameSaga().filter()).isNull()
+            assertThat(gameSaga().replacementFilter()).isNull()
+        }
+
+        @Test
+        fun `narrowingFilter sets the extra condition the saga also requires`() {
+            val subject = Filter.subject("game-1")
+
+            val saga = saga<GameEvent, GameState?, GameCommand>(initialState = null) {
+                correlateAll { it.gameId }
+                startsOn<GameStarted>()
+                narrowingFilter(subject)
+            }
+
+            assertThat(saga.narrowingFilter()).isSameAs(subject)
+            assertThat(saga.replacementFilter()).isNull()
+        }
+
+        @Test
+        fun `a saga without one reports no narrowing filter`() {
+            assertThat(gameSaga().narrowingFilter()).isNull()
         }
 
         @Test
@@ -365,7 +384,7 @@ class SagaExtensionsTest {
                 correlateAll { it.gameId }
                 startsOn<OpenGameEvent>()
                 evolve<OpenGameEvent> { state, _ -> state }
-                filter(Filter.type("game-event"))
+                replacementFilter(Filter.type("game-event"))
             }
 
             assertThat(saga.eventTypes()).containsExactly(OpenGameEvent::class.java)

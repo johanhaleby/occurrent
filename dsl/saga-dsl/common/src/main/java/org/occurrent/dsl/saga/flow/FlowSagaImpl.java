@@ -75,8 +75,10 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // How many of the current step's own events are kept. Applied on every delivery, since a step being parked on is what
     // it caps. UNBOUNDED_STEP_WINDOW keeps all of them.
     private final int stepWindow;
-    // Null unless the caller set one, in which case it replaces the filter derived from eventTypes.
-    private final @Nullable Filter filter;
+    // Both null unless the caller set them. The narrowing is combined with the filter derived from eventTypes, the
+    // replacement is used instead of deriving one.
+    private final @Nullable Filter narrowingFilter;
+    private final @Nullable Filter replacementFilter;
 
     FlowSagaImpl(Class<? extends E> startType,
                  BiFunction<EventMetadata, E, List<C>> onStartCommands,
@@ -89,7 +91,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                  Set<Class<? extends E>> eventTypes,
                  int historyWindow,
                  int stepWindow,
-                 @Nullable Filter filter) {
+                 @Nullable Filter narrowingFilter,
+                 @Nullable Filter replacementFilter) {
         this.startType = startType;
         this.onStartCommands = onStartCommands;
         this.steps = steps;
@@ -101,7 +104,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         this.eventTypes = eventTypes;
         this.historyWindow = historyWindow;
         this.stepWindow = stepWindow;
-        this.filter = filter;
+        this.narrowingFilter = narrowingFilter;
+        this.replacementFilter = replacementFilter;
     }
 
     @Override
@@ -129,8 +133,13 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     @Override
-    public @Nullable Filter filter() {
-        return filter;
+    public @Nullable Filter narrowingFilter() {
+        return narrowingFilter;
+    }
+
+    @Override
+    public @Nullable Filter replacementFilter() {
+        return replacementFilter;
     }
 
     @SuppressWarnings("NullableProblems")

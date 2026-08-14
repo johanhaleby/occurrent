@@ -66,10 +66,10 @@ class SagaFilterOverrideTest {
         Saga<OrderEvent, String, OrderCommand> saga = Saga.<OrderEvent, String, OrderCommand>builder(null)
                 .correlateAll(OrderEvent::orderId)
                 .startsOn(OrderPlaced.class)
-                .filter(SUBJECT_FILTER)
+                .replacementFilter(SUBJECT_FILTER)
                 .build();
 
-        assertThat(saga.filter()).isSameAs(SUBJECT_FILTER);
+        assertThat(saga.replacementFilter()).isSameAs(SUBJECT_FILTER);
     }
 
     @Test
@@ -77,11 +77,11 @@ class SagaFilterOverrideTest {
         Saga<OrderEvent, FlowState<OrderEvent>, OrderCommand> saga = FlowSaga.<OrderEvent, OrderCommand>builder()
                 .correlateAll(OrderEvent::orderId)
                 .startsOn(OrderPlaced.class)
-                .filter(SUBJECT_FILTER)
+                .replacementFilter(SUBJECT_FILTER)
                 .step("wait", step -> step.on(PaymentReserved.class, Continuation.end()))
                 .build();
 
-        assertThat(saga.filter()).isSameAs(SUBJECT_FILTER);
+        assertThat(saga.replacementFilter()).isSameAs(SUBJECT_FILTER);
     }
 
     @Test
@@ -89,7 +89,7 @@ class SagaFilterOverrideTest {
         Saga<OrderEvent, String, OrderCommand> saga = Saga.create(null, OrderEvent::orderId, Set.of(OrderPlaced.class),
                 Set.of(OrderPlaced.class), (state, input) -> state, (state, input) -> List.of(), SUBJECT_FILTER);
 
-        assertThat(saga.filter()).isSameAs(SUBJECT_FILTER);
+        assertThat(saga.replacementFilter()).isSameAs(SUBJECT_FILTER);
     }
 
     @Test
@@ -101,8 +101,8 @@ class SagaFilterOverrideTest {
         Saga<OrderEvent, String, OrderCommand> created = Saga.create(null, OrderEvent::orderId,
                 Set.of(OrderPlaced.class), Set.of(OrderPlaced.class), (state, input) -> state, (state, input) -> List.of());
 
-        assertThat(built.filter()).isNull();
-        assertThat(created.filter()).isNull();
+        assertThat(built.replacementFilter()).isNull();
+        assertThat(created.replacementFilter()).isNull();
     }
 
     @Test
@@ -111,7 +111,7 @@ class SagaFilterOverrideTest {
                 .correlateAll(OpenEvent::orderId)
                 .startsOn(OpenEvent.class)
                 .evolve(OpenEvent.class, (state, e) -> e.orderId())
-                .filter(Filter.type("open-order-event"))
+                .replacementFilter(Filter.type("open-order-event"))
                 .build();
 
         assertThat(saga.eventTypes()).containsExactly(OpenEvent.class);
@@ -122,7 +122,7 @@ class SagaFilterOverrideTest {
         Saga<OpenEvent, FlowState<OpenEvent>, OrderCommand> saga = FlowSaga.<OpenEvent, OrderCommand>builder()
                 .correlateAll(OpenEvent::orderId)
                 .startsOn(OpenOrderPlaced.class)
-                .filter(Filter.type("open-order-event"))
+                .replacementFilter(Filter.type("open-order-event"))
                 .step("wait", step -> step.on(OpenEvent.class, Continuation.end()))
                 .build();
 
@@ -153,7 +153,7 @@ class SagaFilterOverrideTest {
                 .correlateAll(e -> "order-1")
                 .startsOn(OrderPlaced.class)
                 .evolve(OpenEvent.class, (state, e) -> state)
-                .filter(SUBJECT_FILTER)
+                .replacementFilter(SUBJECT_FILTER)
                 .build();
 
         assertThat(saga.eventTypes()).contains(OpenEvent.class, OrderPlaced.class);
@@ -183,34 +183,34 @@ class SagaFilterOverrideTest {
 
         Saga<Object, String, OrderCommand> widened = Saga.adapt(saga, OrderEvent.class);
 
-        assertThat(widened.filter()).isSameAs(SUBJECT_FILTER);
+        assertThat(widened.replacementFilter()).isSameAs(SUBJECT_FILTER);
     }
 
     @Test
     void cannot_be_set_twice_on_the_core_builder() {
         Saga.Builder<OrderEvent, String, OrderCommand> builder = Saga.<OrderEvent, String, OrderCommand>builder(null)
-                .filter(SUBJECT_FILTER);
+                .replacementFilter(SUBJECT_FILTER);
 
-        assertThatThrownBy(() -> builder.filter(Filter.subject("order-2")))
+        assertThatThrownBy(() -> builder.replacementFilter(Filter.subject("order-2")))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("filter(...) has already been set");
+                .hasMessageContaining("replacementFilter(...) has already been set");
     }
 
     @Test
     void cannot_be_set_twice_on_the_flow_builder() {
         FlowSaga.Builder<OrderEvent, OrderCommand> builder = FlowSaga.<OrderEvent, OrderCommand>builder()
-                .filter(SUBJECT_FILTER);
+                .replacementFilter(SUBJECT_FILTER);
 
-        assertThatThrownBy(() -> builder.filter(Filter.subject("order-2")))
+        assertThatThrownBy(() -> builder.replacementFilter(Filter.subject("order-2")))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("filter(...) has already been set");
+                .hasMessageContaining("replacementFilter(...) has already been set");
     }
 
     @Test
     void cannot_be_null() {
-        assertThatThrownBy(() -> Saga.<OrderEvent, String, OrderCommand>builder(null).filter(null))
+        assertThatThrownBy(() -> Saga.<OrderEvent, String, OrderCommand>builder(null).replacementFilter(null))
                 .isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> FlowSaga.<OrderEvent, OrderCommand>builder().filter(null))
+        assertThatThrownBy(() -> FlowSaga.<OrderEvent, OrderCommand>builder().replacementFilter(null))
                 .isInstanceOf(NullPointerException.class);
     }
 
@@ -239,7 +239,7 @@ class SagaFilterOverrideTest {
                 .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Declare the concrete event types instead")
-                .hasMessageContaining("set an explicit filter");
+                .hasMessageContaining("set a replacementFilter(...)");
     }
 
     @Test
@@ -278,11 +278,11 @@ class SagaFilterOverrideTest {
         assertThatThrownBy(() -> Saga.<Object, String, OrderCommand>builder(null)
                 .correlateAll(e -> "order-1")
                 .startsOn(int.class)
-                .filter(SUBJECT_FILTER)
+                .replacementFilter(SUBJECT_FILTER)
                 .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("no event is ever an instance of a primitive type")
-                .hasMessageNotContaining("set an explicit filter");
+                .hasMessageNotContaining("set a replacementFilter(...)");
 
         assertThatThrownBy(() -> Saga.<Object, String, OrderCommand>builder(null)
                 .correlateAll(e -> "order-1")
@@ -300,7 +300,7 @@ class SagaFilterOverrideTest {
         assertThatThrownBy(() -> Saga.<Object, String, OrderCommand>builder(null)
                 .correlateAll(e -> "order-1")
                 .startsOn(OrderPlaced[].class)
-                .filter(SUBJECT_FILTER)
+                .replacementFilter(SUBJECT_FILTER)
                 .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("does not support an array");
@@ -311,7 +311,7 @@ class SagaFilterOverrideTest {
         assertThatThrownBy(() -> FlowSaga.<Object, OrderCommand>builder()
                 .correlateAll(e -> "order-1")
                 .startsOn(OrderPlaced[].class)
-                .filter(SUBJECT_FILTER)
+                .replacementFilter(SUBJECT_FILTER)
                 .step("wait", step -> step.on(OrderPlaced.class, Continuation.end()))
                 .build())
                 .isInstanceOf(IllegalArgumentException.class)
@@ -337,7 +337,7 @@ class SagaFilterOverrideTest {
                 .startsOn(OrderPlaced.class)
                 .evolve(OrderEvent.class, (state, e) -> e.orderId());
         if (filter != null) {
-            builder.filter(filter);
+            builder.replacementFilter(filter);
         }
         return builder.build();
     }
@@ -348,7 +348,7 @@ class SagaFilterOverrideTest {
                 .startsOn(OrderPlaced.class)
                 .evolve(OrderEvent.class, (state, e) -> e.orderId());
         if (filter != null) {
-            builder.filter(filter);
+            builder.replacementFilter(filter);
         }
         return builder.build();
     }

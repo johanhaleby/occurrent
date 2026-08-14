@@ -83,7 +83,8 @@ public final class FlowSaga {
         private final Set<String> stepNames = new LinkedHashSet<>();
         private int historyWindow = FlowSagaImpl.DEFAULT_HISTORY_WINDOW;
         private int stepWindow = FlowSagaImpl.UNBOUNDED_STEP_WINDOW;
-        private @Nullable Filter filter;
+        private @Nullable Filter narrowingFilter;
+        private @Nullable Filter replacementFilter;
 
         private Builder() {
         }
@@ -202,17 +203,31 @@ public final class FlowSaga {
         }
 
         /**
-         * Sets an explicit selector that replaces the one derived from the event types the flow's start, steps and step
-         * conditions name, so the saga can select on more than event type (subject, source, data, time). It also builds
-         * a flow over a hierarchy whose concrete types cannot all be found, which is otherwise refused here, since
-         * nothing is derived and so nothing is refused. See {@link Saga#filter()} for what that leaves you responsible
-         * for. Optional, can be set only once.
+         * Adds a condition every selected event must also match, on top of the selector derived from the event types
+         * the flow's start, steps and step conditions name, so the saga can select on subject, source, data or time and
+         * still ask for its own event types. See {@link Saga#narrowingFilter()} for what that leaves you responsible
+         * for, including what it does to a guard that reads what has arrived. Optional, can be set only once.
          */
-        public Builder<E, C> filter(Filter filter) {
-            if (this.filter != null) {
-                throw new IllegalStateException("filter(...) has already been set and can only be set once");
+        public Builder<E, C> narrowingFilter(Filter narrowingFilter) {
+            if (this.narrowingFilter != null) {
+                throw new IllegalStateException("narrowingFilter(...) has already been set and can only be set once");
             }
-            this.filter = requireNonNull(filter, "filter cannot be null");
+            this.narrowingFilter = requireNonNull(narrowingFilter, "narrowingFilter cannot be null");
+            return this;
+        }
+
+        /**
+         * Sets an explicit selector used instead of deriving one from the event types the flow's start, steps and step
+         * conditions name. It also builds a flow over a hierarchy whose concrete types cannot all be found, which is
+         * otherwise refused here, since nothing is derived and so nothing is refused. See
+         * {@link Saga#replacementFilter()} for what that leaves you responsible for. Optional, can be set only once,
+         * and can be combined with {@link #narrowingFilter(Filter)}.
+         */
+        public Builder<E, C> replacementFilter(Filter replacementFilter) {
+            if (this.replacementFilter != null) {
+                throw new IllegalStateException("replacementFilter(...) has already been set and can only be set once");
+            }
+            this.replacementFilter = requireNonNull(replacementFilter, "replacementFilter cannot be null");
             return this;
         }
 
@@ -250,17 +265,19 @@ public final class FlowSaga {
             }
 
             validateTransitionToTargets(stepsByName.keySet());
-            // No filter is derived under an explicit one, so the walk that refuses a type a derived filter would miss
-            // has nothing to protect and only reports what it finds. Coverage below runs over the same shape either way.
+            // No filter is derived under a replacement, so the walk that refuses a type a derived filter would miss has
+            // nothing to protect and only reports what it finds. A narrowing does not key this, because the selector is
+            // still derived and so still has to name every type. Coverage below runs over the same shape either way.
             Set<Class<? extends E>> declaredTypes = collectEventTypes();
-            Set<Class<? extends E>> eventTypes = filter == null
+            Set<Class<? extends E>> eventTypes = replacementFilter == null
                     ? EventTypeExpansion.expand(declaredTypes, Saga::cannotSubscribeOn)
                     : EventTypeExpansion.expandWhatCanBeFound(declaredTypes, Saga::cannotSubscribeOn);
             validateCorrelationCoverage(eventTypes);
             validateStepWindowCanKeepCounts();
 
             return new FlowSagaImpl<>(startType, onStartCommands, List.copyOf(steps), stepIndex, stepsByName,
-                    correlators, correlateAll, Set.of(startType), eventTypes, historyWindow, stepWindow, filter);
+                    correlators, correlateAll, Set.of(startType), eventTypes, historyWindow, stepWindow, narrowingFilter,
+                    replacementFilter);
         }
 
         // Dropping a step's older events means its condition counts have to live in the instance's state, and a count can
