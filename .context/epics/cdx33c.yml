@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 25
+revision: 27
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -225,7 +225,7 @@ units:
       and fixed by C1 itself once its final round became a code change.) Note from C1: the manual-start pin sentence needing
       the refusal-outcome company exists on BOTH held docs branches: docs/0.33.0-preview AND occurrent-org.github.io PR 55''s
       docs/checkpoint-fencing.'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on:
@@ -235,20 +235,23 @@ units:
     - check: pr_merged
       repo: johanhaleby/occurrent
       ref: '790'
-      met: false
+      met: true
       evidence: 'DELIVERED to hold at final head f94d595 ([ci skip] prose tail; code verdict 27/27 on 45f912f by the recorded
         compare convention). Adversarial pass: behavior refuted on every angle, 4 prose majors fixed in one round plus 2 more
         instances of the same class the worker sweep itself caught (ADR 89 and the guide heading, corrections overclaiming
         like the corrected text, caught by the absolutes grep). Docs branches at b4bee65 (preview) and 93ecd07 (checkpoint-fencing),
         held. #791 filed with marker and routed 0.34 (the elevated remove-by-key race). Three threads: two resolved, one open
-        reasoned (the Q1 derivation). MERGE HELD for Johan: ADR wordings + blast-radius ratification in the return queue'
+        reasoned (the Q1 derivation). MERGE HELD for Johan: ADR wordings + blast-radius ratification in the return queue.
+        MERGED 2026-08-14 evening as squash b8bdeda15bc11fa13c0464913b052f0d674e1e89 after Johan approved the ADR wordings
+        and ratified the blast radius at the return ask; squash body explicitly stripped of skip markers (verified zero),
+        closes #738'
   CREG:
     issue: null
     goal: 'Register and routing: orchestrator-routing markers on every touched issue; finding-2 new evidence on #771''s family;
       the blocker ruling recorded with the reviewer''s rank and the narrowing fact; stopping-rule exceptions as ruled; issue-less
       declines (finding 7 incl. the knowingly-closed window note, finding 8 placement, review-finding 11) in ORCHESTRATOR.md''s
       register; declines by pointer for findings 3, 6, 9, 10, 12'
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on:
@@ -261,8 +264,14 @@ units:
     - check: branch_pushed
       repo: johanhaleby/occurrent
       ref: null
-      met: false
-      evidence: null
+      met: true
+      evidence: 'DONE 2026-08-14 evening: tracker scans from both the recorded cursor and a safety-margin earlier bound (the
+        recorded registration timestamp postdated some fleet activity, noted); every issue in the window is fleet-filed and
+        routed with verified orchestrator-routing markers (#785 closed via C6, #786 deferred, #788 deferred with the comment
+        repaired this tick, #791 deferred). Decline register complete in ORCHESTRATOR.md: section-8 heading fleet ruling (0.34
+        retitle), finding 7 window knowingly closed, review-finding 11 load-bearing read, finding 8 placement, WARN-cadence
+        minors, TCK per-id gap, the #771/#738 resolution pointers. Stopping-rule exceptions and all rulings recorded with
+        provenance'
   C6:
     issue: '785'
     goal: 'Adopted by Johan at the C2 interim report (widening the approved plan by one docs unit): document the explicit
@@ -284,13 +293,29 @@ units:
         8 narrowing/replacement occurrences, stable saga-explicit-filter anchor rewritten in place, zero bare filter( references
         in the section), Jekyll build exit 0 twice, writing gate ran with two semicolon and two colon-reveal catches fixed,
         diff pages/docs/docs.md alone, primary checkout and docs main untouched. #785 closed with the held-branch pointer'
+  C7:
+    issue: null
+    goal: 'Docs bundle ruled fix-now by Johan at the return ask: align PR 55''s docs/checkpoint-fencing stale blanket fixed-at-registration
+      claim with the preview wording, deduplicate the diverging captured-position paragraph on both branches, add the missing
+      blank line before ## Synchronous Subscriptions on checkpoint-fencing; held branches, push only, never merge'
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: null
+      met: false
+      evidence: null
 watchers:
 - id: watcher-001
   kind: github-work-item-monitor
   repository: johanhaleby/occurrent
   external_id: bc0pn7xie
-  status: READY
+  status: RETIRED
   retirement:
     kind: no_unmet_pr_advanceable_deliverables
-  last_verified_at: 2026-08-14 20:05:00+00:00
-  last_verified_revision: 4
+  last_verified_at: '2026-08-14T18:05:00Z'
+  last_verified_revision: 27
