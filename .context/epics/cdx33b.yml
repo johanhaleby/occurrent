@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33b
-revision: 42
+revision: 43
 updated_at: 2026-08-14T09:05:00Z
 updated_by: "successor orchestrator (worktree api-review-verification-c3b0ea): recovered per handoff, monitors re-armed, act-001 reconciled VERIFIED, U10B registered (U11 docs appendix push), U13 gate going to Johan"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -199,7 +199,8 @@ pending_actions:
     type: workflow-dispatch
     target: "U15 subagent (Sonnet, docs worktree per the U10B recipe incl. the local-branch trap): correct docs.md 3669/6674 one-arg pin misattribution on docs/0.33.0-preview at 6e540e7"
     expected: "a pushed held-branch head with both sentences corrected, build+rendered-grep evidence, never a merge; orchestrator verifies against the falsifying input"
-    status: PENDING
+    status: VERIFIED
+    verified: "2026-08-14: head a5b905f on origin, falsifying input closed (one-arg factory now documented as starting at start time, pin guarantee scoped to the three-arg/Spring-manual form)"
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-14T16:05:00Z
@@ -357,13 +358,13 @@ units:
   U15:
     issue: null
     goal: "Round-3 MAJOR-2 on the held docs branch: docs.md 3669 and 6674 attribute the registration-pin guarantee to the one-arg stoppedByDefault factory, which passes null storage and never pins; correct both so the one-arg behavior is stated honestly (first run starts from the wrapped model's default at start) and the pin guarantee is scoped to the checkpoint-backed form (three-arg factory / Spring manual mode); push docs/0.33.0-preview only, never merge"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: "docs/0.33.0-preview", met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: "docs/0.33.0-preview", met: true, evidence: "DONE 2026-08-14: pushed a5b905f (fast-forward from 6e540e7), verified by orchestrator against the origin ref: zero matches for the two old claims, both corrected passages present naming the three-arg overload, Jekyll build exit 0, rendered greps clean, writing gate run with literal greps, diff is pages/docs/docs.md alone, docs main and primary checkout untouched"}
   UREG:
     issue: null
     goal: "Register: decline pointers for findings 8/10/12/14, retention-policy issue (finding 7 residual), finding-11 convention note, environment-artifact note; route new arrivals #760 #761 (both released-behavior, non-overlapping). ADDED 2026-08-13: the broader-filter-is-safe house claim on shipped Projection.java (:39, :301) is falsifiable at the converter exactly as U7 pass defect 1 showed for Saga; released surface, so a register note or 0.34 issue, not a pre-tag fix"
