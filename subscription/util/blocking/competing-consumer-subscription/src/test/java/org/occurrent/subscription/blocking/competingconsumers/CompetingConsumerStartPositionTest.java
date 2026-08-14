@@ -82,10 +82,11 @@ class CompetingConsumerStartPositionTest {
 
     @Test
     void a_registration_under_this_model_is_recorded_from_the_position_the_model_below_it_reads() {
-        // The Spring Boot starter's own stack under occurrent.subscription.mode=manual. A start position answering
-        // for each layer separately used to end the walk here, at an answer that does not decide where the
-        // subscription starts, and the durable model below then recorded a position when the subscription was
-        // started, skipping everything written since it was registered.
+        // ManualStartSubscriptionModel wraps this competing consumer model, which wraps a fake delegate, two layers
+        // under the walk rather than the four-layer starter stack. A start position answering for each layer
+        // separately used to end the walk at the competing consumer's answer, which does not decide where the
+        // subscription starts, leaving the delegate to record a position when the subscription started and skip
+        // everything written since registration.
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         ManualStartSubscriptionModel manualStart = ManualStartSubscriptionModel.stoppedByDefault(
                 model, () -> new StringCheckpoint("at-registration"), storage);

@@ -1069,9 +1069,11 @@ class ManualStartSubscriptionModelTest {
     @Test
     void a_layer_that_decides_something_other_than_the_start_leaves_the_answer_to_the_model_below() {
         // The Spring Boot starter's own stack, where the competing consumer layer resolves the position to work out
-        // whether to compete and leaves where the subscription starts to the durable model below it. Stopping at the
-        // competing consumer's answer records nothing, and the durable model then records a position when the
-        // subscription starts, minutes later on a rolling deploy, skipping everything written in between.
+        // whether to compete and leaves where the subscription starts to the durable model below it. Every start
+        // position Occurrent itself builds is safe from this. Reaching the skip below takes a function written by
+        // hand, and the StartAt here is one. Stopping at the competing consumer's answer records nothing, and the
+        // durable model then records a position when the subscription starts, minutes later on a rolling deploy,
+        // skipping everything written in between.
         RecordingSubscriptionModel checkpointReadingModel = new RecordingSubscriptionModel();
         DeferringSubscriptionModel deferringModel = new DeferringSubscriptionModel(checkpointReadingModel);
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();

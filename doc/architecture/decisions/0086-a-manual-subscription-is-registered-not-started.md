@@ -203,6 +203,16 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > is asked about that is not a catch-up one. "Out of reach either way" still holds for what a subscription gets, for a
 > different reason than the one first written here. Under that position the first layer below the catch-up one
 > answers the model default on its own ask, so the walk records the position there and this second pass does not run.
+>
+> The amendment above also said, of that same start position, that "The Spring Boot starter's own stack answers on
+> the first ask, since it always puts a competing consumer layer on top, but its subscription model bean is
+> `@ConditionalOnMissingBean` and a stack wired by hand can put the catch-up layer outermost." That held only while
+> the competing consumer layer was asked directly and read as deciding the walk. It answers false to
+> `decidesWhereTheSubscriptionStarts()` now, so the walk passes over it unasked, and the paragraph above already
+> works out where that leaves the starter's own stack under the default position. Catch-up answers nothing on its
+> own ask, and the durable layer, the first one actually asked after that, answers the model default and is where
+> the walk records the position. The starter's own stack is the case that needs the walk to descend, the same case
+> the corrected sentence said only a hand-wired stack reaches.
 
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same
