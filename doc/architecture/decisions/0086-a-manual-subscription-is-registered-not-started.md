@@ -239,10 +239,19 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > as success, which the MongoDB storages do, so this branch is reached by Redis and by the in-memory storage, the
 > ones that answer on existence alone.
 >
+> A checkpoint this class cannot read back to compare at all, because the read failed or found nothing, is refused
+> too, for the weaker reason that nothing here can show the two agree rather than because they are known to
+> differ. Those two are also where one node reaches this with no second node registering, since a storage answering
+> from behind its own write, or retrying a write whose answer it never heard, produces both. A read that finds
+> nothing is therefore not proof that a checkpoint was removed, which is what an earlier wording of the message
+> claimed.
+>
 > **What the refusal costs.** A subscription is registered during Spring's context refresh under
 > `occurrent.subscription.mode=manual`, so this fails the start of an application whose subscription is brand new
-> and whose nodes read different positions at the same moment. Registering again is what clears it, and a node that
-> does so finds the other position stored and takes it, which is the branch that was always silent. So the outcome
+> and whose nodes read different positions at the same moment. Registering again is what clears that one, and a node
+> that does so finds the other position stored and takes it, which is the branch that was always silent. A refusal
+> that came from a read served from behind the write does not clear that way, since the same reader answers the same
+> way again, and it needs a reader that has seen the write instead. So the outcome
 > for the events between the two positions is unchanged. What changes is that nobody starts a subscription believing
 > it covers a window it does not, and the interval can be replayed while the subscription is not running anywhere.
 > A registration on a model that is already running is refused the same way, and there it is dropped rather than

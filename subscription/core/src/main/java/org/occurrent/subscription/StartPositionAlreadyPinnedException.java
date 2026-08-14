@@ -70,8 +70,8 @@ public class StartPositionAlreadyPinnedException extends IllegalStateException {
      * failed.
      * <p>
      * That read is a second call, and no checkpoint storage reports the value that actually refused the write, so
-     * a checkpoint another node advanced in between is what this holds. Treat it as the position stored at the
-     * moment it was read rather than as the one that won.
+     * a checkpoint advanced in between is what this holds, by whichever writer advanced it. Treat it as the
+     * position stored at the moment it was read rather than as the one that won.
      */
     public final Optional<Checkpoint> positionStored;
 
