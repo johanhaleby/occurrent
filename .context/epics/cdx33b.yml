@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33b
-revision: 36
+revision: 37
 updated_at: 2026-08-14T09:05:00Z
 updated_by: "successor orchestrator (worktree api-review-verification-c3b0ea): recovered per handoff, monitors re-armed, act-001 reconciled VERIFIED, U10B registered (U11 docs appendix push), U13 gate going to Johan"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -168,6 +168,14 @@ pending_actions:
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-14T08:50:00Z
+  - id: act-021
+    type: workflow-dispatch
+    target: "Fresh-context adversarial verify of PR 779 (U13) at final head 0e948007819766fc1467d79bb33fe08809dacf5c, Opus, read-only: attack the DELIVERY_RESULT's stated invariant (pin iff resolution at the first decidesWhereTheSubscriptionStarts()-true layer reaches the model default, with the inheritance fallback and the stated third-party-wrapper scope limit)"
+    expected: "a report with CONFIRMED-DEFECT/REFUTED/UNVERIFIABLE per attack angle; merge of 779 waits on it AND on Johan's method-name plus ADR 86 wording confirm"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-14T13:20:00Z
 units:
   U1:
     issue: null
