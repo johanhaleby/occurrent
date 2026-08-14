@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 28
+revision: 29
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -124,6 +124,18 @@ pending_actions:
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-14T16:40:00Z'
+- id: act-009
+  type: workflow-dispatch
+  target: 'Fixpoint ROUND 1 verdict: 5 NEW confirmed MAJOR (guide reactor-check sentence, ADR 116 twin, Redis delete-proof
+    scoping, news-post contradiction, recipe-stub misdescription x4 + Java-only unported), all prose, behavior clean on every
+    cross-unit angle. NOT convergence; round 2 is the LAST (cap 2). C8 (library) and C9 (docs) dispatched as parallel Sonnet
+    addenda'
+  expected: both addenda delivered and verified, then round 2 reads the addendum diffs together with the complete state; clean
+    = convergence, above-minor = CAPPED and routed to Johan as such
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-14T19:10:00Z'
 units:
   C1:
     issue: null
@@ -313,6 +325,39 @@ units:
         + origin-ref grep (zero unqualified-claim hits on the fencing ref). Page-wide class sweep on both rendered trees:
         zero hits for every stale pattern. Diffs confined to pages/docs/docs.md, builds exit 0, exact-carry discipline, primary
         checkout untouched'
+  C8:
+    issue: null
+    goal: 'Fixpoint round-1 findings 1-3 + guide section-1 minor: the reactor-check-inert guide sentence C5 falsified, ADR
+      116''s uncorrected Cluster-claim twin (quote-and-correct), the Redis delete-safety proof unscoped for forStandalone
+      (port the guide''s qualification to both javadoc sites), the three-members count'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      repo: johanhaleby/occurrent
+      ref: null
+      met: false
+      evidence: null
+  C9:
+    issue: null
+    goal: 'Fixpoint round-1 findings 4-5 + the C3 coverage gap, held docs branches: the news post''s only-source-breaking
+      self-contradiction, the recipe-stub throwing-placeholder misdescription in four locations incl. the unported Java-only
+      caveat, the CheckpointStorage interface block gaining evaluatesWriteConditionsFor plus forStandalone and the boot exception
+      coverage'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: null
+      met: false
+      evidence: null
 watchers:
 - id: watcher-001
   kind: github-work-item-monitor
