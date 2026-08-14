@@ -50,13 +50,15 @@ The reactor twin gets the same four members, `Mono<Checkpoint> save(String, Chec
 with an empty `Mono` meaning no version is stored. A refusal on that stack signals `Mono.error`, it never throws from
 assembly.
 
-`evaluatesWriteConditions()` and `evaluatesWriteConditionsFor(String)` are the two of the four with a default, and
-both default to `false`, so a storage that writes unconditionally compiles and keeps working without answering
-either. Say `true` from `evaluatesWriteConditions()` when your storage accepts and refuses `notOlderThan` and
-`ifAbsent` as documented and leaves a stored version untouched under `any()`. Override `evaluatesWriteConditionsFor`
-too when that answer varies by subscription id, see section 2. A caller that depends on a conditional write asks
-first, which is how the Spring Boot starter refuses a wiring that would otherwise throw on the first checkpoint
-write. Section 8 covers that failure.
+`evaluatesWriteConditions()` and `evaluatesWriteConditionsFor(String)` are the two of the four with a default.
+`evaluatesWriteConditions()` defaults to `false`. `evaluatesWriteConditionsFor(String)` has no default of its own,
+it delegates to `evaluatesWriteConditions()`, so it inherits `true` for every id once a storage overrides that one,
+unless the storage overrides `evaluatesWriteConditionsFor` too to answer differently by id. A storage that answers
+neither writes unconditionally and compiles and keeps working regardless. Say `true` from `evaluatesWriteConditions()`
+when your storage accepts and refuses `notOlderThan` and `ifAbsent` as documented and leaves a stored version
+untouched under `any()`. Override `evaluatesWriteConditionsFor` too when that answer varies by subscription id, see
+section 2. A caller that depends on a conditional write asks first, which is how the Spring Boot starter refuses a
+wiring that would otherwise throw on the first checkpoint write. Section 8 covers that failure.
 
 A test double that overrides the two-argument `save` to observe writes stops seeing them, because the subscription
 models now call the three-argument `save` directly, so override that one instead.
