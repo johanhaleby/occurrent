@@ -88,7 +88,7 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * {@link StartPositionAlreadyPinnedException} rather than started from a position it never read. A position that was
  * already stored when this model read for it is taken without a word, as before, so a node joining a subscription
  * another has been running is untouched. The refusal reaches the caller wherever that registration path already
- * reports a start it could not make: thrown from {@link #subscribe(String, SubscriptionFilter, StartAt, Function)}
+ * reports a start it could not make. It is thrown from {@link #subscribe(String, SubscriptionFilter, StartAt, Function)}
  * when the wrapped model manages named subscriptions, and signalled on {@link Subscription#waitUntilStarted()},
  * with an {@code ERROR} logged, when this model drives the cold primitive itself. A storage that answers {@code false}
  * from {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} cannot be written to conditionally, so that
@@ -326,16 +326,15 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // The read above found nothing, so this is the first position recorded for this subscription id, and the write
-    // says so: it is conditional on nothing being stored when it lands. The read is what makes that condition the
-    // right one, and it runs before the position is, since seed is only subscribed once the read comes back empty.
-    // A refused write therefore means a checkpoint arrived between the two, written where this model cannot order
-    // it against the position it read. See ADR 89.
+    // is conditional on that still being true when it reaches storage. The read runs before the position is read,
+    // since seed is only subscribed once the read comes back empty. So a refused write means a checkpoint arrived
+    // between the two, written where this model cannot order it against the position it read. See ADR 89.
     private Mono<Checkpoint> pinStartPosition(String subscriptionId, Checkpoint positionRead) {
         if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
             // Nothing here can make a storage that writes unconditionally do otherwise, so the write is the one
             // 0.32.0 made and two nodes recording a first position at the same moment keep the race. Logged rather
             // than refused, because refusing would take out a storage that has worked until now over a capability
-            // it never claimed. It reads as once per subscription: a pin that succeeds is not attempted again.
+            // it never claimed. A write that succeeds is not attempted again, so this reads once per subscription.
             log.warn("Checkpoint storage {} does not evaluate write conditions for subscription {}, so the first " +
                      "position recorded for it is written unconditionally. Two nodes recording a first position " +
                      "for this subscription at the same moment can then lose the events between the two positions. " +

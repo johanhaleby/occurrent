@@ -57,8 +57,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * the stored position back is the one thing that lets a registration through, and only when it holds that same
  * position.
  * <p>
- * Hand-rolled storages rather than MongoDB, because every case here is about the order two calls land in and about
- * what a second read answers, both of which a real database hides rather than shows.
+ * Hand-rolled storages rather than MongoDB, because every case here is about the order two calls reach storage in,
+ * and about what a second read answers, both of which a real database hides rather than shows.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorDurableSubscriptionModelPinRefusalTest {
@@ -80,8 +80,8 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
     @Test
     void a_registration_that_loses_the_write_to_a_position_it_did_not_read_is_refused() {
         RaceSimulatingCheckpointStorage storage = new RaceSimulatingCheckpointStorage();
-        // Another node's write lands after this registration read and found nothing, which is the whole of the race:
-        // both nodes saw an empty storage, and only one of the two positions can be kept.
+        // Another node's write arrives after this registration read and found nothing, which is the whole of the
+        // race. Both nodes saw an empty storage, and only one of the two positions can be kept.
         storage.whenTheFirstReadFindsNothing = () -> storage.writeWithoutScripting("landed-during-registration");
         ReactorDurableSubscriptionModel model = coldModel(new RecordingSubscriptionModel("this-nodes-own-position"), storage);
 
@@ -185,9 +185,9 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
 
     @Test
     void a_storage_that_reports_a_write_of_the_position_already_stored_as_success_never_reaches_the_read_back() {
-        // The shape the MongoDB storages have, and the one most applications run against: ifAbsent lets a storage
-        // report a write of the value already stored as success. Two nodes that read the same position both complete
-        // there without the read back being reached at all.
+        // The shape the MongoDB storages have, and the one most applications run against. ifAbsent lets a storage
+        // report a write of the value already stored as success, so two nodes that read the same position both
+        // complete there without the read back being reached at all.
         ValueComparingCheckpointStorage storage = new ValueComparingCheckpointStorage();
         storage.writeWithoutScripting("the-same-position");
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("the-same-position");
@@ -342,7 +342,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
 
     /**
      * Runs a hook the first time a read finds nothing, which is where a write that beats this registration's own
-     * lands. The write that follows is then refused by {@link InMemoryCheckpointStorage}'s own {@code ifAbsent}.
+     * arrives. The write that follows is then refused by {@link InMemoryCheckpointStorage}'s own {@code ifAbsent}.
      */
     private static class RaceSimulatingCheckpointStorage extends InMemoryCheckpointStorage {
 
@@ -423,7 +423,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
     }
 
     /**
-     * Records the condition every write carried, and can answer that it evaluates none of them.
+     * Records the condition every write used, and can answer that it evaluates none of them.
      */
     private static final class ConditionRecordingCheckpointStorage extends InMemoryCheckpointStorage {
 
