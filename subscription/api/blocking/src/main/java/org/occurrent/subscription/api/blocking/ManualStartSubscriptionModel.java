@@ -138,9 +138,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * registration to find out which of the two it is, layer by layer down the wrapped models, following what those
      * models do to the same position when the subscription starts. A layer answering with {@code null} leaves the
      * subscription to the model it wraps, so the next model down is asked, and the first answer that is not
-     * {@code null} decides. A layer that says it hands the caller's position down unresolved, with
-     * {@link SubscriptionModelWrapper#forwardsStartAtUnresolved()}, is passed over, since the model below it resolves
-     * the same position and is the one that settles where the subscription starts. All of that happens before anything is read or written,
+     * {@code null} decides. A layer that answers
+     * {@link SubscriptionModelWrapper#decidesWhereTheSubscriptionStarts()} with {@code false} is passed over, since
+     * what the position resolves to under that layer's class decides something other than where the subscription
+     * starts, and the model below it settles that instead. All of that happens before anything is read or written,
      * so a function that answers the first-run question by looking for a stored checkpoint sees what was stored
      * before this registration. The wrapped model still receives the {@code StartAt} the caller passed, whatever
      * those resolutions answered.
@@ -154,9 +155,9 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * layers inherit from when that second pass runs, on top of the calls it already gets when the subscription
      * starts. Two shapes are
      * still read differently here than the model that starts the subscription reads it. A layer that passes the
-     * position down without deciding anything for itself and does not say so is asked all the same, and a proxy that
-     * only implements a model's interfaces never shows that model's own class here, so a function naming it exactly
-     * is not recognised through one. ADR 86 has what each costs a subscription.
+     * position down without deciding where the subscription starts and does not say so is asked all the same, and a
+     * proxy that only implements a model's interfaces never shows that model's own class here, so a function naming
+     * it exactly is not recognised through one. ADR 86 has what each costs a subscription.
      *
      * @param delegate          The subscription model to register with once a subscription is started.
      * @param positionSource    Supplies the position to record. Typically the innermost model, the one reading the feed.
@@ -388,15 +389,16 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * The wrapped model receives the {@link StartAt} the caller registered with, whatever this model resolved it to
-     * while working out whether to record a position.
+     * This model resolves the start position to work out whether to record one when a subscription is registered. The
+     * wrapped model receives the caller's own {@link StartAt} and resolves it under its own class, so where the
+     * subscription starts is settled there rather than here.
      *
-     * @return {@code true}
-     * @see SubscriptionModelWrapper#forwardsStartAtUnresolved()
+     * @return {@code false}
+     * @see SubscriptionModelWrapper#decidesWhereTheSubscriptionStarts()
      */
     @Override
-    public boolean forwardsStartAtUnresolved() {
-        return true;
+    public boolean decidesWhereTheSubscriptionStarts() {
+        return false;
     }
 
     /**
@@ -481,13 +483,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     // answer that decides this is the first one a layer gives. Asking only the outermost model would read the start
     // position the annotations build, which answers with nothing for a catch-up layer, as a registration with no
     // position to record, and the durable model below it would then record one when the subscription starts.
-    // A layer that hands the caller's position down unresolved is not asked, since the model below it resolves the
-    // same position and is the one that settles where the subscription starts.
+    // A layer whose own resolution decides something other than where the subscription starts is not asked, since
+    // the model below it settles that instead.
     private boolean startsAtTheModelDefault(StartAt startAt) {
         List<Class<?>> layersAsked = new ArrayList<>();
         SubscriptionModel model = delegate;
         while (true) {
-            if (!forwardsStartAtUnresolved(model)) {
+            if (decidesWhereTheSubscriptionStarts(model)) {
                 Class<?> modelType = model.getClass();
                 layersAsked.add(modelType);
                 @Nullable StartAt startAtToUse = startAt.get(new SubscriptionModelContext(modelType));
@@ -510,8 +512,8 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         return layersAsked.stream().anyMatch(modelType -> aClassItInheritsAnswersTheModelDefault(startAt, modelType));
     }
 
-    private static boolean forwardsStartAtUnresolved(SubscriptionModel model) {
-        return model instanceof SubscriptionModelWrapper wrapper && wrapper.forwardsStartAtUnresolved();
+    private static boolean decidesWhereTheSubscriptionStarts(SubscriptionModel model) {
+        return !(model instanceof SubscriptionModelWrapper wrapper) || wrapper.decidesWhereTheSubscriptionStarts();
     }
 
     // Object is left out since no subscription model resolves its start position against it. A proxy built by

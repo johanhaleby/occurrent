@@ -39,11 +39,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * This model reads a stored checkpoint for a subscription registered with the model default, so it is the layer
- * {@link ManualStartSubscriptionModel} records a registration's start position from. It resolves the caller's
- * position for itself rather than handing it down, which is what
- * {@link org.occurrent.subscription.api.blocking.SubscriptionModelWrapper#forwardsStartAtUnresolved()} answering
- * {@code false} says, and answering {@code true} here would leave a first run starting from the moment it is
- * started rather than from where it was registered.
+ * {@link ManualStartSubscriptionModel} records a registration's start position from. What the caller's position
+ * resolves to under this class is what decides where the subscription starts, which is what
+ * {@link org.occurrent.subscription.api.blocking.SubscriptionModelWrapper#decidesWhereTheSubscriptionStarts()}
+ * answering {@code true} says, and answering {@code false} here would leave a first run starting from the moment it
+ * is started rather than from where it was registered.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DurableSubscriptionModelStartPositionTest {

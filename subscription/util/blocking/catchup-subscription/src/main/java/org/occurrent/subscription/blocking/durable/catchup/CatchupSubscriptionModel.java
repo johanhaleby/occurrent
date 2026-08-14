@@ -216,7 +216,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
 
     // The child gets the caller's own StartAt, but it resolves that under this class rather than its own, since
     // every child is built with CatchupSubscriptionModel.class as its context type. This layer's answer is
-    // therefore acted on, which is why forwardsStartAtUnresolved() stays false here.
+    // therefore the one acted on, which is why decidesWhereTheSubscriptionStarts() stays true here.
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");

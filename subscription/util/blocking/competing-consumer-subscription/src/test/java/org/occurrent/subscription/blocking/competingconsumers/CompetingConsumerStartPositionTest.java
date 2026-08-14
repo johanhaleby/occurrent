@@ -47,7 +47,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Covers what this model does to the start position it is handed. It resolves the position to find out whether to
  * compete for the subscription, and the model it wraps receives the caller's own object either way, which is what
- * {@link CompetingConsumerSubscriptionModel#forwardsStartAtUnresolved()} tells
+ * {@link CompetingConsumerSubscriptionModel#decidesWhereTheSubscriptionStarts()} answering {@code false} tells
  * {@link ManualStartSubscriptionModel} so that a registration under this model is recorded from the model below it.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -83,9 +83,9 @@ class CompetingConsumerStartPositionTest {
     @Test
     void a_registration_under_this_model_is_recorded_from_the_position_the_model_below_it_reads() {
         // The Spring Boot starter's own stack under occurrent.subscription.mode=manual. A start position answering
-        // for each layer separately used to end the walk here, at an answer this model does not act on, and the
-        // durable model below then recorded a position when the subscription was started, skipping everything
-        // written since it was registered (#669).
+        // for each layer separately used to end the walk here, at an answer that does not decide where the
+        // subscription starts, and the durable model below then recorded a position when the subscription was
+        // started, skipping everything written since it was registered (#669).
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         ManualStartSubscriptionModel manualStart = ManualStartSubscriptionModel.stoppedByDefault(
                 model, () -> new StringCheckpoint("at-registration"), storage);

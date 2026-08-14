@@ -162,13 +162,22 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > position Occurrent itself builds is safe, since those answer with nothing or with the model default for the
 > competing consumer layer, so reaching this takes a function written by hand.
 >
-> **A layer now says whether it hands the caller's position down unresolved**, with
-> `SubscriptionModelWrapper.forwardsStartAtUnresolved()`. It answers false by default,
-> `CompetingConsumerSubscriptionModel` and `ManualStartSubscriptionModel` answer true, and the walk passes over a
-> layer that answers true rather than asking it at all. That closes both directions the amendment above described. A
-> forwarding layer no longer ends the walk with an answer it does not act on, and a position is no longer recorded off
-> an answer no layer consumes either. What is left is a wrapper that forwards and does not say so, which is one
-> written outside this repository, and it is read the way every layer was read before.
+> **A layer now says whether its own answer decides where the subscription starts**, with
+> `SubscriptionModelWrapper.decidesWhereTheSubscriptionStarts()`. It answers true by default,
+> `CompetingConsumerSubscriptionModel` and `ManualStartSubscriptionModel` answer false, and the walk passes over a
+> layer that answers false rather than asking it at all. That closes both directions the amendment above described. A
+> layer that decides something else no longer ends the walk with an answer it does not act on, and a position is no
+> longer recorded off an answer no layer consumes either. What is left is a wrapper that decides something else and
+> does not say so, which is one written outside this repository, and it is read the way every layer was read before.
+>
+> The question is deliberately not whether a layer hands the caller's own `StartAt` object down, which was the first
+> wording and is wrong for two of the layers here. `CatchupSubscriptionModel` hands the object to its children, and
+> those children resolve it under `CatchupSubscriptionModel.class` rather than their own, so the answer given for the
+> catch-up layer is the one acted on and that layer answers true. `DurableSubscriptionModel` hands the object on too,
+> on the branch where its own answer was nothing, which is the branch the walk already covers by descending. Both
+> would have answered true under the object wording and been skipped, and a registration under either would then have
+> had no position recorded. A wrapper written outside this repository could have read the same wording the same way,
+> which is why the method names the decision rather than the object.
 >
 > Naming `CompetingConsumerSubscriptionModel` in the walk was the other way to fix it, and the module dependencies
 > rule it out, since the competing consumer model depends on the subscription api module the wrapper lives in.

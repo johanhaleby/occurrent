@@ -1067,13 +1067,13 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
-    void a_layer_that_hands_the_position_down_unresolved_leaves_the_answer_to_the_model_below() {
+    void a_layer_that_decides_something_other_than_the_start_leaves_the_answer_to_the_model_below() {
         // The Spring Boot starter's own stack, where the competing consumer layer resolves the position to work out
-        // whether to compete and then hands the caller's own object to the durable model below it. Stopping at the
+        // whether to compete and leaves where the subscription starts to the durable model below it. Stopping at the
         // competing consumer's answer records nothing, and the durable model then records a position when the
         // subscription starts, minutes later on a rolling deploy, skipping everything written in between (#669).
         RecordingSubscriptionModel checkpointReadingModel = new RecordingSubscriptionModel();
-        ForwardingSubscriptionModel forwardingModel = new ForwardingSubscriptionModel(checkpointReadingModel);
+        DeferringSubscriptionModel deferringModel = new DeferringSubscriptionModel(checkpointReadingModel);
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         checkpointReadingModel.globalCheckpoint = new StringCheckpoint("at-registration");
         List<Class<?>> asked = new CopyOnWriteArrayList<>();
@@ -1081,26 +1081,26 @@ class ManualStartSubscriptionModelTest {
             asked.add(context.subscriptionModelType());
             return context.hasSubscriptionModelType(RecordingSubscriptionModel.class) ? StartAt.subscriptionModelDefault() : StartAt.now();
         });
-        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(forwardingModel, checkpointReadingModel, storage);
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(deferringModel, checkpointReadingModel, storage);
 
         model.subscribe(SUBSCRIPTION_ID, null, startAt, __ -> {
         });
 
         assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("at-registration");
         assertThat(asked)
-                .as("the forwarding layer answers nothing the model below it cannot answer again, so it is not asked")
+                .as("nothing the deferring layer answers changes where the subscription starts, so it is not asked")
                 .containsExactly(RecordingSubscriptionModel.class);
     }
 
     @Test
-    void a_layer_that_hands_the_position_down_unresolved_records_no_position_of_its_own() {
+    void a_layer_that_decides_something_other_than_the_start_records_no_position_of_its_own() {
         RecordingSubscriptionModel checkpointReadingModel = new RecordingSubscriptionModel();
-        ForwardingSubscriptionModel forwardingModel = new ForwardingSubscriptionModel(checkpointReadingModel);
+        DeferringSubscriptionModel deferringModel = new DeferringSubscriptionModel(checkpointReadingModel);
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         checkpointReadingModel.globalCheckpoint = new StringCheckpoint("at-registration");
-        StartAt startAt = StartAt.dynamic(context -> context.hasSubscriptionModelType(ForwardingSubscriptionModel.class)
+        StartAt startAt = StartAt.dynamic(context -> context.hasSubscriptionModelType(DeferringSubscriptionModel.class)
                 ? StartAt.subscriptionModelDefault() : StartAt.now());
-        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(forwardingModel, checkpointReadingModel, storage);
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(deferringModel, checkpointReadingModel, storage);
 
         model.subscribe(SUBSCRIPTION_ID, null, startAt, __ -> {
         });
@@ -1112,17 +1112,18 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
-    void a_registration_below_a_forwarding_layer_that_answers_with_nothing_is_still_recorded() {
-        // Two layers to descend through, one that says it forwards and one that answers with nothing, which is the
-        // shape a hand-wired stack has when the catch-up layer sits under the competing consumer one.
+    void a_registration_below_a_deferring_layer_that_answers_with_nothing_is_still_recorded() {
+        // Two layers to descend through, one that leaves the start to the model below and one that answers with
+        // nothing, which is the shape a hand-wired stack has when the catch-up layer sits under the competing
+        // consumer one.
         RecordingSubscriptionModel checkpointReadingModel = new RecordingSubscriptionModel();
         ReplayingSubscriptionModel replayingModel = new ReplayingSubscriptionModel(checkpointReadingModel);
-        ForwardingSubscriptionModel forwardingModel = new ForwardingSubscriptionModel(replayingModel);
+        DeferringSubscriptionModel deferringModel = new DeferringSubscriptionModel(replayingModel);
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         checkpointReadingModel.globalCheckpoint = new StringCheckpoint("at-registration");
         StartAt startAt = StartAt.dynamic(context -> context.hasSubscriptionModelType(ReplayingSubscriptionModel.class)
                 ? null : StartAt.subscriptionModelDefault());
-        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(forwardingModel, checkpointReadingModel, storage);
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(deferringModel, checkpointReadingModel, storage);
 
         model.subscribe(SUBSCRIPTION_ID, null, startAt, __ -> {
         });
@@ -1132,7 +1133,7 @@ class ManualStartSubscriptionModelTest {
 
     @Test
     void a_registration_under_another_model_of_this_kind_is_recorded_from_the_model_below_both_of_them() {
-        // This model hands the caller's position down too, so it says so and the outer one of two passes over it.
+        // This model leaves the start to the model below too, so it says so and the outer one of two passes over it.
         RecordingSubscriptionModel checkpointReadingModel = new RecordingSubscriptionModel();
         RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
         checkpointReadingModel.globalCheckpoint = new StringCheckpoint("at-registration");
@@ -1346,19 +1347,19 @@ class ManualStartSubscriptionModelTest {
     private static final class SubclassedSubscriptionModel extends RecordingSubscriptionModel {
     }
 
-    // Stands for the competing consumer layer, which resolves the position only to work out whether to compete and
-    // hands the caller's own object to the model below either way. A plain class rather than a record, so the classes
-    // it inherits from cannot answer anything the walk itself did not.
-    private static final class ForwardingSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper {
+    // Stands for the competing consumer layer, which resolves the position to work out whether to compete and leaves
+    // where the subscription starts to the model below. A plain class rather than a record, so the classes it
+    // inherits from cannot answer anything the walk itself did not.
+    private static final class DeferringSubscriptionModel implements SubscriptionModel, SubscriptionModelWrapper {
         private final SubscriptionModel wrapped;
 
-        ForwardingSubscriptionModel(SubscriptionModel wrapped) {
+        DeferringSubscriptionModel(SubscriptionModel wrapped) {
             this.wrapped = wrapped;
         }
 
         @Override
-        public boolean forwardsStartAtUnresolved() {
-            return true;
+        public boolean decidesWhereTheSubscriptionStarts() {
+            return false;
         }
 
         @Override
