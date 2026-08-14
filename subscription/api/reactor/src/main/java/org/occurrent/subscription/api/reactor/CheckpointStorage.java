@@ -42,7 +42,7 @@ public interface CheckpointStorage {
      * </p>
      * For example:
      * <pre>
-     * StartAt startAt = storage.read(subscriptionId)
+     * Mono&lt;StartAt&gt; startAt = storage.read(subscriptionId)
      *                          .switchIfEmpty(Mono.defer(() -> checkpointAwareSubscriptionModel.globalCheckpoint()
      *                                  .flatMap(checkpoint -> storage.save(subscriptionId, checkpoint, CheckpointWriteCondition.ifAbsent()))))
      *                          .map(StartAt::checkpoint);

@@ -118,6 +118,7 @@ public class StartPositionAlreadyPinnedException extends IllegalStateException {
                                                                                         Throwable cause) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(positionRead, Checkpoint.class.getSimpleName() + " read at registration cannot be null");
+        requireNonNull(cause, "The failure that stopped the stored position from being read cannot be null");
         return new StartPositionAlreadyPinnedException(subscriptionId, positionRead, null,
                 "Subscription " + subscriptionId + " was registered at position " + positionRead.asString() +
                 ", but recording it was refused because a checkpoint was already stored for this subscription " +

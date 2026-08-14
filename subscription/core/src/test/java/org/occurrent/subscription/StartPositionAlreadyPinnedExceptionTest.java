@@ -85,6 +85,11 @@ class StartPositionAlreadyPinnedExceptionTest {
                 .readingTheStoredPositionBackFailed(null, READ_AT_REGISTRATION, new IllegalStateException("boom")))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("subscriptionId");
+        assertThatThrownBy(() -> StartPositionAlreadyPinnedException
+                .readingTheStoredPositionBackFailed("someSubscription", READ_AT_REGISTRATION, null))
+                .as("this refusal is the one that has a failure to report, so it cannot be built without one")
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("stopped the stored position from being read");
     }
 
     @Test
