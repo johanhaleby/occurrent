@@ -1,6 +1,6 @@
 schema_version: 2
 epic: cdx33c
-revision: 22
+revision: 23
 updated_at: 2026-08-14 19:00:00+00:00
 updated_by: 'orchestrator: migrated v1 to v2 on Johan confirming Codex-side validator support; live work-item monitor backfilled
   as watcher-001 READY; heartbeat stays prose-journaled (outside the closed watcher kind enum)'
@@ -102,11 +102,24 @@ pending_actions:
     conditional pin with capability branch, ten tests + fixture fix + mutations, eight ripple surfaces, both held docs branches
     additive edit, claim-class sweep per commit'
   expected: 'PR delivered to done then STOP (no unattended merge: ADR-bearing diff waits for Johan''s wording ruling); docs
-    branches pushed; DELIVERY_RESULT with invariant, mutation table, gathering ledger'
-  status: PENDING
+    branches pushed; DELIVERY_RESULT with invariant, mutation table, gathering ledger. RESOLVED: delivered to done at 45f912f
+    (27/27 by job conclusion verified, MERGEABLE, 1 unresolved thread = the Q1 reasoned decline with the derivation on it,
+    policy-allowed), both docs branches pushed (preview f821eea, checkpoint-fencing b75d171) and held, worker stopped before
+    merge per the gate. 10 of 15 tests fail-on-base, 6 mutants killed incl. the onErrorResume widening the first round missed'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-14T15:55:00Z'
+- id: act-008
+  type: workflow-dispatch
+  target: 'C5 adversarial pass on 45f912f (Opus, fresh context): re-subscription semantics, capability-fallback scoping, fatal-channel
+    replay, three-path reachability, Mongo-shaped storage assumption, prose truth on all surfaces incl. both docs branches'
+  expected: verdict per angle; goes into Johan's return ask beside the ADR wordings and blast-radius ratification; no merge
+    unattended
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-14T16:40:00Z'
 units:
   C1:
     issue: null
@@ -217,9 +230,12 @@ units:
     deliverables:
     - check: pr_merged
       repo: johanhaleby/occurrent
-      ref: null
+      ref: '790'
       met: false
-      evidence: null
+      evidence: 'DELIVERED done at 45f912f, merge HELD for Johan (ADR-bearing PR + queued blast-radius ratification). Docs
+        branches pushed additive-only per instruction. Two docs findings: the duplicated diverging captured-position paragraph
+        on both branches (NEW, queued into the docs coordination item), the checkpoint-fencing kramdown blank-line defect
+        (already recorded in the 0.33.0 release checklist)'
   CREG:
     issue: null
     goal: 'Register and routing: orchestrator-routing markers on every touched issue; finding-2 new evidence on #771''s family;
