@@ -494,6 +494,32 @@ Telling the two apart is a matter of what the storage holds. A position recorded
 read confirms means the first case, and starting again is the whole of it. No such position, or one only some readers
 can see, means the second.
 
+**On the reactive stack the same refusal is not limited to the subscriptions under `manual`.**
+`ReactorDurableSubscriptionModel` records a first start position the same conditional way now, and refuses a
+registration that loses that write with the same `StartPositionAlreadyPinnedException`. The reactive stack has no
+`ManualStartSubscriptionModel`, because its layer order never needed one, so this sits in the only durable model it
+has. Any reactive subscription whose start position resolves to the subscription model default can be refused on its
+very first pass, whatever `occurrent.subscription.mode` says. A registration that names a position of its own records
+nothing and is never refused, so a `@Projection(startAt = StartPosition.BEGINNING_OF_TIME)` and anything else asking
+for a replay is untouched. Everything above about the two causes and how to tell them apart applies unchanged.
+
+Where it reaches you depends on what your durable model wraps. A wrapped model that manages named subscriptions of
+its own means the exception comes straight out of `subscribe(..)`, and under Spring that fails the context refresh
+the way the blocking one does. That is what the reactive Mongo starter builds, since `ReactorCatchupSubscriptionModel`
+is such a model. Nothing is logged on that path, so the exception itself is all you get, which is enough because it
+reaches whoever called `subscribe(..)`. A wrapped model offering only the plain subscription primitive means
+`subscribe(..)` returns and the exception is signalled on the returned `Subscription.waitUntilStarted()` instead,
+with an `ERROR` logged next to it, because there is no caller holding it at that point.
+Call `waitUntilStarted()` if you want a refused subscription to stop your application from starting on that path,
+because a refused one is dropped from the model rather than left registered, so it will not be running and
+`resumeSubscription(..)` will not find it. Register it again to retry.
+
+One more thing to watch out for if you wrote your own reactive `CheckpointStorage`. That first write uses `ifAbsent()`,
+and a storage answering `false` from `evaluatesWriteConditionsFor(String)` gets the unconditional write it got in
+0.32.0 instead, plus a `WARN` naming the class. Nothing fails, and the race stays open for that storage, because the
+storage is what would have to evaluate the condition. Answer `true` from it once your storage really does evaluate
+`ifAbsent`, see section 2. `ReactorCheckpointStorage` and the reactive in-memory storage both already do.
+
 ## 9. A flow saga can cap the events of the step it is parked in
 
 Nothing here changes unless you ask for it, so you can skip this section if no flow saga of yours idles in one step.

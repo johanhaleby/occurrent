@@ -567,23 +567,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         try {
             stored = storage.read(subscriptionId);
         } catch (RuntimeException e) {
-            throw new StartPositionAlreadyPinnedException(subscriptionId, positionRead, null,
-                    "Subscription " + subscriptionId + " was registered at position " + positionRead.asString() +
-                    ", but recording it was refused because a checkpoint was already stored for this subscription " +
-                    "id, and reading that back to find out whether it holds this same position failed. The " +
-                    "registration is refused rather than started from a position it cannot show it read. That " +
-                    "checkpoint may hold another position, from another node registering at the same moment, or " +
-                    "this registration's own, which a storage retrying a write it never heard the answer to can " +
-                    "produce on a single node.", e);
+            throw StartPositionAlreadyPinnedException.readingTheStoredPositionBackFailed(subscriptionId, positionRead, e);
         }
         if (stored == null) {
-            throw new StartPositionAlreadyPinnedException(subscriptionId, positionRead, null,
-                    "Subscription " + subscriptionId + " was registered at position " + positionRead.asString() +
-                    ", but recording it was refused because a checkpoint was already stored for this subscription " +
-                    "id, and reading it back found nothing, so whether it holds this same position cannot be shown " +
-                    "here. The registration is refused rather than started from a position it cannot show it read. " +
-                    "A checkpoint removed in between reads this way, and so does a read served from somewhere that " +
-                    "has not seen the write.");
+            throw StartPositionAlreadyPinnedException.readingTheStoredPositionBackFoundNothing(subscriptionId, positionRead);
         }
         if (positionRead.asString().equals(stored.asString())) {
             return;

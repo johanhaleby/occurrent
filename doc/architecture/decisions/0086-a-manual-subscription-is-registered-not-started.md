@@ -265,6 +265,9 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > can have a position recorded for a start that reads none, or none recorded for a start that reads one. Neither is
 > reachable through a start position Occurrent builds. #771 keeps the question of the ordering that would close the
 > window itself, and #738 the reactor stack.
+>
+> *(#738 is done, in [ADR 89](0089-manual-subscription-mode-on-the-reactive-stack.md)'s last amendment. The reactor
+> stack refuses the same way, off the same exception, and that amendment has the two places it comes out differently.)*
 
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same

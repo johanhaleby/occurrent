@@ -20,7 +20,10 @@ import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
+import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
@@ -71,13 +74,26 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * path: two durable models sharing one would stop and shut down each other's subscriptions.
  * <p>
  * When the wrapped model offers only the plain (cold)
- * {@link CheckpointAwareSubscriptionModel#subscribe(SubscriptionFilter, StartAt)} primitive, which is what the reactor
- * catch-up models do, this model drives that primitive itself and manages the life cycle. A failing action is not
+ * {@link CheckpointAwareSubscriptionModel#subscribe(SubscriptionFilter, StartAt)} primitive, which is a model written
+ * outside this repository since #547 and #550 made every reactor catch-up model a named one,
+ * this model drives that primitive itself and manages the life cycle. A failing action is not
  * retried on that path and an unsupported filter is reported when the subscription starts rather than when it is
  * created, because there is no named subscription underneath to inherit either from. See issue #547.
  * <p>
  * Either way the start position is resolved from storage when the caller asks for the subscription-model default, and
  * the position is persisted after each event per {@link ReactorDurableSubscriptionModelConfig}.
+ * <p>
+ * The first position recorded for a subscription id is written with
+ * {@link org.occurrent.subscription.CheckpointWriteCondition#ifAbsent() ifAbsent()}, so a registration that found
+ * nothing stored, read its position and then lost that write is refused with
+ * {@link StartPositionAlreadyPinnedException} rather than started from a position it never read. A position that was
+ * already stored when this model read for it is taken without a word, as before, so a node joining a subscription
+ * another has been running is untouched. The refusal reaches the caller wherever that registration path already
+ * reports a start it could not make. It is thrown from {@link #subscribe(String, SubscriptionFilter, StartAt, Function)}
+ * when the wrapped model manages named subscriptions, and signalled on {@link Subscription#waitUntilStarted()},
+ * with an {@code ERROR} logged, when this model drives the cold primitive itself. A storage that answers {@code false}
+ * from {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} cannot be written to conditionally, so that
+ * write stays unconditional and is logged at {@code WARN} instead. See ADR 89.
  * <p>
  * Note that this implementation stores the checkpoint after _every_ action by default. If you have a lot of
  * events and duplication is not that much of a deal, consider changing this behavior by supplying an instance of
@@ -289,14 +305,15 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // out"; any concrete StartAt passes through unchanged.
     private Mono<StartAt> resolveStartAt(String subscriptionId, StartAt startAt, @Nullable Mono<Checkpoint> positionAtRegistration) {
         if (startAt.isDefault()) {
-            // A stored position always wins, so this only seeds one the first time a subscription runs. It prefers the
-            // position read when the subscription was registered, which is earlier than now for one registered on a
-            // stopped model, and reads the position again when there is none.
+            // A stored position always wins, so this only records one the first time a subscription runs. It prefers
+            // the position read when the subscription was registered, which is earlier than now for one registered on
+            // a stopped model, and reads the position again when there is none. Recording it can be refused, see
+            // pinStartPosition below.
             Mono<Checkpoint> seed = positionAtRegistration == null
                     ? subscription.globalCheckpoint()
                     : positionAtRegistration.switchIfEmpty(subscription.globalCheckpoint());
             return storage.read(subscriptionId)
-                    .switchIfEmpty(Mono.defer(() -> seed.flatMap(checkpoint -> storage.save(subscriptionId, checkpoint))))
+                    .switchIfEmpty(Mono.defer(() -> seed.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint))))
                     .map(StartAt::checkpoint)
                     .switchIfEmpty(Mono.fromSupplier(StartAt::now));
         } else if (startAt.isDynamic()) {
@@ -307,6 +324,45 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             return resolveStartAt(subscriptionId, nextStartAt, positionAtRegistration);
         }
         return Mono.just(startAt);
+    }
+
+    // The read above found nothing, so this is the first position recorded for this subscription id, and the write
+    // is conditional on that still being true when it reaches storage. A refused write therefore means a checkpoint
+    // arrived between the read and the write, written where this model cannot order it against the position it read.
+    // That position is read after the storage read on every path but one. A subscription registered while the model
+    // was stopped read it at registration instead, so its window is the wider one ADR 89 records and #771 owns.
+    private Mono<Checkpoint> pinStartPosition(String subscriptionId, Checkpoint positionRead) {
+        if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
+            // Nothing here can make a storage that writes unconditionally do otherwise, so the write is the one
+            // 0.32.0 made and two nodes recording a first position at the same moment keep the race. Logged rather
+            // than refused, because refusing would take out a storage that has worked until now over a capability
+            // it never claimed. A write that succeeds is not attempted again, so this reads once per subscription.
+            log.warn("Checkpoint storage {} does not evaluate write conditions for subscription {}, so the first " +
+                     "position recorded for it is written unconditionally. Two nodes recording a first position " +
+                     "for this subscription at the same moment can then lose the events between the two positions. " +
+                     "Answer true from evaluatesWriteConditionsFor(String) on a storage that does evaluate " +
+                     "ifAbsent(), or use one of the storages Occurrent ships, to close that.",
+                    storage.getClass().getName(), subscriptionId);
+            return storage.save(subscriptionId, positionRead);
+        }
+        return storage.save(subscriptionId, positionRead, CheckpointWriteCondition.ifAbsent())
+                .onErrorResume(CheckpointWriteConditionNotFulfilledException.class,
+                        __ -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, positionRead));
+    }
+
+    // Reading it back answers the only question that settles the registration, whether it holds the position this
+    // one read. Anything else is refused rather than started from a position this registration never read, which
+    // would skip whatever lies between the two. onErrorMap sits on the read, upstream of the comparison, so it
+    // cannot re-wrap the refusals below it.
+    private Mono<Checkpoint> refuseUnlessTheStoredPositionIsTheOneRead(String subscriptionId, Checkpoint positionRead) {
+        return storage.read(subscriptionId)
+                .onErrorMap(throwable -> StartPositionAlreadyPinnedException
+                        .readingTheStoredPositionBackFailed(subscriptionId, positionRead, throwable))
+                .flatMap(stored -> positionRead.asString().equals(stored.asString())
+                        ? Mono.just(stored)
+                        : Mono.error(() -> new StartPositionAlreadyPinnedException(subscriptionId, positionRead, stored)))
+                .switchIfEmpty(Mono.error(() -> StartPositionAlreadyPinnedException
+                        .readingTheStoredPositionBackFoundNothing(subscriptionId, positionRead)));
     }
 
     @Override

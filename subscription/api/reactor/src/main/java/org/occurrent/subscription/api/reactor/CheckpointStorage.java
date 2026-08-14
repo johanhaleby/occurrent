@@ -42,10 +42,18 @@ public interface CheckpointStorage {
      * </p>
      * For example:
      * <pre>
-     * StartAt startAt = storage.read(subscriptionId)
-     *                          .switchIfEmpty(Mono.defer(() -> checkpointAwareSubscriptionModel.globalCheckpoint().flatMap(checkpoint -> storage.save(subscriptionId, checkpoint))))
+     * Mono&lt;StartAt&gt; startAt = storage.read(subscriptionId)
+     *                          .switchIfEmpty(Mono.defer(() -> checkpointAwareSubscriptionModel.globalCheckpoint()
+     *                                  .flatMap(checkpoint -> storage.save(subscriptionId, checkpoint, CheckpointWriteCondition.ifAbsent()))))
      *                          .map(StartAt::checkpoint);
      * </pre>
+     * <p>
+     * The condition on that write is what the read above cannot do on its own. Two callers reading an empty storage
+     * at the same moment both get as far as writing, and without it the second write wins and the events between the
+     * two positions reach neither. With it the second is refused, which leaves you to decide what that means rather
+     * than deciding it by accident. {@code ReactorDurableSubscriptionModel} reads the stored position back and
+     * refuses the registration unless it holds the position that caller read. Drop the condition only for a storage
+     * that answers {@code false} from {@link #evaluatesWriteConditionsFor(String)}, which cannot evaluate it.
      *
      * @param subscriptionId The id of the subscription whose checkpoint to find
      * @return A Mono with the {@link Checkpoint} data point for the supplied subscriptionId
