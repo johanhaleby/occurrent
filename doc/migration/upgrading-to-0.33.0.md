@@ -54,11 +54,13 @@ assembly.
 `evaluatesWriteConditions()` defaults to `false`. `evaluatesWriteConditionsFor(String)` has no default of its own,
 it delegates to `evaluatesWriteConditions()`, so it inherits `true` for every id once a storage overrides that one,
 unless the storage overrides `evaluatesWriteConditionsFor` too to answer differently by id. A storage that answers
-neither writes unconditionally and compiles and keeps working regardless. Say `true` from `evaluatesWriteConditions()`
-when your storage accepts and refuses `notOlderThan` and `ifAbsent` as documented and leaves a stored version
-untouched under `any()`. Override `evaluatesWriteConditionsFor` too when that answer varies by subscription id, see
-section 2. A caller that depends on a conditional write asks first, which is how the Spring Boot starter refuses a
-wiring that would otherwise throw on the first checkpoint write. Section 8 covers that failure.
+neither only guarantees that a caller treats it as unable to evaluate a condition. It compiles and keeps working
+either way, whether or not `save` actually does evaluate one without saying so, and section 2 has that case. Say
+`true` from `evaluatesWriteConditions()` when your storage accepts and refuses `notOlderThan` and `ifAbsent` as
+documented and leaves a stored version untouched under `any()`. Override `evaluatesWriteConditionsFor` too when
+that answer varies by subscription id, see section 2. A caller that depends on a conditional write asks first,
+which is how the Spring Boot starter refuses a wiring that would otherwise throw on the first checkpoint write.
+Section 8 covers that failure.
 
 A test double that overrides the two-argument `save` to observe writes stops seeing them, because the subscription
 models now call the three-argument `save` directly, so override that one instead.
