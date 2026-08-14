@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33b
-revision: 40
+revision: 41
 updated_at: 2026-08-14T09:05:00Z
 updated_by: "successor orchestrator (worktree api-review-verification-c3b0ea): recovered per handoff, monitors re-armed, act-001 reconciled VERIFIED, U10B registered (U11 docs appendix push), U13 gate going to Johan"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -182,7 +182,8 @@ pending_actions:
     type: workflow-dispatch
     target: "Fixpoint ROUND 3 (LAST within cap of 3): fresh-context Opus review of the epic addendum since round 2 (U13 squash 8e88c6f on main, U10B docs head 6e540e7 on docs/0.33.0-preview) read together with its effect on the complete current state, never in isolation"
     expected: "zero new confirmed findings above minor means CONVERGENCE and closeout starts; any above-minor finding means the CAP IS REACHED: end the loop, route the remainder to Johan as one structured ask, report as capped never as convergence"
-    status: PENDING
+    status: VERIFIED
+    verified: "2026-08-14: verdict 2 NEW confirmed MAJOR, CAP REACHED, loop ENDED (first launch lost to a user-level interrupt, relaunched fresh). MAJOR-1: ADR 86 lines 97-99 (amendment 2's starter-stack-answers-on-first-ask sentence) falsified by U13 and contradicted by amendment 3 at 204-205; fix is one sentence in amendment 3's correction list. MAJOR-2: docs.md 3669 and 6674 on docs/0.33.0-preview attribute the registration-pin guarantee to the one-arg stoppedByDefault factory, which passes null storage and never pins (library javadoc says the opposite in as many words); pre-existing before the epic but U10B's rewrite sharpened the false reading; three-arg factory unmentioned on the site. Three minors listed (two test-comment starter-stack overreaches, one javadoc upper-bound count). Angles 2, 3, 5 CLEAN incl. all seven wrapper implementors verified truthful. Remainder routed to Johan as one structured ask, reported as capped"
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-14T14:40:00Z
