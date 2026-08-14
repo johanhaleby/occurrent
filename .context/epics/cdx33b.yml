@@ -1,6 +1,6 @@
 schema_version: 1
 epic: cdx33b
-revision: 37
+revision: 38
 updated_at: 2026-08-14T09:05:00Z
 updated_by: "successor orchestrator (worktree api-review-verification-c3b0ea): recovered per handoff, monitors re-armed, act-001 reconciled VERIFIED, U10B registered (U11 docs appendix push), U13 gate going to Johan"
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -316,7 +316,7 @@ units:
     depends_on: [U11]
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "779", met: false, evidence: "design gate CLOSED 2026-08-14: Johan approved the recorded direction via AskUserQuestion (Attended); implementation dispatched per act-020; PR 779 opened at 69288b3 (branch johan/cdx33b-u13-cc-forwarding), checks running, worker in its pr-fix loop"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "779", met: false, evidence: "design gate CLOSED 2026-08-14: Johan approved the recorded direction via AskUserQuestion (Attended); implementation dispatched per act-020; PR 779 delivered done at final head 0e948007819766fc1467d79bb33fe08809dacf5c: 28/28 by job conclusion (one subscription-mongodb-spring flake settled by same-commit rerun), 0 threads, MERGEABLE, both suppressed findings fixed and verified by orchestrator (final PR body documents only the final API). Method decidesWhereTheSubscriptionStarts() and ADR 86 third amendment APPROVED by Johan 2026-08-14 (AskUserQuestion, Attended). Merge waits only on act-021 adversarial pass"}
   UREG:
     issue: null
     goal: "Register: decline pointers for findings 8/10/12/14, retention-policy issue (finding 7 residual), finding-11 convention note, environment-artifact note; route new arrivals #760 #761 (both released-behavior, non-overlapping). ADDED 2026-08-13: the broader-filter-is-safe house claim on shipped Projection.java (:39, :301) is falsifiable at the converter exactly as U7 pass defect 1 showed for Saga; released surface, so a register note or 0.34 issue, not a pre-tag fix"
