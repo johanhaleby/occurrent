@@ -39,17 +39,24 @@ OptionalLong writeVersion(String subscriptionId);
 default boolean evaluatesWriteConditions() {
     return false;
 }
+
+default boolean evaluatesWriteConditionsFor(String subscriptionId) {
+    return evaluatesWriteConditions();
+}
 ```
 
-The reactor twin gets the same three members, `Mono<Checkpoint> save(String, Checkpoint, CheckpointWriteCondition)`,
-`Mono<Long> writeVersion(String)` and the same `evaluatesWriteConditions()`, with an empty `Mono` meaning no version
-is stored. A refusal on that stack signals `Mono.error`, it never throws from assembly.
+The reactor twin gets the same four members, `Mono<Checkpoint> save(String, Checkpoint, CheckpointWriteCondition)`,
+`Mono<Long> writeVersion(String)`, and the same `evaluatesWriteConditions()` and `evaluatesWriteConditionsFor(String)`,
+with an empty `Mono` meaning no version is stored. A refusal on that stack signals `Mono.error`, it never throws from
+assembly.
 
-`evaluatesWriteConditions()` is the only one of the three with a default, and the default is `false`, so a storage that
-writes unconditionally compiles and keeps working without answering it. Say `true` when your storage accepts and
-refuses `notOlderThan` and `ifAbsent` as documented and leaves a stored version untouched under `any()`. A caller that
-depends on a conditional write asks first, which is how the Spring Boot starter refuses a wiring that would otherwise
-throw on the first checkpoint write. Section 8 covers that failure.
+`evaluatesWriteConditions()` and `evaluatesWriteConditionsFor(String)` are the two of the four with a default, and
+both default to `false`, so a storage that writes unconditionally compiles and keeps working without answering
+either. Say `true` from `evaluatesWriteConditions()` when your storage accepts and refuses `notOlderThan` and
+`ifAbsent` as documented and leaves a stored version untouched under `any()`. Override `evaluatesWriteConditionsFor`
+too when that answer varies by subscription id, see section 2. A caller that depends on a conditional write asks
+first, which is how the Spring Boot starter refuses a wiring that would otherwise throw on the first checkpoint
+write. Section 8 covers that failure.
 
 A test double that overrides the two-argument `save` to observe writes stops seeing them, because the subscription
 models now call the three-argument `save` directly, so override that one instead.
@@ -105,8 +112,14 @@ same as it always accepted every subscription id outside the version key's own r
 A store whose answer to a conditional write depends on the subscription id, the way the two Redis modes above do, can
 say so precisely with `evaluatesWriteConditionsFor(String subscriptionId)`, a second new default method that answers
 `evaluatesWriteConditions()` for every id unless overridden. The blocking Spring Boot starter's own fencing check
-reads it too, see section 8. No such check exists on the reactor stack yet, so a reactor `CheckpointStorage`
-implementer overrides it only for callers that ask directly.
+reads it too, see section 8. The reactor stack has no startup check like that one, but the override is not merely
+advisory there either. `ReactorDurableSubscriptionModel.pinStartPosition` reads it on every reactive durable
+subscription's first run whose start position resolves to the subscription model default, and the answer decides
+between a conditional `ifAbsent()` write that can refuse a losing race and an unconditional write logged at `WARN`
+that keeps 0.32.0's race open for that subscription. A storage whose `ifAbsent()` otherwise works but whose
+predicate stays at the default `false` here does not fail loudly for it. It compiles, runs, and keeps the 0.32.0
+race open with nothing louder than that `WARN`. Leaving the override unanswered is a real choice with a real
+cost, not optional polish, see section 8.
 
 If your store can evaluate a condition for real, the two rules that matter are the same two the TCK asserts on every
 storage that declares it supports them. `any()` must leave whatever version is stored untouched, carrying it
