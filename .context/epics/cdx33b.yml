@@ -1,8 +1,8 @@
 schema_version: 1
 epic: cdx33b
-revision: 4
-updated_at: 2026-08-12T17:49:25Z
-updated_by: "orchestrator session faee3625 (registration; plan approved by Johan 2026-08-12, /Users/johan/.claude/plans/unified-bubbling-koala.md)"
+revision: 33
+updated_at: 2026-08-14T08:30:00Z
+updated_by: "successor orchestrator (worktree api-review-verification-c3b0ea): recovered per handoff, monitors re-armed, act-001 reconciled VERIFIED, U10B registered (U11 docs appendix push), U13 gate going to Johan"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). The 0.33.0 tag is HELD for this epic. Release gate: U1, U2, U4, U5, U7, U8, U9, plus the in-epic fixpoint review (definition of done includes a review round with zero new confirmed findings above minor). U3 and U6 ride along. Plan gates: U1 and U7 plan-first with plan_approval_venue session (Johan at computer); U9 ADR wording design-gated to Johan. Adversarial verify pass required per gating unit before merge. Stopping rule ratified at plan approval: after the fixpoint review is clean, only a BLOCKER-severity confirmed finding reopens pre-tag work. Fixpoint round cap: 3 (Johan, 2026-08-12, post-approval ask per the updated skill); reaching the cap ENDS the loop and routes the remainder to Johan as one structured ask, reported as a capped outcome and never as convergence. Addendum re-reviews read the addendum diff together with its effect on the complete current state, never the addendum commits in isolation (skill d7ddd47, supersedes the plan wording)."
 pending_actions:
@@ -10,41 +10,186 @@ pending_actions:
     type: dispatch-chip
     target: "All nine units dispatched as CHIPS per Johan's explicit vehicle instruction mid-dispatch (four subagents U3/U5/U6/U8 stopped within a minute of launch and reissued as chips). Chip ids: U1 task_b1bb589d, U7 task_e8ffca0c, U2 task_697ac389, U4 task_d0071e31, U3 task_9d06c1eb, U5 task_0c40e553, U6 task_64882fe4, U8 task_90e69b98, U9 task_e8d98913"
     expected: "each chip starts when Johan clicks it, delivers a PR and a DELIVERY_RESULT; U1 and U7 present plan gates in their own sessions"
-    status: PENDING
+    status: VERIFIED
+    verified: "2026-08-14 successor reconcile: all nine units delivered PRs and merged (evidence per unit deliverable entries); action was left PENDING only because the predecessor handed off mid-endgame"
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-12T17:49:25Z
+  - id: act-002
+    type: workflow-dispatch
+    target: "Fresh-context adversarial verify of PR 772 (U1, the blocker) at head 93711c943, Opus in an isolated worktree, six attack angles against the stated interleaving invariant"
+    expected: "a report with CONFIRMED-DEFECT/REFUTED/UNVERIFIABLE per angle; merge of 772 waits on it AND on Johan's ADR wording ruling in U1's session"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-13T06:20:00Z
+  - id: act-003
+    type: workflow-dispatch
+    target: "Fresh-context adversarial verify of PR 770 (U7) at rebased head 9a391aaad, dispatched 2026-08-13 ~06:45, STOPPED by Johan ~07:5x before reporting"
+    expected: "the pass is a standing gate obligation for U7 and remains UNMET; plan on record is to re-run it on U7's final pre-merge head after its rebase over U2/U8, pending Johan's confirmation that the stop was deliberate. RESOLVED: re-dispatched 2026-08-13 ~13:45 on the final rebased head 800aca091 (full matrix green) per the recorded plan; the stopped instance targeted a superseded head and the gate obligation itself was never waived"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T06:45:00Z
+  - id: act-004
+    type: message-session
+    target: "U7 session local_8a2de541 re PR 770 head 445ee42c4: routed defect 1 (isInstance guard before the FlowSagaImpl append + two tests) was replaced by documentation (guide section 10 flow-saga cost paragraph, Saga.filter() javadoc) with no rationale sent; asked for the rationale or the guard commit, plus the head's remaining obligations (updated DELIVERY_RESULT, Copilot re-review with suppressed block, ADR 124 wording set to Johan before the ruling ask)"
+    expected: "either a stated rationale I rule on, or a guard commit with the mutation evidence; recorded in the updated DELIVERY_RESULT either way. RESOLVED: rationale returned on the PR (the guard is not a no-op on the derived path under a collapsing mapper, so it changes shipped 0.32 behaviour; stepWindow's javadoc is not violated; the fix shape is an unsettled ReceivedEvents design owned by ADR 120/123). RULED 2026-08-13: documented-cost + #773 deferred to 0.34 per the stopping rule; guard refuted, my routed direction's no-op premise was wrong. One residual routed: ADR 124 line-193 clause must say an array or a primitive is refused on either path"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T15:10:00Z
+  - id: act-005
+    type: merge
+    target: "PR 772 (U1) CAS squash merge on exact head 74b2d37f4 after Johan approved the ADR 116/86 wording (AskUserQuestion, orchestrator session)"
+    expected: "merge commit on main"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-13T16:10:00Z
+  - id: act-006
+    type: dispatch-chip
+    target: "U11 chip task_feaffead (pin vs StartAt interaction + evaluatesWriteConditions boot-failure twin), Opus/high plan-first, base origin/main at be68eb434, plan_approval_venue session"
+    expected: "Johan starts the chip. FAILED as designed: chips unreachable from his phone, chip withdrawn, superseded by act-011"
+    status: FAILED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-13T16:12:00Z
+  - id: act-011
+    type: workflow-dispatch
+    target: "U11 planning subagent (Opus, read-only, base origin/main): produces the StartAt-variant pin table, design alternatives argued from AGENTS.md and the ADR 86/116 amendments, defect-2 fix shape, ADR impact, test plan. Gate content returns to the orchestrator; principle-settled parts decided here, taste parts to Johan via AskUserQuestion in this session"
+    expected: "a plan report; then the design gate, then an implementing dispatch. VERIFIED: plan returned with file:line ground truth (model is in subscription/api/blocking, StartAt is sealed with four variants, the shipped DEFAULT path is a Dynamic so isDefault() keying would regress #481, BEGINNING is a Dynamic exists()-oracle). Gate RULED by the orchestrator under Unattended terms, approved as principle-settled: rule c-prime (pin iff registration-time resolution to Default, resolve before the existence read), option b violates no-design-may-lose-events, option a refuted by fact, the pin-marking optimum named and declined as a storage-format break for an unreleased defect with the path left open. ADR WORDING QUEUED for Johan (decision queue in ORCHESTRATOR.md): ADR 86 amendment + ADR 116 INFO-vs-WARNING correction; merge holds on it"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T19:35:00Z
+  - id: act-013
+    type: workflow-dispatch
+    target: "U11 implementation subagent (Opus, own worktree off origin/main, branch johan/cdx33b-u11-pin-startat): the approved plan verbatim, seven new tests plus the now()-to-default migration of existing pin tests, mutation table, construction-time refusal, ADR texts committed but flagged wording-pending, changelog corrections, PR via gh"
+    expected: "an open PR with matrix green, suppressed blocks handled, DELIVERY_RESULT with invariant and mutation tables; then adversarial pass, then the queued ADR ruling, then my merge. VERIFIED: PR 777 delivered at 4ee0dc165, 27/27 by job conclusion, 4 threads resolved, suppressed comment fixed across all four surfaces, full mutation table incl. the statement-order mutant killed by the BEGINNING test alone; two reasoned deviations accepted (independent clone under scratchpad due to the sibling-worktree write hook, three extra pre-502 tests moved plus a positive control in the wiring test)"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T19:55:00Z
+  - id: act-014
+    type: workflow-dispatch
+    target: "Fresh-context adversarial verify of PR 777 (U11) at 4ee0dc165, Opus read-only, seven angles: double-resolution side effects, outermost-context mismatch, BEGINNING oracle race vs pre-PR window, lock interleaving, test-claim truth, factory-refusal completeness, claim surfaces"
+    expected: "verdict per angle; merge additionally holds on the queued ADR wording ruling. VERIFIED: DEFECTS-FOUND with the mechanism held (angles 1/3/4/5 refuted the attacks, window narrowed not widened, tests non-vacuous). Confirmed: the ADR 86 justifying sentence is false (the shipped annotation DEFAULT dynamic IS the null-for-catchup shape, the starter is safe only by competing-consumer layer order), so a supported custom-bean stack reopens the 772 skip window; guide option 2 false under mode=manual; the factory refusal is an unflagged 0.32-API breaking change; message wider than the storage contract; stale test name; WARNING-claim silent-equal qualifier"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T20:20:00Z
+  - id: act-016
+    type: message-session
+    target: "U11 agent resumed with the fix round: RULED chain-aware registration resolution via SubscriptionModelWrapper descent (regression from starting state on public API rules out the documented-limitation option; interface verified on main), plus guide manual-mode carve-out, Breaking-changes entry for the factory refusal, requirement-stating refusal message, test rename, WARNING qualifier; ADR 86 amendment rewritten so the false sentence disappears by construction"
+    expected: "fix push on PR 777, green matrix, re-review read on the new head, DELIVERY_RESULT updated with the chain-descent invariant and new mutants. VERIFIED: delivered at 044edca51, 28/28 by job conclusion, all five ruled items in (chain walk via SubscriptionModelWrapper with its descent mutant killed by the layer-below test, guide carve-out, Breaking-changes entry, requirement-stating message, rename + WARNING qualifier), Copilot reviewed every head of the round, final suppressed comment read by the orchestrator. Two declines ACCEPTED with derivation (pass-through wrapper = pre-PR outcome exactly, no regression; runtime-class misread needs subclass + hand-written equality dynamic, fix needs a layer resolution-contract capability that does not exist), recorded in ADR 86 and the register. One framework-shard flake (ProjectionAnnotationDurableResumeMongoTest, expected 3 was 5) settled by same-commit rerun on a markdown-only delta. MERGE HOLDS solely on the queued ADR wording ruling"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T20:45:00Z
+  - id: act-015
+    type: rerun
+    target: "Copilot re-review requested on PR 777 final head 4ee0dc165 via GraphQL requestReviews (the REST path adds nobody)"
+    expected: "a new review lands on 4ee0dc165; its body and suppressed block read before merge"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T20:18:00Z
+  - id: act-017
+    type: workflow-dispatch
+    target: "In-epic fixpoint review ROUND 1 (Opus, fresh context, read-only) over the merged increment f6ddc2cff...d376c8be5, nine units, severity line per the ratified stopping rule, cross-unit interactions and quantifier sweep mandated; PR 777 explicitly out of scope, it gets its own addendum round after merging"
+    expected: "verdict with N confirmed findings above minor; zero means round 2 only covers 777's addendum diff. VERIFIED: 1 confirmed MAJOR (DurableSubscriptionModel:155-157 lock-scope comment justifies the lock with a checkpoint write that runs inside the delegate-evaluated supplier outside the lock; shipped Mongo delegates close the window incidentally via their own monitor, false for any other delegate), 1 SUSPECTED not counting (Kotlin pin-codegen test), 8 minors (4 one-clause prose fixes folded into U12, the rest to the register: evaluatesWriteConditions true while an id shape throws at first fenced write, writeVersion guard asymmetry + read/exists requireNonNull asymmetry, Lua tonumber above 2^53, warns-once converter qualifier decision delegated to U12)"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T21:40:00Z
+  - id: act-018
+    type: workflow-dispatch
+    target: "U12 corrections subagent (Sonnet, own clone, branch johan/cdx33b-u12-fixpoint-corrections off main at d376c8be5+): the MAJOR lock-comment rewrite with the true scope statement, plus four one-clause prose corrections (changelog Cluster qualifier, warns-once re-arm semantics, refuseArrayOrPrimitive walk claim, Redis DEL javadoc reconciliation); no behavior changes"
+    expected: "a small PR, green matrix, suppressed blocks handled, DELIVERY_RESULT with before/after per item. VERIFIED: PR 778 delivered at b8566d923 through three review rounds (round 2's suppressed comment corrected the comment in the OTHER direction, Spring's synchronous first-subscribe evaluation is lock-covered, only deferred evaluation escapes), final review verified bare by the orchestrator, per-item before/after complete, local builds green on all three heads; matrix pending at report time, merge on green. One agent-process note: the agent first paused on a background monitor that reports to nobody and had pushed nothing, resumed with a no-pausing directive. New register item from the correction: NativeMongoSubscriptionModel defers StartAt evaluation to its dispatcher executor with no serialization against cancelSubscription, the pre-existing orphan-checkpoint race family, 0.34 candidate"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T22:00:00Z
+  - id: act-012
+    type: workflow-dispatch
+    target: "U10 executing subagent (Sonnet) in the docs repo via its own git worktrees off the held branches: join corrections both branches, filter-override chapter, Cluster and manual-start/stepWindow claim sweeps, jekyll builds with rendered-layer greps, push never merge"
+    expected: "pushed held branches and a report with before/after pairs, build results, grep evidence, worktrees removed. VERIFIED: heads 90d2906 and 7472be8 confirmed on origin by ls-remote, report complete with rendered-layer evidence"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T19:35:00Z
+  - id: act-007
+    type: message-session
+    target: "U7 session local_8a2de541: ADR 124 wording approved by Johan; rebase PR 770 over be68eb434 (shared changelog section), then run-list green on the Java-bearing verdict head, Copilot review + suppressed block on final head, DELIVERY_RESULT bumped with invariant table; merge stays the orchestrator's"
+    expected: "rebased head, final report; then my merge gate on the exact head. Rebase landed as e56098d25, verified content-identical (delta is exactly U1's five merged files, changelog corrections carried verbatim)"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T16:11:00Z
+  - id: act-008
+    type: message-session
+    target: "U7 session local_8a2de541: Copilot suppressed block on e56098d25 yielded one confirmed defect (Saga.create's empty-eventTypes branch skips start-type validation, so int.class/array start types build an unstartable saga on the new trailing-filter overload's path; verified in code) routed with fix+test+mutation direction; array-lenient comment declined per ADR 124's behavior table, docs-site comment declined as U10 scope"
+    expected: "fix push, green run list, re-review read on the new head, DELIVERY_RESULT describing the final head"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-13T16:30:00Z
+  - id: act-009
+    type: merge
+    target: "PR 770 (U7) CAS squash merge on exact head 6ca6c6d30 after the full gate (28/28 by run list, 0 threads, sentinels verified, all review channels read, both rulings closed)"
+    expected: "merge commit on main; main matrix green on it. VERIFIED: all four workflows success on d376c8be5 including the full Java CI matrix"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-13T17:28:00Z
+  - id: act-010
+    type: dispatch-chip
+    target: "U10 chip task_1553430e (docs-site ripple: carried-over join corrections on both held branches, U7 filter-override chapter with the three caveats and the flow-saga cost, U2 Cluster claim sweep, U4/U1 claim sweep), Sonnet/high, base docs/0.33.0-preview in the docs repo, push-never-merge; U11 ripple explicitly excluded, lands as an appendix push later"
+    expected: "Johan starts the chip. FAILED as designed: chips unreachable from his phone, chip withdrawn, superseded by act-012"
+    status: FAILED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-13T17:35:00Z
+  - id: act-019
+    type: workflow-dispatch
+    target: "U10B docs-appendix subagent (fresh general-purpose, Sonnet): sweep pages/docs/docs.md on docs/0.33.0-preview (head 90d2906) for manual-start/pin claims made stale by U11 (PR 777), align with the merged changelog wording on main at 8a57fc319, push the held branch only; worktree off the primary docs checkout, Jekyll build with the LC_ALL workaround, /johan-writing gates on changed lines"
+    expected: "either a pushed docs/0.33.0-preview head with corrected claims and build+grep evidence, or a verified-accurate report with grep evidence if no claim is false; never a merge, docs main untouched"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-14T08:35:00Z
 units:
   U1:
     issue: null
     goal: "Manual-start pin race (review findings 1+13, the blocker): close the capture/write-order reversal without throwing on the ordinary rolling-deploy refusal; fold write-first-read-on-refusal with the log classification redesigned"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "local_6d655966"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "772", met: true, evidence: "MERGED 2026-08-13 as be68eb434, CAS on exact head 74b2d37f4 (run list: 5/5 runs success, maven matrix 24/24 jobs, 0 threads, CLEAN). Johan approved the ADR 116 third amendment and ADR 86 bounds via AskUserQuestion in the orchestrator session (Approve as committed). Adversarial findings 1/2/4 fixed, 3 partly declined with the verified everyEvent() noise reason, both holes on #771; 5 mutations killed. Full rework trail in revision 22's entry."}
   U2:
     issue: null
     goal: "Redis Cluster hash slots (finding 2): hash-tag both keys into one slot (layout unreleased), decide fail-fast complement at unit gate; changelog entry + migration guide section 4 correction"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "local_d72c5e14"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "769", met: true, evidence: "MERGED 2026-08-13 as e5175f0ce (CAS on head 07aadf4fa). Mechanism verified by adversarial re-verify at 498ee7037 (independent slot model, 128k-id corpus, zero misalignments or collisions); every later commit read line-by-line by the orchestrator against the routed instructions. Final invariant set: same-slot, uniqueness (SHA-256 suffix), DISJOINTNESS (reserved-prefix refusal on read/save/delete/exists, widened by the unit and RATIFIED, with the process point acknowledged: directed boundaries are not widened silently), CROSSSLOT terminal on save and provably-safe fallback on delete. Breaking-changes entry for the prefix refusal plus a timing-aware migration path in section 4 (pre-upgrade via API, post-upgrade via raw RENAME). Test independence claim rebuilt honestly (regex model, which caught its own unanchored bug via a Python cross-check). Gate: verdict head 88b570218 fully green, markdown-only tail verified by compare, final review on exact head clean with no suppressed block, 0 threads"}
   U3:
     issue: null
     goal: "Durable opt-out marker race (finding 3): marker-before-delegate plus remove-on-exception, preserving PR 733's no-leak property; latched-delegate concurrency test"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "768", met: false, evidence: "OPEN. Adversarial verify found a CONFIRMED regression: catch(RuntimeException) misses Error, so the marker leaks permanently on an Error-throwing delegate, the exact PR 733 bug reopened. Sent back with the catch(Throwable) fix and an Error-path test. Other three angles held, the latched race test verified deterministic against the old ordering."}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "768", met: true, evidence: "MERGED 2026-08-13 as 696f34d01 (CAS on head 27a78ace1). Eleven rounds ended by a DESIGN change, not a patch: per-id mutual exclusion (striped, 1024 locks) over the FULL bodies of subscribe/cancel/resume, replacing the reference counter, identity checks and preflight reads entirely; the marker returned to a plain Set. Along the way the unit found an ordinary exception-safety bug the concurrency rounds had masked. Final round: striping-coupling thread closed as the orchestrator's reasoned decline (policy allow_reasoned_declines) with the trade-off recorded in the :72 comment incl. the hung-backend clause, verified in the final diff by the orchestrator. Gate: 26/26 success on exact head, review on exact head with no suppressed block, 0 threads, report at e414e1cbc plus a self-verified comment-only delta. Mutations: locks removed -> blocking tests fail; widened region reverted -> checkpoint-managed test fails. Rides along; its earlier adversarial pass caught the Error-leak regression."}
   U4:
     issue: null
     goal: "stepWindow pre-progress trap (finding 4): derive fallback counts pre-trim, pass STORED windowStart to droppedFromTheCurrentStep; regression tests incl. hand-seeded pre-progress document; aligns implementation with ADR 123's stated contract"
@@ -54,7 +199,7 @@ units:
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "766", met: false, evidence: "OPEN, checks green, no threads. Adversarial verify CLEAN on all five angles incl. the algebraic no-legitimate-misclassification trace and the non-vacuous changed-declaration test. Cleared for merge pending DELIVERY_RESULT with mutation evidence and the section 9 accuracy verdict."}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "766", met: true, evidence: "MERGED 2026-08-13 as 8123774ce (CAS on head a4b4bf5fc). Gate verified independently: 27/27 check runs success on the exact head, Copilot review on that head with no suppressed block, 0 unresolved threads, adversarial pass CLEAN. DELIVERY_RESULT complete on the PR (posted 2026-08-12T19:20Z, found late; see lessons): 8-row invariant table, mutation evidence with restore-from-copy, section 9 and ADR 123 verdict NO EDIT NEEDED with reasoning. Touches no guide or changelog file, so guide serialization did not bind."}
   U5:
     issue: null
     goal: "Kotlin predicate identity (finding 6): NamedPredicate wrapper in SagaFlowExtensions.kt with equality on the captured function; Kotlin parity test; fingerprint verified unaffected"
@@ -64,64 +209,104 @@ units:
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "765", met: false, evidence: "OPEN, checks green after one recorded-flake rerun (ninth data point). Adversarial verify CLEAN on all five angles; the third commit (referential identity per a Copilot finding) is what makes it hold. One addition requested: a test asserting the documented method-reference refusal. Changelog absence is CORRECT per the epic dev-churn rule, ruled and recorded."}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "765", met: true, evidence: "MERGED 2026-08-13 as ce46e4969 (CAS on head 608cb666e). Adversarial pass CLEAN, checks green after one recorded-flake rerun, Copilot re-review requested and read on the FINAL head (clean, no suppressed block), 0 threads. DELIVERY_RESULT on the PR: 5-row identity-property table incl. the bound-reference case a structural equals would get wrong, 4 mutation rounds each proving a specific commit load-bearing, fingerprint persistence untouched, changelog absence correct per dev-churn rule."}
   U6:
     issue: null
     goal: "Retained-size threshold warning (finding 7 per D2): edge-triggered WARN at SpringMongoSagaStateStore.flowStateToDocument naming stepWindow as the remedy"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "local_d3b6c302 (archive at closeout)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "767", met: true, evidence: "MERGED 2026-08-13 as 75823204c (CAS on head 938873467). 27/27 on the exact head, final review clean with no suppressed block, sole open thread is the policy-sanctioned reasoned decline (allow_reasoned_declines). Seven review rounds, every one surfacing something real: latch comment overclaim, delete cleanup hook, TTL-latch permanent-saturation leak (fixed with an access-ordered LRU), the churn falsifier of the LRU claim (guarantee restated as 10k most-recently-checked, degradation pinned by a churn test), and the missing changelog line folded into the stepWindow entry. 13 mutations killed across the rounds. Rides along, no adversarial pass per the skill."}
   U7:
     issue: 751
     goal: "Saga filter override, closes #751 (finding 5 per D1): explicit filter/type-selector override bypassing EventTypeExpansion, Kotlin sugar, refusal message gains the third remedy, changelog + migration section 10 rework, ADR 124 amendment wording design-gated to Johan"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "local_8a2de541"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "770", met: true, evidence: "MERGED 2026-08-13 as d376c8be5, CAS on exact head 6ca6c6d30 (run list 28/28 jobs across 5 runs, 0 threads, CLEAN, sentinels exactly-once verified by the orchestrator on the head). Adversarial pass held on all seven angles; its three defects closed as: claim rescope + ADR clause (fixed in-PR), flow-window guard RULED OUT on U7's derived-path evidence (would change shipped 0.32 behaviour under a collapsing mapper) and deferred as #773 with both fix candidates, documented-cost meanwhile. Johan approved the ADR 116/86 and ADR 124 wording via AskUserQuestion; one post-approval truth refinement to blockquote 2 flagged to him. Copilot suppressed blocks read at every head, yielding two more real fixes (primitive refusal on the lenient path; empty-selector factory start-type validation) plus declines recorded with pointers (array-lenient per ADR 124 table, docs-site per U10, ORCHESTRATOR.md per single-writer). Seven mutations killed, restore-from-copy. Final report describes 100d9d4a4 with the tail test-comment commit directed and line-read by the orchestrator; its stale still-owed paragraph (claims U2/U8 open) noted, substance re-verified on the final head."}
   U8:
     issue: null
     goal: "Migration guide Kotlin truth (finding 9): section 2 discloses Java-only recipe coverage, adds blocking and reactor Kotlin snippets; merges after U4 per guide serialization order U2-U4-U8-U7"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U4]
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "762", met: true, evidence: "MERGED 2026-08-13 as bc6a1e872 (CAS on rebased head 733e69192). Report: three claim sentences rescoped after Copilot caught the umbrella-recipe overreach (rename sub-recipe IS Kotlin-capable, only the checkpoint-storage stub is Java-only), snippets written against both real interfaces with file:line, By-hand-in-Kotlin subsection added. Rebase over U2 verified by the orchestrator at byte level (compare vs new main = its own +46/-8 only, per-phrase sentinel counts all exactly one, two line-wrap false alarms resolved by inspection), which voided the owed confirmation line. Markdown-only PR: no matrix by design, review clean at content-identical pre-rebase head."}
   U9:
     issue: null
     goal: "ADR and javadoc integrity (finding 15): ADR 0110 follow-up note, ADR 0116 three-way reconciliation, reactor Projections.java stale phrase, ADR 0111 Status wording to Johan at design gate"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "local_ded4eaaf (idle since merge, archive at closeout)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "763", met: true, evidence: "MERGED 2026-08-12 as 8eed7a138. ADR 0111 Status flipped to Withdrawn per Johan's in-session choice at the design gate (answered before the diff, verified in the unit transcript). Three-dot merge-base diff confirmed clean of .context/ after a two-dot artifact scare. Prose-only, no adversarial pass per the skill."}
   U10:
     issue: null
     goal: "Docs-site ripple, LAST: carried-over join correction (docs/0.33.0-preview ~5799, docs/707-step-conditions ~5546), U7 filter override chapter, claim sweep of saga/subscription/checkpoint chapters; push never merge"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U2, U4, U7]
     session: null
     deliverables:
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: true, evidence: "Both held branches pushed 2026-08-13, heads verified on origin by the orchestrator via ls-remote: docs/0.33.0-preview at 90d2906 (join correction, new saga-explicit-filter section with the three caveats and flow-saga cost plus the addedTags entry, Redis Cluster claim flipped to supported with the digest and refused-prefix detail; manual-start and stepWindow claims swept and found already accurate by grep), docs/707-step-conditions at 7472be8 (join correction only, per scope). Jekyll builds clean with the LC_ALL workaround, corrected claims verified in the rendered _site layer by grep, voice greps clean on added lines, worktrees removed, primary docs checkout untouched. Held-branch convention kept: pushed, no merge, no PR; docs merges are Johan's at release. U11's ripple explicitly excluded, lands as an appendix push after U11 merges"}
+  U11:
+    issue: null
+    goal: "Addendum (from U1's adversarial pass, confirmed major, unreleased manual-start surface, pre-existing at U1's merge base): pinStartPosition ignores the caller's StartAt. With startAt NOW the pin is written and never read (single-node event skip since registration); with BEGINNING plus default resumeBehavior the pin makes exists() true at start so the first-run replay is silently replaced by resume-from-pin (no manual-mode BEGINNING test exists). Decide and implement the correct pin/StartAt interaction; also fold the register-note twin: the 3-arg factory does not check evaluatesWriteConditions, so an ifAbsent save on a non-evaluating storage fails first-registration boot (CheckpointFencingConfigurationCheck guards only the fencing combination). Dispatch AFTER PR 772 merges (same files)."
+    phase: DONE
+    health: PROGRESSING
+    swept: false
+    depends_on: [U1]
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "777", met: true, evidence: "MERGED 2026-08-14 as 8a57fc319, CAS on exact head 1dfaed8bd, after Johan approved the ADR 86/116 wording as committed (AskUserQuestion, Attended). Gate had been verified clean: 28/28 by job conclusion, 0 threads, final Copilot review bare incl. suppressed block, rebase over U12 content-identical, adversarial pass closed with the inheritance-fallback reversal ratified (monotone-safe, three fallback mutants) and two capability-blocked declines recorded in ADR 86. Prior evidence trail in revision 29"}
+  U12:
+    issue: null
+    goal: "Fixpoint round 1 corrections: the MAJOR DurableSubscriptionModel lock-scope comment rewrite (the comment names a supplier-internal checkpoint write the lock does not cover) plus four one-clause prose truth fixes on unreleased text; no behavior changes. Register-only residuals: evaluatesWriteConditions vs id-shape refusal, writeVersion/read/exists guard asymmetries, Lua tonumber above 2^53, the Kotlin codegen-pinned identity test"
+    phase: DONE
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "778", met: true, evidence: "MERGED 2026-08-14 as f117cf9e5, CAS on exact head b8566d923 (25/25 jobs across runs, 0 threads, CLEAN, final review verified bare by the orchestrator). Three review rounds refined the lock comment in both directions; all five items delivered with before/after pairs; native-model cancel race banked in the register for 0.34"}
+  U10B:
+    issue: null
+    goal: "U11 docs-site appendix push, excluded from U10 by brief and owed since U11 (PR 777) merged: sweep pages/docs/docs.md on docs/0.33.0-preview for manual-start/pin claims (the site's 'position fixed at registration' claim is true only for a registration resolving to the model default post-U11); correct to match the merged changelog wording; push the held branch, never merge; docs main and primary docs checkout untouched"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: [U11]
+    session: null
+    deliverables:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
+  U13:
+    issue: null
+    goal: "Fixpoint round 2 MAJOR: the registration walk breaks on CompetingConsumerSubscriptionModel's non-default answer, but CC only resolves to decide whether to compete and forwards the ORIGINAL StartAt down in both branches (CompetingConsumerSubscriptionModel.java:112,311,328), so a per-layer function (Default for durable, now() for CC) gets no pin and the durable layer pins at start, the #669 window, a regression vs the pre-U11 unconditional pin; ADR 86's 'all three decide for themselves' is false for CC. Fix direction (predecessor's read, successor's gate): the missing capability now has a confirmed defect justifying it pre-tag. A default method on SubscriptionModelWrapper (api module, interface name new in 0.33 so additive is free) letting a wrapper say it forwards the position unresolved, CC overrides, the walk continues past a forwarding layer's answer. Skip-CC-by-instanceof is blocked by module dependency direction. Documented-bound is ruled out by the same item-1 regression criterion that justified the inheritance fallback. Correct ADR 86's false sentence as part of the fix, and fold round 2's seven minors (all one-clause, mostly the same files: the once-per-layer understatement, the inherits-from bounds, the Proxy/Record ask framing, guide :429 conditional claim, changelog delete-clears-latch clause, two test-comment staleness items)."
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: [U11]
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
   UREG:
     issue: null
-    goal: "Register: decline pointers for findings 8/10/12/14, retention-policy issue (finding 7 residual), finding-11 convention note, environment-artifact note; route new arrivals #760 #761 (both released-behavior, non-overlapping)"
+    goal: "Register: decline pointers for findings 8/10/12/14, retention-policy issue (finding 7 residual), finding-11 convention note, environment-artifact note; route new arrivals #760 #761 (both released-behavior, non-overlapping). ADDED 2026-08-13: the broader-filter-is-safe house claim on shipped Projection.java (:39, :301) is falsifiable at the converter exactly as U7 pass defect 1 showed for Saga; released surface, so a register note or 0.34 issue, not a pre-tag fix"
     phase: READY
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: "placeholder check; UREG delivers issues and comments, verified by listing them in evidence at closeout"}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: "IN PROGRESS 2026-08-13: #775 filed (Projection broader-filter claim, released surface, 0.34); retention residual confirmed already filed as #764 (my #776 was a duplicate, closed with the #773 coupling moved to #764 as a comment); decline register for findings 8/10/11/12/14 plus the environment artifact verified present in ORCHESTRATOR.md from 2026-08-12 routing; #760/#761 routed leave-for-later same day. Marker comments on #760/#761 verified present 2026-08-13 (orchestrator-routing markers from the 08-12 routing). Remaining at closeout: final evidence listing only"}
