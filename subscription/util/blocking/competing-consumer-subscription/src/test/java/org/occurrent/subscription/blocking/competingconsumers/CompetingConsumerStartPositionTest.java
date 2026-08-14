@@ -82,7 +82,7 @@ class CompetingConsumerStartPositionTest {
 
     @Test
     void a_registration_under_this_model_is_recorded_from_the_position_the_model_below_it_reads() {
-        // ManualStartSubscriptionModel wrapping this competing consumer model wrapping a fake delegate, two layers
+        // ManualStartSubscriptionModel wraps this competing consumer model, which wraps a fake delegate, two layers
         // under the walk rather than the four-layer starter stack. A start position answering for each layer
         // separately used to end the walk at the competing consumer's answer, which does not decide where the
         // subscription starts, leaving the delegate to record a position when the subscription started and skip
