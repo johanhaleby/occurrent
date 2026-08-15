@@ -19,6 +19,7 @@ package org.occurrent.subscription.reactor.durable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.UnknownSubscriptionException;
@@ -140,6 +141,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(SUBSCRIPTION_ID)
                 .hasMessageContaining("answered nothing")
+                .hasMessageContaining("cancelSubscription(String)")
                 .hasMessageContaining("StartAt of your own");
         assertThat(storage.saves).hasValue(0);
         assertThat(delegate.startedAt).isEmpty();
@@ -386,6 +388,47 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         assertThat(storage.saves).hasValue(0);
         assertThat(delegate.startedAt).isEmpty();
         assertThat(model.isRunning(SUBSCRIPTION_ID)).isFalse();
+    }
+
+    @Test
+    void registering_while_running_still_starts_from_now_when_the_position_answers_nothing() {
+        // There is no wait to cover on this path, since the subscription starts at the moment it is registered, so
+        // starting from now starts from where it was registered and skips nothing. Refusing here would take out every
+        // first run on a database that cannot answer, over a gap that does not exist.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        delegate.globalCheckpoint = null;
+        SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
+
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        subscription.waitUntilStarted().block(TIMEOUT);
+        assertThat(delegate.startedAt).hasSize(1);
+        assertThat(delegate.startedAt.getFirst()).isInstanceOf(StartAt.Now.class);
+        assertThat(storage.saves).hasValue(0);
+    }
+
+    @Test
+    void a_registration_refused_on_its_own_handle_keeps_its_id_until_it_is_started_or_cancelled() {
+        // Starting it is what drops it, so an id whose subscription was never started is still taken. Cancelling is
+        // the other way out, and this is the difference between the two the refusal names.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        delegate.failGlobalCheckpoint = true;
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
+        model.stop();
+        Subscription registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        assertThatThrownBy(() -> registration.waitUntilStarted().block(TIMEOUT)).isInstanceOf(IllegalStateException.class);
+
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
+                .isInstanceOf(DuplicateSubscriptionIdException.class);
+
+        model.cancelSubscription(SUBSCRIPTION_ID);
+        delegate.failGlobalCheckpoint = false;
+
+        Subscription fresh = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        assertThat(model.isPaused(SUBSCRIPTION_ID)).isTrue();
+        assertThatThrownBy(() -> fresh.waitUntilStarted().block(Duration.ofMillis(200)))
+                .hasMessageContaining("Timeout on blocking read");
     }
 
     @Test

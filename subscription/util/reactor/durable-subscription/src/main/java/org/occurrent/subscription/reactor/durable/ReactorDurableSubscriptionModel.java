@@ -102,8 +102,9 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * the earlier read exists to keep. Answering nothing is the wrapped model's documented way of reporting a problem it
  * cannot resolve, not a position, which is why it refuses rather than falls back. The refusal is signalled on the
  * {@link Subscription#waitUntilStarted()} of the registration handle and again on the one
- * {@link #resumeSubscription(String)} returns, and the subscription is dropped rather than left registered, so
- * starting it means registering it again. {@link #start(boolean)} keeps starting the rest.
+ * {@link #resumeSubscription(String)} returns, and starting it is what drops it, so a subscription refused there is
+ * registered again rather than resumed. One refused on the registration handle alone still holds its id until it is
+ * started or {@link #cancelSubscription(String)} releases it. {@link #start(boolean)} keeps starting the rest.
  * <p>
  * Two registrations are left alone by all of that. One that names a position of its own begins there whatever the feed
  * does while it waits, so nothing is read for it. One that already has a checkpoint stored begins from that checkpoint,
@@ -284,9 +285,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                                          subscriptionId + ", which is how it reports a problem it cannot resolve. There is " +
                                          "no position to start this subscription from, and starting it anyway would begin " +
                                          "wherever the feed has reached by then and skip whatever was written while it " +
-                                         "waited, so the registration is refused. Register again once the model can answer, " +
-                                         "or subscribe with a StartAt of your own, which records no position and carries no " +
-                                         "such guarantee.");
+                                         "waited, so the registration is refused. Starting it is what releases the id, so " +
+                                         "register it again after that, or after cancelSubscription(String), once the model " +
+                                         "can answer. Subscribing with a StartAt of your own records no position and carries " +
+                                         "no such guarantee.");
     }
 
     private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt,
