@@ -1,9 +1,10 @@
 schema_version: 2
 epic: cdx33e
-revision: 3
-updated_at: 2026-08-15 19:00:00+00:00
-updated_by: 'orchestrator: E2 DONE and verified (cb383b5); the enumeration found 2 further defects (fixed) and the dead-anchor
-  cluster, routed to Johan; E1 mid-review on PR 797'
+revision: 4
+updated_at: 2026-08-15 19:35:00+00:00
+updated_by: 'orchestrator: E1 DONE (PR 797 merged 06f1b5e, docs verified), watcher-001 RETIRED in the same sweep (last
+  PR-advanceable deliverable met); Johan ruled the dead-anchor cluster as preview-docs-wins-at-release-day; closeout waits
+  on the 06f1b5e matrix'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -20,9 +21,9 @@ pending_actions:
   target: 'E1 subagent (Sonnet, isolation worktree): split the dynamic-refusal timing claim by wrapped-model type in the
     ReactorDurableSubscriptionModel class javadoc (one PR off 05763ca) and on all three docs tips, plus F4''s fencing parity
     scoping folded into the fencing edit'
-  expected: PR delivered with DELIVERY_RESULT and three docs branches pushed; orchestrator verifies on exact refs, merges
-    the PR under standing authority
-  status: PENDING
+  expected: 'PR delivered with DELIVERY_RESULT and docs branches pushed; orchestrator verifies on exact refs, merges the
+    PR under standing authority. RESOLVED: 2026-08-15: PR 797 merged as 06f1b5e, both owned docs branches verified'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-15T18:30:00Z'
@@ -44,7 +45,7 @@ units:
     goal: 'Sweep F1 + F4: the dynamic-StartAt refusal timing claim split by wrapped-model type (delegating path throws from
       subscribe at registration, cold path reports on the resumeSubscription handle) in the class javadoc and on all three
       docs tips; the fencing Cluster opener scoped to slot-alignable ids'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -52,19 +53,21 @@ units:
     deliverables:
     - check: pr_merged
       repo: johanhaleby/occurrent
-      ref: null
-      met: false
-      evidence: null
+      ref: '797'
+      met: true
+      evidence: 'MERGED 2026-08-15 as squash 06f1b5e, CAS-pinned to b40cc42 (24/24 by job conclusion, final Copilot round
+        clean, marker-free squash, the accepted-fixed thread resolved). Copilot round 1 caught a second layer of the same
+        timing imprecision (running-vs-stopped on the cold path), split too. Main matrix on 06f1b5e watched'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-preview
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed dcab6d3 -> 3293762, F1 split verified on the origin ref'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/checkpoint-fencing
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed b571eb6 -> 5fcf235, F1 split plus F4 slot-alignable scoping verified on the origin ref'
   E2:
     issue: null
     goal: 'Sweep F2 + F3 + the class completion: port the preview news-post corrections the release-notes post never received
@@ -110,7 +113,7 @@ watchers:
   kind: github-work-item-monitor
   repository: johanhaleby/occurrent
   external_id: b8vfgsmkn
-  status: READY
+  status: RETIRED
   retirement:
     kind: no_unmet_pr_advanceable_deliverables
   last_verified_at: '2026-08-15T18:30:00Z'
