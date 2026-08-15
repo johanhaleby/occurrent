@@ -16,7 +16,6 @@
 
 package org.occurrent.subscription.reactor.durable;
 
-import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -27,13 +26,10 @@ import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StringBasedCheckpoint;
-import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscription;
-import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
@@ -42,7 +38,6 @@ import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -440,84 +435,6 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         @Override
         public boolean evaluatesWriteConditions() {
             return evaluatesWriteConditions;
-        }
-    }
-
-    /**
-     * A wrapped model that manages named subscriptions of its own, which is what puts the durable model on the path
-     * that awaits the start position inside {@code subscribe} rather than driving the cold primitive itself.
-     */
-    private static final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
-
-        final List<String> subscribedIds = new CopyOnWriteArrayList<>();
-
-        private final Checkpoint globalCheckpoint;
-
-        private NamedRecordingSubscriptionModel(String globalCheckpoint) {
-            this.globalCheckpoint = new StringBasedCheckpoint(globalCheckpoint);
-        }
-
-        @Override
-        public Flux<CloudEvent> subscribe(@Nullable SubscriptionFilter filter, StartAt startAt) {
-            return Flux.never();
-        }
-
-        @Override
-        public Mono<Checkpoint> globalCheckpoint() {
-            return Mono.just(globalCheckpoint);
-        }
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
-                                      Function<CloudEvent, Mono<Void>> action) {
-            subscribedIds.add(subscriptionId);
-            return new Subscription() {
-                @Override
-                public String id() {
-                    return subscriptionId;
-                }
-
-                @Override
-                public Mono<Void> waitUntilStarted() {
-                    return Mono.empty();
-                }
-            };
-        }
-
-        @Override
-        public void cancelSubscription(String subscriptionId) {
-        }
-
-        @Override
-        public void stop() {
-        }
-
-        @Override
-        public void start(boolean resumeSubscriptionsAutomatically) {
-        }
-
-        @Override
-        public boolean isRunning() {
-            return true;
-        }
-
-        @Override
-        public boolean isRunning(String subscriptionId) {
-            return subscribedIds.contains(subscriptionId);
-        }
-
-        @Override
-        public boolean isPaused(String subscriptionId) {
-            return false;
-        }
-
-        @Override
-        public Subscription resumeSubscription(String subscriptionId) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public void pauseSubscription(String subscriptionId) {
         }
     }
 }
