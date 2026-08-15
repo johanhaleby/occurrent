@@ -166,11 +166,24 @@ because neither interface ever extended `SubscriptionModel`.
 > no position and promises nothing about where the subscription starts. A read that failed carries its own failure
 > unwrapped. Both surface where this amendment already says a refusal surfaces, and a refused subscription is dropped
 > the same way. Only a registration that can still ask the model where to begin is read for, and only one that finds
-> nothing stored when it starts is refused. A registration naming a position of its own begins there whatever the feed
-> does while it waits, and one that already has a checkpoint begins from that checkpoint, so a position source that
-> can never answer, an Atlas cluster prohibiting `hostInfo` say, stops a brand new subscription rather than every
-> subscription the application has. The blocking model draws the same two lines, since it already skipped a
-> registration naming its own position and already accepted a checkpoint that was there before it read.
+> nothing stored when it starts is refused. A registration naming its own `StartAt` is not read for, `StartAt.now()`
+> included, since this model records no position for it and the caller has said where to begin. One that already has
+> a checkpoint begins from that checkpoint. So a position source that can never answer, an Atlas cluster prohibiting
+> `hostInfo` say, stops a brand new subscription rather than every subscription the application has. The blocking
+> model draws the same two lines, since it already skipped a registration naming its own position and already
+> accepted a checkpoint that was there before it read.
+>
+> **Refusing does not depend on whether the model is running.** The first draft of this let a registration on a
+> running model fall back to `StartAt.now()`, on the reasoning that such a subscription starts at the moment it
+> registers and has no wait to cover. That was wrong on the path every reactor model in this repository takes. The
+> durable model hands the wrapped named model a start position, and that model applies it when it opens its feed
+> rather than when it receives it, so a wrapped model that is itself stopped starts from wherever the feed has reached
+> by the time it is started. `MongoCommons.applyStartPosition` leaves the builder untouched for `now`, which is what
+> makes it mean "wherever the feed is when the change stream opens". Two more reasons settle it independently of that
+> path. The blocking `ManualStartSubscriptionModel` refuses a `null` position whatever state it is in, so making the
+> reactive model condition on running state would have split a rule the two stacks are meant to answer the same way.
+> And a check on running state is a check that can be stale by the time the position is parked, since the wrapped
+> model can stop in between, which unconditional refusal removes rather than races.
 >
 > **A storage that cannot evaluate the condition keeps the write it had.** `CheckpointStorage.evaluatesWriteConditions()`
 > defaults to `false`, and this model is the only durable model the reactive stack has, so requiring the capability
