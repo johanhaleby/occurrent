@@ -551,9 +551,11 @@ the one-argument factory that records no position, or with a `StartAt` of your o
 
 `ReactorDurableSubscriptionModel` refuses the same registration on the reactive stack when the position it reads
 answers empty, with `IllegalStateException` naming the wrapped model. A read that fails instead passes through
-whatever it threw, unwrapped, rather than becoming an `IllegalStateException`. Either way, registering again once
-the model can answer, or subscribing with a `StartAt` of your own, gets past it. `ReactorDurableSubscriptionModel`
-also refuses with `IllegalStateException` when the `CheckpointStorage` it pins that first position to answers empty
+whatever it threw, unwrapped, rather than becoming an `IllegalStateException`. Either way, once the model can
+answer, register again to get past it, unless the registration was made while the model was stopped and never
+started. That one keeps its id until `cancelSubscription(subscriptionId)` releases it, so cancel it first, then
+register again. Subscribing with a `StartAt` of your own sidesteps the read on any of these paths.
+`ReactorDurableSubscriptionModel` also refuses with `IllegalStateException` when the `CheckpointStorage` it pins that first position to answers empty
 from `save(..)` instead of handing back the checkpoint it wrote, naming the storage and the position. Only a
 registration resolving to the subscription model default reaches that write, so a `StartAt` of your own avoids it
 too, and the real fix is a storage that returns what `save(..)` wrote.
