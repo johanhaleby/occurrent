@@ -1,9 +1,9 @@
 schema_version: 2
 epic: cdx33e
-revision: 2
-updated_at: 2026-08-15 18:40:00+00:00
-updated_by: 'orchestrator: E1 (isolation worktree) and E2 dispatched with exclusive branch ownership (E2 owns release-notes,
-  E1 the other two); work-item monitor READY as b8vfgsmkn, baseline 0 open PRs; heartbeat buiuop1n4'
+revision: 3
+updated_at: 2026-08-15 19:00:00+00:00
+updated_by: 'orchestrator: E2 DONE and verified (cb383b5); the enumeration found 2 further defects (fixed) and the dead-anchor
+  cluster, routed to Johan; E1 mid-review on PR 797'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -31,9 +31,10 @@ pending_actions:
   target: 'E2 subagent (Sonnet): release-notes news-post catch-up (join sentence, source-breaking enumeration incl. the CheckpointStorage
     break) plus the full divergence enumeration of the release-notes news post and docs.md against preview, every divergence
     dispositioned deliberate-or-defect, defects fixed, ambiguity routed to Johan'
-  expected: release-notes branch pushed with DELIVERY_RESULT incl. the enumeration table; orchestrator verifies on the origin
-    ref
-  status: PENDING
+  expected: 'release-notes branch pushed with DELIVERY_RESULT incl. the enumeration table; orchestrator verifies on the origin
+    ref. RESOLVED: 2026-08-15: delivered and verified at cb383b5; enumeration complete with 4 defects fixed (2 beyond the
+    ruled set), the deliberate list recorded, the dead-anchor AMBIGUOUS cluster routed to Johan by ask'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-15T18:30:00Z'
@@ -71,7 +72,7 @@ units:
       the release-notes branch''s news post and docs.md and the preview branch''s, dispositioning each as deliberate or defect,
       fixing defects, routing ambiguity. Owns the release-notes branch exclusively this epic, incl. applying F1''s split
       sentence there (E1 handles the other two branches), so the two units never push the same ref'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -80,8 +81,13 @@ units:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-release-notes
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed 62bed8c -> cb383b5, verified on the origin ref: all four old claims gone, corrections present (join
+        window, CheckpointStorage in the source-break enumeration with a self-contained recipe bullet, findIn renames, the
+        third registration-position overclaim instance scoped). The enumeration delivered in full: 2 additional defects found
+        and fixed beyond the ruled two, deliberate list recorded, and an AMBIGUOUS cluster routed to Johan: the branch''s
+        own news post links to two DEAD ANCHORS (#replay-batching, #saga-step-conditions) whose sections exist only on preview,
+        plus further preview-only 0.33 sections and stale-but-compiling timer examples'
   CREG:
     issue: null
     goal: 'Register: the sweep''s no-blocker verdict recorded beside the release-readiness declaration; the four dispositions;
