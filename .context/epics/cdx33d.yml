@@ -1,9 +1,10 @@
 schema_version: 2
 epic: cdx33d
-revision: 7
-updated_at: 2026-08-15 08:40:00+00:00
-updated_by: 'orchestrator: adversarial verdict journaled (1 MAJOR: delegating-path empty read still loses events, prose
-  ratifies it; 4 minors), fix round dispatched to the D1 implementer with the derivation; merge still held'
+revision: 8
+updated_at: 2026-08-15 10:15:00+00:00
+updated_by: 'orchestrator: D1 DONE (PR 795 merged as 5f753a0 after the fix round closed the adversarial major and four
+  minors, all verified on the exact head); watcher-001 RETIRED in the same sweep (last PR-advanceable deliverable met); the
+  single fixpoint round dispatched as act-006 with the main matrix on 5f753a0 watched in parallel'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -85,6 +86,17 @@ pending_actions:
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-15T08:15:00Z'
+- id: act-006
+  type: workflow-dispatch
+  target: 'Fixpoint round, THE ONLY ONE (cap 1): fresh-context Opus review of the complete cdx33d increment (library d05b3d9..5f753a0,
+    three docs branch deltas) with error-path enumeration against release-contract absolutes, the four exemptions, the empty-save
+    addition, and whole-0.33.0-state cross-surface consistency'
+  expected: 'CLEAN (nothing above minor) = convergence; any above-minor = CAPPED, loop ends, remainder routed to Johan, reported
+    as capped never convergence'
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-15T10:15:00Z'
 - id: act-003
   type: workflow-dispatch
   target: 'D3 subagent (Sonnet/high): findings 2-4 plus docs halves of 5-6 on both held docs branches (preview 9b7c378, fencing
@@ -104,7 +116,7 @@ units:
       the position pinned at start is the position captured at registration, or registration/start fails visibly; no path
       pins a later read; a legitimately-empty capture keeps its documented meaning. Blocking stack is the settled reference
       shape (forget-and-rethrow)'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -112,9 +124,16 @@ units:
     deliverables:
     - check: pr_merged
       repo: johanhaleby/occurrent
-      ref: null
-      met: false
-      evidence: null
+      ref: '795'
+      met: true
+      evidence: 'MERGED 2026-08-15 as squash 5f753a0, CAS-pinned to 1886950 (28/28 by job conclusion verified, final Copilot
+        round of nine clean incl. suppressed blocks, MERGEABLE/CLEAN, three accepted-fixed threads resolved, one reasoned-decline
+        thread open per policy, squash body marker-free). Adversarial pass round: 1 MAJOR (delegating-path empty read still
+        lost events, prose ratified it) + 4 minors, ALL fixed in the addendum under the empty==error derivation from Q1;
+        17/17 mutations killed, two named review-only unkillables. Docs ripple pushed and verified on origin refs: preview
+        3cba4f2, fencing 89e8def, release-notes d0e9b01 (the last also gaining the previously-missing pin-refusal coverage).
+        Three judgment calls ratified: empty-save refusal (closes the last silent-now route), no ERROR log where the exception
+        reaches the caller, the number-771-window handle report declined as out of scope. Main matrix on 5f753a0 watched'
   D2:
     issue: null
     goal: 'Library release prose (findings 5 and 6, library halves): changelog.md:38 delete-safety proof completed with the
@@ -186,7 +205,7 @@ watchers:
   kind: github-work-item-monitor
   repository: johanhaleby/occurrent
   external_id: bj71didql
-  status: READY
+  status: RETIRED
   retirement:
     kind: no_unmet_pr_advanceable_deliverables
   last_verified_at: '2026-08-15T05:25:00Z'
