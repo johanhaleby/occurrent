@@ -179,6 +179,51 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
     }
 
     @Test
+    void a_registration_naming_its_own_position_is_not_touched_by_a_read_that_could_not_answer() {
+        // Such a registration begins where it asked to, whatever the feed does while it waits, so there is nothing
+        // here for a read that cannot answer to cost. Reading for it at all would only produce a refusal for a
+        // subscription that goes on to start, which is also the way out the refusal names.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        delegate.failGlobalCheckpoint = true;
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
+        model.stop();
+
+        Subscription registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(new StringBasedCheckpoint("replay-from-here")), __ -> Mono.empty());
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delegate.globalCheckpointReads).hasValue(0);
+        assertThat(startedAtCheckpoint(delegate)).isEqualTo("replay-from-here");
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
+        assertThatThrownBy(() -> registration.waitUntilStarted().block(Duration.ofMillis(200)))
+                .as("the handle from the registration keeps waiting rather than reporting a refusal that never happened")
+                .hasMessageContaining("Timeout on blocking read");
+    }
+
+    @Test
+    void a_read_that_could_not_answer_does_not_refuse_a_subscription_that_has_a_stored_checkpoint() {
+        // The stored checkpoint is where this subscription starts and the read at registration is never consulted
+        // for it, so the registration handle must not report a refusal that the start does not make.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        delegate.failGlobalCheckpoint = true;
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("from-a-previous-run")).block(TIMEOUT);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
+        model.stop();
+
+        Subscription registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        assertThatThrownBy(() -> registration.waitUntilStarted().block(Duration.ofMillis(200)))
+                .hasMessageContaining("Timeout on blocking read");
+
+        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+
+        resumed.waitUntilStarted().block(TIMEOUT);
+        assertThat(startedAtCheckpoint(delegate)).isEqualTo("from-a-previous-run");
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
+    }
+
+    @Test
     void a_refused_registration_is_not_read_again_when_the_subscription_is_started() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
         delegate.failGlobalCheckpoint = true;

@@ -105,6 +105,12 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * {@link #resumeSubscription(String)} returns, and the subscription is dropped rather than left registered, so
  * starting it means registering it again. {@link #start(boolean)} keeps starting the rest.
  * <p>
+ * Two registrations are left alone by all of that. One that names a position of its own begins there whatever the feed
+ * does while it waits, so nothing is read for it. One that already has a checkpoint stored begins from that checkpoint,
+ * which is read when the subscription starts and settles the question before the registration read is consulted, so it
+ * starts even when that read could not answer. Only a registration asking this model where to begin, and finding
+ * nothing stored when it does, is refused.
+ * <p>
  * Note that this implementation stores the checkpoint after _every_ action by default. If you have a lot of
  * events and duplication is not that much of a deal, consider changing this behavior by supplying an instance of
  * {@link ReactorDurableSubscriptionModelConfig}.
@@ -255,8 +261,19 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private Mono<Checkpoint> capturePositionNow(String subscriptionId) {
         return subscription.globalCheckpoint()
                 .switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)))
-                .doOnError(throwable -> log.error("Could not read the current position while registering subscription {}, so the subscription is refused rather than started from a position read after it was registered", subscriptionId, throwable))
+                .doOnError(throwable -> log.error("Could not read the current position while registering subscription {}. It is refused when it starts, rather than started from a position read after it was registered, unless a checkpoint is stored for it by then, which is where it starts from instead", subscriptionId, throwable))
                 .cache();
+    }
+
+    // A read that could not answer does not settle the registration on its own. A checkpoint stored for this
+    // subscription is where it starts, and this read is never consulted then, so asking storage is what tells a
+    // subscription that is about to be refused from one that will start on what it has run before. A storage that
+    // cannot answer either leaves the read to decide, since the start reads the same storage and fails there too.
+    private Mono<Void> refusalOnceNothingIsStored(String subscriptionId, Mono<Checkpoint> positionNow) {
+        return storage.read(subscriptionId)
+                .onErrorResume(__ -> Mono.empty())
+                .flatMap(__ -> Mono.<Void>never())
+                .switchIfEmpty(positionNow.then(Mono.<Void>never()));
     }
 
     // No original throwable to carry here, since answering nothing is how the wrapped model reports a problem it
@@ -281,19 +298,28 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // Read where the feed is now and hold it, because starting this subscription later would otherwise begin
             // wherever the feed had reached by then, skipping everything written while it waited. Nothing is stored
             // until the subscription starts, so one that never starts leaves nothing behind. A read that could not
-            // answer refuses the subscription instead. It is reported on the handle below and again when the
-            // subscription is started, which is where the model drops it, so getting it back means registering it
-            // again rather than resuming.
-            Mono<Checkpoint> positionNow = capturePositionNow(subscriptionId);
+            // answer refuses the subscription when it starts, which is where the model drops it, so getting it back
+            // means registering it again rather than resuming.
+            StartAt startAtNow = currentStartAt.get();
+            // Only a registration that can still ask this model where to begin has anything to read for. A concrete
+            // position is where the subscription begins whatever the feed does while it waits. A dynamic one is not
+            // resolved until the subscription starts, so it is read for in case it answers the model default then.
+            @Nullable Mono<Checkpoint> positionNow = startAtNow.isDefault() || startAtNow.isDynamic()
+                    ? capturePositionNow(subscriptionId)
+                    : null;
             // Kept as this subscription's disposable so shutdown and cancellation stop a read that is still in flight.
             // The error consumer is what keeps a failed read off Operators.onErrorDropped, which throws on whichever
             // thread the read finished on. Reporting it is capturePositionNow's job, and it does it once.
-            Disposable reading = positionNow.subscribe(unused -> {
+            Disposable reading = positionNow == null ? Disposables.disposed() : positionNow.subscribe(unused -> {
             }, throwable -> {
             });
             // A read that answered still leaves waitUntilStarted() waiting, since the subscription has not started and
-            // will not until it is asked to. One that could not answer ends the wait with the reason.
-            InternalSubscription internalSubscription = new InternalSubscription(reading, currentStartAt, filter, action, positionNow.then(Mono.<Void>never()), positionNow);
+            // will not until it is asked to. Only the model default is certain to begin from what was read, so only
+            // that one can end the wait here with the reason it could not be read.
+            Mono<Void> started = startAtNow.isDefault() && positionNow != null
+                    ? refusalOnceNothingIsStored(subscriptionId, positionNow)
+                    : Mono.never();
+            InternalSubscription internalSubscription = new InternalSubscription(reading, currentStartAt, filter, action, started, positionNow);
             pausedSubscriptions.put(subscriptionId, internalSubscription);
             return new ReactorDurableSubscription(subscriptionId, internalSubscription.started);
         }

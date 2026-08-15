@@ -150,9 +150,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * {@link IllegalStateException}. That answer is how a source reports a problem it cannot resolve, so there is no
      * position to record and nothing to hold the registration to, and letting it through would start the subscription
      * from wherever the feed has reached once it is started rather than from where it was registered. The id is left
-     * free, so registering again once the source can answer is what a node does. Use
-     * {@link #stoppedByDefault(SubscriptionModel)}, or a {@link StartAt} of your own, to register without recording a
-     * position at all, neither of which carries the guarantee this factory makes.
+     * free, so registering again once the source can answer is what a node does. A subscription that already has a
+     * checkpoint stored is not refused, since that checkpoint is where it starts and nothing would have been recorded
+     * over it anyway. Use {@link #stoppedByDefault(SubscriptionModel)}, or a {@link StartAt} of your own, to register
+     * without recording a position at all, neither of which carries the guarantee this factory makes.
      * <p>
      * The position is recorded only for a registration that asks for {@link StartAt#subscriptionModelDefault()},
      * since that is the one a wrapped model reads a stored checkpoint for. Registering with a position of your own,
@@ -511,7 +512,11 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             // Answering null is how the source reports a problem it cannot resolve, so there is no position to record
             // and nothing to hold this registration to. Letting it through would start the subscription from wherever
             // the feed has reached once it is started, skipping everything written while it waited, which is the whole
-            // of what recording at registration is for.
+            // of what recording at registration is for. A checkpoint that was already there is where the subscription
+            // starts and nothing would have been recorded over it anyway, so that one is left alone.
+            if (checkpointAlreadyExisted) {
+                return;
+            }
             throw positionSourceAnsweredNothing(subscriptionId);
         }
         try {

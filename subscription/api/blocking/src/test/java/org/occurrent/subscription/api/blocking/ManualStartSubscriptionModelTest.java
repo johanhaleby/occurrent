@@ -497,6 +497,24 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void a_position_source_that_answers_nothing_still_registers_a_subscription_that_has_a_stored_checkpoint() {
+        // That checkpoint is where the subscription starts, and nothing would have been recorded over it anyway, so
+        // there is nothing here for a source that cannot answer to cost. A model on a database that never answers,
+        // an Atlas cluster prohibiting hostInfo say, would otherwise stop registering every subscription it has
+        // already run once.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        storage.save(SUBSCRIPTION_ID, new StringCheckpoint("from-a-previous-run"), CheckpointWriteCondition.any());
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, () -> null, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("from-a-previous-run");
+        assertThat(model.isPaused(SUBSCRIPTION_ID)).isTrue();
+    }
+
+    @Test
     void a_position_source_that_answers_nothing_leaves_a_registration_naming_its_own_position_alone() {
         // Nothing is recorded for such a registration in the first place, so there is no position for the source to
         // fail to supply, and a replay the caller asked for is not something to refuse.

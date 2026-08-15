@@ -165,7 +165,12 @@ because neither interface ever extended `SubscriptionModel`.
 > it is an `IllegalStateException` naming the subscription and the way past it, an explicit `StartAt`, which records
 > no position and promises nothing about where the subscription starts. A read that failed carries its own failure
 > unwrapped. Both surface where this amendment already says a refusal surfaces, and a refused subscription is dropped
-> the same way.
+> the same way. Only a registration that can still ask the model where to begin is read for, and only one that finds
+> nothing stored when it starts is refused. A registration naming a position of its own begins there whatever the feed
+> does while it waits, and one that already has a checkpoint begins from that checkpoint, so a position source that
+> can never answer, an Atlas cluster prohibiting `hostInfo` say, stops a brand new subscription rather than every
+> subscription the application has. The blocking model draws the same two lines, since it already skipped a
+> registration naming its own position and already accepted a checkpoint that was there before it read.
 >
 > **A storage that cannot evaluate the condition keeps the write it had.** `CheckpointStorage.evaluatesWriteConditions()`
 > defaults to `false`, and this model is the only durable model the reactive stack has, so requiring the capability
