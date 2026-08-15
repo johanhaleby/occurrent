@@ -155,6 +155,18 @@ because neither interface ever extended `SubscriptionModel`.
 > is also dropped from the model rather than left registered, so starting again means registering again, not
 > resuming.
 >
+> **A position that could not be read at registration joins the refusal.** A subscription registered while the model
+> is stopped reads where the feed is at that moment, and that read used to be allowed to fail quietly and be taken
+> again when the subscription started. A read taken then answers with wherever the feed has reached by then, so the
+> subscription started past everything written while it waited, which is the same loss this amendment refuses
+> everywhere else. It refuses now, and a read that answers nothing refuses with it, since answering nothing is how
+> `CheckpointAwareSubscriptionModel.globalCheckpoint()` reports a problem it cannot resolve rather than a position,
+> and an Atlas cluster that prohibits `hostInfo` reaches it. There is no original failure to carry for that one, so
+> it is an `IllegalStateException` naming the subscription and the way past it, an explicit `StartAt`, which records
+> no position and promises nothing about where the subscription starts. A read that failed carries its own failure
+> unwrapped. Both surface where this amendment already says a refusal surfaces, and a refused subscription is dropped
+> the same way.
+>
 > **A storage that cannot evaluate the condition keeps the write it had.** `CheckpointStorage.evaluatesWriteConditions()`
 > defaults to `false`, and this model is the only durable model the reactive stack has, so requiring the capability
 > would fail every application whose own storage never overrode that method, at the first write and with no startup
