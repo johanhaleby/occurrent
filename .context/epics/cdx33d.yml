@@ -1,10 +1,10 @@
 schema_version: 2
 epic: cdx33d
-revision: 8
-updated_at: 2026-08-15 10:15:00+00:00
-updated_by: 'orchestrator: D1 DONE (PR 795 merged as 5f753a0 after the fix round closed the adversarial major and four
-  minors, all verified on the exact head); watcher-001 RETIRED in the same sweep (last PR-advanceable deliverable met); the
-  single fixpoint round dispatched as act-006 with the main matrix on 5f753a0 watched in parallel'
+revision: 9
+updated_at: 2026-08-15 10:45:00+00:00
+updated_by: 'orchestrator: fixpoint verdict journaled (3 MAJOR prose + 5 minor at the cap, code clean), Johan ruled the
+  capped close with remediation; D4 registered RUNNING (library PR + three docs branches); work-item monitor NOT re-armed
+  for D4 by decision: the epic is in its capped tail with a single known PR whose delivery the subagent notification covers'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -92,8 +92,13 @@ pending_actions:
     three docs branch deltas) with error-path enumeration against release-contract absolutes, the four exemptions, the empty-save
     addition, and whole-0.33.0-state cross-surface consistency'
   expected: 'CLEAN (nothing above minor) = convergence; any above-minor = CAPPED, loop ends, remainder routed to Johan, reported
-    as capped never convergence'
-  status: PENDING
+    as capped never convergence. RESOLVED: 2026-08-15: verdict 3 CONFIRMED MAJOR, all prose (the unscoped no-loss absolute
+    contradicted by the StartAt.now exemption the same delta added, on all three docs refs plus changelog:98; the release-notes
+    branch missing the one-arg stoppedByDefault correction and the pin-scoping correction the other branches carry) + 5 minors;
+    library code verified CLEAN on every error and empty branch, main matrix 27/27 on 5f753a0. CAP REACHED, loop ended. Johan
+    ruled fix-3-majors-plus-2-doc-minors-close-capped by AskUserQuestion; remediation runs as D4 with NO further round, the
+    three code-adjacent minors banked in the register as 0.34 notes'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-15T10:15:00Z'
@@ -181,6 +186,39 @@ units:
         hash-tag design, per-id qualification folded into the adjacent paragraph per the narrow-fix ruling, flagged adaptation
         ratified), one-argument stoppedByDefault guarantee corrected from preview''s wording. Fencing news post checked, no
         join claim present'
+  D4:
+    issue: null
+    goal: 'Capped-close remediation, ruled by Johan: scope the no-loss absolute to model-default registrations (changelog:98
+      plus the guarantee paragraphs on all three docs refs), port the two blocking corrections the release-notes branch never
+      received (one-arg stoppedByDefault guarantee, unconditional pin claim), extend migration-guide section 8 to the new
+      IllegalStateException refusals, describe the empty-save refusal in the class javadoc and docs. No further review round;
+      fixes verified mechanically against the named falsifying facts'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      repo: johanhaleby/occurrent
+      ref: null
+      met: false
+      evidence: null
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-preview
+      met: false
+      evidence: null
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/checkpoint-fencing
+      met: false
+      evidence: null
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-release-notes
+      met: false
+      evidence: null
   CREG:
     issue: null
     goal: 'Register and tracker dispositions: the blocker recorded with the reviewer rank, orchestrator verification and
