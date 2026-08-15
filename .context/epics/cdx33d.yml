@@ -1,10 +1,9 @@
 schema_version: 2
 epic: cdx33d
-revision: 5
-updated_at: 2026-08-15 06:55:00+00:00
-updated_by: 'orchestrator: D1 implementation redispatched as an isolation-worktree agent after two structural permission
-  stops by the resumed planner (both correct refusals, journaled in act-004); plan, rulings and corrected changelog map carried
-  in the new brief verbatim'
+revision: 6
+updated_at: 2026-08-15 08:15:00+00:00
+updated_by: 'orchestrator: D1 delivered at 9305dd2 with five flagged deviations (four review-added refusal exemptions the
+  most consequential), docs heads verified; adversarial pass dispatched as act-005, merge holds on its verdict'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -59,11 +58,26 @@ pending_actions:
     denies git worktree add in its session; the cross-worktree edit hook blocks edits outside its pinned cwd; EnterWorktree/ExitWorktree
     refuse from a cwd-pinned subagent) and twice STOPPED rather than work around, incl. refusing the orchestrator-created
     worktree as permission laundering, the right failure mode both times. Implementation respawned 2026-08-15 as a fresh
-    isolation-worktree Opus agent with the complete ratified plan inlined and the base pinned to f073e39 by explicit fetch-and-checkout'
-  status: PENDING
+    isolation-worktree Opus agent with the complete ratified plan inlined and the base pinned to f073e39 by explicit fetch-and-checkout.
+    RESOLVED: 2026-08-15: delivered to done at 9305dd2 (28/28 green, five Copilot rounds with suppressed blocks read, 13
+    mutations killed, two named unkillables) with five flagged deviations incl. four refusal exemptions added during review;
+    all three docs branches pushed (preview 36335b3, fencing 27ae3bf, release-notes fde6a82, heads verified by ls-remote).
+    Merge waits on the adversarial pass'
+  status: VERIFIED
   attempts: 3
   safe_to_repeat: true
   issued_at: '2026-08-15T06:20:00Z'
+- id: act-005
+  type: workflow-dispatch
+  target: 'D1 adversarial pass on final head 9305dd2 (Opus, fresh context): attack the four refusal exemptions for constructible
+    event loss, the removed resolveStartAt fallback, concurrency interleavings, the blocking exists-read timing, prose truth
+    on every changed surface incl. the three docs refs, tests-as-claims'
+  expected: verdict per angle; merge waits on it (ADR 89 paragraph is an amendment extension, no new decision, so no separate
+    wording confirm owed unless the pass raises one)
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-15T08:15:00Z'
 - id: act-003
   type: workflow-dispatch
   target: 'D3 subagent (Sonnet/high): findings 2-4 plus docs halves of 5-6 on both held docs branches (preview 9b7c378, fencing
