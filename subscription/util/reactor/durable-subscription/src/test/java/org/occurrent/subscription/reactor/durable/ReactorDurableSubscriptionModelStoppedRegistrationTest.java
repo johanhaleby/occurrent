@@ -391,6 +391,53 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
     }
 
     @Test
+    void a_dynamic_start_position_that_answers_the_model_default_is_refused_when_it_starts() {
+        // The read runs at registration, because the answer may be the model default, but which of the two it is only
+        // becomes known at start. So the registration handle waits and the refusal comes out on the resume handle.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        delegate.failGlobalCheckpoint = true;
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
+        model.stop();
+        StartAt dynamic = StartAt.dynamic(StartAt::subscriptionModelDefault);
+
+        Subscription registration = model.subscribe(SUBSCRIPTION_ID, null, dynamic, __ -> Mono.empty());
+        assertThatThrownBy(() -> registration.waitUntilStarted().block(Duration.ofMillis(200)))
+                .hasMessageContaining("Timeout on blocking read");
+
+        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThatThrownBy(() -> resumed.waitUntilStarted().block(TIMEOUT))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Cannot read the position right now");
+        assertThat(delegate.globalCheckpointReads)
+                .as("the answer read at registration is the one that decides it, so the resume adds no read of its own")
+                .hasValue(1);
+        assertThat(delegate.startedAt).isEmpty();
+        assertThat(model.isPaused(SUBSCRIPTION_ID)).isFalse();
+    }
+
+    @Test
+    void a_dynamic_start_position_that_answers_with_one_of_its_own_starts_despite_a_read_that_could_not_answer() {
+        // It begins where its own answer says, so the read at registration was never going to be consulted and its
+        // failure must not stop the subscription.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        delegate.failGlobalCheckpoint = true;
+        SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
+        model.stop();
+        StartAt dynamic = StartAt.dynamic(() -> StartAt.checkpoint(new StringBasedCheckpoint("replay-from-here")));
+
+        model.subscribe(SUBSCRIPTION_ID, null, dynamic, __ -> Mono.empty());
+        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+
+        resumed.waitUntilStarted().block(TIMEOUT);
+        assertThat(startedAtCheckpoint(delegate)).isEqualTo("replay-from-here");
+        assertThat(storage.saves).hasValue(0);
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
+    }
+
+    @Test
     void registering_while_running_still_starts_from_now_when_the_position_answers_nothing() {
         // There is no wait to cover on this path, since the subscription starts at the moment it is registered, so
         // starting from now starts from where it was registered and skips nothing. Refusing here would take out every

@@ -112,6 +112,11 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * starts even when that read could not answer. Only a registration asking this model where to begin, and finding
  * nothing stored when it does, is refused.
  * <p>
+ * A {@link StartAt#dynamic(java.util.function.Supplier) dynamic} start position is read for all the same, since it is
+ * not resolved until the subscription starts and may answer the model default then. Which of the two it answers is
+ * what decides whether the registration is refused, so its registration handle keeps waiting rather than reporting a
+ * refusal that may never happen, and the refusal comes out on the handle {@link #resumeSubscription(String)} returns.
+ * <p>
  * Note that this implementation stores the checkpoint after _every_ action by default. If you have a lot of
  * events and duplication is not that much of a deal, consider changing this behavior by supplying an instance of
  * {@link ReactorDurableSubscriptionModelConfig}.
@@ -262,7 +267,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     private Mono<Checkpoint> capturePositionNow(String subscriptionId) {
         return subscription.globalCheckpoint()
                 .switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)))
-                .doOnError(throwable -> log.error("Could not read the current position while registering subscription {}. It is refused when it starts, rather than started from a position read after it was registered, unless a checkpoint is stored for it by then, which is where it starts from instead", subscriptionId, throwable))
+                .doOnError(throwable -> log.error("Could not read the current position while registering subscription {}. It is refused when it starts, rather than started from a position read after it was registered, unless by then a checkpoint is stored for it or its start position resolves to one of its own, either of which it starts from instead", subscriptionId, throwable))
                 .cache();
     }
 
