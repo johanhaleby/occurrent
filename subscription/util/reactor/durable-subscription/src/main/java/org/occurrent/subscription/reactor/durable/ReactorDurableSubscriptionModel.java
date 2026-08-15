@@ -102,9 +102,10 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * resolve, not a position, which is why it refuses rather than falling back to
  * {@link StartAt#now()}. A wrapped model applies a start position when it opens its feed rather than when it is handed
  * one, so falling back would begin wherever the feed had reached by then and skip what the read exists to keep. That
- * holds whether this model is running or stopped, which is what the blocking {@code ManualStartSubscriptionModel} has
- * always done with a {@code null} position, and a subscription registered while stopped is not read for again when it
- * starts, since a position read then is a position later than the registration.
+ * holds whether this model is running or stopped, which is also how the blocking
+ * {@code ManualStartSubscriptionModel} answers a {@code null} position from 0.33.0 on, and a subscription registered
+ * while stopped is not read for again when it starts, since a position read then is a position later than the
+ * registration.
  * <p>
  * The refusal is thrown from {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} when the wrapped model
  * manages named subscriptions of its own, and signalled on {@link Subscription#waitUntilStarted()} when this model
@@ -413,6 +414,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // That position is read after the storage read on every path but one. A subscription registered while the model
     // was stopped read it at registration instead, so its window is the wider one ADR 89 records and #771 owns.
     private Mono<Checkpoint> pinStartPosition(String subscriptionId, Checkpoint positionRead) {
+        return recordFirstPosition(subscriptionId, positionRead)
+                .switchIfEmpty(Mono.error(() -> storageAnsweredNothingAboutItsOwnWrite(subscriptionId, positionRead)));
+    }
+
+    private Mono<Checkpoint> recordFirstPosition(String subscriptionId, Checkpoint positionRead) {
         if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
             // Nothing here can make a storage that writes unconditionally do otherwise, so the write is the one
             // 0.32.0 made and two nodes recording a first position at the same moment keep the race. Logged rather
@@ -428,8 +434,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
         return storage.save(subscriptionId, positionRead, CheckpointWriteCondition.ifAbsent())
                 .onErrorResume(CheckpointWriteConditionNotFulfilledException.class,
-                        __ -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, positionRead))
-                .switchIfEmpty(Mono.error(() -> storageAnsweredNothingAboutItsOwnWrite(subscriptionId, positionRead)));
+                        __ -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, positionRead));
     }
 
     // save is documented to hand the checkpoint back for chaining, so a storage that answers nothing has told this

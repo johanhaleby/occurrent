@@ -314,6 +314,33 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
     }
 
     @Test
+    void a_storage_that_evaluates_no_write_conditions_and_answers_nothing_is_refused_the_same_way() {
+        // The unconditional write is a second way through the same code, so the guard has to sit where both reach it.
+        // Without it this one completes empty, which the caller reads as a start position that opted out, and the
+        // subscription starts from the caller's original default with no position recorded at all.
+        CheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public boolean evaluatesWriteConditions() {
+                return false;
+            }
+
+            @Override
+            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+                return Mono.empty();
+            }
+        };
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        ReactorDurableSubscriptionModel model = coldModel(delegate, storage);
+
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("answered nothing");
+        assertThat(delegate.startedAt).isEmpty();
+    }
+
+    @Test
     void a_start_position_the_caller_named_is_not_recorded_at_all() {
         // Only the model default reads a stored checkpoint, so writing for any other position would record one
         // nothing starts from, over a subscription the caller asked to replay.
