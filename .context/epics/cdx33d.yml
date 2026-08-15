@@ -1,9 +1,9 @@
 schema_version: 2
 epic: cdx33d
-revision: 6
-updated_at: 2026-08-15 08:15:00+00:00
-updated_by: 'orchestrator: D1 delivered at 9305dd2 with five flagged deviations (four review-added refusal exemptions the
-  most consequential), docs heads verified; adversarial pass dispatched as act-005, merge holds on its verdict'
+revision: 7
+updated_at: 2026-08-15 08:40:00+00:00
+updated_by: 'orchestrator: adversarial verdict journaled (1 MAJOR: delegating-path empty read still loses events, prose
+  ratifies it; 4 minors), fix round dispatched to the D1 implementer with the derivation; merge still held'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -72,9 +72,16 @@ pending_actions:
   target: 'D1 adversarial pass on final head 9305dd2 (Opus, fresh context): attack the four refusal exemptions for constructible
     event loss, the removed resolveStartAt fallback, concurrency interleavings, the blocking exists-read timing, prose truth
     on every changed surface incl. the three docs refs, tests-as-claims'
-  expected: verdict per angle; merge waits on it (ADR 89 paragraph is an amendment extension, no new decision, so no separate
-    wording confirm owed unless the pass raises one)
-  status: PENDING
+  expected: 'verdict per angle; merge waits on it (ADR 89 paragraph is an amendment extension, no new decision, so no separate
+    wording confirm owed unless the pass raises one). RESOLVED: 2026-08-15: verdict 1 CONFIRMED MAJOR (the delegating path,
+    the only one in-tree reactor models take, still loses events on an empty read for a stopped registration via the StartAt.now
+    fallback at resolveStartAt:388, and the new prose ratifies the hole) + 4 minors (StartAt.now justification false, exemption-d
+    absent from user prose, three-vs-two left-alone contradiction, glued markdown paragraph on two refs); the four cold-path
+    exemptions, concurrency angles, blocking exists-read timing and the removed fallback all verified clean. Fix round routed
+    to the implementer with the empty==error-everywhere derivation from Q1 (error already refuses on those paths, blocking
+    already refuses null unconditionally so parity was broken, and only unconditional refusal removes the check-then-park
+    race)'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-15T08:15:00Z'
