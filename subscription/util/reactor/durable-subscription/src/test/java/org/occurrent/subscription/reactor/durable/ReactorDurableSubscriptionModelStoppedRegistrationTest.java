@@ -226,6 +226,37 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
     }
 
     @Test
+    void a_storage_that_could_not_be_read_leaves_the_registration_handle_waiting_rather_than_guessing() {
+        // Whether the subscription is refused turns on what storage holds, and a read that failed says nothing about
+        // that. Reading it as nothing stored would report a refusal that the start, reading the same storage a moment
+        // later, does not make.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        delegate.failGlobalCheckpoint = true;
+        AtomicInteger reads = new AtomicInteger();
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Mono<org.occurrent.subscription.Checkpoint> read(String subscriptionId) {
+                return Mono.defer(() -> reads.getAndIncrement() == 0
+                        ? Mono.error(new IllegalStateException("the checkpoint store is unreachable"))
+                        : super.read(subscriptionId));
+            }
+        };
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("from-a-previous-run")).block(TIMEOUT);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
+        model.stop();
+
+        Subscription registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        assertThatThrownBy(() -> registration.waitUntilStarted().block(Duration.ofMillis(200)))
+                .hasMessageContaining("Timeout on blocking read");
+
+        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+
+        resumed.waitUntilStarted().block(TIMEOUT);
+        assertThat(startedAtCheckpoint(delegate)).isEqualTo("from-a-previous-run");
+    }
+
+    @Test
     void a_refused_registration_is_not_read_again_when_the_subscription_is_started() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
         delegate.failGlobalCheckpoint = true;

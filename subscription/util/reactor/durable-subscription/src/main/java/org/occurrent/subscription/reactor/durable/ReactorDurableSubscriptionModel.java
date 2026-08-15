@@ -273,11 +273,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     // A read that could not answer does not settle the registration on its own. A checkpoint stored for this
     // subscription is where it starts, and this read is never consulted then, so asking storage is what tells a
-    // subscription that is about to be refused from one that will start on what it has run before. A storage that
-    // cannot answer either leaves the read to decide, since the start reads the same storage and fails there too.
+    // subscription that is about to be refused from one that will start on what it has run before. Only storage
+    // answering that it holds nothing settles it. A storage that cannot answer at all leaves this waiting, since a
+    // read that failed here says nothing about what the read at start will find.
     private Mono<Void> refusalOnceNothingIsStored(String subscriptionId, Mono<Checkpoint> positionNow) {
         return storage.read(subscriptionId)
-                .onErrorResume(__ -> Mono.empty())
+                .onErrorResume(__ -> Mono.never())
                 .flatMap(__ -> Mono.<Void>never())
                 .switchIfEmpty(positionNow.then(Mono.<Void>never()));
     }
