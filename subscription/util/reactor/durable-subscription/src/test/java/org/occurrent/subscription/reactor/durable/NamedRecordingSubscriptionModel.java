@@ -40,6 +40,11 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
 
     final List<String> subscribedIds = new CopyOnWriteArrayList<>();
     final RecordingSubscriptionModel feed;
+    /**
+     * A stopped named model parks a registration and opens its feed when it is started, which is what makes a start
+     * position of {@code now} mean "wherever the feed has reached by then" rather than "where this registered".
+     */
+    boolean running = true;
 
     NamedRecordingSubscriptionModel(String globalCheckpoint) {
         this.feed = new RecordingSubscriptionModel(globalCheckpoint);
@@ -86,17 +91,17 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
 
     @Override
     public boolean isRunning() {
-        return true;
+        return running;
     }
 
     @Override
     public boolean isRunning(String subscriptionId) {
-        return subscribedIds.contains(subscriptionId);
+        return running && subscribedIds.contains(subscriptionId);
     }
 
     @Override
     public boolean isPaused(String subscriptionId) {
-        return false;
+        return !running && subscribedIds.contains(subscriptionId);
     }
 
     @Override

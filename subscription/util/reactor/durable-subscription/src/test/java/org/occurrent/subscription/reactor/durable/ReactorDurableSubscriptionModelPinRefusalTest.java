@@ -292,6 +292,28 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
     }
 
     @Test
+    void a_storage_that_answers_nothing_about_its_own_write_is_refused_rather_than_started_from_now() {
+        // save is documented to hand the checkpoint back, so a storage answering nothing has said neither that the
+        // position was recorded nor that it was not. Starting anyway would begin wherever the feed has reached.
+        CheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                return Mono.empty();
+            }
+        };
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        ReactorDurableSubscriptionModel model = coldModel(delegate, storage);
+
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(SUBSCRIPTION_ID)
+                .hasMessageContaining("answered nothing");
+        assertThat(delegate.startedAt).isEmpty();
+    }
+
+    @Test
     void a_start_position_the_caller_named_is_not_recorded_at_all() {
         // Only the model default reads a stored checkpoint, so writing for any other position would record one
         // nothing starts from, over a subscription the caller asked to replay.

@@ -469,10 +469,11 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
     }
 
     @Test
-    void registering_while_running_still_starts_from_now_when_the_position_answers_nothing() {
-        // There is no wait to cover on this path, since the subscription starts at the moment it is registered, so
-        // starting from now starts from where it was registered and skips nothing. Refusing here would take out every
-        // first run on a database that cannot answer, over a gap that does not exist.
+    void registering_while_running_is_refused_when_the_position_answers_nothing() {
+        // A wrapped model applies a start position when it opens its feed, not when it is handed one, so falling back
+        // to now here begins wherever the feed has reached by then rather than where this registration happened.
+        // Answering nothing is the same unresolvable problem on a running model as on a stopped one, and the blocking
+        // model refuses a null position whatever state it is in, so refusing here is what keeps the two the same.
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
         delegate.globalCheckpoint = null;
         SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
@@ -480,10 +481,67 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
 
         Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
-        subscription.waitUntilStarted().block(TIMEOUT);
-        assertThat(delegate.startedAt).hasSize(1);
-        assertThat(delegate.startedAt.getFirst()).isInstanceOf(StartAt.Now.class);
+        assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(SUBSCRIPTION_ID)
+                .hasMessageContaining("answered nothing");
+        assertThat(delegate.startedAt).isEmpty();
         assertThat(storage.saves).hasValue(0);
+        assertThat(model.isRunning(SUBSCRIPTION_ID)).isFalse();
+    }
+
+    @Test
+    void a_wrapped_model_that_manages_named_subscriptions_refuses_a_position_that_answers_nothing_while_it_is_stopped() {
+        // The path every reactor model in this repository takes. The wrapped model is stopped, so it parks the
+        // registration and opens its feed when it is started, and a start position of now is applied then. Handing it
+        // one would lose everything written while it waited, which is the loss this whole guarantee is about.
+        NamedRecordingSubscriptionModel delegate = new NamedRecordingSubscriptionModel("at-registration");
+        delegate.feed.globalCheckpoint = null;
+        delegate.running = false;
+        SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
+
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
+                .as("the refusal reaches the caller from subscribe itself on this path, since it awaits the position there")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(SUBSCRIPTION_ID)
+                .hasMessageContaining("answered nothing");
+
+        // The feed moves on while nothing is registered. Had the registration gone through with a start position of
+        // now, this is what the subscription would have started past.
+        delegate.feed.globalCheckpoint = new StringBasedCheckpoint("much-later");
+        assertThat(delegate.subscribedIds).isEmpty();
+        assertThat(storage.saves).hasValue(0);
+    }
+
+    @Test
+    void a_wrapped_model_that_manages_named_subscriptions_refuses_a_position_that_answers_nothing_while_it_is_running() {
+        NamedRecordingSubscriptionModel delegate = new NamedRecordingSubscriptionModel("at-registration");
+        delegate.feed.globalCheckpoint = null;
+        SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
+
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("answered nothing");
+        assertThat(delegate.subscribedIds).isEmpty();
+        assertThat(storage.saves).hasValue(0);
+    }
+
+    @Test
+    void a_wrapped_model_that_manages_named_subscriptions_takes_a_stored_checkpoint_when_the_position_answers_nothing() {
+        // The exemption still stands on this path. The stored checkpoint is where the subscription starts and the
+        // position read is never consulted for it.
+        NamedRecordingSubscriptionModel delegate = new NamedRecordingSubscriptionModel("at-registration");
+        delegate.feed.globalCheckpoint = null;
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("from-a-previous-run")).block(TIMEOUT);
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        assertThat(delegate.subscribedIds).containsExactly(SUBSCRIPTION_ID);
+        assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT).asString()).isEqualTo("from-a-previous-run");
     }
 
     @Test
