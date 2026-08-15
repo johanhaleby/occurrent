@@ -1,0 +1,137 @@
+schema_version: 2
+epic: cdx33d
+revision: 2
+updated_at: 2026-08-15 05:30:00+00:00
+updated_by: 'orchestrator: epic registered from the approved meta-plan (harmonic-spinning-peach.md) for the 2026-08-15 Codex
+  final pre-tag sweep (1 BLOCKER + 3 major + 2 minor, all six verified by the orchestrator on the exact refs); D1 planning
+  subagent, D2 and D3 execution subagents dispatched; work-item monitor armed'
+baseline:
+  repo: johanhaleby/occurrent
+  branch: main
+authority: 'Meta-plan approved by Johan 2026-08-15 (ExitPlanMode). Rulings by AskUserQuestion the same morning: fixpoint cap
+  1 (budget; stopping rule carried forward: clean = convergence, above-minor = CAPPED routed to Johan and reported as capped,
+  after clean or cap only a confirmed BLOCKER reopens, rest is 0.34); D1 vehicle subagent; fencing Cluster section narrow
+  fix now with the wholesale port staying Johan''s release-day call. Finding-1 severity is principle-settled as BLOCKER (AGENTS.md
+  no-severity-ladder rule plus safety-work-finishes-in-its-release; derivation in the plan), ratified by plan approval. The
+  0.33.0 tag stays HELD; the tag and every docs-repo merge are Johan''s manual acts. Mode Attended (Johan messaging 2026-08-15
+  morning). Standing grants per .context/orchestrator-policy.yml. Conventions: invariant-first briefs, adversarial pass per
+  correctness unit, CAS merges with marker-stripped squash bodies, suppressed blocks read at every head, CI-over-local-suites,
+  [ci skip] only for genuinely prose-only diffs, foreground waits only, johan-writing gates on every prose surface, asserted
+  anchors on scripted memory edits'
+pending_actions:
+- id: act-001
+  type: workflow-dispatch
+  target: 'D1 planning subagent (Opus/high, read-only, plan_approval_venue orchestrator): reactor registration-read refusal
+    design per the meta-plan''s five settle-points (failed-vs-empty distinction, capture paths, test rewrite + regression
+    shape, ripple sweep, blocking parity both directions)'
+  expected: a unit plan handed back; gate through the orchestrator with Johan ruling taste questions while present; implementation
+    dispatched separately after the gate
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-15T05:25:00Z'
+- id: act-002
+  type: workflow-dispatch
+  target: 'D2 subagent (Sonnet/high): changelog.md:38 delete-safety proof completion and :67/:93/:106 IntrospectableSubscriptions
+    rename, one PR off d05b3d9'
+  expected: PR delivered with DELIVERY_RESULT; orchestrator verifies and merges under standing authority
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-15T05:25:00Z'
+- id: act-003
+  type: workflow-dispatch
+  target: 'D3 subagent (Sonnet/high): findings 2-4 plus docs halves of 5-6 on both held docs branches (preview 9b7c378, fencing
+    13e128f), scratchpad worktrees, jekyll build, origin-ref verification'
+  expected: both branches pushed with DELIVERY_RESULT; orchestrator verifies heads and greps on origin refs
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-15T05:25:00Z'
+units:
+  D1:
+    issue: null
+    goal: 'BLOCKER fix (sweep finding 1): a reactor registration whose globalCheckpoint() read fails must refuse visibly
+      instead of falling forward to a later read at start (capturePositionNow swallow + resolveStartAt switchIfEmpty substitution
+      skips the events between registration and start; the stopped-registration test locks the loss in as intended). Invariant:
+      the position pinned at start is the position captured at registration, or registration/start fails visibly; no path
+      pins a later read; a legitimately-empty capture keeps its documented meaning. Blocking stack is the settled reference
+      shape (forget-and-rethrow)'
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      repo: johanhaleby/occurrent
+      ref: null
+      met: false
+      evidence: null
+  D2:
+    issue: null
+    goal: 'Library release prose (findings 5 and 6, library halves): changelog.md:38 delete-safety proof completed with the
+      forStandalone-to-Cluster migration case, and the stale IntrospectableSubscriptionModel name at :67/:93/:106 renamed
+      to IntrospectableSubscriptions'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      repo: johanhaleby/occurrent
+      ref: null
+      met: false
+      evidence: null
+  D3:
+    issue: null
+    goal: 'Held docs branches (findings 2, 3 narrow, 4, and the docs halves of 5 and 6): news behave-exactly-as-before join
+      claim, fencing Cluster-cannot-fence section replaced with the shipped hash-tag design, fencing one-argument stoppedByDefault
+      guarantee corrected from the preview wording, preview delete-safety proof completed, preview triple-duplicated introspection
+      paragraph deduplicated with the current type name'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-preview
+      met: false
+      evidence: null
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/checkpoint-fencing
+      met: false
+      evidence: null
+  CREG:
+    issue: null
+    goal: 'Register and tracker dispositions: the blocker recorded with the reviewer rank, orchestrator verification and
+      principle derivation; routing markers where tracker items exist or are created; the fencing wholesale-port decision
+      recorded unchanged; ORCHESTRATOR.md register updated'
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - D1
+    - D2
+    - D3
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: johanhaleby/occurrent
+      ref: null
+      met: false
+      evidence: null
+watchers:
+- id: watcher-001
+  kind: github-work-item-monitor
+  repository: johanhaleby/occurrent
+  external_id: bj71didql
+  status: READY
+  retirement:
+    kind: no_unmet_pr_advanceable_deliverables
+  last_verified_at: '2026-08-15T05:25:00Z'
+  last_verified_revision: 1
