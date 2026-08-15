@@ -1,9 +1,9 @@
 schema_version: 2
 epic: cdx33e
-revision: 1
-updated_at: 2026-08-15 18:30:00+00:00
-updated_by: 'orchestrator: epic registered from the approved meta-plan for the fifth Codex sweep (delta-scoped, NO BLOCKER,
-  3 doc majors + 1 minor, all verified on the exact refs); E1 and E2 dispatched in parallel, work-item monitor arming'
+revision: 2
+updated_at: 2026-08-15 18:40:00+00:00
+updated_by: 'orchestrator: E1 (isolation worktree) and E2 dispatched with exclusive branch ownership (E2 owns release-notes,
+  E1 the other two); work-item monitor READY as b8vfgsmkn, baseline 0 open PRs; heartbeat buiuop1n4'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -103,8 +103,8 @@ watchers:
 - id: watcher-001
   kind: github-work-item-monitor
   repository: johanhaleby/occurrent
-  external_id: null
-  status: ARMING
+  external_id: b8vfgsmkn
+  status: READY
   retirement:
     kind: no_unmet_pr_advanceable_deliverables
   last_verified_at: '2026-08-15T18:30:00Z'
