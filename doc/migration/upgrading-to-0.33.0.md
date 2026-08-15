@@ -543,6 +543,23 @@ and a storage answering `false` from `evaluatesWriteConditionsFor(String)` gets 
 storage is what would have to evaluate the condition. Answer `true` from it once your storage really does evaluate
 `ifAbsent`, see section 2. `ReactorCheckpointStorage` and the reactive in-memory storage both already do.
 
+The same first-run pin refuses in more ways than `StartPositionAlreadyPinnedException` alone. Under
+`occurrent.subscription.mode=manual`, a `positionSource` answering `null` when `ManualStartSubscriptionModel` asks
+for the current position refuses the registration with `IllegalStateException`, naming the source's class. Register
+again once the source can answer, or register with `ManualStartSubscriptionModel.stoppedByDefault(SubscriptionModel)`,
+the one-argument factory that records no position, or with a `StartAt` of your own.
+
+`ReactorDurableSubscriptionModel` refuses the same registration on the reactive stack when the position it reads
+answers empty, with `IllegalStateException` naming the wrapped model. A read that fails instead passes through
+whatever it threw, unwrapped, rather than becoming an `IllegalStateException`. Either way, once the model can
+answer, register again to get past it, unless the registration was made while the model was stopped and never
+started. That one keeps its id until `cancelSubscription(subscriptionId)` releases it, so cancel it first, then
+register again. Subscribing with a `StartAt` of your own sidesteps the read on any of these paths.
+`ReactorDurableSubscriptionModel` also refuses with `IllegalStateException` when the `CheckpointStorage` it pins that first position to answers empty
+from `save(..)` instead of handing back the checkpoint it wrote, naming the storage and the position. Only a
+registration resolving to the subscription model default reaches that write, so a `StartAt` of your own avoids it
+too, and the real fix is a storage that returns what `save(..)` wrote.
+
 ## 9. A flow saga can cap the events of the step it is parked in
 
 Nothing here changes unless you ask for it, so you can skip this section if no flow saga of yours idles in one step.

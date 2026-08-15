@@ -93,7 +93,10 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * when the wrapped model manages named subscriptions, and signalled on {@link Subscription#waitUntilStarted()},
  * with an {@code ERROR} logged, when this model drives the cold primitive itself. A storage that answers {@code false}
  * from {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} cannot be written to conditionally, so that
- * write stays unconditional and is logged at {@code WARN} instead. See ADR 89.
+ * write stays unconditional and is logged at {@code WARN} instead. See ADR 89. A {@code save(..)} for that first
+ * position answering nothing, rather than the checkpoint it wrote, refuses the registration the same way, with
+ * {@code IllegalStateException} naming the storage and the position it tried to record, since nothing then shows
+ * whether the write reached storage.
  * <p>
  * A registration that asks for {@link StartAt#subscriptionModelDefault()} and has no checkpoint stored is recorded
  * from where the feed is when it registers, so that starting it later still delivers what was written while it waited.
