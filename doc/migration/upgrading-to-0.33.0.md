@@ -543,6 +543,20 @@ and a storage answering `false` from `evaluatesWriteConditionsFor(String)` gets 
 storage is what would have to evaluate the condition. Answer `true` from it once your storage really does evaluate
 `ifAbsent`, see section 2. `ReactorCheckpointStorage` and the reactive in-memory storage both already do.
 
+Two more refusals during the same first-run pin raise `IllegalStateException` instead of
+`StartPositionAlreadyPinnedException`. Under `occurrent.subscription.mode=manual`, a `positionSource` answering
+`null` when `ManualStartSubscriptionModel` asks for the current position refuses the registration this way, naming
+the source's class. Register again once the source can answer, or register with
+`ManualStartSubscriptionModel.stoppedByDefault(SubscriptionModel)`, the one-argument factory that records no
+position, or with a `StartAt` of your own. `ReactorDurableSubscriptionModel` refuses the same way on the reactive
+stack when the position it reads for a registration answers empty, naming the wrapped model, and passes a failed
+read through with whatever it threw rather than wrapping it. Registering again once the model can answer, or
+subscribing with a `StartAt` of your own, gets past this one too. It refuses once more, still with
+`IllegalStateException`, when the `CheckpointStorage` it pins that first position to answers empty from `save(..)`
+rather than handing back the checkpoint it wrote, naming the storage and the position. Only a registration
+resolving to the subscription model default reaches that write, so a `StartAt` of your own avoids it as well, and
+the actual fix is a storage that returns what `save(..)` wrote.
+
 ## 9. A flow saga can cap the events of the step it is parked in
 
 Nothing here changes unless you ask for it, so you can skip this section if no flow saga of yours idles in one step.
