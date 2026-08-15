@@ -1,9 +1,13 @@
 schema_version: 2
 epic: cdx33d
-revision: 11
-updated_at: 2026-08-15 11:40:00+00:00
-updated_by: 'orchestrator: D4 DONE (PR 796 merged 05763ca, three docs branches verified on origin refs), watcher-002 RETIRED
-  in the same sweep, CREG DONE with the tracker scan clean; closeout waits only on the 05763ca main matrix'
+revision: 12
+updated_at: 2026-08-15 12:05:00+00:00
+updated_by: 'orchestrator: EPIC CLOSED as CAPPED-WITH-REMEDIATION, 5 of 5 units DONE and swept, both watchers RETIRED,
+  heartbeat retired at this closeout, no unresolved pending actions. The single fixpoint round (cap 1) returned 3 prose majors
+  at the cap, all fixed as D4 under Johan''s ruling with no further round; the library code verified clean on every error
+  and empty branch. Verification of record: main 05763ca is 24/24 green (and 5f753a0 27/27 before it). Held docs heads for
+  release day: preview dcab6d3, fencing b571eb6, release-notes 62bed8c. The 0.33.0 tag and every docs merge stay Johan''s
+  manual acts'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -122,7 +126,7 @@ units:
       shape (forget-and-rethrow)'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -145,7 +149,7 @@ units:
       to IntrospectableSubscriptions'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -164,7 +168,7 @@ units:
       paragraph deduplicated with the current type name'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -194,7 +198,7 @@ units:
       fixes verified mechanically against the named falsifying facts'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -230,7 +234,7 @@ units:
       recorded unchanged; ORCHESTRATOR.md register updated'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - D1
     - D2
