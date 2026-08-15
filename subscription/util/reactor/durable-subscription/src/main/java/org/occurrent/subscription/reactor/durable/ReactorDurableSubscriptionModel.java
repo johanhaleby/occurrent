@@ -131,9 +131,11 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * and which of the two it answers decides whether the registration is refused. When the wrapped model manages named
  * subscriptions of its own that is resolved where {@link #subscribe(String, SubscriptionFilter, StartAt, Function)}
  * is called, so a refusal is thrown from that call like any other, with no handle involved. When this model drives
- * the cold primitive itself that resolution waits until the subscription starts, so its registration handle keeps
- * waiting rather than reporting a refusal that may never happen, and the refusal comes out on the handle
- * {@link #resumeSubscription(String)} returns.
+ * the cold primitive itself the function is resolved only once the subscription actually starts. A registration made
+ * while running starts immediately, so the refusal comes out on the handle
+ * {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} itself returns. One made while stopped leaves
+ * that handle waiting instead, and the refusal comes out later, on the handle {@link #resumeSubscription(String)}
+ * returns.
  * <p>
  * Note that this implementation stores the checkpoint after _every_ action by default. If you have a lot of
  * events and duplication is not that much of a deal, consider changing this behavior by supplying an instance of
