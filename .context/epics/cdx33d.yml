@@ -1,10 +1,10 @@
 schema_version: 2
 epic: cdx33d
-revision: 9
-updated_at: 2026-08-15 10:45:00+00:00
-updated_by: 'orchestrator: fixpoint verdict journaled (3 MAJOR prose + 5 minor at the cap, code clean), Johan ruled the
-  capped close with remediation; D4 registered RUNNING (library PR + three docs branches); work-item monitor NOT re-armed
-  for D4 by decision: the epic is in its capped tail with a single known PR whose delivery the subagent notification covers'
+revision: 10
+updated_at: 2026-08-15 10:55:00+00:00
+updated_by: 'orchestrator: correcting revision 9''s monitor decision, which rationalized an exception to the lifetime invariant:
+  D4 holds an unmet pr_merged deliverable, so the work-item monitor re-arms as watcher-002 (b2r13r30w) per the rule and the
+  cdx33c precedent, retiring in the sweep that meets it'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -248,3 +248,12 @@ watchers:
     kind: no_unmet_pr_advanceable_deliverables
   last_verified_at: '2026-08-15T05:25:00Z'
   last_verified_revision: 1
+- id: watcher-002
+  kind: github-work-item-monitor
+  repository: johanhaleby/occurrent
+  external_id: b2r13r30w
+  status: READY
+  retirement:
+    kind: no_unmet_pr_advanceable_deliverables
+  last_verified_at: '2026-08-15T10:55:00Z'
+  last_verified_revision: 10
