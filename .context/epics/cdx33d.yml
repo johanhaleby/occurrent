@@ -1,10 +1,9 @@
 schema_version: 2
 epic: cdx33d
-revision: 10
-updated_at: 2026-08-15 10:55:00+00:00
-updated_by: 'orchestrator: correcting revision 9''s monitor decision, which rationalized an exception to the lifetime invariant:
-  D4 holds an unmet pr_merged deliverable, so the work-item monitor re-arms as watcher-002 (b2r13r30w) per the rule and the
-  cdx33c precedent, retiring in the sweep that meets it'
+revision: 11
+updated_at: 2026-08-15 11:40:00+00:00
+updated_by: 'orchestrator: D4 DONE (PR 796 merged 05763ca, three docs branches verified on origin refs), watcher-002 RETIRED
+  in the same sweep, CREG DONE with the tracker scan clean; closeout waits only on the 05763ca main matrix'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -193,7 +192,7 @@ units:
       received (one-arg stoppedByDefault guarantee, unconditional pin claim), extend migration-guide section 8 to the new
       IllegalStateException refusals, describe the empty-save refusal in the class javadoc and docs. No further review round;
       fixes verified mechanically against the named falsifying facts'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -201,30 +200,35 @@ units:
     deliverables:
     - check: pr_merged
       repo: johanhaleby/occurrent
-      ref: null
-      met: false
-      evidence: null
+      ref: '796'
+      met: true
+      evidence: 'MERGED 2026-08-15 as squash 05763ca, CAS-pinned to a150daa (final Copilot round of three clean incl. no
+        suppressed block, matrix green on the code-bearing head by job conclusions, marker-free squash, the one open thread
+        replied-and-resolved by the orchestrator). All five ruled fixes verified; the empty-save docs mention correctly SKIPPED
+        because the docs reactive CheckpointStorage section still shows the pre-0.33 two-argument save, verified by the orchestrator
+        and recorded as a release-day checklist item rather than silently patched around'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-preview
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed 3cba4f2 -> dcab6d3, F1 scoping verified on the origin ref (old absolute gone)'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/checkpoint-fencing
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed 89e8def -> b571eb6, F1 scoping verified on the origin ref'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-release-notes
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed d0e9b01 -> 62bed8c, F1 scoping plus the two ported blocking corrections (F2 one-arg guarantee, F3
+        pin scoping) verified on the origin ref'
   CREG:
     issue: null
     goal: 'Register and tracker dispositions: the blocker recorded with the reviewer rank, orchestrator verification and
       principle derivation; routing markers where tracker items exist or are created; the fencing wholesale-port decision
       recorded unchanged; ORCHESTRATOR.md register updated'
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on:
@@ -236,8 +240,13 @@ units:
     - check: branch_pushed
       repo: johanhaleby/occurrent
       ref: null
-      met: false
-      evidence: null
+      met: true
+      evidence: 'DONE 2026-08-15: tracker scan from the 00:00Z safety bound returned only the three fleet PRs, no third-party
+        arrivals, no new issues to route. Dispositions recorded in ORCHESTRATOR.md register: the blocker with reviewer rank,
+        orchestrator verification and the principle derivation; finding-6 rename half declined on the released-0.32.0-section
+        evidence; the number-771-window decline on the PR 795 thread; the three code-adjacent fixpoint minors banked as 0.34
+        register notes; the fencing wholesale-port decision unchanged; the stale reactive CheckpointStorage docs section added
+        to the release-day checklist'
 watchers:
 - id: watcher-001
   kind: github-work-item-monitor
@@ -252,7 +261,7 @@ watchers:
   kind: github-work-item-monitor
   repository: johanhaleby/occurrent
   external_id: b2r13r30w
-  status: READY
+  status: RETIRED
   retirement:
     kind: no_unmet_pr_advanceable_deliverables
   last_verified_at: '2026-08-15T10:55:00Z'
