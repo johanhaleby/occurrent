@@ -1,10 +1,9 @@
 schema_version: 2
 epic: cdx33d
-revision: 2
-updated_at: 2026-08-15 05:30:00+00:00
-updated_by: 'orchestrator: epic registered from the approved meta-plan (harmonic-spinning-peach.md) for the 2026-08-15 Codex
-  final pre-tag sweep (1 BLOCKER + 3 major + 2 minor, all six verified by the orchestrator on the exact refs); D1 planning
-  subagent, D2 and D3 execution subagents dispatched; work-item monitor armed'
+revision: 3
+updated_at: 2026-08-15 05:50:00+00:00
+updated_by: 'orchestrator: D3 DONE, both held docs branches pushed and verified on origin refs (preview c7894e3, fencing
+  04153cb); D2 PR 794 open awaiting its Copilot loop; D1 planning in flight'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -43,8 +42,9 @@ pending_actions:
   type: workflow-dispatch
   target: 'D3 subagent (Sonnet/high): findings 2-4 plus docs halves of 5-6 on both held docs branches (preview 9b7c378, fencing
     13e128f), scratchpad worktrees, jekyll build, origin-ref verification'
-  expected: both branches pushed with DELIVERY_RESULT; orchestrator verifies heads and greps on origin refs
-  status: PENDING
+  expected: 'both branches pushed with DELIVERY_RESULT; orchestrator verifies heads and greps on origin refs. RESOLVED: 2026-08-15:
+    delivered and verified, preview c7894e3, fencing 04153cb, all five fixes present, forbidden phrases gone from 0.33 surfaces'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-15T05:25:00Z'
@@ -90,7 +90,7 @@ units:
       claim, fencing Cluster-cannot-fence section replaced with the shipped hash-tag design, fencing one-argument stoppedByDefault
       guarantee corrected from the preview wording, preview delete-safety proof completed, preview triple-duplicated introspection
       paragraph deduplicated with the current type name'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -99,13 +99,20 @@ units:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-preview
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed 9b7c378 -> c7894e3, verified on the origin ref: join claim corrected at news:36 (narrowed step window
+        stated), delete-safety proof completed at docs.md:3623 with the forStandalone migration case, introspection paragraph
+        deduplicated at :7366 with the current IntrospectableSubscriptions name. The one remaining behave-exactly-as-before
+        string is the 0.30 news post''s correct historical claim about stream-only stores, out of scope. Jekyll exit 0 per
+        worker, gates run on diffs'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/checkpoint-fencing
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed 13e128f -> 04153cb, verified on the origin ref: Cluster section replaced (supports-the-fence with
+        hash-tag design, per-id qualification folded into the adjacent paragraph per the narrow-fix ruling, flagged adaptation
+        ratified), one-argument stoppedByDefault guarantee corrected from preview''s wording. Fencing news post checked, no
+        join claim present'
   CREG:
     issue: null
     goal: 'Register and tracker dispositions: the blocker recorded with the reviewer rank, orchestrator verification and
