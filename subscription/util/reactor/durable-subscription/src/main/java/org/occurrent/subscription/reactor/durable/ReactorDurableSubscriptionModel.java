@@ -95,6 +95,40 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * from {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} cannot be written to conditionally, so that
  * write stays unconditional and is logged at {@code WARN} instead. See ADR 89.
  * <p>
+ * A registration that asks for {@link StartAt#subscriptionModelDefault()} and has no checkpoint stored is recorded
+ * from where the feed is when it registers, so that starting it later still delivers what was written while it waited.
+ * A read of that position that fails, and one that answers nothing, refuse the registration the same way.
+ * Answering nothing is the wrapped model's documented way of reporting a problem it cannot
+ * resolve, not a position, which is why it refuses rather than falling back to
+ * {@link StartAt#now()}. A wrapped model applies a start position when it opens its feed rather than when it is handed
+ * one, so falling back would begin wherever the feed had reached by then and skip what the read exists to keep. That
+ * holds whether this model is running or stopped, which is also how the blocking
+ * {@code ManualStartSubscriptionModel} answers a {@code null} position from 0.33.0 on, and a subscription registered
+ * while stopped is not read for again when it starts, since a position read then is a position later than the
+ * registration.
+ * <p>
+ * The refusal is thrown from {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} when the wrapped model
+ * manages named subscriptions of its own, which is the caller's own call and needs no log to reach anybody. When this
+ * model drives the cold primitive itself it cannot throw there, so the refusal is logged at {@code ERROR} and
+ * signalled on {@link Subscription#waitUntilStarted()}, on the handle {@link #resumeSubscription(String)} returns and
+ * on the registration handle as well once that registration asked for the model default and storage has confirmed it
+ * holds nothing.
+ * A storage that cannot be read leaves the registration handle waiting rather than reporting a refusal the start may
+ * not make. Starting a refused subscription is what drops it, so it is registered again rather than resumed, and one
+ * that was never started holds its id until {@link #cancelSubscription(String)} releases it.
+ * {@link #start(boolean)} keeps starting the rest.
+ * <p>
+ * Two registrations are left alone by all of that. One that names its own {@link StartAt}, {@link StartAt#now()}
+ * included, is not read for at all, since this model records no position for it and the caller has said where to
+ * begin. One that already has a checkpoint stored begins from that checkpoint, which is read when the subscription
+ * starts and settles the question before the registration read is consulted, so it starts even when that read could
+ * not answer.
+ * <p>
+ * A {@link StartAt#dynamic(java.util.function.Supplier) dynamic} start position is read for all the same, since it is
+ * not resolved until the subscription starts and may answer the model default then. Which of the two it answers is
+ * what decides whether the registration is refused, so its registration handle keeps waiting rather than reporting a
+ * refusal that may never happen, and the refusal comes out on the handle {@link #resumeSubscription(String)} returns.
+ * <p>
  * Note that this implementation stores the checkpoint after _every_ action by default. If you have a lot of
  * events and duplication is not that much of a deal, consider changing this behavior by supplying an instance of
  * {@link ReactorDurableSubscriptionModelConfig}.
@@ -237,14 +271,42 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // Where the feed is, read once and remembered, so a subscription that is not started yet can begin from here. A
-    // failed read is swallowed because the position is read again when the subscription starts.
+    // read that fails, and one that answers nothing, both refuse the subscription instead. Reading again when the
+    // subscription starts would answer with wherever the feed has reached by then, and starting from that skips
+    // everything written while the subscription waited, which is the whole of what reading at registration is for.
+    // An empty answer is the unresolvable problem the wrapped model documents rather than a position, so it refuses
+    // for the same reason. Cached, so the read runs once and every subscriber sees the same outcome.
     private Mono<Checkpoint> capturePositionNow(String subscriptionId) {
         return subscription.globalCheckpoint()
-                .onErrorResume(throwable -> {
-                    log.warn("Could not read the current position while registering subscription {}, it will be read again when the subscription starts", subscriptionId, throwable);
-                    return Mono.empty();
-                })
+                .switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)))
+                .doOnError(throwable -> log.error("Could not read the current position while registering subscription {}. It is refused when it starts, rather than started from a position read after it was registered, unless by then a checkpoint is stored for it or its start position resolves to one of its own, either of which it starts from instead", subscriptionId, throwable))
                 .cache();
+    }
+
+    // A read that could not answer does not settle the registration on its own. A checkpoint stored for this
+    // subscription is where it starts, and this read is never consulted then, so asking storage is what tells a
+    // subscription that is about to be refused from one that will start on what it has run before. Only storage
+    // answering that it holds nothing settles it. A storage that cannot answer at all leaves this waiting, since a
+    // read that failed here says nothing about what the read at start will find.
+    private Mono<Void> refusalOnceNothingIsStored(String subscriptionId, Mono<Checkpoint> positionNow) {
+        return storage.read(subscriptionId)
+                .onErrorResume(__ -> Mono.never())
+                .flatMap(__ -> Mono.<Void>never())
+                .switchIfEmpty(positionNow.then(Mono.<Void>never()));
+    }
+
+    // No original throwable to carry here, since answering nothing is how the wrapped model reports a problem it
+    // cannot resolve, so this is what names the subscription and the way past it.
+    private IllegalStateException positionSourceAnsweredNothing(String subscriptionId) {
+        return new IllegalStateException("The wrapped subscription model " + subscription.getClass().getName() +
+                                         " answered nothing when asked for the current position while registering subscription " +
+                                         subscriptionId + ", which is how it reports a problem it cannot resolve. There is " +
+                                         "no position to start this subscription from, and starting it anyway would begin " +
+                                         "wherever the feed has reached by then and skip whatever was written while it " +
+                                         "waited, so the registration is refused. Starting it is what releases the id, so " +
+                                         "register it again after that, or after cancelSubscription(String), once the model " +
+                                         "can answer. Subscribing with a StartAt of your own records no position and carries " +
+                                         "no such guarantee.");
     }
 
     private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt,
@@ -255,11 +317,29 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             //
             // Read where the feed is now and hold it, because starting this subscription later would otherwise begin
             // wherever the feed had reached by then, skipping everything written while it waited. Nothing is stored
-            // until the subscription starts, so one that never starts leaves nothing behind.
-            Mono<Checkpoint> positionNow = capturePositionNow(subscriptionId);
+            // until the subscription starts, so one that never starts leaves nothing behind. A read that could not
+            // answer refuses the subscription when it starts, which is where the model drops it, so getting it back
+            // means registering it again rather than resuming.
+            StartAt startAtNow = currentStartAt.get();
+            // Only a registration that can still ask this model where to begin has anything to read for. A concrete
+            // position is where the subscription begins whatever the feed does while it waits. A dynamic one is not
+            // resolved until the subscription starts, so it is read for in case it answers the model default then.
+            @Nullable Mono<Checkpoint> positionNow = startAtNow.isDefault() || startAtNow.isDynamic()
+                    ? capturePositionNow(subscriptionId)
+                    : null;
             // Kept as this subscription's disposable so shutdown and cancellation stop a read that is still in flight.
-            Disposable reading = positionNow.subscribe();
-            InternalSubscription internalSubscription = new InternalSubscription(reading, currentStartAt, filter, action, Mono.never(), positionNow);
+            // The error consumer is what keeps a failed read off Operators.onErrorDropped, which throws on whichever
+            // thread the read finished on. Reporting it is capturePositionNow's job, and it does it once.
+            Disposable reading = positionNow == null ? Disposables.disposed() : positionNow.subscribe(unused -> {
+            }, throwable -> {
+            });
+            // A read that answered still leaves waitUntilStarted() waiting, since the subscription has not started and
+            // will not until it is asked to. Only the model default is certain to begin from what was read, so only
+            // that one can end the wait here with the reason it could not be read.
+            Mono<Void> started = startAtNow.isDefault() && positionNow != null
+                    ? refusalOnceNothingIsStored(subscriptionId, positionNow)
+                    : Mono.never();
+            InternalSubscription internalSubscription = new InternalSubscription(reading, currentStartAt, filter, action, started, positionNow);
             pausedSubscriptions.put(subscriptionId, internalSubscription);
             return new ReactorDurableSubscription(subscriptionId, internalSubscription.started);
         }
@@ -305,17 +385,21 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // out"; any concrete StartAt passes through unchanged.
     private Mono<StartAt> resolveStartAt(String subscriptionId, StartAt startAt, @Nullable Mono<Checkpoint> positionAtRegistration) {
         if (startAt.isDefault()) {
-            // A stored position always wins, so this only records one the first time a subscription runs. It prefers
-            // the position read when the subscription was registered, which is earlier than now for one registered on
-            // a stopped model, and reads the position again when there is none. Recording it can be refused, see
-            // pinStartPosition below.
+            // A stored position always wins, so this only records one the first time a subscription runs. A
+            // subscription registered on a stopped model brings the position it read then, which is earlier than now,
+            // and nothing falls back to a fresh read behind it. That read either answered with a position or answered
+            // with the reason it could not, and taking a second one here is the substitution that would skip whatever
+            // was written while the subscription waited. Every other registration reads here instead, and a read that
+            // answers nothing refuses the same way one that failed already did. There is no position to record then,
+            // and the wrapped model applies a start position when it opens its feed rather than when it is handed
+            // one, so falling back to now would begin wherever the feed had reached by then. Recording the position
+            // can be refused too, see pinStartPosition below.
             Mono<Checkpoint> seed = positionAtRegistration == null
-                    ? subscription.globalCheckpoint()
-                    : positionAtRegistration.switchIfEmpty(subscription.globalCheckpoint());
+                    ? subscription.globalCheckpoint().switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)))
+                    : positionAtRegistration;
             return storage.read(subscriptionId)
                     .switchIfEmpty(Mono.defer(() -> seed.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint))))
-                    .map(StartAt::checkpoint)
-                    .switchIfEmpty(Mono.fromSupplier(StartAt::now));
+                    .map(StartAt::checkpoint);
         } else if (startAt.isDynamic()) {
             StartAt nextStartAt = startAt.get(new SubscriptionModelContext(ReactorDurableSubscriptionModel.class));
             if (nextStartAt == null) {
@@ -332,6 +416,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // That position is read after the storage read on every path but one. A subscription registered while the model
     // was stopped read it at registration instead, so its window is the wider one ADR 89 records and #771 owns.
     private Mono<Checkpoint> pinStartPosition(String subscriptionId, Checkpoint positionRead) {
+        return recordFirstPosition(subscriptionId, positionRead)
+                .switchIfEmpty(Mono.error(() -> storageAnsweredNothingAboutItsOwnWrite(subscriptionId, positionRead)));
+    }
+
+    private Mono<Checkpoint> recordFirstPosition(String subscriptionId, Checkpoint positionRead) {
         if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
             // Nothing here can make a storage that writes unconditionally do otherwise, so the write is the one
             // 0.32.0 made and two nodes recording a first position at the same moment keep the race. Logged rather
@@ -348,6 +437,19 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         return storage.save(subscriptionId, positionRead, CheckpointWriteCondition.ifAbsent())
                 .onErrorResume(CheckpointWriteConditionNotFulfilledException.class,
                         __ -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, positionRead));
+    }
+
+    // save is documented to hand the checkpoint back for chaining, so a storage that answers nothing has told this
+    // model neither that the position was recorded nor that it was not. Refused, because the alternative is starting
+    // from wherever the feed has reached and skipping whatever a recorded position would have kept.
+    private IllegalStateException storageAnsweredNothingAboutItsOwnWrite(String subscriptionId, Checkpoint positionRead) {
+        return new IllegalStateException("Checkpoint storage " + storage.getClass().getName() + " answered nothing when " +
+                                         "asked to record " + positionRead.asString() + " as the first position for " +
+                                         "subscription " + subscriptionId + ", instead of the checkpoint it wrote. " +
+                                         "Nothing here can show the position was recorded, and starting the subscription " +
+                                         "anyway would begin wherever the feed has reached, so the registration is " +
+                                         "refused. Answer with the checkpoint that was written, which is what " +
+                                         "CheckpointStorage.save(..) returns it for.");
     }
 
     // Reading it back answers the only question that settles the registration, whether it holds the position this
@@ -388,6 +490,17 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
     }
 
+    /**
+     * Start a subscription that was registered while this model was stopped, or resume one that was paused.
+     * <p>
+     * A subscription whose position could not be read when it was registered is refused here rather than started, and
+     * the refusal is signalled on the returned {@link Subscription#waitUntilStarted()}. Such a subscription is dropped
+     * from this model, so asking again answers with {@link UnknownSubscriptionException} and getting it back means
+     * registering it again.
+     *
+     * @throws UnknownSubscriptionException        If this model has no such subscription.
+     * @throws SubscriptionAlreadyRunningException If the subscription is already running.
+     */
     @Override
     public synchronized Subscription resumeSubscription(String subscriptionId) {
         if (delegate != null) {
@@ -474,6 +587,16 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
     }
 
+    /**
+     * Start this model, and with {@code resumeSubscriptionsAutomatically} start every subscription registered while it
+     * was stopped.
+     * <p>
+     * A subscription whose position could not be read when it was registered is refused, and the rest are started all
+     * the same, so one broken subscription does not withhold the others. Each refusal is logged at {@code ERROR} and
+     * signalled on that subscription's own {@link Subscription#waitUntilStarted()}, so this call does not report it.
+     *
+     * @see SubscriptionModelLifeCycle#start(boolean)
+     */
     @Override
     public synchronized void start(boolean resumeSubscriptionsAutomatically) {
         if (delegate != null) {
@@ -550,8 +673,9 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         final Function<CloudEvent, Mono<Void>> action;
         final Mono<Void> started;
         // Where the feed was when this subscription was registered on a stopped model, so starting it later resumes
-        // from then rather than from wherever the feed has reached by that point. Null for one registered while
-        // running, which has no gap to cover.
+        // from then rather than from wherever the feed has reached by that point. Carries the reason instead when
+        // that read could not answer, which is what refuses the subscription when it is started. Null for one
+        // registered while running, which has no gap to cover.
         final @Nullable Mono<Checkpoint> positionAtRegistration;
 
         private InternalSubscription(Disposable disposable, AtomicReference<StartAt> currentStartAt, @Nullable SubscriptionFilter filter,

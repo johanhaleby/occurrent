@@ -67,8 +67,9 @@ import static java.util.Objects.requireNonNull;
  * {@link StartPositionAlreadyPinnedException}, rather than starting from one it never read. That covers a stored
  * position that differs, and one this class cannot read back to compare, whether reading it failed or found
  * nothing. A single node reaches those last two on its own when its storage answers from somewhere that has not
- * seen the write. Without a position source and a checkpoint storage, a first run starts from the moment it is
- * started.
+ * seen the write. A position source that answers nothing refuses the registration too, with an
+ * {@link IllegalStateException}, since there is then no position to hold it to. Without a position source and a
+ * checkpoint storage, a first run starts from the moment it is started.
  *
  * @see #stoppedByDefault(SubscriptionModel)
  */
@@ -144,6 +145,15 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * already running, so such a registration is dropped rather than started. That is the same answer as for a
      * registration this model withholds, which is what keeps the promise this factory makes independent of when
      * the model happened to be started.
+     * <p>
+     * A {@code positionSource} that answers {@code null} refuses the registration too, with an
+     * {@link IllegalStateException}. That answer is how a source reports a problem it cannot resolve, so there is no
+     * position to record and nothing to hold the registration to, and letting it through would start the subscription
+     * from wherever the feed has reached once it is started rather than from where it was registered. The id is left
+     * free, so registering again once the source can answer is what a node does. A subscription that already has a
+     * checkpoint stored is not refused, since that checkpoint is where it starts and nothing would have been recorded
+     * over it anyway. Use {@link #stoppedByDefault(SubscriptionModel)}, or a {@link StartAt} of your own, to register
+     * without recording a position at all, neither of which carries the guarantee this factory makes.
      * <p>
      * The position is recorded only for a registration that asks for {@link StartAt#subscriptionModelDefault()},
      * since that is the one a wrapped model reads a stored checkpoint for. Registering with a position of your own,
@@ -223,6 +233,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      *                                                   registering it again is what a node does once a position
      *                                                   is stored. Withheld and passed-through registrations
      *                                                   answer the same way.
+     * @throws IllegalStateException                     If this model records start positions and the position source
+     *                                                   answered nothing, which is how it reports a problem it cannot
+     *                                                   resolve. The id is left free, so registering it again once
+     *                                                   the source can answer is what a node does.
      */
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
@@ -495,7 +509,15 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         boolean checkpointAlreadyExisted = checkpointStorage.exists(subscriptionId);
         @Nullable Checkpoint positionToPin = positionSource.globalCheckpoint();
         if (positionToPin == null) {
-            return;
+            // Answering null is how the source reports a problem it cannot resolve, so there is no position to record
+            // and nothing to hold this registration to. Letting it through would start the subscription from wherever
+            // the feed has reached once it is started, skipping everything written while it waited, which is the whole
+            // of what recording at registration is for. A checkpoint that was already there is where the subscription
+            // starts and nothing would have been recorded over it anyway, so that one is left alone.
+            if (checkpointAlreadyExisted) {
+                return;
+            }
+            throw positionSourceAnsweredNothing(subscriptionId);
         }
         try {
             checkpointStorage.save(subscriptionId, positionToPin, CheckpointWriteCondition.ifAbsent());
@@ -505,6 +527,20 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
             }
             refuseUnlessTheStoredPositionIsTheOneRead(checkpointStorage, subscriptionId, positionToPin);
         }
+    }
+
+    // No original throwable to carry here, since answering nothing is how the source reports a problem it cannot
+    // resolve, so this is what names the subscription and the way past it.
+    private IllegalStateException positionSourceAnsweredNothing(String subscriptionId) {
+        return new IllegalStateException("The position source " + requireNonNull(positionSource).getClass().getName() +
+                                         " answered nothing when asked for the current position while registering subscription " +
+                                         subscriptionId + ", which is how it reports a problem it cannot resolve. There is " +
+                                         "no position to start this subscription from, and starting it anyway would begin " +
+                                         "wherever the feed has reached by then and skip whatever was written while it " +
+                                         "waited, so the registration is refused. Register again once the source can answer, " +
+                                         "or use " + ManualStartSubscriptionModel.class.getSimpleName() +
+                                         ".stoppedByDefault(SubscriptionModel), or a StartAt of your own, neither of which " +
+                                         "records a position and neither of which carries such a guarantee.");
     }
 
     // Asks the question the way the wrapped models answer it when the subscription starts. Each layer resolves the

@@ -404,7 +404,7 @@ class ManualStartSubscriptionModelTest {
         GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> {
             registrationInProgress.countDown();
             awaitOrFail(startReturned);
-            return null;
+            return new StringCheckpoint("at-registration");
         };
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
 
@@ -471,6 +471,81 @@ class ManualStartSubscriptionModelTest {
         });
 
         assertThat(storage.conditions.get(SUBSCRIPTION_ID)).isEqualTo(CheckpointWriteCondition.ifAbsent());
+    }
+
+    @Test
+    void a_position_source_that_answers_nothing_refuses_the_registration_rather_than_recording_none() {
+        // Answering null is the source reporting a problem it cannot resolve, so there is no position to hold this
+        // registration to. Letting it through would start the subscription from wherever the feed has reached once it
+        // is started, skipping everything written while it waited, which is what recording at registration is for.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, () -> null, storage);
+
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(SUBSCRIPTION_ID)
+                .hasMessageContaining("answered nothing")
+                .hasMessageContaining("stoppedByDefault(SubscriptionModel)");
+
+        assertThat(storage.checkpoints).isEmpty();
+        assertThat(delegate.subscribeCalls).isEmpty();
+        assertThat(model.subscriptionIds())
+                .as("the id is left free, so registering again once the source can answer is what a node does")
+                .doesNotContain(SUBSCRIPTION_ID);
+    }
+
+    @Test
+    void a_position_source_that_answers_nothing_still_registers_a_subscription_that_has_a_stored_checkpoint() {
+        // That checkpoint is where the subscription starts, and nothing would have been recorded over it anyway, so
+        // there is nothing here for a source that cannot answer to cost. A model on a database that never answers,
+        // an Atlas cluster prohibiting hostInfo say, would otherwise stop registering every subscription it has
+        // already run once.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        storage.save(SUBSCRIPTION_ID, new StringCheckpoint("from-a-previous-run"), CheckpointWriteCondition.any());
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, () -> null, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString()).isEqualTo("from-a-previous-run");
+        assertThat(model.isPaused(SUBSCRIPTION_ID)).isTrue();
+    }
+
+    @Test
+    void a_position_source_that_answers_nothing_leaves_a_registration_naming_its_own_position_alone() {
+        // Nothing is recorded for such a registration in the first place, so there is no position for the source to
+        // fail to supply, and a replay the caller asked for is not something to refuse.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, () -> null, storage);
+
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        });
+
+        assertThat(storage.checkpoints).isEmpty();
+        assertThat(model.isPaused(SUBSCRIPTION_ID)).isTrue();
+    }
+
+    @Test
+    void a_position_source_that_fails_reaches_the_caller_as_the_failure_it_threw() {
+        // There is an original failure here, so it is what the caller gets. Wrapping it would bury the reason the
+        // position could not be read behind a name that says something else.
+        RuntimeException unreachable = new IllegalStateException("the position source is unreachable");
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        RecordingCheckpointStorage storage = new RecordingCheckpointStorage();
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, () -> {
+            throw unreachable;
+        }, storage);
+
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        })).isSameAs(unreachable);
+
+        assertThat(storage.checkpoints).isEmpty();
+        assertThat(delegate.subscribeCalls).isEmpty();
+        assertThat(model.subscriptionIds()).doesNotContain(SUBSCRIPTION_ID);
     }
 
     @Test

@@ -28,6 +28,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Records what start position it is asked to read from, and hands back no events, since the tests using it are about
@@ -36,8 +37,19 @@ import java.util.concurrent.CopyOnWriteArrayList;
 final class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel {
 
     final List<StartAt> startedAt = new CopyOnWriteArrayList<>();
-    Checkpoint globalCheckpoint;
+    /**
+     * Counts the reads at subscription time rather than at assembly time, since that is when a read costs anything and
+     * what a caching model has to avoid doing twice.
+     */
+    final AtomicInteger globalCheckpointReads = new AtomicInteger();
+    @Nullable Checkpoint globalCheckpoint;
     boolean failGlobalCheckpoint = false;
+    /**
+     * How many reads still fail before the rest succeed. A budget rather than a flag, so a test can prove a
+     * registration that read once and failed is not read again by letting the second read succeed and finding it never
+     * happened.
+     */
+    int failGlobalCheckpointTimes = 0;
 
     RecordingSubscriptionModel(String initialGlobalCheckpoint) {
         this.globalCheckpoint = new StringBasedCheckpoint(initialGlobalCheckpoint);
@@ -49,10 +61,18 @@ final class RecordingSubscriptionModel implements CheckpointAwareSubscriptionMod
         return Flux.never();
     }
 
+    /**
+     * Answers empty for a null checkpoint, which is the unresolvable problem
+     * {@link CheckpointAwareSubscriptionModel#globalCheckpoint()} documents rather than a position.
+     */
     @Override
     public Mono<Checkpoint> globalCheckpoint() {
-        return failGlobalCheckpoint
-                ? Mono.error(new IllegalStateException("Cannot read the position right now"))
-                : Mono.just(globalCheckpoint);
+        return Mono.defer(() -> {
+            globalCheckpointReads.incrementAndGet();
+            if (failGlobalCheckpoint || failGlobalCheckpointTimes-- > 0) {
+                return Mono.error(new IllegalStateException("Cannot read the position right now"));
+            }
+            return Mono.justOrEmpty(globalCheckpoint);
+        });
     }
 }
