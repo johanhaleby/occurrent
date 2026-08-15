@@ -97,8 +97,8 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * <p>
  * A registration that asks for {@link StartAt#subscriptionModelDefault()} and has no checkpoint stored is recorded
  * from where the feed is when it registers, so that starting it later still delivers what was written while it waited.
- * A read of that position that fails, and one that answers nothing, refuse the registration the same way, with an
- * {@code ERROR} logged. Answering nothing is the wrapped model's documented way of reporting a problem it cannot
+ * A read of that position that fails, and one that answers nothing, refuse the registration the same way.
+ * Answering nothing is the wrapped model's documented way of reporting a problem it cannot
  * resolve, not a position, which is why it refuses rather than falling back to
  * {@link StartAt#now()}. A wrapped model applies a start position when it opens its feed rather than when it is handed
  * one, so falling back would begin wherever the feed had reached by then and skip what the read exists to keep. That
@@ -108,9 +108,11 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * registration.
  * <p>
  * The refusal is thrown from {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} when the wrapped model
- * manages named subscriptions of its own, and signalled on {@link Subscription#waitUntilStarted()} when this model
- * drives the cold primitive itself, on the handle {@link #resumeSubscription(String)} returns and on the registration
- * handle as well once that registration asked for the model default and storage has confirmed it holds nothing.
+ * manages named subscriptions of its own, which is the caller's own call and needs no log to reach anybody. When this
+ * model drives the cold primitive itself it cannot throw there, so the refusal is logged at {@code ERROR} and
+ * signalled on {@link Subscription#waitUntilStarted()}, on the handle {@link #resumeSubscription(String)} returns and
+ * on the registration handle as well once that registration asked for the model default and storage has confirmed it
+ * holds nothing.
  * A storage that cannot be read leaves the registration handle waiting rather than reporting a refusal the start may
  * not make. Starting a refused subscription is what drops it, so it is registered again rather than resumed, and one
  * that was never started holds its id until {@link #cancelSubscription(String)} releases it.
