@@ -1,10 +1,10 @@
 schema_version: 2
 epic: cdx33d
-revision: 4
-updated_at: 2026-08-15 06:20:00+00:00
-updated_by: 'orchestrator: D2 DONE (PR 794 merged f073e39, finding-6 rename half declined on verified evidence); D1 plan
-  gated (Q1 ruled by Johan: empty capture in scope on both stacks; Q2/Q3 derived), implementation dispatched as act-004;
-  D1 RUNNING'
+revision: 5
+updated_at: 2026-08-15 06:55:00+00:00
+updated_by: 'orchestrator: D1 implementation redispatched as an isolation-worktree agent after two structural permission
+  stops by the resumed planner (both correct refusals, journaled in act-004); plan, rulings and corrected changelog map carried
+  in the new brief verbatim'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -54,10 +54,14 @@ pending_actions:
     refusal on both stacks per Q1, raw propagation per Q2, handle carries failure per Q3, tests X1-X10 plus blocking twins
     with mutations, ripple incl. changelog:96 and :27 in-place amendments, ADR 89 paragraph, three held docs branches incl.
     0.33.0-release-notes refusal-paragraph catch-up'
-  expected: PR delivered to done off f073e39 with DELIVERY_RESULT pinned to the exact head, docs branches pushed; orchestrator
-    runs the adversarial pass, then merges
+  expected: 'PR delivered to done off f073e39 with DELIVERY_RESULT pinned to the exact head, docs branches pushed; orchestrator
+    runs the adversarial pass, then merges. REDISPATCHED: the resumed planning agent could not obtain a writable tree (classifier
+    denies git worktree add in its session; the cross-worktree edit hook blocks edits outside its pinned cwd; EnterWorktree/ExitWorktree
+    refuse from a cwd-pinned subagent) and twice STOPPED rather than work around, incl. refusing the orchestrator-created
+    worktree as permission laundering, the right failure mode both times. Implementation respawned 2026-08-15 as a fresh
+    isolation-worktree Opus agent with the complete ratified plan inlined and the base pinned to f073e39 by explicit fetch-and-checkout'
   status: PENDING
-  attempts: 1
+  attempts: 3
   safe_to_repeat: true
   issued_at: '2026-08-15T06:20:00Z'
 - id: act-003
