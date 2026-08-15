@@ -1,10 +1,12 @@
 schema_version: 2
 epic: cdx33e
-revision: 4
-updated_at: 2026-08-15 19:35:00+00:00
-updated_by: 'orchestrator: E1 DONE (PR 797 merged 06f1b5e, docs verified), watcher-001 RETIRED in the same sweep (last
-  PR-advanceable deliverable met); Johan ruled the dead-anchor cluster as preview-docs-wins-at-release-day; closeout waits
-  on the 06f1b5e matrix'
+revision: 5
+updated_at: 2026-08-15 19:55:00+00:00
+updated_by: 'orchestrator: EPIC CLOSED COMPLETE with the ruled exit condition met, 3 of 3 units DONE and swept, watcher
+  and heartbeat retired, no unresolved pending actions. The enumeration exit ran in full: every cross-branch divergence dispositioned,
+  4 defects fixed (2 beyond the sweep''s findings), the deliberate list recorded, the ambiguous cluster ruled by Johan (preview
+  docs.md wins at release day). Verification of record: main 06f1b5e 24/24 green. Held docs heads: preview 3293762, fencing
+  5fcf235, release-notes cb383b5. Per the tag-sequencing ruling, 0.33.0 is tag-ready NOW'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -47,7 +49,7 @@ units:
       docs tips; the fencing Cluster opener scoped to slot-alignable ids'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -77,7 +79,7 @@ units:
       sentence there (E1 handles the other two branches), so the two units never push the same ref'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -95,9 +97,9 @@ units:
     issue: null
     goal: 'Register: the sweep''s no-blocker verdict recorded beside the release-readiness declaration; the four dispositions;
       the enumeration''s deliberate-divergence list recorded as the release-notes branch''s known shape'
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on:
     - E1
     - E2
@@ -106,8 +108,10 @@ units:
     - check: branch_pushed
       repo: johanhaleby/occurrent
       ref: null
-      met: false
-      evidence: null
+      met: true
+      evidence: 'DONE 2026-08-15: tracker scan clean (only PR 797, fleet-created); the fifth sweep''s no-blocker verdict,
+        the four dispositions, E2''s two extra defect fixes, the deliberate-divergence list, and Johan''s preview-docs-wins
+        ruling all recorded in the ORCHESTRATOR.md closeout block and release-day checklist'
 watchers:
 - id: watcher-001
   kind: github-work-item-monitor
