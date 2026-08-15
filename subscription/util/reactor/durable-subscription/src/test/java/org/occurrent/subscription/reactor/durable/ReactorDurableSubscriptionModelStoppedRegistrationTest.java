@@ -541,6 +541,9 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThat(delegate.subscribedIds).containsExactly(SUBSCRIPTION_ID);
+        assertThat(delegate.startedAt.getFirst())
+                .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+                        startAt -> assertThat(startAt.checkpoint.asString()).isEqualTo("from-a-previous-run"));
         assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT).asString()).isEqualTo("from-a-previous-run");
     }
 
@@ -579,6 +582,11 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
 
         assertThat(delegate.subscribedIds).containsExactly(SUBSCRIPTION_ID);
         assertThat(delegate.feed.globalCheckpointReads).hasValue(1);
+        assertThat(delegate.startedAt).hasSize(1);
+        assertThat(delegate.startedAt.getFirst())
+                .as("the position read here is what the wrapped model is handed, not something for it to resolve later")
+                .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+                        startAt -> assertThat(startAt.checkpoint.asString()).isEqualTo("at-registration"));
         assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT).asString()).isEqualTo("at-registration");
     }
 

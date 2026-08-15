@@ -39,6 +39,7 @@ import java.util.function.Function;
 final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModel {
 
     final List<String> subscribedIds = new CopyOnWriteArrayList<>();
+    final List<StartAt> startedAt = new CopyOnWriteArrayList<>();
     final RecordingSubscriptionModel feed;
     /**
      * A stopped named model parks a registration and opens its feed when it is started, which is what makes a start
@@ -64,6 +65,9 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
                                   Function<CloudEvent, Mono<Void>> action) {
         subscribedIds.add(subscriptionId);
+        // What the durable model hands a named model is the whole of what decides where the subscription begins on
+        // this path, since this model resolves nothing further.
+        startedAt.add(startAt);
         return new Subscription() {
             @Override
             public String id() {
