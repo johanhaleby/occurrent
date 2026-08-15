@@ -1,9 +1,10 @@
 schema_version: 2
 epic: cdx33d
-revision: 3
-updated_at: 2026-08-15 05:50:00+00:00
-updated_by: 'orchestrator: D3 DONE, both held docs branches pushed and verified on origin refs (preview c7894e3, fencing
-  04153cb); D2 PR 794 open awaiting its Copilot loop; D1 planning in flight'
+revision: 4
+updated_at: 2026-08-15 06:20:00+00:00
+updated_by: 'orchestrator: D2 DONE (PR 794 merged f073e39, finding-6 rename half declined on verified evidence); D1 plan
+  gated (Q1 ruled by Johan: empty capture in scope on both stacks; Q2/Q3 derived), implementation dispatched as act-004;
+  D1 RUNNING'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -23,9 +24,14 @@ pending_actions:
   target: 'D1 planning subagent (Opus/high, read-only, plan_approval_venue orchestrator): reactor registration-read refusal
     design per the meta-plan''s five settle-points (failed-vs-empty distinction, capture paths, test rewrite + regression
     shape, ripple sweep, blocking parity both directions)'
-  expected: a unit plan handed back; gate through the orchestrator with Johan ruling taste questions while present; implementation
-    dispatched separately after the gate
-  status: PENDING
+  expected: 'a unit plan handed back; gate through the orchestrator with Johan ruling taste questions while present; implementation
+    dispatched separately after the gate. RESOLVED: 2026-08-15: registration-grade plan returned, correcting three brief premises
+    (falsified claim is changelog:96, blocker confined to the cold-primitive path for out-of-tree wrapped models, stopped
+    path cannot throw synchronously under the monitor) and finding the empty-capture silent twin on both stacks plus the third
+    held branch docs/0.33.0-release-notes missing the refusal paragraph. Gate: Q1 ruled by Johan (empty IN SCOPE, both stacks''
+    pin paths), Q2 raw propagation and Q3 handle-carries-failure decided by derivation, changelog:27 flag refuted by direct
+    read (already names StartPositionAlreadyPinnedException). Implementation dispatched as the same agent resumed'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-15T05:25:00Z'
@@ -33,11 +39,27 @@ pending_actions:
   type: workflow-dispatch
   target: 'D2 subagent (Sonnet/high): changelog.md:38 delete-safety proof completion and :67/:93/:106 IntrospectableSubscriptions
     rename, one PR off d05b3d9'
-  expected: PR delivered with DELIVERY_RESULT; orchestrator verifies and merges under standing authority
-  status: PENDING
+  expected: 'PR delivered with DELIVERY_RESULT; orchestrator verifies and merges under standing authority. RESOLVED: 2026-08-15:
+    PR 794 delivered and merged as f073e39 (CAS ee49921, marker-free squash, Copilot clean, 0 threads). Deviation ratified
+    on orchestrator-verified evidence: lines 67/93/106 sit in the released 0.32.0 section and the occurrent-0.32.0 tag shipped
+    IntrospectableSubscriptionModel, so those entries are historically accurate and Codex finding 6''s unreleased-entries
+    premise was wrong; only the delete-safety proof was fixed. Decline recorded for CREG'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: true
   issued_at: '2026-08-15T05:25:00Z'
+- id: act-004
+  type: workflow-dispatch
+  target: 'D1 implementation (same agent resumed, context preserved, Opus/high): B1/B2/B3 on the reactor cold path, empty-capture
+    refusal on both stacks per Q1, raw propagation per Q2, handle carries failure per Q3, tests X1-X10 plus blocking twins
+    with mutations, ripple incl. changelog:96 and :27 in-place amendments, ADR 89 paragraph, three held docs branches incl.
+    0.33.0-release-notes refusal-paragraph catch-up'
+  expected: PR delivered to done off f073e39 with DELIVERY_RESULT pinned to the exact head, docs branches pushed; orchestrator
+    runs the adversarial pass, then merges
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: true
+  issued_at: '2026-08-15T06:20:00Z'
 - id: act-003
   type: workflow-dispatch
   target: 'D3 subagent (Sonnet/high): findings 2-4 plus docs halves of 5-6 on both held docs branches (preview 9b7c378, fencing
@@ -57,7 +79,7 @@ units:
       the position pinned at start is the position captured at registration, or registration/start fails visibly; no path
       pins a later read; a legitimately-empty capture keeps its documented meaning. Blocking stack is the settled reference
       shape (forget-and-rethrow)'
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -73,7 +95,7 @@ units:
     goal: 'Library release prose (findings 5 and 6, library halves): changelog.md:38 delete-safety proof completed with the
       forStandalone-to-Cluster migration case, and the stale IntrospectableSubscriptionModel name at :67/:93/:106 renamed
       to IntrospectableSubscriptions'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -81,9 +103,11 @@ units:
     deliverables:
     - check: pr_merged
       repo: johanhaleby/occurrent
-      ref: null
-      met: false
-      evidence: null
+      ref: '794'
+      met: true
+      evidence: 'MERGED 2026-08-15 as squash f073e39, CAS-pinned to ee49921 (md-only diff, no checks by paths-ignore design,
+        Copilot review clean with no suppressed block, 0 unresolved threads, squash body marker-free). Fix 1 verified against
+        the javadoc and migration guide; fix 2 correctly declined as historically-accurate released-section entries'
   D3:
     issue: null
     goal: 'Held docs branches (findings 2, 3 narrow, 4, and the docs halves of 5 and 6): news behave-exactly-as-before join
