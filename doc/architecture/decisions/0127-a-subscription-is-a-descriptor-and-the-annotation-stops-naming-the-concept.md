@@ -110,7 +110,7 @@ type-derived selector, the way `Projection.filter()` does.
 **The split cuts the other way too, so the selector attributes leave the annotations.** `eventTypes` on all four
 subscription annotations and `tags` on `@DcbSubscription` describe which events are wanted, which is the descriptor's
 half, and leaving them on the annotation would give one subscription two places to say it with no rule for which wins.
-The new annotations do not carry them. The recipe moves a declared `eventTypes` into the descriptor's handler
+The new annotations do not have them. The recipe moves a declared `eventTypes` into the descriptor's handler
 registrations and a declared `tags` into its criteria, and this is the one part of the rewrite that changes a
 selector rather than moving a body, so the migration guide calls it out.
 
