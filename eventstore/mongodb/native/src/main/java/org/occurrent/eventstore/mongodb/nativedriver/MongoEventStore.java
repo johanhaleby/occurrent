@@ -175,16 +175,17 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
         }
 
-        // Uses "lte" currentStreamVersion instead of a transaction on read, so an event another thread inserts
-        // after currentStreamVersion is read does not matter.
-        Bson query = streamIdAndStreamVersionLessThanOrEqualTo(streamId, currentStreamVersion);
+        // Uses "lte" currentStreamVersion instead of a transaction on read, so an event another thread inserts after
+        // currentStreamVersion is read does not matter. "skip" is folded into the version bound here, before the
+        // filter narrows the query, so it keeps counting stream positions instead of filtered documents.
+        Bson query = streamIdAndStreamVersionBetween(streamId, skip, currentStreamVersion);
         if (streamReadFilter != null) {
             StreamReadFilterValidator.validate(streamReadFilter);
             Filter mapped = StreamReadFilterToFilterMapper.map(streamReadFilter);
             Bson streamReadBsonFilter = FilterToBsonFilterConverter.convertFilterToBsonFilter(timeRepresentation, mapped);
             query = and(query, streamReadBsonFilter);
         }
-        Stream<Document> documentStream = readCloudEvents(query, skip, limit, SortBy.streamVersion(ASCENDING));
+        Stream<Document> documentStream = readCloudEvents(query, 0, limit, SortBy.streamVersion(ASCENDING));
         return new EventStreamImpl<>(streamId, currentStreamVersion, documentStream);
     }
 
@@ -234,12 +235,16 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         Bson sort = convertToMongoDBSort(sortBy);
         final FindIterable<Document> documentsWithSkipAndLimitAndSort;
         if (sort == null) {
-            documentsWithSkipAndLimitAndSort = documentsWithoutSkipAndLimit;
+            documentsWithSkipAndLimitAndSort = documentsWithSkipAndLimit;
         } else {
             documentsWithSkipAndLimitAndSort = documentsWithSkipAndLimit.sort(sort);
         }
 
-        return StreamSupport.stream(queryOptions.apply(documentsWithSkipAndLimitAndSort).spliterator(), false);
+        // Built from the FindIterable's own cursor, with onClose wired to it, so closing the returned Stream (a
+        // Kotlin `.use { }` included) releases the MongoCursor instead of leaving it open server-side.
+        MongoCursor<Document> cursor = queryOptions.apply(documentsWithSkipAndLimitAndSort).iterator();
+        return StreamSupport.stream(Spliterators.spliteratorUnknownSize(cursor, Spliterator.ORDERED | Spliterator.NONNULL), false)
+                .onClose(cursor::close);
     }
 
     @Override
@@ -937,8 +942,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         return eq(STREAM_ID, streamId);
     }
 
-    private static Bson streamIdAndStreamVersionLessThanOrEqualTo(String streamId, long version) {
-        return and(streamIdEqualTo(streamId), lte(STREAM_VERSION, version));
+    // "afterVersion" is exclusive, matching ExecuteOptions.fromStreamVersion and the "skip N stream positions"
+    // reading of EventStore.read's skip parameter, so a skip of 0 keeps every event and a skip of N drops the
+    // first N regardless of whether a StreamReadFilter narrows the result further.
+    private static Bson streamIdAndStreamVersionBetween(String streamId, long afterVersion, long uptoAndIncludingVersion) {
+        return and(streamIdEqualTo(streamId), gt(STREAM_VERSION, afterVersion), lte(STREAM_VERSION, uptoAndIncludingVersion));
     }
 
     private static Bson toDcbBsonQuery(DcbCriteria criteria, long afterPosition, long upperSequencePosition) {

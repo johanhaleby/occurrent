@@ -775,9 +775,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
         }
 
-        // Uses "lte" currentStreamVersion instead of a transaction on read, so an event another thread inserts
-        // after currentStreamVersion is read does not matter.
-        Query query = Query.query(streamIdEqualToCriteria(streamId).and(STREAM_VERSION).lte(currentStreamVersion));
+        // Uses "lte" currentStreamVersion instead of a transaction on read, so an event another thread inserts after
+        // currentStreamVersion is read does not matter. "skip" is folded into the version bound here, before the
+        // filter narrows the query, so it keeps counting stream positions instead of filtered documents.
+        Query query = Query.query(streamIdEqualToCriteria(streamId).and(STREAM_VERSION).gt((long) skip).lte(currentStreamVersion));
 
         if (streamReadFilter != null) {
             StreamReadFilterValidator.validate(streamReadFilter);
@@ -786,7 +787,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             query.addCriteria(criteria);
         }
 
-        Stream<Document> stream = readCloudEvents(readOptions.apply(query), skip, limit, SortBy.streamVersion(ASCENDING));
+        Stream<Document> stream = readCloudEvents(readOptions.apply(query), 0, limit, SortBy.streamVersion(ASCENDING));
         return new EventStreamImpl<>(streamId, currentStreamVersion, stream);
     }
 
