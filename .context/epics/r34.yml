@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 37
-updated_at: 2026-08-17T05:30:00Z
+revision: 38
+updated_at: 2026-08-17T05:50:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -224,7 +224,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: [U10A]
-    session: "background subagent, delivered PR 829 at 05:3xZ, still in its pr-fix loop, completion report pending"
+    session: "background subagent, delivered PR 829 then STOPPED expecting to auto-resume, which subagents do not. On 829 reaching checks-done plus review-present, orchestrator messages the agent to run its thread pass, or does the pass itself if the agent fails to resume"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "750", met: false, evidence: null}
