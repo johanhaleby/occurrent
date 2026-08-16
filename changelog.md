@@ -4,6 +4,9 @@
 
 #### Changes
 
+* **Reading a stream with a `StreamReadFilter` and a nonzero skip now resumes from the correct stream position, on every event store Occurrent ships.** The native, Spring blocking, Spring reactive, and in-memory stores previously applied skip after the filter had already narrowed the result, so it counted matching events instead of stream positions. `ApplicationService#execute` with both `ExecuteOptions.fromStreamVersion(n)` and a filter set could silently resume from the wrong place in the stream because of this. Fixes [#810](https://github.com/johanhaleby/occurrent/issues/810).
+* **The native MongoDB store no longer leaks a `MongoCursor` when a stream read's `Stream` is closed early**, including through Kotlin's `.use { }`. The Spring store already closed correctly here. While tracking this down I also found a dead branch in the same method that looked like it dropped `skip` and `limit` on an unsorted query, but never actually did, because the MongoDB driver's query builder mutates itself in place regardless of which branch runs. Cleaned it up anyway, with no behavior change. Fixes [#810](https://github.com/johanhaleby/occurrent/issues/810).
+
 #### Breaking changes
 
 ### Changelog 0.33.0 (2026-08-16)

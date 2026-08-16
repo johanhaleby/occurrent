@@ -414,12 +414,28 @@ public abstract class StreamEventStoreConformance extends EventStoreConformance 
         void pages_a_filtered_read_without_changing_the_reported_version() {
             writeThreeEvents();
 
+            // Skip counts stream positions, not filtered matches. Skipping 1 drops event-1 (streamVersion 1)
+            // regardless of the filter, leaving event-2 and event-3 as candidates, of which the limit keeps the
+            // first.
             EventStream<CloudEvent> stream = filteredReader().read(STREAM_ID, StreamReadFilter.type(CHANGED), 1, 1);
 
             assertAll(
                     () -> assertThat(stream.version()).isEqualTo(3L),
-                    () -> assertThat(idsOf(stream.eventList())).containsExactly("event-3")
+                    () -> assertThat(idsOf(stream.eventList())).containsExactly("event-2")
             );
+        }
+
+        @Test
+        void skip_counts_stream_positions_even_when_the_filter_excludes_some_of_them() {
+            // event-1 and event-2 are skipped by stream position. event-2 would also fail the filter, so a skip
+            // that counted filtered matches instead of stream positions would only drop event-1 here, and return
+            // event-2 as well.
+            eventStore().write(STREAM_ID, List.of(
+                    event("event-1", CHANGED), event("event-2", DEFINED), event("event-3", CHANGED), event("event-4", CHANGED)));
+
+            EventStream<CloudEvent> stream = filteredReader().read(STREAM_ID, StreamReadFilter.type(CHANGED), 2, 10);
+
+            assertThat(idsOf(stream.eventList())).containsExactly("event-3", "event-4");
         }
 
         private void writeThreeEvents() {

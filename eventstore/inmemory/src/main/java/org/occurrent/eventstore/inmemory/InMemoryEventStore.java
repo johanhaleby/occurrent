@@ -606,34 +606,30 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
     @Override
     public EventStream<CloudEvent> read(String streamId, @Nullable StreamReadFilter filter, int skip, int limit) {
         List<CloudEvent> events = state.get(streamId);
-        record StreamVersionAndEvents(long version, List<CloudEvent> events) {
-        }
-
-        final StreamVersionAndEvents streamVersionAndEvents;
         if (events == null) {
             return new EventStreamImpl(streamId, 0, Collections.emptyList());
         }
 
         var streamVersion = calculateStreamVersion(events);
+
+        // "skip" counts stream positions, so it applies to the raw per-stream list before the filter runs, not
+        // to the filtered result. "limit" stays a cap on the filtered result, at most this many matches.
+        List<CloudEvent> eventsAfterSkip = skip == 0 ? events : events.subList(Math.min(skip, events.size()), events.size());
+
         List<CloudEvent> eventsAfterFilter;
         if (filter == null) {
-            eventsAfterFilter = events;
+            eventsAfterFilter = eventsAfterSkip;
         } else {
             StreamReadFilterValidator.validate(filter);
             Filter readFilter = StreamReadFilterToFilterMapper.map(filter);
-            eventsAfterFilter = events.stream().filter(cloudEvent -> matchesFilter(cloudEvent, readFilter, dataFieldReader)).toList();
+            eventsAfterFilter = eventsAfterSkip.stream().filter(cloudEvent -> matchesFilter(cloudEvent, readFilter, dataFieldReader)).toList();
         }
 
-        if (skip == 0 && limit == Integer.MAX_VALUE) {
-            streamVersionAndEvents = new StreamVersionAndEvents(streamVersion, eventsAfterFilter);
-        } else {
-            int fromIndex = Math.min(skip, eventsAfterFilter.size());
-            long requestedToIndex = (long) fromIndex + (long) limit;
-            int toIndex = (int) Math.min(requestedToIndex, eventsAfterFilter.size());
-            streamVersionAndEvents = new StreamVersionAndEvents(streamVersion, eventsAfterFilter.subList(fromIndex, toIndex));
-        }
+        List<CloudEvent> result = limit == Integer.MAX_VALUE
+                ? eventsAfterFilter
+                : eventsAfterFilter.subList(0, (int) Math.min((long) limit, eventsAfterFilter.size()));
 
-        return new EventStreamImpl(streamId, streamVersionAndEvents.version, streamVersionAndEvents.events);
+        return new EventStreamImpl(streamId, streamVersion, result);
     }
 
     private static class EventStreamImpl implements EventStream<CloudEvent> {
