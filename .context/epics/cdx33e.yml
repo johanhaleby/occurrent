@@ -1,11 +1,9 @@
 schema_version: 2
 epic: cdx33e
-revision: 14
-updated_at: 2026-08-16 13:10:00+00:00
-updated_by: 'orchestrator: E9 dispatched (Opus, step-conditions restructure per Johan''s round-two feedback; the failure
-  class is concept ORDER, now a cold-reader check recorded in the johan-writing documentation surface at 49f4da8); the predicate-name
-  API question answered from FlowSagaImpl 659-662 and folded into the brief; Johan''s primary docs checkout fast-forwarded
-  to cd41668 at his flag so his local jekyll shows current content. E8 still implementing'
+revision: 15
+updated_at: 2026-08-16 14:00:00+00:00
+updated_by: 'orchestrator: E9 DONE and verified (preview 32464a1), release-notes re-aligned (8d87245), Johan''s local checkout
+  fast-forwarded; E8 in its Copilot loop on PR 798, the tag still waits only on its merge'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -211,7 +209,7 @@ units:
       dissolved or rewritten, transitionTo re-entry semantics verified in code before writing, and the predicate-name truth
       stated plainly (needed only under stepWindow, count irrelevant, harmless without). After it lands, release-notes docs
       content must be RE-ALIGNED to preview (E7''s alignment predates this rewrite)'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -220,13 +218,17 @@ units:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-preview
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed cd41668 -> 32464a1, verified on the origin ref: all ten quoted sentences gone, the Counted Conditions
+        and stepWindow subsection present (TOC :138, heading :5983, cross-reference :6562), concept-order table delivered
+        with introduction preceding first use for every load-bearing term, every behavioral claim code-cited incl. re-entry-resets
+        and the fingerprint-omits-count fact, one exposed contradiction in the five-things list fixed along the way'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-release-notes
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Re-aligned by the orchestrator at 8d87245: docs.md byte-identical to preview 32464a1 (0-line diff verified
+        before commit). Johan''s primary checkout also fast-forwarded to 32464a1 so his local jekyll shows the restructure'
   CREG:
     issue: null
     goal: 'Register: the sweep''s no-blocker verdict recorded beside the release-readiness declaration; the four dispositions;
