@@ -1,7 +1,7 @@
 schema_version: 2
 epic: cdx33e
-revision: 26
-updated_at: 2026-08-17 07:10:00+00:00
+revision: 27
+updated_at: 2026-08-17 08:20:00+00:00
 updated_by: 'orchestrator: EPIC RE-CLOSED COMPLETE for the second and final time, 11 of 11 units DONE and swept, all watchers
   and the heartbeat retired, no unresolved pending actions. The post-closeout adopted tail delivered: E4 (reactive CheckpointStorage
   section), E5 (fencing announcement port), E6 and E9 and E11 (three rounds of Johan''s docs feedback with the learnings
@@ -12,10 +12,12 @@ updated_by: 'orchestrator: EPIC RE-CLOSED COMPLETE for the second and final time
   cluster whose opener implied the stored count was optional), each mirrored to both branches so their docs.md stays
   blob-identical, then advanced a third time 2026-08-17 for three gaps Johan found (push feed bean selection and name
   optionality, the register-only-models-do-not-replace-the-default-model rule, and the missing Upgrading to 0.33.0
-  section), then a fourth advance documenting that a push saga ignores an undeclared event type: tag from main 00dfb24;
-  merge docs/0.33.0-preview at 0605ff0 then docs/0.33.0-release-notes at 113685c (docs.md blob acde2513a6 on both, the
-  second merge cannot conflict); docs/checkpoint-fencing retired unmerged. The tag and both docs merges are Johan''s
-  manual acts. Follow-ups filed outside the epic: RabbitSaga/KafkaSaga inspiration on 415 and 417, issue 802 for 0.34.0'
+  section), then a fourth advance documenting that a push saga ignores an undeclared event type. RELEASED 2026-08-17,
+  post dated 2026-08-16: Johan tagged occurrent-0.33.0 at 4c04880e5 (base 00dfb24 plus PR 800 and the changelog-prep
+  commit) and instructed the docs merges, executed by the orchestrator, preview 0605ff0 then release-notes 113685c into
+  docs main at 504532c, post renamed to 2026-08-16-0_33_0.md, occurrentversion 0.33.0, jekyll clean.
+  docs/checkpoint-fencing retired unmerged. Follow-ups outside the epic: RabbitSaga/KafkaSaga inspiration on 415 and
+  417, issue 802 for 0.34.0'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
