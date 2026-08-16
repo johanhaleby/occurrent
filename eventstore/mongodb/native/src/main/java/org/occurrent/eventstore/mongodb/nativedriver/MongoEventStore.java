@@ -167,6 +167,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     }
 
     private EventStreamImpl<Document> readEventStream(String streamId, @Nullable StreamReadFilter streamReadFilter, int skip, int limit) {
+        if (skip < 0) {
+            throw new IllegalArgumentException("skip cannot be negative");
+        }
         // Join the transaction an external executor opened on this thread, if any, so a read of the just-written
         // (still uncommitted) tail issued from inside that transaction sees the events. Without an ambient session
         // this reads non-transactionally, exactly as before.
