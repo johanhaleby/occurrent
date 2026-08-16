@@ -4,6 +4,7 @@
 
 #### Changes
 
+* **A `@Projection(source = PUSH)` fed by a `DomainEventFeed` the starter can identify without creating it no longer fails startup under an id-sensitive `CheckpointStorage`, fixing behaviour shipped in 0.33.0.** The Spring Boot starter's fencing check used to ask about every push projection's id once `catchup` defaulted to `FROM_EVENT_STORE`, even for a `DomainEventFeed`-fed projection, which never resolves `CheckpointStorage` at all. A storage refusing that id's shape, `SpringRedisCheckpointStorage`'s Cluster-safe mode for example, could sink startup for a projection that would never have written a fenced checkpoint. A feed bean the starter cannot type read-only, an ambiguous or otherwise unresolvable one, stays checked, the same conservative behaviour as before this fix. See [section 8 of the upgrade guide](doc/migration/upgrading-to-0.33.0.md#8-three-ways-the-spring-boot-starter-now-refuses-to-start). Resolves [#788](https://github.com/johanhaleby/occurrent/issues/788).
 * **`SagaFilters` is now public, in `dsl/saga-dsl/common` (`org.occurrent.dsl.saga.internal.SagaFilters`), instead of package-private in `dsl/saga-dsl/blocking`.** It composes the filter a saga subscribes on, mirroring the already-public `ProjectionFilters` in `dsl/projection-dsl/common`, so a future reactive saga runner can reuse it instead of writing the same composition again. Nothing public shipped from the old location, so this is a straight addition. Resolves [#786](https://github.com/johanhaleby/occurrent/issues/786).
 
 #### Breaking changes

@@ -39,8 +39,7 @@ import java.util.Set;
  * {@link #check(ApplicationContext, Set)} itself before it registers anything, since a push projection or saga writes
  * a checkpoint while catching up and would reach that write first, and passes the subscription ids the id-specific
  * check below asks about. {@link CheckpointStorageCannotFenceSubscriptionException}'s javadoc says exactly which
- * ids those are, which are left out even though the storage might refuse them, and which are asked about even
- * though the storage refusing them would never matter.
+ * ids those are, and which are left out even though the storage might refuse them.
  */
 class CheckpointFencingConfigurationCheck implements SmartInitializingSingleton {
 

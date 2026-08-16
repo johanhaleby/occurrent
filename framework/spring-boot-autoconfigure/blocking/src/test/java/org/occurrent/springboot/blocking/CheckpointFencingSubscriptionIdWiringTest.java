@@ -16,19 +16,33 @@
 
 package org.occurrent.springboot.blocking;
 
+import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.Mode;
 import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.Source;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.net.URI;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -53,6 +67,8 @@ class CheckpointFencingSubscriptionIdWiringTest {
     private static final String SUBSCRIPTION_ID_B = "proj-fenced-b";
     private static final String SUBSCRIPTION_ID_SYNC = "proj-sync";
     private static final String SUBSCRIPTION_ID_NO_CATCHUP = "proj-no-catchup";
+    private static final String SUBSCRIPTION_ID_DOMAIN_FEED = "proj-domain-feed";
+    private static final String SUBSCRIPTION_ID_PUSH_MODEL = "proj-push-model";
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -135,6 +151,72 @@ class CheckpointFencingSubscriptionIdWiringTest {
                 .run(context -> verify(checkpointStorage, never()).evaluatesWriteConditionsFor(SUBSCRIPTION_ID_NO_CATCHUP));
     }
 
+    @Test
+    void a_push_projections_id_fed_by_a_domainEventFeed_is_never_asked_about_even_with_the_default_catchup() {
+        // registerDomainPushProjection never resolves CheckpointStorage at all, whatever catchup says, unlike the
+        // PushSubscriptionModel path, which does exactly that once catchup defaults to FROM_EVENT_STORE. So an
+        // id-sensitive storage that refuses every id, as SpringRedisCheckpointStorage's Cluster-safe mode does for
+        // one id shape, must not fail startup here, since this projection never reaches that storage.
+        CompetingConsumerStrategy strategy = mock(CompetingConsumerStrategy.class);
+        CheckpointStorage checkpointStorage = mock(CheckpointStorage.class);
+        when(checkpointStorage.evaluatesWriteConditions()).thenReturn(true);
+        when(checkpointStorage.evaluatesWriteConditionsFor(any())).thenReturn(false);
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(DomainEventFeedProjectionConfiguration.class)
+                .withBean(CompetingConsumerStrategy.class, () -> strategy)
+                .withBean(CheckpointStorage.class, () -> checkpointStorage)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    verify(checkpointStorage, never()).evaluatesWriteConditionsFor(SUBSCRIPTION_ID_DOMAIN_FEED);
+                });
+    }
+
+    @Test
+    void a_push_projections_id_fed_by_a_confirmed_pushSubscriptionModel_is_still_asked_about_at_the_default_catchup() {
+        // The mirror of the DomainEventFeed test above. Once resolveFeedBeanType confirms the feed bean is a
+        // PushSubscriptionModel rather than leaving it unknown, the id must stay in idsToCheck, since that path
+        // does resolve CheckpointStorage once catchup defaults to FROM_EVENT_STORE.
+        CompetingConsumerStrategy strategy = mock(CompetingConsumerStrategy.class);
+        CheckpointStorage checkpointStorage = mock(CheckpointStorage.class);
+        when(checkpointStorage.evaluatesWriteConditions()).thenReturn(true);
+        when(checkpointStorage.evaluatesWriteConditionsFor(any())).thenReturn(false);
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(ConfirmedPushSubscriptionModelProjectionConfiguration.class)
+                .withBean(CompetingConsumerStrategy.class, () -> strategy)
+                .withBean(CheckpointStorage.class, () -> checkpointStorage)
+                .run(context -> assertThat(context).getFailure()
+                        .isInstanceOf(CheckpointStorageCannotFenceSubscriptionException.class)
+                        .hasMessageContaining(SUBSCRIPTION_ID_PUSH_MODEL));
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class ConfirmedPushSubscriptionModelProjectionConfiguration {
+        @Bean
+        PushSubscriptionModel pushSubscriptionModel() {
+            return mock(PushSubscriptionModel.class);
+        }
+
+        @Bean
+        ConfirmedPushModelProjection confirmedPushModelProjection() {
+            return new ConfirmedPushModelProjection();
+        }
+    }
+
+    static class ConfirmedPushModelProjection {
+        @Projection(id = SUBSCRIPTION_ID_PUSH_MODEL, source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
     @Configuration(proxyBeanMethods = false)
     @EnableConfigurationProperties(OccurrentProperties.class)
     static class SynchronousProjectionConfiguration {
@@ -165,6 +247,74 @@ class CheckpointFencingSubscriptionIdWiringTest {
 
     static class NoCatchupPushProjection {
         @Projection(id = SUBSCRIPTION_ID_NO_CATCHUP, source = Source.PUSH, catchup = org.occurrent.annotation.Catchup.NONE)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class DomainEventFeedProjectionConfiguration {
+        @Bean
+        ViewStateRepository<Integer, String> viewStateRepository() {
+            Map<String, Integer> store = new ConcurrentHashMap<>();
+            return ViewStateRepository.create(store::get, (id, value) -> store.put(id, value));
+        }
+
+        @Bean
+        CloudEventConverter<TestEvent> cloudEventConverter() {
+            return new CloudEventConverter<>() {
+                @Override
+                public CloudEvent toCloudEvent(TestEvent domainEvent) {
+                    return CloudEventBuilder.v1().withId(domainEvent.eventId()).withSource(URI.create("urn:test")).withType("TestEvent").build();
+                }
+
+                @Override
+                public TestEvent toDomainEvent(CloudEvent cloudEvent) {
+                    return new TestEvent(cloudEvent.getId());
+                }
+
+                @Override
+                public String getCloudEventType(Class<? extends TestEvent> type) {
+                    return type.getSimpleName();
+                }
+            };
+        }
+
+        // An empty reader replays no history, which the fencing check running before this feed's catch-up makes
+        // enough to let the context refresh complete, with no event store bean needed.
+        @Bean
+        DomainEventFeed<TestEvent> domainEventFeed(CloudEventConverter<TestEvent> converter) {
+            PositionOrderedReader reader = new PositionOrderedReader() {
+                @Override
+                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    return Stream.empty();
+                }
+
+                @Override
+                public long currentPosition() {
+                    return 0;
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+            return new DomainEventFeed<>(reader, converter, TestEvent::eventId);
+        }
+
+        @Bean
+        DomainFeedProjection domainFeedProjection() {
+            return new DomainFeedProjection();
+        }
+    }
+
+    static class DomainFeedProjection {
+        @Projection(id = SUBSCRIPTION_ID_DOMAIN_FEED, source = Source.PUSH)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
                     .id(event -> "k")
