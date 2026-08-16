@@ -323,20 +323,21 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
 
             // For a non-generic return type (`returnTypeArgFqn` null), a plain assignability check is exact enough.
             // For Mono, `TypeUtils.isAssignableTo(String, JavaType)` only compares the raw type, so `Mono<String>`
-            // would otherwise pass as freely as the required `Mono<Checkpoint>` or `Mono<Long>`. Unwrapping the
-            // parameterized type and checking its own single type argument is what tells them apart.
+            // would otherwise pass as freely as the required `Mono<Checkpoint>` or `Mono<Long>`. A raw, unparameterized
+            // `Mono` is still a legal override of `Mono<Checkpoint>`, with an unchecked-conversion warning rather
+            // than an error (confirmed with javac), so that case is accepted the same way as before. Once there is
+            // a type argument to compare, it has to match exactly rather than merely be assignable, since generics
+            // are invariant. `Mono<SubtypeOfCheckpoint>` does not compile as an override of `Mono<Checkpoint>`
+            // either, confirmed the same way.
             private boolean isOverrideCompatibleReturnType(@Nullable JavaType actual, String returnTypeFqn, @Nullable String returnTypeArgFqn) {
-                if (returnTypeArgFqn == null) {
+                if (returnTypeArgFqn == null || !(actual instanceof JavaType.Parameterized)) {
                     return TypeUtils.isAssignableTo(returnTypeFqn, actual);
-                }
-                if (!(actual instanceof JavaType.Parameterized)) {
-                    return false;
                 }
                 JavaType.Parameterized parameterized = (JavaType.Parameterized) actual;
                 List<JavaType> typeParameters = parameterized.getTypeParameters();
                 return TypeUtils.isAssignableTo(returnTypeFqn, parameterized.getType())
                        && typeParameters.size() == 1
-                       && TypeUtils.isAssignableTo(returnTypeArgFqn, typeParameters.get(0));
+                       && TypeUtils.isOfType(JavaType.ShallowClass.build(returnTypeArgFqn), typeParameters.get(0));
             }
 
             private boolean sameParameterTypes(List<JavaType> actual, List<JavaType> expected) {

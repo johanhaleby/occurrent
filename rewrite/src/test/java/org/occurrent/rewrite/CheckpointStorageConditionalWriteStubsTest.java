@@ -1007,6 +1007,86 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
     }
 
     @Test
+    void generatesADelegatingSaveWhenTheClassOwnTwoArgumentSaveHasARawMonoReturnType() {
+        // InMemoryReactorCheckpointStorage's own two-argument save returns a raw Mono, not the parameterized
+        // Mono<Checkpoint> the interface declares. That still compiles as an override, with an unchecked-conversion
+        // warning rather than an error, so it is a genuine two-argument save this class can delegate to, not a
+        // coincidental unrelated method. The delegating stub is still the right one to generate.
+        rewriteRun(
+                java(CHECKPOINT),
+                java(CHECKPOINT_WRITE_CONDITION),
+                java(MONO),
+                java(REACTOR_CHECKPOINT_STORAGE),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+                        import org.occurrent.subscription.api.reactor.CheckpointStorage;
+                        import reactor.core.publisher.Mono;
+
+                        class InMemoryReactorCheckpointStorage implements CheckpointStorage {
+                            @Override
+                            public Mono<Checkpoint> read(String subscriptionId) {
+                                return null;
+                            }
+
+                            @Override
+                            public Mono save(String subscriptionId, Checkpoint checkpoint) {
+                                return Mono.just(checkpoint);
+                            }
+
+                            @Override
+                            public Mono<Void> delete(String subscriptionId) {
+                                return null;
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+                        import org.occurrent.subscription.CheckpointWriteCondition;
+                        import org.occurrent.subscription.api.reactor.CheckpointStorage;
+                        import reactor.core.publisher.Mono;
+
+                        class InMemoryReactorCheckpointStorage implements CheckpointStorage {
+                            @Override
+                            public Mono<Checkpoint> read(String subscriptionId) {
+                                return null;
+                            }
+
+                            @Override
+                            public Mono save(String subscriptionId, Checkpoint checkpoint) {
+                                return Mono.just(checkpoint);
+                            }
+
+                            @Override
+                            public Mono<Void> delete(String subscriptionId) {
+                                return null;
+                            }
+
+                            /* TODO [Occurrent 0.33 upgrade]: this only refuses a condition stronger than any(), delegating any() to the existing two-argument save. Evaluate `condition` for real if this storage can, otherwise this is the permanent answer. See doc/migration/upgrading-to-0.33.0.md. */
+                            @Override
+                            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                                if (!(condition instanceof CheckpointWriteCondition.Any)) {
+                                    return Mono.error(new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported."));
+                                }
+                                return save(subscriptionId, checkpoint);
+                            }
+
+                            /* TODO [Occurrent 0.33 upgrade]: this always answers an empty Mono, correct if this storage cannot evaluate a condition. Signal the version a condition is judged against if it can. See doc/migration/upgrading-to-0.33.0.md. */
+                            @Override
+                            public Mono<Long> writeVersion(String subscriptionId) {
+                                return Mono.empty();
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
     void leavesABlockingImplementerThatAlreadyHasBothMembersUntouched() {
         rewriteRun(
                 java(CHECKPOINT),
