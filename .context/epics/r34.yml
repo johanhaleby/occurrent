@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 11
-updated_at: 2026-08-16T19:30:00Z
+revision: 12
+updated_at: 2026-08-16T19:55:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -48,6 +48,14 @@ pending_actions:
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-16T18:00:00Z
+  - id: act-006
+    type: dispatch-chip
+    target: "U1 remediation chip task_2cf40682 spawned 2026-08-16T19:55Z on PR branch johan/r34-u1-reactor-subscription-fixes, plan gate in session for the atomicity redesign"
+    expected: "PR 812 rebased, three threads fixed or refuted with evidence, green with resolved threads, then DELIVERY_RESULT"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-16T19:55:00Z
 units:
   H1:
     issue: null
@@ -86,7 +94,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_350dd4df, delivered PR 812, 26/26 green but 3 unresolved Copilot threads and now CONFLICTING after 809 changelog merge, worker owns both, expected clean by 19:45Z else escalate"
+    session: "chip task_350dd4df went idle at DONE with 3 substantive Copilot threads unresolved (atomicity gap in the fix, test does not exercise the race, false WARN) and the changelog conflict standing. Remediation chip task_2cf40682 spawned 19:55Z on the same PR branch, awaiting Johan click. Dismiss it if the original session resumes first"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "791", met: false, evidence: null}
