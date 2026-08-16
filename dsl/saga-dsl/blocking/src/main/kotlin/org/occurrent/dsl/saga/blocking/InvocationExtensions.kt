@@ -47,7 +47,7 @@ fun <E : Any> SagaEffects<Invocation<E>>.issue(streamId: String, decision: (List
 
 /**
  * Issue an [Invocation] that runs [decision] against the stream [streamId], for a flow saga. Available in every flow
- * reaction, since `startsOn`, `on`, `join` and `timeout` all share this receiver:
+ * reaction, since `startsOn`, `on` and `timeout` all share this receiver:
  *
  * ```kotlin
  * on<PaymentReserved>(then = end) { issue(it.orderId) { events -> ship(events) } }

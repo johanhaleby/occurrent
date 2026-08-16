@@ -37,9 +37,9 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * How much of that retained history a given callback reads depends on which callback it is. A guard
  * ({@code on(Class, onlyIf, ...)}) and a {@code timeout}'s {@code onExpiry} read all of it, which is what makes a count
- * spanning several steps possible. A window-condition reaction ({@code on(StepCondition, ...)}, and the deprecated
- * {@code join}) reads the step window its condition was evaluated over instead, the events received since the step it
- * fired from was entered, so a count it takes agrees with the count that fulfilled the condition. {@link #initiating()}
+ * spanning several steps possible. A window-condition reaction ({@code on(StepCondition, ...)}) reads the step window
+ * its condition was evaluated over instead, the events received since the step it fired from was entered, so a count
+ * it takes agrees with the count that fulfilled the condition. {@link #initiating()}
  * reaches past the window either way.
  *
  * @param <E> the domain event type

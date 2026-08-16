@@ -12,6 +12,8 @@
 
 #### Breaking changes
 
+* **The flow saga's deprecated `join`, Kotlin's `expect<T>`, and `Expectation` are removed.** `join` was already deprecated in 0.33.0 in favor of `on(StepCondition, ...)` with `allOf(...)`, and that replacement is what every caller now needs. `UpgradeToOccurrent_0_34` rewrites every `join` call whose expectation list is a literal `List.of(...)`/`Arrays.asList(...)` of literal `Expectation.of(...)` calls, collapsing a duplicate-typed pair to the higher of their counts the same way `join` itself did, but only when both counts are integer literals. A list built from a variable or a method call, a duplicate-typed pair whose count is not a literal, and every Kotlin call site (`expect<T>` and `join` alike) are left alone and stop compiling, so the compiler finds them for you. [ADR 125](doc/architecture/decisions/0125-a-lowered-joins-reaction-reads-its-own-window-not-the-whole-retained-history.md) had rejected removing `join` outright, since no recipe covered it and removal would have broken every caller with no automated fix. That recipe is what this release adds, closing the gap ADR 125 identified rather than relitigating it. See [section 1 of the upgrade guide](doc/migration/upgrading-to-0.34.0.md#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed), [#707](https://github.com/johanhaleby/occurrent/issues/707) and [#806](https://github.com/johanhaleby/occurrent/issues/806).
+
 ### Changelog 0.33.0 (2026-08-16)
 
 #### Highlights
