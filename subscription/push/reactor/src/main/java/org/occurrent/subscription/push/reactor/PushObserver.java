@@ -34,14 +34,16 @@ import org.jspecify.annotations.NullMarked;
  * A filter that throws while being evaluated (a supplied {@code DataFieldReader} can) never gets to answer whether
  * it matched. A {@link RuntimeException} or {@link AssertionError} is reported to the observer as {@code false}
  * instead, standing in for the answer that never came, before that error propagates. Any other {@link Error} skips
- * the observer entirely and propagates straight out. If the observer itself then throws while being told about the
- * filter's failure, that throw is attached to the filter's error through {@link Throwable#addSuppressed(Throwable)}
- * rather than propagating on its own, so a filter failure is never replaced by a failure in reporting it.
+ * the observer entirely and propagates straight out.
  * <p>
- * Called with the real {@code matched} instead, the observer can throw too. A {@link RuntimeException} or
- * {@link AssertionError} it throws here is caught and logged rather than propagated, so a broken observer cannot
- * turn an event that was actually delivered into a broker redelivery. Any other {@link Error} it throws here still
- * propagates on its own, once the observer has already run.
+ * Whatever it is being told, the real {@code matched} or a filter's own failure, a {@link RuntimeException} or
+ * {@link AssertionError} the observer throws is caught and logged rather than propagated, so a broken observer
+ * cannot turn an event that was actually delivered into a broker redelivery. That much is the same either way. Any
+ * other {@link Error} the observer throws is not caught, and where it goes next depends on what it was being told.
+ * Told the real {@code matched}, that {@link Error} propagates on its own, once the observer has already run. Told
+ * about a filter's own failure instead, it is attached to that filter's error through
+ * {@link Throwable#addSuppressed(Throwable)} rather than propagating on its own, so a filter failure is never
+ * replaced by a failure in reporting it.
  * <p>
  * The returned {@link reactor.core.publisher.Mono} from {@link PushSubscriptionModel#accept(CloudEvent)} is cold, so
  * "once per event" means once per subscription to it, not once per event handed to {@code accept(..)}. Subscribing
