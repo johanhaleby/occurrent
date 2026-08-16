@@ -260,9 +260,10 @@ public final class Projection<S extends @Nullable Object, E, ID> {
          * earlier handler.
          * <p>
          * The registered types also become {@link Projection#eventTypes()}, the selector a runner uses when no explicit
-         * {@link #filter(Filter) filter} is set. Register concrete event types: a handler keyed on a supertype still
-         * folds every matching event, but a type filter derived from that supertype key matches no stored event, so set
-         * an explicit {@link #filter(Filter) filter} when you fold by a supertype.
+         * {@link #filter(Filter) filter} is set. A handler registered on a sealed supertype asks for every concrete type
+         * it permits, the same expansion the saga DSL and the subscription annotations apply, so folding by a supertype
+         * needs no explicit filter. A registered type whose concrete types cannot all be found is refused when the
+         * filter is derived, naming the type and the remedy.
          *
          * @param type    the event type this handler folds
          * @param handler the fold: current state and the event, returning the new state

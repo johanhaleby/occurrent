@@ -18,11 +18,9 @@ package org.occurrent.dsl.projection.internal;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.condition.Condition;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.filter.Filter;
-
-import java.util.List;
+import org.occurrent.filter.internal.EventTypeExpansion;
 
 import static java.util.Objects.requireNonNull;
 
@@ -37,13 +35,14 @@ public final class ProjectionFilters {
     }
 
     /**
-     * The plain {@link Filter} a projection selects on: its explicit {@link Projection#filter() filter} if set,
-     * otherwise a type filter over its {@link Projection#eventTypes() handled event types} (resolved to CloudEvent type
-     * strings through {@code cloudEventConverter}, empty means all events).
-     * <p>
-     * The type-to-filter mapping deliberately re-implements the subscription DSL's {@code filterFromEventTypes} rather
-     * than depend on {@code subscription-dsl-common}, keeping this module independent of the subscription stack.
+     * The plain {@link Filter} a projection selects on. Its explicit {@link Projection#filter() filter} wins if set,
+     * otherwise this derives a type filter over its {@link Projection#eventTypes() handled event types}, expanded
+     * through {@link EventTypeExpansion#deriveFilter} the same way the saga DSL and the subscription annotations
+     * already do, so a handler registered on a sealed supertype asks for every concrete type it permits. Empty means
+     * all events. A registered type whose concrete types cannot all be found is refused, naming the type and the
+     * remedy.
      */
+    @SuppressWarnings("unchecked")
     public static <E> Filter filterFor(CloudEventConverter<E> cloudEventConverter, Projection<?, E, ?> projection) {
         requireNonNull(cloudEventConverter, "cloudEventConverter cannot be null");
         requireNonNull(projection, "projection cannot be null");
@@ -51,13 +50,24 @@ public final class ProjectionFilters {
         if (explicit != null) {
             return explicit;
         }
-        List<Condition<String>> typeConditions = projection.eventTypes().stream()
-                .map(type -> Condition.eq(cloudEventConverter.getCloudEventType(type)))
-                .toList();
-        return switch (typeConditions.size()) {
-            case 0 -> Filter.all();
-            case 1 -> Filter.type(typeConditions.getFirst());
-            default -> Filter.type(Condition.or(typeConditions));
-        };
+        return EventTypeExpansion.deriveFilter(projection.eventTypes(),
+                type -> cloudEventConverter.getCloudEventType((Class<? extends E>) type),
+                ProjectionFilters::cannotDeriveFilterFor);
+    }
+
+    private static IllegalArgumentException cannotDeriveFilterFor(Class<?> eventType) {
+        if (eventType.isArray()) {
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be a registered event type, since this expansion does not support an array. Register the concrete event types instead.");
+        }
+        if (eventType.isPrimitive()) {
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be a registered event type, since no event is ever an instance of a primitive type. Register the concrete event types instead.");
+        }
+        return new IllegalArgumentException("the concrete event types dispatch would accept for " + eventType.getName()
+                + " cannot all be enumerated, so a filter derived from it would miss some of them. Register the concrete "
+                + "event types instead, make " + eventType.getSimpleName() + " and every level below it final or sealed, "
+                + "or set an explicit filter(...), which is used instead of deriving one and is the way out when a "
+                + "CloudEventTypeMapper of your own maps the whole hierarchy onto a single CloudEvent type string.");
     }
 }

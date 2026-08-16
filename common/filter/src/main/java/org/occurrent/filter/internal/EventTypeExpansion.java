@@ -16,6 +16,9 @@
 
 package org.occurrent.filter.internal;
 
+import org.occurrent.condition.Condition;
+import org.occurrent.filter.Filter;
+
 import java.lang.reflect.Modifier;
 import java.util.Collections;
 import java.util.HashSet;
@@ -41,14 +44,14 @@ import static java.util.Objects.requireNonNull;
  * declares a class which is not final, which is behaviour that shipped. Events written as records or Kotlin data classes
  * are final already, so the exemption is narrow in practice.
  * <p>
- * Shared by the saga DSL and the subscription annotations, which each derive a type filter from declared event types and
- * each used to walk the hierarchy themselves. The caller formats and throws, because a saga and a subscription have
- * different things to say about the type they were given.
+ * Shared by every DSL that derives a type filter from declared event types, each of which used to walk the hierarchy on
+ * its own. The caller formats and throws, because a saga, a projection, a subscription, a query and a snapshot view all
+ * have different things to say about the type they were given.
  * <p>
- * The rule above governs {@link #expand} and {@link #concreteTypesOf}, the two entry points a derived filter is built
- * from. {@link #expandWhatCanBeFound} walks the same hierarchy for a caller that was handed an explicit filter and so
- * derives none, and it still refuses an array or a primitive. Nothing here relaxes the rule, because a caller with no
- * derived filter has no filter for it to be true of.
+ * The rule above governs {@link #expand}, {@link #concreteTypesOf} and {@link #deriveFilter}, which is {@code expand}
+ * carried the rest of the way to a {@link org.occurrent.filter.Filter}. {@link #expandWhatCanBeFound} walks the same
+ * hierarchy for a caller that was handed an explicit filter and so derives none, and it still refuses an array or a
+ * primitive. Nothing here relaxes the rule, because a caller with no derived filter has no filter for it to be true of.
  */
 public final class EventTypeExpansion {
 
@@ -72,6 +75,35 @@ public final class EventTypeExpansion {
             expanded.addAll(concreteTypesOf(declared, cannotExpand));
         }
         return Collections.unmodifiableSet(expanded);
+    }
+
+    /**
+     * The plain {@link Filter} a caller's declared event types derive: {@link #expand} them and match every CloudEvent
+     * type the expansion names, one {@link Condition#eq} per type, combined with {@link Condition#or} when there is more
+     * than one. No declared types derives {@link Filter#all()}.
+     * <p>
+     * This is the one step every caller that derives a filter from declared event types was hand-rolling its own copy
+     * of, {@code expand} plus the branch on how many types it comes back with. A declared type whose concrete types
+     * cannot all be found is refused here exactly as it is in {@code expand}, since that is where the refusal happens.
+     *
+     * @param cloudEventTypeOf the CloudEvent type string an expanded event type is stored under
+     * @param cannotExpand     builds the exception to throw for a type that cannot be turned into a filter
+     */
+    public static <E> Filter deriveFilter(Set<Class<? extends E>> declaredTypes,
+                                          Function<Class<?>, String> cloudEventTypeOf,
+                                          Function<Class<?>, RuntimeException> cannotExpand) {
+        requireNonNull(declaredTypes, "declaredTypes cannot be null");
+        requireNonNull(cloudEventTypeOf, "cloudEventTypeOf cannot be null");
+        requireNonNull(cannotExpand, "cannotExpand cannot be null");
+        Set<Class<? extends E>> expanded = expand(declaredTypes, cannotExpand);
+        List<Condition<String>> typeConditions = expanded.stream()
+                .map(type -> Condition.eq(cloudEventTypeOf.apply(type)))
+                .toList();
+        return switch (typeConditions.size()) {
+            case 0 -> Filter.all();
+            case 1 -> Filter.type(typeConditions.getFirst());
+            default -> Filter.type(Condition.or(typeConditions));
+        };
     }
 
     /**

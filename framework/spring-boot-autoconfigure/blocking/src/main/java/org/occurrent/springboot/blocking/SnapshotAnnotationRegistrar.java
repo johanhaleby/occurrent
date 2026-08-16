@@ -22,7 +22,6 @@ import kotlin.Unit;
 import kotlin.jvm.functions.Function2;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
-import org.occurrent.condition.Condition;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.snapshot.DcbSnapshotKeys;
 import org.occurrent.dsl.snapshot.DcbSnapshotView;
@@ -37,6 +36,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.filter.Filter;
+import org.occurrent.filter.internal.EventTypeExpansion;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
@@ -303,19 +303,31 @@ class SnapshotAnnotationRegistrar {
         return result;
     }
 
+    @SuppressWarnings("unchecked")
     private static <E> Filter snapshotFilterFor(CloudEventConverter<E> converter, SnapshotView<?, E> snapshotView) {
         Filter explicit = snapshotView.filter();
         if (explicit != null) {
             return explicit;
         }
-        List<Condition<String>> typeConditions = snapshotView.eventTypes().stream()
-                .map(type -> Condition.eq(converter.getCloudEventType(type)))
-                .toList();
-        return switch (typeConditions.size()) {
-            case 0 -> Filter.all();
-            case 1 -> Filter.type(typeConditions.getFirst());
-            default -> Filter.type(Condition.or(typeConditions));
-        };
+        return EventTypeExpansion.deriveFilter(snapshotView.eventTypes(),
+                type -> converter.getCloudEventType((Class<? extends E>) type),
+                SnapshotAnnotationRegistrar::cannotDeriveFilterFor);
+    }
+
+    private static IllegalArgumentException cannotDeriveFilterFor(Class<?> eventType) {
+        if (eventType.isArray()) {
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be a registered event type, since this expansion does not support an array. Register the concrete event types instead.");
+        }
+        if (eventType.isPrimitive()) {
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be a registered event type, since no event is ever an instance of a primitive type. Register the concrete event types instead.");
+        }
+        return new IllegalArgumentException("the concrete event types dispatch would accept for " + eventType.getName()
+                + " cannot all be enumerated, so a filter derived from it would miss some of them. Register the concrete "
+                + "event types instead, make " + eventType.getSimpleName() + " and every level below it final or sealed, "
+                + "or set an explicit filter(...) on the SnapshotView, which is used instead of deriving one and is the "
+                + "way out when a CloudEventTypeMapper of your own maps the whole hierarchy onto a single CloudEvent type string.");
     }
 
     private static Object invokeSnapshotFactory(Method method, Object bean) {
