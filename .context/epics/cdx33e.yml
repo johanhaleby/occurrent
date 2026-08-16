@@ -1,11 +1,9 @@
 schema_version: 2
 epic: cdx33e
-revision: 10
-updated_at: 2026-08-16 10:05:00+00:00
-updated_by: 'orchestrator: epic reopened for E6 (Johan''s 20-item docs feedback, Opus, both branches); johan-writing gained
-  five voice learnings (a902090, swedish.md left to its in-flight owner), AGENTS.md gained the released-behavior-not-bug-history
-  rule (91d1848); preview merged current with docs main at b1db97e after Johan flagged the divergence (rebase replay fought
-  the news-post rename history, merge applied clean, fast-forward push)'
+revision: 11
+updated_at: 2026-08-16 10:45:00+00:00
+updated_by: 'orchestrator: E6 DONE and verified on both origin refs (preview 3c92140, release-notes 6ffe405); E7 dispatched
+  for the flagged out-of-scope pattern hits plus the release-notes docs.md alignment'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -141,6 +139,31 @@ units:
       and pre-0.33 bug history cut per the new AGENTS.md rule. Voice learnings recorded to johan-writing first (a902090)
       so the worker writes under the updated gates. Preview was first brought current with docs main by clean merge (b1db97e)
       at Johan''s flag; release-notes docs.md alignment to preview follows after E6 lands'
+    phase: DONE
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-preview
+      met: true
+      evidence: 'Pushed b1db97e -> 3c92140 (4 commits), verified on the origin ref: all 20 quoted sentences 0 hits, replacements
+        and both new snippets present in rendered output, two duplicated paragraphs removed, the fencing auto-configuration
+        truth corrected to auto-contributes-with-override. Worker flagged 23 Reach-for hits and a bare window outside its
+        two sections, adopted as E7'
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-release-notes
+      met: true
+      evidence: 'Pushed 6b4148f -> 6ffe405: the two news-post items fixed identically to preview''s post'
+  E7:
+    issue: null
+    goal: 'Completion sweep per the corrections-complete-everywhere rule: the newly banned patterns (Reach for, bare window,
+      a-real intensifier, tree leaves, bold fragment labels, command-pair remedies) swept across the whole preview docs.md
+      beyond E6''s two sections; then release-notes docs.md and shared includes made byte-identical to preview so the release-day
+      second merge cannot conflict or resurrect stale text'
     phase: RUNNING
     health: PROGRESSING
     swept: false
