@@ -1,9 +1,10 @@
 schema_version: 2
 epic: cdx33e
-revision: 11
-updated_at: 2026-08-16 10:45:00+00:00
-updated_by: 'orchestrator: E6 DONE and verified on both origin refs (preview 3c92140, release-notes 6ffe405); E7 dispatched
-  for the flagged out-of-scope pattern hits plus the release-notes docs.md alignment'
+revision: 12
+updated_at: 2026-08-16 11:30:00+00:00
+updated_by: 'orchestrator: E8 adopted and dispatched (recipe fixes for 732 and 736, ruled fix-both-pre-tag after the orchestrator''s
+  investigation found 736''s runtime-recursion half to be the release-gating one); watcher-002 armed per the lifetime invariant
+  since a PR deliverable exists again. Tag now waits on E8''s merge'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -180,6 +181,24 @@ units:
       ref: docs/0.33.0-release-notes
       met: false
       evidence: null
+  E8:
+    issue: null
+    goal: 'Recipe completeness before the tag, ruled by Johan (fix both pre-tag): number-736''s generated-stub any() delegation
+      recursion (StackOverflowError at runtime on the no-own-save inheritance shape, no compile-time warning, falsifying
+      the docs'' permanent-answer claim) and its alreadyDeclared supertype gap, plus number-732''s review-comment marker
+      for Object-typed capability-lookup callers. Rewrite module only, invariant: generated code never re-enters itself
+      on any inheritance shape'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      repo: johanhaleby/occurrent
+      ref: null
+      met: false
+      evidence: null
   CREG:
     issue: null
     goal: 'Register: the sweep''s no-blocker verdict recorded beside the release-readiness declaration; the four dispositions;
@@ -200,6 +219,15 @@ units:
         the four dispositions, E2''s two extra defect fixes, the deliberate-divergence list, and Johan''s preview-docs-wins
         ruling all recorded in the ORCHESTRATOR.md closeout block and release-day checklist'
 watchers:
+- id: watcher-002
+  kind: github-work-item-monitor
+  repository: johanhaleby/occurrent
+  external_id: bteh21ltq
+  status: READY
+  retirement:
+    kind: no_unmet_pr_advanceable_deliverables
+  last_verified_at: '2026-08-16T11:30:00Z'
+  last_verified_revision: 12
 - id: watcher-001
   kind: github-work-item-monitor
   repository: johanhaleby/occurrent
