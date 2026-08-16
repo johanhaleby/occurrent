@@ -243,6 +243,22 @@ public abstract class StreamEventStoreConformance extends EventStoreConformance 
                     () -> assertThat(stream.eventList()).isEmpty()
             );
         }
+
+        @Test
+        void rejects_a_negative_skip() {
+            eventStore().write(STREAM_ID, List.of(event("event-1", DEFINED)));
+
+            Throwable thrown = catchThrowable(() -> eventStore().read(STREAM_ID, -1, 10));
+
+            assertThat(thrown).isExactlyInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_negative_skip_even_when_the_stream_does_not_exist() {
+            Throwable thrown = catchThrowable(() -> eventStore().read("never-written", -1, 10));
+
+            assertThat(thrown).isExactlyInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     @Nested
@@ -436,6 +452,15 @@ public abstract class StreamEventStoreConformance extends EventStoreConformance 
             EventStream<CloudEvent> stream = filteredReader().read(STREAM_ID, StreamReadFilter.type(CHANGED), 2, 10);
 
             assertThat(idsOf(stream.eventList())).containsExactly("event-3", "event-4");
+        }
+
+        @Test
+        void rejects_a_negative_skip() {
+            writeThreeEvents();
+
+            Throwable thrown = catchThrowable(() -> filteredReader().read(STREAM_ID, StreamReadFilter.type(CHANGED), -1, 10));
+
+            assertThat(thrown).isExactlyInstanceOf(IllegalArgumentException.class);
         }
 
         private void writeThreeEvents() {
