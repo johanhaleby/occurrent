@@ -23,7 +23,12 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.Pushable;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
 import org.occurrent.subscription.api.reactor.Subscribable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+
+import java.util.Objects;
 
 /**
  * The reactive counterpart of the blocking {@code PushSubscriptionModel}: a register-only reactive {@link Subscribable}
@@ -48,12 +53,20 @@ import reactor.core.publisher.Mono;
 @NullMarked
 public class PushSubscriptionModel extends RegisteringSubscribable implements Pushable {
 
+    private static final Logger log = LoggerFactory.getLogger(PushSubscriptionModel.class);
+
+    private final PushObserver observer;
+    // Precomputed once rather than compared on every accept(..). Identity against PushObserver.noop()'s singleton is
+    // how "nobody is observing" is told from "an observer that happens to do nothing", so the match check this model
+    // does purely for the observer's benefit is skipped for every existing caller that configured none.
+    private final boolean observing;
+
     /**
      * Creates a model that refuses a subscription filter on a {@code data} payload field, which is what it has always
      * done.
      */
     public PushSubscriptionModel() {
-        super(Consumers.ONE);
+        this(DataFieldReader.refusing(), PushObserver.noop());
     }
 
     /**
@@ -62,7 +75,19 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * {@code occurrent-common-inmemory-filter-matching-jackson}. Without one, such a filter is refused.
      */
     public PushSubscriptionModel(DataFieldReader dataFieldReader) {
+        this(dataFieldReader, PushObserver.noop());
+    }
+
+    /**
+     * Creates a model that both answers a subscription filter on a {@code data} payload field through
+     * {@code dataFieldReader} and tells {@code observer} about every event {@link #accept(CloudEvent)} is asked to
+     * deliver, see {@link PushObserver}. Pass {@link DataFieldReader#refusing()} to get the observer without also
+     * answering a payload filter.
+     */
+    public PushSubscriptionModel(DataFieldReader dataFieldReader, PushObserver observer) {
         super(Consumers.ONE, dataFieldReader);
+        this.observer = Objects.requireNonNull(observer, PushObserver.class.getSimpleName() + " cannot be null");
+        this.observing = observer != PushObserver.noop();
     }
 
     /**
@@ -73,24 +98,58 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * Ask {@link #hasSubscriptions()} before feeding this model from a broker, and register the subscription before
      * the listener starts consuming. This model cannot refuse the event on your behalf, because it is also fed from
      * the write path, where the event is already durably stored and refusing would fail the write instead of
-     * protecting anything. The domain-event feed, which is broker-only, does refuse. See ADR 104.
+     * protecting anything. The domain-event feed, which is broker-only, does refuse. See ADR 104. A configured
+     * {@link PushObserver} is told about the event, matched or not, before delivery is attempted, and that is where
+     * to get visibility into it instead. Told about the event even when a subscription's filter itself throws while
+     * being evaluated (a supplied {@link DataFieldReader} can), with {@code matched} reported as {@code false},
+     * before that exception propagates as it always has.
      *
      * @param cloudEvent The event received from the external source.
      * @return A {@link Mono} that completes when the handler has completed.
      */
     public Mono<Void> accept(CloudEvent cloudEvent) {
-        return route(cloudEvent);
+        Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
+        return acceptEvent(cloudEvent);
     }
 
     /**
      * Feed a batch of events to the model, routing each in iteration order, sequentially.
      * <p>
-     * Drops the batch when no subscription is registered, with the caveat {@link #accept(CloudEvent)} describes.
+     * Drops the batch when no subscription is registered, with the caveat {@link #accept(CloudEvent)} describes. An
+     * event whose predecessor's handler errored is neither observed nor routed, since the batch stops there.
      *
      * @param cloudEvents The events received from the external source.
      * @return A {@link Mono} that completes when every event has been dispatched.
      */
     public Mono<Void> accept(Iterable<CloudEvent> cloudEvents) {
-        return route(cloudEvents);
+        Objects.requireNonNull(cloudEvents, "cloudEvents cannot be null");
+        return Flux.fromIterable(cloudEvents)
+                .concatMap(this::acceptEvent)
+                .then();
+    }
+
+    // Never call the overridable accept(CloudEvent) from here. This class is public and not final, and a subclass
+    // overriding accept(CloudEvent) by delegating to accept(Iterable) for a single event would recurse indefinitely
+    // if the batch pipeline called back into it. route(..) itself is already final, so before this observer feature
+    // existed the batch path never touched an overridable method at all, and this helper keeps it that way.
+    private Mono<Void> acceptEvent(CloudEvent cloudEvent) {
+        if (!observing) {
+            return route(cloudEvent);
+        }
+        return routeReportingMatch(cloudEvent, this::notifyObserver);
+    }
+
+    // Keeps a broken observer from masquerading as a handler failure. accept(...) erroring is what tells a broker
+    // listener to redeliver (ADR 104), so an observer exception must never trigger that for an event that was, or
+    // would have been, delivered normally. RuntimeException and AssertionError are caught, the same as a handler
+    // failure elsewhere on this stack (routeIsolated) plus the assertion an observer used as a test spy is likely to
+    // throw. Another Error still propagates.
+    private void notifyObserver(CloudEvent cloudEvent, boolean matched) {
+        try {
+            observer.observe(cloudEvent, matched);
+        } catch (RuntimeException | AssertionError e) {
+            log.warn("A PushObserver threw while observing an event pushed to {}. The observer failure did not affect routing.",
+                    getClass().getSimpleName(), e);
+        }
     }
 }
