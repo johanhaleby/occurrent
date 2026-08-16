@@ -372,7 +372,7 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                         }
                         """
                 ),
-                // No change expected: both members are already concretely implemented on the abstract base.
+                // No change expected. Both members are already concretely implemented on the abstract base.
                 java(
                         """
                         package com.example;
@@ -440,7 +440,7 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                         }
                         """
                 ),
-                // No change expected: both members are concretely implemented two levels up, on BaseCheckpointStorage.
+                // No change expected. Both members are concretely implemented two levels up, on BaseCheckpointStorage.
                 java(
                         """
                         package com.example;
@@ -501,7 +501,7 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                         }
                         """
                 ),
-                // No change expected: both members are concretely implemented on CustomCheckpointStorage, the
+                // No change expected. Both members are concretely implemented on CustomCheckpointStorage, the
                 // interface this class directly implements.
                 java(
                         """
@@ -697,6 +697,108 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                             @Override
                             public boolean exists(String subscriptionId) {
                                 return false;
+                            }
+
+                            /* TODO [Occurrent 0.33 upgrade]: this only refuses a condition stronger than any(), delegating any() to the existing two-argument save. Evaluate `condition` for real if this storage can, otherwise this is the permanent answer. See doc/migration/upgrading-to-0.33.0.md. */
+                            @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                                if (!(condition instanceof CheckpointWriteCondition.Any)) {
+                                    throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
+                                }
+                                return save(subscriptionId, checkpoint);
+                            }
+
+                            /* TODO [Occurrent 0.33 upgrade]: this always answers empty, correct if this storage cannot evaluate a condition. Return the version a condition is judged against if it can. See doc/migration/upgrading-to-0.33.0.md. */
+                            @Override
+                            public OptionalLong writeVersion(String subscriptionId) {
+                                return OptionalLong.empty();
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void generatesAWriteVersionStubWhenTheClasssOwnMatchingSignatureIsPrivate() {
+        // InMemoryCheckpointStorage's own writeVersion(String) is private, an unrelated helper. writeVersion did
+        // not exist on CheckpointStorage in 0.32.0, so nothing about that name was reserved yet, and this could be
+        // a genuine 0.32.0 implementation detail sharing the name by coincidence. A private method cannot
+        // implement the new public interface member, so it still has to be stubbed, and the review comment still
+        // has to appear, even though the class's own body is where the mismatch lives this time rather than a
+        // supertype's. The stub is generated anyway, alongside the private method, which the review comment does
+        // not resolve by itself. A class silently left without a stub or a marker at all is worse though. The
+        // compile error becomes a duplicate-signature one instead of a missing-member one, with a comment
+        // pointing at why.
+        rewriteRun(
+                java(CHECKPOINT),
+                java(CHECKPOINT_WRITE_CONDITION),
+                java(BLOCKING_CHECKPOINT_STORAGE),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+                        import org.occurrent.subscription.api.blocking.CheckpointStorage;
+
+                        import java.util.OptionalLong;
+
+                        class InMemoryCheckpointStorage implements CheckpointStorage {
+                            @Override
+                            public Checkpoint read(String subscriptionId) {
+                                return null;
+                            }
+
+                            @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+                                return checkpoint;
+                            }
+
+                            @Override
+                            public void delete(String subscriptionId) {
+                            }
+
+                            @Override
+                            public boolean exists(String subscriptionId) {
+                                return false;
+                            }
+
+                            private OptionalLong writeVersion(String subscriptionId) {
+                                return OptionalLong.empty();
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+                        import org.occurrent.subscription.CheckpointWriteCondition;
+                        import org.occurrent.subscription.api.blocking.CheckpointStorage;
+
+                        import java.util.OptionalLong;
+
+                        class InMemoryCheckpointStorage implements CheckpointStorage {
+                            @Override
+                            public Checkpoint read(String subscriptionId) {
+                                return null;
+                            }
+
+                            @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+                                return checkpoint;
+                            }
+
+                            @Override
+                            public void delete(String subscriptionId) {
+                            }
+
+                            @Override
+                            public boolean exists(String subscriptionId) {
+                                return false;
+                            }
+
+                            private OptionalLong writeVersion(String subscriptionId) {
+                                return OptionalLong.empty();
                             }
 
                             /* TODO [Occurrent 0.33 upgrade]: this only refuses a condition stronger than any(), delegating any() to the existing two-argument save. Evaluate `condition` for real if this storage can, otherwise this is the permanent answer. See doc/migration/upgrading-to-0.33.0.md. */

@@ -261,9 +261,17 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
             // method at all.
             private boolean hasOwnConcreteImplementation(J.ClassDeclaration cd, String capabilityInterfaceFqn, String methodName,
                                                            List<JavaType> paramTypes) {
+                // Public is required here too. writeVersion and the three-argument save are both new in 0.33.0, so
+                // a 0.32.0 class could already have a private or package-private method of the same name and
+                // parameters for an unrelated reason, and that coincidence cannot implement the new public member
+                // any more than the same shape could two levels up. Checked through the declaration's own modifier
+                // list rather than its MethodType's flags, since a template this same visit just inserted does not
+                // reliably carry Public in its (re-synthesized) MethodType until a later parse, while the printed
+                // `public` keyword is already right there on the declaration.
                 boolean declaredOnClassItself = cd.getBody().getStatements().stream()
                         .filter(J.MethodDeclaration.class::isInstance)
                         .map(J.MethodDeclaration.class::cast)
+                        .filter(md -> md.hasModifier(J.Modifier.Type.Public))
                         .map(J.MethodDeclaration::getMethodType)
                         .anyMatch(mt -> mt != null && methodName.equals(mt.getName()) && sameParameterTypes(mt.getParameterTypes(), paramTypes));
                 if (declaredOnClassItself) {
@@ -277,7 +285,7 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                 if (concretelyDeclaredBelow(fq.getSupertype(), capabilityInterfaceFqn, methodName, paramTypes)) {
                     return true;
                 }
-                // cd's own directly-implemented interfaces, not only reachable through a superclass: a class that
+                // cd's own directly-implemented interfaces, not only reachable through a superclass. A class that
                 // implements a capability interface of its own (extending CheckpointStorage with a default for
                 // this member) rather than CheckpointStorage directly has its real implementation here.
                 for (JavaType.FullyQualified i : fq.getInterfaces()) {
@@ -293,8 +301,8 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
             // a method that is Abstract without also being Default has no body to fall back on. The member being
             // searched for is always a public interface member, and Java refuses to compile a class where a
             // private, static, package-private or protected method of the same signature stands in for it, even
-            // from a same-package supertype, so only a Public candidate actually implements it. Confirmed with
-            // javac directly: a same-package package-private or protected method fails with "attempting to assign
+            // from a same-package supertype, so only a Public candidate actually implements it. Confirmed directly
+            // with javac. A same-package package-private or protected method fails with "attempting to assign
             // weaker access privileges".
             private boolean concretelyDeclaredBelow(JavaType.@Nullable FullyQualified type, String capabilityInterfaceFqn,
                                                       String methodName, List<JavaType> paramTypes) {
