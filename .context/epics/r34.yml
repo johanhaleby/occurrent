@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 3
-updated_at: 2026-08-16T16:35:30Z
+revision: 4
+updated_at: 2026-08-16T17:20:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -14,27 +14,35 @@ pending_actions:
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-16T16:35:30Z
+  - id: act-002
+    type: merge
+    target: "PR 808 (U4), held until Johan approves the ADR 54 amendment wording, presented 2026-08-16T17:20Z. Related but Johan's own merges: docs PRs 66 (U4 projection filter correction) and 67 (saga-step-conditions addedTags badge, closes the H1 gap). Docs issue 57 closes after 67 lands"
+    expected: "Johan rules on the amendment, then 808 merges under standing authority with a CAS pin. If he amends the wording, the fix lands on the branch first"
+    status: PENDING
+    attempts: 0
+    safe_to_repeat: false
+    issued_at: 2026-08-16T17:20:00Z
 units:
   H1:
     issue: null
     goal: "Docs closeout verification: reconstruct closed docs PRs 49/52/55/61/62/63/64/65 diffs via API, verify content reached docs main or is legitimately dead, verdict table plus recommendation on closing docs issue 57"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "subagent a83e224630286a3dd, completed 2026-08-16T17:0xZ"
     deliverables:
-      - {check: manual_approval, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
+      - {check: manual_approval, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: "verdict 2026-08-16: all eight closed docs PRs clean, 52/63 confirmed deliberate non-merges, historyWindow paragraph appears once. Sole gap saga-step-conditions missing from addedTags, fixed as docs PR 67, orchestrator re-verified the gap and anchor on docs main itself. Awaiting Johan: merge 67, then close docs issue 57"}
   H2:
     issue: null
     goal: "Changelog next-version skeleton plus 0.33.0 date fix to 2026-08-16, and the doc/migration/upgrading-to-0.34.0.md shell"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: null
+    session: "orchestrator inline"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "807", met: true, evidence: "PR 807 merged as 4f52632089bf 2026-08-16T17:1xZ, CAS pin 55455c7c8a, Copilot inline finding fixed in that head and replied to"}
   H3:
     issue: null
     goal: "Milestone and tracker bookkeeping: milestone 0.34.0 created, 35 issues assigned, stale milestones closed, #806 filed, #71 closed superseded"
@@ -48,11 +56,11 @@ units:
   U1:
     issue: 791
     goal: "One ReactorDurableSubscriptionModel correctness-and-wording PR: #791 remove(key,value), #803 comment, #804 log level, #805 message (also touches ManualStartSubscriptionModel, shared with U7, U1 lands first)"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_350dd4df, started by Johan 2026-08-16T17:0xZ"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "791", met: false, evidence: null}
@@ -62,33 +70,33 @@ units:
   U2:
     issue: 788
     goal: "Fencing configuration check sees DomainEventFeed-backed push projections; scope is the annotation scan and resolveFeedBean, CheckpointStorage SPI out of bounds"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_7cd8b360, started by Johan 2026-08-16T17:0xZ"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "788", met: false, evidence: null}
   U3:
     issue: 802
     goal: "Observation hook on PushSubscriptionModel, design gate on the hook's home (push models vs RegisteringSubscribable)"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_a33f0879, started by Johan 2026-08-16T17:0xZ"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "802", met: false, evidence: null}
   U4:
     issue: 775
     goal: "Docs-corrections bundle: #775 javadoc and docs-site check, #761 cursor warnings on six Sequence extensions, #760 ADR 54 read-side amendment (issue close is Johan's)"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_52b639cb, delivered PR 808 (held on act-002 ADR gate) and docs PR 66"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "775", met: false, evidence: null}
@@ -96,22 +104,22 @@ units:
   U5:
     issue: 781
     goal: "Flake-rate investigation SubscriptionModelConformance$TheLifeCycle, timeboxed; TCK fixture changes may tighten or add, never loosen"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_e01a9bfc, started by Johan 2026-08-16T17:0xZ"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "781", met: false, evidence: null}
   U6A:
     issue: 786
     goal: "Move SagaFilters to dsl/saga-dsl/common and make public, mirroring ProjectionFilters; independent of the expansion pass"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_545261f9, started by Johan 2026-08-16T17:0xZ"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "786", met: false, evidence: null}
