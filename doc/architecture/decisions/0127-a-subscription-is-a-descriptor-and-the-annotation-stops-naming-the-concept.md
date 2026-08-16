@@ -109,6 +109,12 @@ stay on the annotation, or become arguments to the runner, exactly the split
 `ProjectionRunner.project(subscriptionId, projection, view, startAt)` already uses. An explicit `Filter` overrides the
 type-derived selector, the way `Projection.filter()` does.
 
+**One event reaches one handler, by `Projection`'s rule.** Registering both `on(OrderEvent.class, ..)` and
+`on(OrderShipped.class, ..)` is allowed, and a shipped event goes to the second one only. `Projection.Builder.on`
+already defines this, an exact handler first, otherwise the nearest superclass and then an interface, with a second
+registration of the same type replacing the first. Running both would double every side effect, and a subscription's
+side effects are the whole point of it, so the descriptor takes that rule verbatim rather than inventing a second one.
+
 **A registered sealed type expands to its permitted subtypes, which follows `Saga` rather than `Projection`.**
 `.on(OrderEvent.class, ..)` where `OrderEvent` is sealed selects every concrete event it permits, because that is what
 `@Subscription` does today through `EventTypeExpansion` and a migration must not change which events arrive.
@@ -243,7 +249,25 @@ to the descriptors, `store`, `storeName`, `source`, `catchup`, `capability`, `mo
 subsets, so one annotation means most of its attributes being wrong for any given method, checked at startup rather
 than by the compiler. That trades a naming problem for a worse one.
 
-### 4. The `void` handler method goes with the old annotation names
+### 4. A descriptor annotation is read after the singletons are instantiated
+
+A new subscription annotation moves to `afterSingletonsInstantiated`, where `@Projection`, `@Snapshot` and `@Saga`
+already are. It has to, for the reason the bean post processor already gives for those three, that the factory must be
+invoked to get the descriptor and its collaborators have to be wired before it is.
+
+The deprecated annotations stay in `postProcessBeforeInitialization`, since nothing about them changed.
+
+This also closes something the current code calls out as a wart. Its comment notes that a `@Subscription` method
+registers per bean before the checkpoint fencing check runs, so one can write a checkpoint before that check happens,
+and marks it pre-existing. A descriptor annotation registered in the later phase is behind the check like every other
+descriptor, so the gap closes for the new annotations as a consequence of moving them rather than as separate work.
+
+The one thing to watch out for is `@SynchronousSubscription`, which delivers on the writer's thread. Moving its
+registration later means a write executed during startup, between the two phases, is not delivered to it where today it
+would be. That is the correct order rather than a regression, since a synchronous handler whose collaborators are not
+yet wired cannot run safely, but it is a behaviour change and the migration guide says so.
+
+### 5. The `void` handler method goes with the old annotation names
 
 **The deprecation is one thing, not two, and that is what keeps the release coherent.** A new annotation takes a
 descriptor and nothing else. A deprecated one keeps accepting a `void` handler and behaves exactly as it does today,
@@ -265,8 +289,13 @@ or `tags` into the descriptor.
 `Mono.fromRunnable`. A handler returning some other `Mono<T>` needs the same treatment from the other direction, a
 trailing `.then()`, because the registrar applies exactly that today and
 `ReactiveStreamSubscriptionHandlerReturnTypeAnnotationMongoTest` covers a `Mono<String>` handler as supported
-behaviour. The recipe picks the stack from which autoconfigure module the application depends on, the same thing that
-decides which registrar reads the annotation today.
+behaviour. The recipe picks the stack from which autoconfigure module the application depends on.
+
+**An application on both stacks at once is refused too.** The two bean post processors coexist deliberately,
+under distinct bean names, and both scan the same annotations, so a `void` handler in such an application is registered
+by both and there is nothing in the source that says which stack it belongs to. Rewriting it to one descriptor would
+quietly drop one of its two registrations. So the recipe refuses when it finds both autoconfigure modules, and the
+migration guide says to write the two descriptors by hand, which is the only way to keep both registrations.
 
 **The recipe refuses an advised synchronous handler rather than rewriting it.** Spring advice reaches
 exactly one of the four annotations today. `processSynchronousSubscribeAnnotation` looks the bean up by name at dispatch
@@ -286,7 +315,7 @@ whose class or method has any advice annotation it can see, and refuses rather t
 Advice attached by an external pointcut is invisible to a source rewrite whatever it looks for, so the migration guide
 says to check those by hand rather than the recipe pretending to catch them.
 
-**A handler that declares a checked exception is the second refusal case.** The registrars invoke reflectively, so a
+**A handler that declares a checked exception is refused as well.** The registrars invoke reflectively, so a
 `void` handler may declare `throws` today and the registrar wraps whatever comes back. A descriptor's handler is a
 `BiConsumer` on the blocking stack and a `BiFunction` returning `Mono<Void>` on the reactor one, and neither can throw
 a checked exception, so there is no lambda the recipe can write that compiles. Wrapping the body in a try/catch on the
@@ -294,8 +323,8 @@ user's behalf would be the recipe inventing an error policy, which is the kind o
 So it refuses those too, and the migration guide gives the two ways out, catching inside the handler or changing what
 the method throws.
 
-Those are the two refusal cases, an advised synchronous handler and a handler with a checked `throws` clause.
-Everything else is rewritten.
+So the recipe refuses three things, an advised synchronous handler, a handler declaring a checked `throws`, and any
+handler in an application running both stacks. Everything else is rewritten.
 
 **The three asynchronous paths silently ignoring advice is a pre-existing defect, and the descriptor form is what fixes
 it.** Today a user writes `@Transactional` on a `@Subscription` handler, everything compiles, the tests pass, and no
@@ -304,7 +333,7 @@ factory method, nobody expects method-level advice on it, and a handler that nee
 `TransactionTemplate` on the blocking stack or a `TransactionalOperator` on the reactor one, and says so in the code.
 The gap stops being silent because the shape of the API stops inviting the mistake.
 
-### 5. This is an epic
+### 6. This is an epic
 
 The work this ADR describes, listed so it can be scoped as its own epic:
 
@@ -316,7 +345,7 @@ The work this ADR describes, listed so it can be scoped as its own epic:
 4. Adding descriptor paths to both `SubscriptionAnnotationRegistrar` classes, 217 and 234 lines, beside the existing
    reflective path, which the deprecated annotations still need and which is deleted with them a release later.
 5. Seven new annotation types, seven deprecations, and normalization of both sets in the bean post processors.
-6. Recipes, declarative for the type and annotation renames, a Java visitor for the body rewrite with its two refusal cases.
+6. Recipes, declarative for the type and annotation renames, a Java visitor for the body rewrite with its three refusal cases.
 7. A section in `doc/migration/upgrading-to-0.34.0.md`, changelog entries, and a docs branch.
 8. Updating 35 test classes, 13 example files, and the 79 lines of the documentation site's reference page on `main`
    that mention one of these annotations.
@@ -334,7 +363,7 @@ time. ADR 26 renamed the original stream annotation to `@StreamSubscription`, th
 capability-agnostic annotation that exists today, and this ADR moves that one to `@OccurrentSubscription` while also
 changing what its method returns. So a user who has been on this library since 0.30 sees the same word mean three
 things. The recipe covers the mechanical part, and the migration guide covers what it cannot, which is Kotlin sources,
-every handler the recipe refused, for visible advice or for a checked `throws` clause, and any handler advised by a pointcut
+every handler the recipe refused, for visible advice, a checked `throws` clause or a mixed-stack application, and any handler advised by a pointcut
 the recipe cannot see.
 
 Two names for one word disappear. `Subscription` means the thing a user declares, `SubscriptionHandle` means the thing
