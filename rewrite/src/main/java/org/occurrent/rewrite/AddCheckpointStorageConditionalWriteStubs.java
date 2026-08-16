@@ -35,26 +35,30 @@ import static org.openrewrite.java.tree.J.ClassDeclaration.Kind.Type.Interface;
 /**
  * Finds a class implementing the blocking or reactor {@code CheckpointStorage} that is missing the three-argument
  * {@code save} or {@code writeVersion} ADR 116 added, and inserts a stub for each missing member plus a review
- * comment, so the class compiles again. This is only the signature half of the 0.33.0 break. The recipe cannot know
- * whether a store can evaluate a write condition for real, so the generated {@code save} delegates {@code any()} to
- * the class's own two-argument {@code save} and refuses only a stronger condition, with
- * {@link UnsupportedOperationException} (a {@link reactor.core.publisher.Mono#error(Throwable)} carrying one on the
- * reactor stack), and {@code writeVersion} always answers empty. That is the same permanent shape
- * doc/migration/upgrading-to-0.33.0.md documents for a store that cannot evaluate a condition, not a stopgap, and
- * it is what keeps a wrapper-managed checkpoint write, which calls the three-argument {@code save} with {@code
- * any()} whenever no write-version source answers, working as soon as the stub is generated.
+ * comment, so the class compiles again. This is only the signature half of the 0.33.0 break, and the recipe cannot
+ * know whether a store can evaluate a write condition for real, so the generated members are a best-effort answer,
+ * not a finished one.
  * <p>
- * The delegating {@code save} is only generated for a class that declares its own two-argument {@code save}. Every
- * genuine 0.32.0 implementer does, since the two-argument method was abstract before 0.33.0. A class reachable only
- * through {@code CheckpointStorage}'s own two-argument default (a partial hand-migration that deleted its override,
- * say) would otherwise recurse. The default calls the three-argument method with {@code any()}, straight back into
- * the generated stub, a {@link StackOverflowError} on the first checkpoint write. Such a class gets the old
- * always-refusing {@code save} instead, the shape this recipe generated before delegation was added, so the
- * generated code never calls back into itself on any inheritance shape.
+ * A class with its own two-argument {@code save}, the shape every genuine 0.32.0 implementer has, since the
+ * two-argument method was abstract before 0.33.0, gets a three-argument {@code save} that delegates {@code any()}
+ * to it and refuses only a stronger condition, with {@link UnsupportedOperationException} (a
+ * {@link reactor.core.publisher.Mono#error(Throwable)} carrying one on the reactor stack). That is the same
+ * permanent shape doc/migration/upgrading-to-0.33.0.md documents for a store that cannot evaluate a condition, not
+ * a stopgap, and it is what keeps a wrapper-managed checkpoint write, which calls the three-argument {@code save}
+ * with {@code any()} whenever no write-version source answers, working as soon as the stub is generated.
  * <p>
- * A store that evaluates a condition for real still gets a review comment and is left marked for a manual pass, the
- * same best-effort-plus-marker shape as {@link MigrateEventStoreWriteStreamToList}. Java only, rewrite-kotlin has
- * no recipe for inserting a member into a class body, so a Kotlin implementer still needs the manual steps in
+ * A class reachable only through {@code CheckpointStorage}'s own two-argument default (a partial hand-migration
+ * that deleted its override, say) would recurse if it got that same delegating stub. The default calls the
+ * three-argument method with {@code any()}, straight back into the generated stub, a {@link StackOverflowError} on
+ * the first checkpoint write. Such a class gets the old always-refusing {@code save} instead, the shape this recipe
+ * generated before delegation was added, refusing {@code any()} too since there is nothing safe to delegate it to.
+ * That keeps the generated code from calling back into itself on any inheritance shape, at the cost of a checkpoint
+ * write that always fails until the class gets its own two-argument {@code save}.
+ * <p>
+ * {@code writeVersion} always answers empty, for both shapes above. A store that evaluates a condition for real
+ * still gets a review comment and is left marked for a manual pass, the same best-effort-plus-marker shape as
+ * {@link MigrateEventStoreWriteStreamToList}. Java only, rewrite-kotlin has no recipe for inserting a member into a
+ * class body, so a Kotlin implementer still needs the manual steps in
  * doc/migration/upgrading-to-0.33.0.md.
  */
 public class AddCheckpointStorageConditionalWriteStubs extends Recipe {

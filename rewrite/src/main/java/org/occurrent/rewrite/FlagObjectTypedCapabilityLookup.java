@@ -34,11 +34,13 @@ import java.util.List;
 
 /**
  * Finds a call to {@code ReplayAwareSubscriptionModel.of(Object)} or {@code IntrospectableSubscriptionModel.of(Object)},
- * on either the blocking or reactor stack, whose argument is itself typed {@code Object}, and marks it with a
- * review comment. This runs before the rest of {@code renames-0_33.yml} renames the call to
+ * on the blocking stack, whose argument is itself typed {@code Object}, and marks it with a review comment. This
+ * runs before the rest of {@code renames-0_33.yml} renames the call to
  * {@code findIn(SubscriptionModelCapability)}, a parameter narrowed from {@code Object} to
  * {@code SubscriptionModelCapability}, since {@code of(Object)} is the last point at which the call still matches
- * its own 0.32.0 signature.
+ * its own 0.32.0 signature. Blocking only: the reactor {@code ReplayAwareSubscriptions} and
+ * {@code IntrospectableSubscriptions} never had an {@code of} lookup, so there is no reactor call site for this to
+ * find.
  * <p>
  * An {@code Object}-typed argument is the 0.32.0 shape of a caller that resolved its subscription model through a
  * broader static type rather than one of the capability interfaces. The rename would otherwise give such a caller
@@ -55,11 +57,11 @@ public class FlagObjectTypedCapabilityLookup extends Recipe {
             "will not accept that once this call is renamed from of(Object). Type it as SubscriptionModelCapability " +
             "(or a narrower capability) so this compiles again. See doc/migration/upgrading-to-0.33.0.md. ";
 
+    // Blocking only. The reactor ReplayAwareSubscriptions and IntrospectableSubscriptions never exposed an of(..)
+    // lookup, so a reactor matcher here would never match anything.
     private static final List<MethodMatcher> CAPABILITY_LOOKUP_OF_MATCHERS = List.of(
             new MethodMatcher("org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel of(java.lang.Object)"),
-            new MethodMatcher("org.occurrent.subscription.api.reactor.ReplayAwareSubscriptionModel of(java.lang.Object)"),
-            new MethodMatcher("org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel of(java.lang.Object)"),
-            new MethodMatcher("org.occurrent.subscription.api.reactor.IntrospectableSubscriptionModel of(java.lang.Object)"));
+            new MethodMatcher("org.occurrent.subscription.api.blocking.IntrospectableSubscriptionModel of(java.lang.Object)"));
 
     @Override
     public String getDisplayName() {
@@ -68,10 +70,10 @@ public class FlagObjectTypedCapabilityLookup extends Recipe {
 
     @Override
     public String getDescription() {
-        return "Finds a call to `ReplayAwareSubscriptionModel.of(Object)` or `IntrospectableSubscriptionModel.of(Object)` " +
-               "whose argument is itself typed `Object`, and marks it with a review comment before the rest of " +
-               "this recipe list renames the call to `findIn(SubscriptionModelCapability)`, a parameter narrowed " +
-               "from `Object` that an `Object`-typed argument no longer satisfies.";
+        return "Finds a call to `ReplayAwareSubscriptionModel.of(Object)` or `IntrospectableSubscriptionModel.of(Object)`, " +
+               "on the blocking stack, whose argument is itself typed `Object`, and marks it with a review comment " +
+               "before the rest of this recipe list renames the call to `findIn(SubscriptionModelCapability)`, a " +
+               "parameter narrowed from `Object` that an `Object`-typed argument no longer satisfies.";
     }
 
     @Override

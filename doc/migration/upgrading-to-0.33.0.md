@@ -3,8 +3,9 @@
 `CheckpointStorage` and its reactor twin gain a conditional write. This is a real break, and every implementation of
 either interface, in this repository and outside it, now has two more members to answer. No calling code changes,
 because the two-argument `save` you already call stays exactly as it was, as a default that delegates to the new
-one. `UpgradeToOccurrent_0_33` stubs the two new members for you on a Java class it finds missing them, delegating
-`any()` to your existing write and marking the rest with a review comment, so the module compiles again. That stub
+one. `UpgradeToOccurrent_0_33` stubs the two new members for you on a Java class it finds missing them, marking each
+with a review comment, so the module compiles again. The generated `save` delegates `any()` to your existing write
+when your class has its own two-argument `save`, and refuses every write instead when it does not. That stub
 is Java only, so a Kotlin implementer adds the same two members by hand, see section 2. Evaluating a condition for
 real is still yours either way.
 [ADR 116](../architecture/decisions/0116-a-checkpoint-write-from-a-lease-that-has-moved-on-is-refused.md) has the
