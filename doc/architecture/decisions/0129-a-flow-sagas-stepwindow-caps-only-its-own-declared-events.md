@@ -36,13 +36,18 @@ This ADR decides both together because #773's fix determines exactly what #764 i
 
 ### #773: the cap counts only the flow's own declared-type events
 
-`stepWindow` now counts and evicts only events whose type is a member of the flow's own
-`eventTypes()`, the union of every step's declared branches and window-condition leaves, already
-computed at build time (ADR 124 covers how a declared sealed type expands into it). A correlated
-event of any other type is still appended to `received()`, never silently dropped, but it neither
-counts toward the N-event budget nor evicts one of the step's own events by itself. It is swept up
-only as a byproduct of the window advancing past it while dropping enough declared events ahead of
-it to satisfy the cap.
+`stepWindow` now counts and evicts only events whose type some step's own `on(...)` branch or
+window-condition leaf names, computed at build time as a set kept alongside `eventTypes()` (ADR 124
+covers how a declared sealed type expands into it). That set is deliberately narrower than
+`eventTypes()` itself, which unions in the flow's `startType` too, because that union exists only so
+the subscription selector can create an instance in the first place, not because a step treats the
+start type as its own. A repeat of the start type arriving after the instance already exists is not
+one of a step's own events merely because it once created the instance, unless some step also
+declares it in its own right, the same way a first step can use
+`on(StepCondition.event(startType, 1), ...)`. A correlated event of any other type is still appended
+to `received()`, never silently dropped, but it neither counts toward the N-event budget nor evicts
+one of the step's own events by itself. It is swept up only as a byproduct of the window advancing
+past it while dropping enough declared events ahead of it to satisfy the cap.
 
 The alternative the issue also named, discarding the foreign event before it is ever appended, was
 rejected. Nothing else in the codebase silently drops an event that genuinely arrived and correlated

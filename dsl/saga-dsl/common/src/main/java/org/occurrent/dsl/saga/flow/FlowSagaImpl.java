@@ -69,6 +69,12 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     private final @Nullable Function<E, @Nullable String> correlateAll;
     private final Set<Class<? extends E>> startEventTypes;
     private final Set<Class<? extends E>> eventTypes;
+    // What stepWindow checks an arriving event against: every type a step's own on(...) branch or window-condition
+    // leaf names, deliberately narrower than eventTypes (which also unions in startType, so the subscription can
+    // create an instance at all). A repeat of the start type arriving after the instance already exists is not one
+    // of a step's own events merely because it once created the instance, unless some step also declares it in its
+    // own right. See ADR 129.
+    private final Set<Class<? extends E>> stepDeclaredEventTypes;
     // How many received events before the current step's entry are kept, and so what a guard and a reaction can still read
     // of the earlier history. Applied when a step is left.
     private final int historyWindow;
@@ -89,6 +95,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                  @Nullable Function<E, @Nullable String> correlateAll,
                  Set<Class<? extends E>> startEventTypes,
                  Set<Class<? extends E>> eventTypes,
+                 Set<Class<? extends E>> stepDeclaredEventTypes,
                  int historyWindow,
                  int stepWindow,
                  @Nullable Filter narrowingFilter,
@@ -102,6 +109,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         this.correlateAll = correlateAll;
         this.startEventTypes = startEventTypes;
         this.eventTypes = eventTypes;
+        this.stepDeclaredEventTypes = stepDeclaredEventTypes;
         this.historyWindow = historyWindow;
         this.stepWindow = stepWindow;
         this.narrowingFilter = narrowingFilter;
@@ -350,10 +358,10 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // types, see ADR 124). An empty eventTypes means "no narrowing", the same reading eventTypes()'s own javadoc
     // gives it, so every event counts when it is empty.
     private boolean isDeclared(E event) {
-        if (eventTypes.isEmpty()) {
+        if (stepDeclaredEventTypes.isEmpty()) {
             return true;
         }
-        for (Class<? extends E> type : eventTypes) {
+        for (Class<? extends E> type : stepDeclaredEventTypes) {
             if (type.isInstance(event)) {
                 return true;
             }

@@ -767,6 +767,27 @@ class FlowSagaTest {
         }
 
         @Test
+        void a_repeated_start_type_event_does_not_count_toward_the_cap_unless_a_step_also_declares_it() {
+            // eventTypes(), the subscription selector, unions in startType so an instance can ever be created, but a
+            // repeat of that type arriving after the instance already exists is not one of this step's own events
+            // just because it once created the instance. waitingForThree's "wait" step never declares Opened.
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(2, new ArrayList<>());
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            FlowState<CapEvent> afterTwoApproved = deliver(saga, opened, new Approved("c1", 1), new Approved("c1", 2));
+            FlowState<CapEvent> afterRepeatedStart = saga.evolve(afterTwoApproved, SagaInput.event(new Opened("c1")));
+
+            assertAll(
+                    () -> assertThat(afterRepeatedStart.receivedEvents().count(Approved.class))
+                            .as("the repeated start event did not evict either Approved, since no step declares Opened")
+                            .isEqualTo(2),
+                    () -> assertThat(afterRepeatedStart.receivedEvents().count(Opened.class))
+                            .as("the repeat is still retained, both it and the initiating event")
+                            .isEqualTo(2)
+            );
+        }
+
+        @Test
         void the_event_that_fired_the_condition_and_the_initiating_event_are_both_still_readable() {
             List<String> saw = new ArrayList<>();
             Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(1, saw);

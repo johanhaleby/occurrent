@@ -133,7 +133,9 @@ public final class FlowSaga {
          * it keeps only its own newest {@code events}, because reaching its oldest events means dropping the carry-over
          * standing ahead of them. A transition keeps the events of the step it left as well, for that step's reaction, and
          * the step it enters then fills its own cap before anything is dropped, so the most an instance holds at any one
-         * moment is {@code historyWindow + 2 * stepWindow + 1} rather than one {@code stepWindow}'s worth.
+         * moment is {@code historyWindow + 2 * stepWindow + 1} rather than one {@code stepWindow}'s worth, of its own
+         * declared-type events. That bound does not include a retained event of a type no step declares, which the two
+         * paragraphs above already say this cap does not limit.
          * <p>
          * Keeping a count means being able to match it to a leaf again after a redeploy, so a window-condition leaf in a capped
          * step names its predicate, {@code event(Payment.class, 2, "isBig", p -> p.isBig())}. {@link #build()} refuses a capped
@@ -280,12 +282,13 @@ public final class FlowSaga {
             Set<Class<? extends E>> eventTypes = replacementFilter == null
                     ? EventTypeExpansion.expand(declaredTypes, Saga::cannotSubscribeOn)
                     : EventTypeExpansion.expandWhatCanBeFound(declaredTypes, Saga::cannotSubscribeOn);
+            Set<Class<? extends E>> stepDeclaredEventTypes = collectStepDeclaredEventTypes();
             validateCorrelationCoverage(eventTypes);
             validateStepWindowCanKeepCounts();
 
             return new FlowSagaImpl<>(startType, onStartCommands, List.copyOf(steps), stepIndex, stepsByName,
-                    correlators, correlateAll, Set.of(startType), eventTypes, historyWindow, stepWindow, narrowingFilter,
-                    replacementFilter);
+                    correlators, correlateAll, Set.of(startType), eventTypes, stepDeclaredEventTypes, historyWindow,
+                    stepWindow, narrowingFilter, replacementFilter);
         }
 
         // Dropping a step's older events means its condition counts have to live in the instance's state, and a count can
@@ -328,12 +331,26 @@ public final class FlowSaga {
         }
 
         // An ArrivingEvent trigger contributes its one type directly. A WindowCondition trigger walks its whole tree, since
-        // a mixed allOf/anyOf can name several leaf types that must each get build-time correlation coverage.
+        // a mixed allOf/anyOf can name several leaf types that must each get build-time correlation coverage. startType is
+        // unioned in here (and only here) because eventTypes() is the subscription selector, and a start type left out of
+        // it would mean no instance could ever be created. collectStepDeclaredEventTypes() below is the narrower set with
+        // that union left out.
         private Set<Class<? extends E>> collectEventTypes() {
             Set<Class<? extends E>> types = new LinkedHashSet<>();
             if (startType != null) {
                 types.add(startType);
             }
+            types.addAll(collectStepDeclaredEventTypes());
+            return Collections.unmodifiableSet(types);
+        }
+
+        // What stepWindow checks an arriving event against, deliberately narrower than collectEventTypes(): every type a
+        // step's own on(...) branch or window-condition leaf names, and nothing added just because it starts the flow. A
+        // repeat of the start type arriving after the instance already exists is not one of a step's own events merely
+        // because it once created the instance, so it is left out here unless some step also declares it in its own right
+        // (the on(StepCondition.event(startType, ...)) case a first step can use). See ADR 129.
+        private Set<Class<? extends E>> collectStepDeclaredEventTypes() {
+            Set<Class<? extends E>> types = new LinkedHashSet<>();
             for (CompiledStep<E, C> step : steps) {
                 for (Branch<E, C> branch : step.branches()) {
                     switch (branch.trigger()) {
