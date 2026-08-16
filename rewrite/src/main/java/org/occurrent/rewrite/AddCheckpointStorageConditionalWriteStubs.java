@@ -71,6 +71,7 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
     private static final String CHECKPOINT_WRITE_CONDITION = "org.occurrent.subscription.CheckpointWriteCondition";
     private static final String OPTIONAL_LONG = "java.util.OptionalLong";
     private static final String MONO = "reactor.core.publisher.Mono";
+    private static final String BOXED_LONG = "java.lang.Long";
 
     private static final List<JavaType> SAVE_2_ARG_PARAMS =
             List.of(JavaType.ShallowClass.build("java.lang.String"), JavaType.ShallowClass.build(CHECKPOINT));
@@ -208,17 +209,17 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                 }
 
                 if (TypeUtils.isAssignableTo(BLOCKING_STORAGE, cd.getType())) {
-                    String saveTemplate = hasOwnConcreteImplementation(cd, BLOCKING_STORAGE, "save", SAVE_2_ARG_PARAMS, CHECKPOINT)
+                    String saveTemplate = hasOwnConcreteImplementation(cd, BLOCKING_STORAGE, "save", SAVE_2_ARG_PARAMS, CHECKPOINT, null)
                             ? BLOCKING_SAVE_STUB
                             : BLOCKING_SAVE_STUB_NO_OWN_TWO_ARG_SAVE;
-                    cd = stub(cd, BLOCKING_STORAGE, "save", SAVE_3_ARG_PARAMS, CHECKPOINT, saveTemplate, CHECKPOINT, CHECKPOINT_WRITE_CONDITION);
-                    cd = stub(cd, BLOCKING_STORAGE, "writeVersion", WRITE_VERSION_PARAMS, OPTIONAL_LONG, BLOCKING_WRITE_VERSION_STUB, OPTIONAL_LONG);
+                    cd = stub(cd, BLOCKING_STORAGE, "save", SAVE_3_ARG_PARAMS, CHECKPOINT, null, saveTemplate, CHECKPOINT, CHECKPOINT_WRITE_CONDITION);
+                    cd = stub(cd, BLOCKING_STORAGE, "writeVersion", WRITE_VERSION_PARAMS, OPTIONAL_LONG, null, BLOCKING_WRITE_VERSION_STUB, OPTIONAL_LONG);
                 } else if (TypeUtils.isAssignableTo(REACTOR_STORAGE, cd.getType())) {
-                    String saveTemplate = hasOwnConcreteImplementation(cd, REACTOR_STORAGE, "save", SAVE_2_ARG_PARAMS, MONO)
+                    String saveTemplate = hasOwnConcreteImplementation(cd, REACTOR_STORAGE, "save", SAVE_2_ARG_PARAMS, MONO, CHECKPOINT)
                             ? REACTOR_SAVE_STUB
                             : REACTOR_SAVE_STUB_NO_OWN_TWO_ARG_SAVE;
-                    cd = stub(cd, REACTOR_STORAGE, "save", SAVE_3_ARG_PARAMS, MONO, saveTemplate, CHECKPOINT, CHECKPOINT_WRITE_CONDITION, MONO);
-                    cd = stub(cd, REACTOR_STORAGE, "writeVersion", WRITE_VERSION_PARAMS, MONO, REACTOR_WRITE_VERSION_STUB, MONO);
+                    cd = stub(cd, REACTOR_STORAGE, "save", SAVE_3_ARG_PARAMS, MONO, CHECKPOINT, saveTemplate, CHECKPOINT, CHECKPOINT_WRITE_CONDITION, MONO);
+                    cd = stub(cd, REACTOR_STORAGE, "writeVersion", WRITE_VERSION_PARAMS, MONO, BOXED_LONG, REACTOR_WRITE_VERSION_STUB, MONO);
                 }
                 return cd;
             }
@@ -228,8 +229,9 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
             // (or hand-migrated) class a no-op, and what keeps an inherited implementation from an in-source
             // abstract base from being overridden by a generated stub.
             private J.ClassDeclaration stub(J.ClassDeclaration cd, String capabilityInterfaceFqn, String methodName,
-                                             List<JavaType> paramTypes, String returnTypeFqn, String template, String... imports) {
-                if (hasOwnConcreteImplementation(cd, capabilityInterfaceFqn, methodName, paramTypes, returnTypeFqn)) {
+                                             List<JavaType> paramTypes, String returnTypeFqn, @Nullable String returnTypeArgFqn,
+                                             String template, String... imports) {
+                if (hasOwnConcreteImplementation(cd, capabilityInterfaceFqn, methodName, paramTypes, returnTypeFqn, returnTypeArgFqn)) {
                     return cd;
                 }
 
@@ -260,7 +262,7 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
             // owner and by the abstract flag, is what tells a supertype override from nothing overriding the
             // method at all.
             private boolean hasOwnConcreteImplementation(J.ClassDeclaration cd, String capabilityInterfaceFqn, String methodName,
-                                                           List<JavaType> paramTypes, String returnTypeFqn) {
+                                                           List<JavaType> paramTypes, String returnTypeFqn, @Nullable String returnTypeArgFqn) {
                 // Public and non-static are required here too, and the return type has to be override-compatible.
                 // writeVersion and the three-argument save are both new in 0.33.0, so a 0.32.0 class could already
                 // have a method of the same name and parameters for an unrelated reason, public static or with an
@@ -275,7 +277,7 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                         .filter(md -> md.hasModifier(J.Modifier.Type.Public) && !md.hasModifier(J.Modifier.Type.Static))
                         .map(J.MethodDeclaration::getMethodType)
                         .anyMatch(mt -> mt != null && methodName.equals(mt.getName()) && sameParameterTypes(mt.getParameterTypes(), paramTypes)
-                                && TypeUtils.isAssignableTo(returnTypeFqn, mt.getReturnType()));
+                                && isOverrideCompatibleReturnType(mt.getReturnType(), returnTypeFqn, returnTypeArgFqn));
                 if (declaredOnClassItself) {
                     return true;
                 }
@@ -284,14 +286,14 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                 if (fq == null) {
                     return false;
                 }
-                if (concretelyDeclaredBelow(fq.getSupertype(), capabilityInterfaceFqn, methodName, paramTypes, returnTypeFqn)) {
+                if (concretelyDeclaredBelow(fq.getSupertype(), capabilityInterfaceFqn, methodName, paramTypes, returnTypeFqn, returnTypeArgFqn)) {
                     return true;
                 }
                 // cd's own directly-implemented interfaces, not only reachable through a superclass. A class that
                 // implements a capability interface of its own (extending CheckpointStorage with a default for
                 // this member) rather than CheckpointStorage directly has its real implementation here.
                 for (JavaType.FullyQualified i : fq.getInterfaces()) {
-                    if (concretelyDeclaredBelow(i, capabilityInterfaceFqn, methodName, paramTypes, returnTypeFqn)) {
+                    if (concretelyDeclaredBelow(i, capabilityInterfaceFqn, methodName, paramTypes, returnTypeFqn, returnTypeArgFqn)) {
                         return true;
                     }
                 }
@@ -308,14 +310,33 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
             // candidates missing any of that are excluded, along with one whose return type is not the expected
             // type or a subtype of it, an unrelated method that only coincidentally shares the name and parameters.
             private boolean concretelyDeclaredBelow(JavaType.@Nullable FullyQualified type, String capabilityInterfaceFqn,
-                                                      String methodName, List<JavaType> paramTypes, String returnTypeFqn) {
+                                                      String methodName, List<JavaType> paramTypes, String returnTypeFqn,
+                                                      @Nullable String returnTypeArgFqn) {
                 return TypeUtils.findDeclaredMethod(type, methodName, paramTypes)
                         .filter(m -> !m.getFlags().contains(Flag.Abstract) || m.getFlags().contains(Flag.Default))
                         .filter(m -> !capabilityInterfaceFqn.equals(m.getDeclaringType().getFullyQualifiedName()))
                         .filter(m -> m.getFlags().contains(Flag.Public))
                         .filter(m -> !m.getFlags().contains(Flag.Static))
-                        .filter(m -> TypeUtils.isAssignableTo(returnTypeFqn, m.getReturnType()))
+                        .filter(m -> isOverrideCompatibleReturnType(m.getReturnType(), returnTypeFqn, returnTypeArgFqn))
                         .isPresent();
+            }
+
+            // For a non-generic return type (`returnTypeArgFqn` null), a plain assignability check is exact enough.
+            // For Mono, `TypeUtils.isAssignableTo(String, JavaType)` only compares the raw type, so `Mono<String>`
+            // would otherwise pass as freely as the required `Mono<Checkpoint>` or `Mono<Long>`. Unwrapping the
+            // parameterized type and checking its own single type argument is what tells them apart.
+            private boolean isOverrideCompatibleReturnType(@Nullable JavaType actual, String returnTypeFqn, @Nullable String returnTypeArgFqn) {
+                if (returnTypeArgFqn == null) {
+                    return TypeUtils.isAssignableTo(returnTypeFqn, actual);
+                }
+                if (!(actual instanceof JavaType.Parameterized)) {
+                    return false;
+                }
+                JavaType.Parameterized parameterized = (JavaType.Parameterized) actual;
+                List<JavaType> typeParameters = parameterized.getTypeParameters();
+                return TypeUtils.isAssignableTo(returnTypeFqn, parameterized.getType())
+                       && typeParameters.size() == 1
+                       && TypeUtils.isAssignableTo(returnTypeArgFqn, typeParameters.get(0));
             }
 
             private boolean sameParameterTypes(List<JavaType> actual, List<JavaType> expected) {

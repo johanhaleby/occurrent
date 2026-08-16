@@ -919,6 +919,94 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
     }
 
     @Test
+    void generatesAWriteVersionStubOnTheReactorStackWhenTheOwnMatchingSignatureReturnsTheWrongMonoTypeArgument() {
+        // InMemoryReactorCheckpointStorage's own writeVersion(String) returns Mono<String>, not the required
+        // Mono<Long>, an unrelated helper writeVersion did not exist to collide with in 0.32.0. A raw-type check
+        // alone would accept any Mono<T> here, so this specifically has to fail the type-argument comparison, not
+        // just the raw one.
+        rewriteRun(
+                java(CHECKPOINT),
+                java(CHECKPOINT_WRITE_CONDITION),
+                java(MONO),
+                java(REACTOR_CHECKPOINT_STORAGE),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+                        import org.occurrent.subscription.api.reactor.CheckpointStorage;
+                        import reactor.core.publisher.Mono;
+
+                        class InMemoryReactorCheckpointStorage implements CheckpointStorage {
+                            @Override
+                            public Mono<Checkpoint> read(String subscriptionId) {
+                                return null;
+                            }
+
+                            @Override
+                            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+                                return Mono.just(checkpoint);
+                            }
+
+                            @Override
+                            public Mono<Void> delete(String subscriptionId) {
+                                return null;
+                            }
+
+                            public Mono<String> writeVersion(String subscriptionId) {
+                                return Mono.just("unrelated");
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+                        import org.occurrent.subscription.CheckpointWriteCondition;
+                        import org.occurrent.subscription.api.reactor.CheckpointStorage;
+                        import reactor.core.publisher.Mono;
+
+                        class InMemoryReactorCheckpointStorage implements CheckpointStorage {
+                            @Override
+                            public Mono<Checkpoint> read(String subscriptionId) {
+                                return null;
+                            }
+
+                            @Override
+                            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint) {
+                                return Mono.just(checkpoint);
+                            }
+
+                            @Override
+                            public Mono<Void> delete(String subscriptionId) {
+                                return null;
+                            }
+
+                            public Mono<String> writeVersion(String subscriptionId) {
+                                return Mono.just("unrelated");
+                            }
+
+                            /* TODO [Occurrent 0.33 upgrade]: this only refuses a condition stronger than any(), delegating any() to the existing two-argument save. Evaluate `condition` for real if this storage can, otherwise this is the permanent answer. See doc/migration/upgrading-to-0.33.0.md. */
+                            @Override
+                            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                                if (!(condition instanceof CheckpointWriteCondition.Any)) {
+                                    return Mono.error(new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported."));
+                                }
+                                return save(subscriptionId, checkpoint);
+                            }
+
+                            /* TODO [Occurrent 0.33 upgrade]: this always answers an empty Mono, correct if this storage cannot evaluate a condition. Signal the version a condition is judged against if it can. See doc/migration/upgrading-to-0.33.0.md. */
+                            @Override
+                            public Mono<Long> writeVersion(String subscriptionId) {
+                                return Mono.empty();
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
     void leavesABlockingImplementerThatAlreadyHasBothMembersUntouched() {
         rewriteRun(
                 java(CHECKPOINT),
