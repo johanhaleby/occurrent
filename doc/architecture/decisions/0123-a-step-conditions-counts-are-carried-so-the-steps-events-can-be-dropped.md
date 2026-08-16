@@ -217,6 +217,6 @@ nothing can tell a forgotten bump from an unchanged declaration.
 ## Amendment (2026-08-16): #748 is resolved
 
 The Consequences bullet above deferred #748, a renamed or removed step throwing a bare `NullPointerException`, as a
-lifecycle decision rather than a message. [ADR 126](0126-a-renamed-or-removed-step-refuses-its-parked-instances.md)
+lifecycle decision rather than a message. [ADR 128](0128-a-renamed-or-removed-step-refuses-its-parked-instances.md)
 decides it now, with the same refusal shape as this record's own declaration-change case, naming the step and
 giving two remedies, and no new public API.

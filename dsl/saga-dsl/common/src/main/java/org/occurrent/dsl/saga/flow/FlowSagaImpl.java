@@ -175,7 +175,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // A step name is the persisted position, so a step renamed or removed since an instance entered it leaves that
     // instance with no route: nothing in the current definition says what its branches, timeout or leaves are. Thrown
     // from both evolveOnEvent and evolveOnTimeout, right after the stepsByName lookup that would otherwise NPE. See ADR
-    // 126 for why this refuses rather than guessing a recovery, and why that is enough to also keep reactToBranch's
+    // 128 for why this refuses rather than guessing a recovery, and why that is enough to also keep reactToBranch's
     // matchedBranchIndex lookup in range: react only ever runs on the state evolve just returned in this same call, so
     // once evolve refuses here, nothing downstream can observe a step or branch index this build does not have.
     private static IllegalStateException missingStep(String stepName) {
