@@ -108,7 +108,9 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * write path (an {@code InMemoryEventStore} listener, say), where the event is already durably stored and
      * refusing would fail the write instead of protecting anything. The domain-event feed, which is broker-only, does
      * refuse. See ADR 104. A configured {@link PushObserver} is told about the event, matched or not, before delivery
-     * is attempted, and that is where to get visibility into it instead.
+     * is attempted, and that is where to get visibility into it instead. Told about the event even when a
+     * subscription's filter itself throws while being evaluated (a supplied {@link DataFieldReader} can), with
+     * {@code matched} reported as {@code false}, before that exception propagates as it always has.
      *
      * @param cloudEvent The event received from the external source.
      */
@@ -116,7 +118,14 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     public void accept(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         if (observing) {
-            notifyObserver(cloudEvent, hasMatchingRegistration(cloudEvent));
+            boolean matched;
+            try {
+                matched = hasMatchingRegistration(cloudEvent);
+            } catch (RuntimeException e) {
+                notifyObserver(cloudEvent, false);
+                throw e;
+            }
+            notifyObserver(cloudEvent, matched);
         }
         route(cloudEvent);
     }

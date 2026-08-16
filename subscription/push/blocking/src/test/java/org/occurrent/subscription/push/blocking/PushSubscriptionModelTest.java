@@ -34,6 +34,7 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.occurrent.condition.Condition.eq;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class PushSubscriptionModelTest {
@@ -288,6 +289,26 @@ class PushSubscriptionModelTest {
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class);
         assertThat(matches).containsExactly(true);
+    }
+
+    @Test
+    void the_observer_still_sees_the_event_when_evaluating_the_filter_itself_throws() {
+        // A supplied DataFieldReader can throw while reading the payload, the same hazard the shared dispatch loop
+        // documents (routeIsolated). The "every event is observed" promise has to survive that too, not just a
+        // handler that throws, and the original exception still has to reach the caller afterward.
+        List<Boolean> matches = new ArrayList<>();
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw new IllegalStateException("payload unreadable");
+        };
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader,
+                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
+        });
+
+        Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage("payload unreadable");
+        assertThat(matches).containsExactly(false);
     }
 
     @Test
