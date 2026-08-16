@@ -294,15 +294,6 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             matchingEventCount = eventStoreQueries.count(catchupFilter);
         }
 
-        // If the delegate is not allowed to subscribe, remove the temporary position written during catch-up
-        // now that it's done.
-        if (delegatedStartAt == null) {
-            returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                cfg.storage().delete(subscriptionId);
-                return null;
-            });
-        }
-
         // shouldKeepReplaying gates on stopped/shuttingDown as well as identity, so a stop() that lands before this
         // point still leaves this attempt's marker in place instead of removing it (mirrors the pre-#737 behavior
         // for that case). Passing the gate on identity alone is not enough to call this a normal completion though:
@@ -312,6 +303,16 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         final boolean subscriptionsWasCancelledOrShutdown = shouldKeepReplaying(subscriptionId, attempt)
                 ? !runningCatchupSubscriptions.remove(subscriptionId, attempt)
                 : true;
+
+        // If the delegate is not allowed to subscribe, remove the temporary position written during catch-up now
+        // that it's done. Gated on the same atomic decision above (not just checked ahead of it), so a superseded
+        // attempt reaching this late cannot delete a later attempt's own temporary position.
+        if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
+            returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+                cfg.storage().delete(subscriptionId);
+                return null;
+            });
+        }
 
         // Store the global position once catch-up is ready so a subscription that got no new events during replay
         // still resumes from it after a restart, instead of replaying history again. Uses UseCheckpointInStorage
@@ -405,17 +406,19 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 (events, cache) -> deliverCatchupEvents(events, subscriptionId, attempt, action, cache, e -> GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e))),
                 catchupPhaseCache);
 
-        if (delegatedStartAt == null) {
+        // See the time-based path's identical gate-then-atomic-remove for why this is not a single call.
+        final boolean subscriptionsWasCancelledOrShutdown = shouldKeepReplaying(subscriptionId, attempt)
+                ? !runningCatchupSubscriptions.remove(subscriptionId, attempt)
+                : true;
+
+        // Gated on the atomic decision above, not just checked ahead of it, for the same reason as the time-based
+        // path: a superseded attempt reaching this late must not delete a later attempt's own temporary position.
+        if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
             returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
                 cfg.storage().delete(subscriptionId);
                 return null;
             });
         }
-
-        // See the time-based path's identical gate-then-atomic-remove for why this is not a single call.
-        final boolean subscriptionsWasCancelledOrShutdown = shouldKeepReplaying(subscriptionId, attempt)
-                ? !runningCatchupSubscriptions.remove(subscriptionId, attempt)
-                : true;
 
         StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
                         cfg -> () -> {

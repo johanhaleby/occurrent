@@ -160,13 +160,6 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId, attempt),
                 (events, cache) -> deliverCatchupEvents(events, subscriptionId, attempt, action, cache), catchupPhaseCache);
 
-        if (delegatedStartAt == null) {
-            returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                cfg.storage().delete(subscriptionId);
-                return null;
-            });
-        }
-
         // shouldKeepReplaying gates on stopped/shuttingDown as well as identity, so a stop() that lands before this
         // point still leaves this attempt's marker in place instead of removing it. Passing that gate on identity
         // alone is not enough to call this a normal completion though: the atomic remove is what actually decides,
@@ -176,6 +169,15 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         final boolean subscriptionsWasCancelledOrShutdown = shouldKeepReplaying(subscriptionId, attempt)
                 ? !runningCatchupSubscriptions.remove(subscriptionId, attempt)
                 : true;
+
+        // Gated on the atomic decision above, not just checked ahead of it: a superseded attempt reaching this
+        // late must not delete a later attempt's own temporary position.
+        if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
+            returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+                cfg.storage().delete(subscriptionId);
+                return null;
+            });
+        }
 
         StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
                         cfg -> () -> {
