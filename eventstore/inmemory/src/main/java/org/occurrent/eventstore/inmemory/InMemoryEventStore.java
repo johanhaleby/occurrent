@@ -612,9 +612,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
         var streamVersion = calculateStreamVersion(events);
 
-        // "skip" counts stream positions, so it applies to the raw per-stream list before the filter runs, not
-        // to the filtered result. "limit" stays a cap on the filtered result, at most this many matches.
-        List<CloudEvent> eventsAfterSkip = skip == 0 ? events : events.subList(Math.min(skip, events.size()), events.size());
+        // "skip" is matched against each event's own STREAM_VERSION rather than its list index, so it stays
+        // correct after deleteEvent or delete(Filter) removes an earlier event and the survivors shift down in
+        // the list. Applied before the filter runs, not to the filtered result.
+        List<CloudEvent> eventsAfterSkip = skip == 0 ? events : events.stream().filter(e -> OccurrentExtensionGetter.getStreamVersion(e) > skip).toList();
 
         List<CloudEvent> eventsAfterFilter;
         if (filter == null) {

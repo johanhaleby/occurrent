@@ -427,9 +427,9 @@ public abstract class StreamEventStoreConformance extends EventStoreConformance 
 
         @Test
         void skip_counts_stream_positions_even_when_the_filter_excludes_some_of_them() {
-            // event-1 and event-2 are skipped by stream position. event-2 would also fail the filter, so a skip
-            // that counted filtered matches instead of stream positions would only drop event-1 here, and return
-            // event-2 as well.
+            // event-2 fails the filter, so a skip that counted filtered matches instead of stream positions would
+            // skip 2 of the 3 filtered matches (event-1, event-3) and return only event-4, instead of the correct
+            // event-3 and event-4.
             eventStore().write(STREAM_ID, List.of(
                     event("event-1", CHANGED), event("event-2", DEFINED), event("event-3", CHANGED), event("event-4", CHANGED)));
 
