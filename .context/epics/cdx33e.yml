@@ -1,10 +1,11 @@
 schema_version: 2
 epic: cdx33e
-revision: 13
-updated_at: 2026-08-16 12:20:00+00:00
-updated_by: 'orchestrator: E7 DONE and verified on both origin refs (preview cd41668, release-notes 1f32c7d aligned identical);
-  E8 implementing after its correct refusal was resolved by landing the deferral reversal on the tracker in the same tick,
-  lesson recorded'
+revision: 14
+updated_at: 2026-08-16 13:10:00+00:00
+updated_by: 'orchestrator: E9 dispatched (Opus, step-conditions restructure per Johan''s round-two feedback; the failure
+  class is concept ORDER, now a cold-reader check recorded in the johan-writing documentation surface at 49f4da8); the predicate-name
+  API question answered from FlowSagaImpl 659-662 and folded into the brief; Johan''s primary docs checkout fast-forwarded
+  to cd41668 at his flag so his local jekyll shows current content. E8 still implementing'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -201,6 +202,29 @@ units:
     - check: pr_merged
       repo: johanhaleby/occurrent
       ref: null
+      met: false
+      evidence: null
+  E9:
+    issue: null
+    goal: 'Round-two Flow DSL feedback (11 items): the Step Conditions material restructured for cold-reader order (counted
+      conditions and stepWindow introduced in their own subsection before any rule referencing them), the ten quoted sentences
+      dissolved or rewritten, transitionTo re-entry semantics verified in code before writing, and the predicate-name truth
+      stated plainly (needed only under stepWindow, count irrelevant, harmless without). After it lands, release-notes docs
+      content must be RE-ALIGNED to preview (E7''s alignment predates this rewrite)'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-preview
+      met: false
+      evidence: null
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-release-notes
       met: false
       evidence: null
   CREG:
