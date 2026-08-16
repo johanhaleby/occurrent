@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 25
-updated_at: 2026-08-17T01:05:00Z
+revision: 26
+updated_at: 2026-08-17T01:20:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -191,7 +191,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_ffc08735, started by Johan 20:5xZ"
+    session: "chip task_ffc08735, delivered PR 822 at 01:1xZ (stepWindow foreign-type eviction fix plus ADR). ADR COLLISION again, claims 127 which 819 holds. Orchestrator directed renumber to 129 via PR comment 5309149686, worker active, expected renumbered and rebased by 02:00Z else orchestrator does both. ADR RESERVATIONS: 127=U15/819, 128=MERGED/816, 129=U8/822, next free 130"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "773", met: false, evidence: null}
