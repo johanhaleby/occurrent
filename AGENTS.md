@@ -62,6 +62,8 @@ Three things this protocol has already been caught out by:
 
 ADRs live in `doc/architecture/decisions/`, **not** `doc/adr/`. Filenames are `NNNN-kebab-case-title.md`, numbered sequentially from the highest existing number. Write one for architectural decisions, not for minor implementation details.
 
+An ADR that has shipped in a release is immutable. Correct or change a released decision with a new ADR that supersedes or amends the old one by reference, and touch the released file only to update its Status section with a pointer to the successor, the way [ADR 111](doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md) points at its withdrawer. An ADR that has not shipped in any release yet may still be updated in place when that is the best option.
+
 ## Changelog
 
 Update `changelog.md` after any change that affects code behavior, a public API, build or runtime behavior, or a notable user-facing capability. Small documentation-only edits do not need an entry.
