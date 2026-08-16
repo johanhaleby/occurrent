@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 24
-updated_at: 2026-08-17T00:40:00Z
+revision: 25
+updated_at: 2026-08-17T01:05:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -210,21 +210,21 @@ units:
   U10A:
     issue: 750
     goal: "Sealed-expansion ADR: uniformity across modules on the getPermittedSubclasses invariant, #753 likely no-change-recorded, #758 largely documentation"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: "chip task_8da6cf7d, delivered PR 815 at 21:4xZ: ADR 126, number audited across all remote branches, decision matches the approved meta-plan direction so the merge is principle-settled once review threads resolve. Body repointed from Fixes to Decides (750/753/758 close at U10B, 753 as recorded no-change). Copilot requested and read back. Review landed with two factual claims about DomainEventQueries (worker owns) and the Fixes-line flag (orchestrator resolved, already fixed). U10B dispatches as a background subagent after 815 merges"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "815", met: true, evidence: "ADR 126 merged 9c523bafc 2026-08-17T00:5xZ, CAS pin 2080996. Worker session ended with two factual Copilot threads open, orchestrator verified both against DomainEventQueries.createFilterFrom, corrected the ADR in place (unreleased, allowed), replied and resolved"}
   U10B:
     issue: 750
     goal: "Sealed-expansion module pass per U10A's decision: projection DSL, subscription DSL, query DSL both stacks, Spring registrars; migration-guide section for any released-surface refusal"
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U10A]
-    session: null
+    session: "background subagent dispatched 2026-08-17T01:0xZ per the unattended vehicle, own worktree from origin/main, brief carries the finding-routing block and the semantic guard for the query DSL empty-set case"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "750", met: false, evidence: null}
