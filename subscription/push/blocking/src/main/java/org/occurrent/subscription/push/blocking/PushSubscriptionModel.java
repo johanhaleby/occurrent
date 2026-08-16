@@ -121,7 +121,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
             boolean matched;
             try {
                 matched = hasMatchingRegistration(cloudEvent);
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | AssertionError e) {
                 notifyObserver(cloudEvent, false);
                 throw e;
             }

@@ -312,6 +312,25 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void the_observer_still_sees_the_event_when_evaluating_the_filter_itself_fails_an_assertion() {
+        // Same as the RuntimeException case above, but for a DataFieldReader instrumented as a test double, which is
+        // as likely to throw AssertionError as a spy observer is.
+        List<Boolean> matches = new ArrayList<>();
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw new AssertionError("payload assertion failed");
+        };
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader,
+                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
+        });
+
+        Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
+
+        assertThat(thrown).isInstanceOf(AssertionError.class).hasMessage("payload assertion failed");
+        assertThat(matches).containsExactly(false);
+    }
+
+    @Test
     void a_throwing_observer_is_swallowed_and_the_matching_handler_still_runs() {
         List<String> handled = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (CloudEvent cloudEvent, boolean matched) -> {

@@ -25,11 +25,13 @@ import org.jspecify.annotations.NullMarked;
  * apart from a saga or projection that received an event and chose not to act on it. {@code accept(...)} itself
  * stays silent about all of these by design, see ADR 104.
  * <p>
- * Called once per event, whether or not a handler ends up running. {@code matched} is {@code true} when a currently
- * registered, unpaused subscription's filter accepted the event, independent of whether that handler goes on to
- * succeed or throw. A {@link RuntimeException} or {@link AssertionError} the observer throws is caught and logged
- * rather than propagated, so a broken observer cannot turn an event that was actually delivered into a broker
- * redelivery. Another {@link Error} still propagates, as it does everywhere else on this stack.
+ * Called once per event, whether or not a handler ends up running. {@code matched} is {@code true} only when the
+ * model is running and a currently registered, unpaused subscription's filter accepted the event, independent of
+ * whether that handler goes on to succeed or throw. A filter that throws while being evaluated (a supplied
+ * {@code DataFieldReader} can) is reported as unmatched too, before that exception propagates. A
+ * {@link RuntimeException} or {@link AssertionError} the observer itself throws is caught and logged rather than
+ * propagated, so a broken observer cannot turn an event that was actually delivered into a broker redelivery.
+ * Another {@link Error} still propagates, as it does everywhere else on this stack.
  * <p>
  * The default, {@link #noop()}, changes nothing for existing code, and {@link PushSubscriptionModel} skips both this
  * call and the match check entirely when no other observer is configured.
@@ -40,7 +42,8 @@ public interface PushObserver {
 
     /**
      * @param cloudEvent The event {@code accept(...)} was asked to deliver.
-     * @param matched    Whether a currently registered, unpaused subscription's filter accepted the event.
+     * @param matched    Whether the model is running and a currently registered, unpaused subscription's filter
+     *                   accepted the event.
      */
     void observe(CloudEvent cloudEvent, boolean matched);
 
