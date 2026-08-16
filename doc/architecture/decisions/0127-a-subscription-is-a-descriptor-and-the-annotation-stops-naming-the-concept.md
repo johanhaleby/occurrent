@@ -279,14 +279,19 @@ both.
 Retiring that classification is the point of the change rather than a side effect of it, since a typed handler turns
 its startup failures into compile errors.
 
-An OpenRewrite recipe rewrites the common case, moving the method body into a lambda inside a factory method, mapping
-`@StreamId` and `@StreamVersion` parameters onto the metadata the lambda receives, and moving a declared `eventTypes`
-or `tags` into the descriptor.
+**The recipe keeps the handler method and delegates to it, rather than moving its body.** It drops the annotation from
+the method, adds a factory method beside it, and the descriptor's handler calls the original. Lifting the body into the
+lambda instead would break anything that calls the handler directly or references it as a method reference, and these
+are shipped annotations, so external call sites cannot be assumed away just because this repository has none. Keeping
+the method also means the migration does not touch the body at all, which is the part most likely to go wrong.
+
+It maps `@StreamId` and `@StreamVersion` parameters onto the metadata the lambda receives, and moves a declared
+`eventTypes` or `tags` into the descriptor.
 
 **A reactor handler needs one extra step.** The reactor registrar accepts a `void` method as readily as a
 `Mono`-returning one, wrapping the first in an empty `Mono`, while a `ReactiveSubscription` handler has to return
-`Mono<Void>`. So a `void` reactor body moved straight into a lambda does not compile, and the recipe wraps it in
-`Mono.fromRunnable`. A handler returning some other `Mono<T>` needs the same treatment from the other direction, a
+`Mono<Void>`. So a lambda that just calls a `void` handler method does not compile as a `Mono<Void>` handler, and the recipe wraps
+the call in `Mono.fromRunnable`. A handler returning some other `Mono<T>` needs the same treatment from the other direction, a
 trailing `.then()`, because the registrar applies exactly that today and
 `ReactiveStreamSubscriptionHandlerReturnTypeAnnotationMongoTest` covers a `Mono<String>` handler as supported
 behaviour. The recipe picks the stack from which autoconfigure module the application depends on.
@@ -318,8 +323,8 @@ says to check those by hand rather than the recipe pretending to catch them.
 **A handler that declares a checked exception is refused as well.** The registrars invoke reflectively, so a
 `void` handler may declare `throws` today and the registrar wraps whatever comes back. A descriptor's handler is a
 `BiConsumer` on the blocking stack and a `BiFunction` returning `Mono<Void>` on the reactor one, and neither can throw
-a checked exception, so there is no lambda the recipe can write that compiles. Wrapping the body in a try/catch on the
-user's behalf would be the recipe inventing an error policy, which is the kind of decision it should hand back instead.
+a checked exception, so no lambda calling that method compiles. Catching on the user's behalf would be the recipe
+inventing an error policy, which is the kind of decision it should hand back instead.
 So it refuses those too, and the migration guide gives the two ways out, catching inside the handler or changing what
 the method throws.
 
@@ -329,7 +334,8 @@ handler in an application running both stacks. Everything else is rewritten.
 **The three asynchronous paths silently ignoring advice is a pre-existing defect, and the descriptor form is what fixes
 it.** Today a user writes `@Transactional` on a `@Subscription` handler, everything compiles, the tests pass, and no
 transaction is ever opened. There is nothing in the API that could tell them. Once the handler is a lambda inside a
-factory method, nobody expects method-level advice on it, and a handler that needs a transaction takes a
+factory method calling an ordinary unannotated method, there is no proxy in the path and nothing suggesting there is,
+and a handler that needs a transaction takes a
 `TransactionTemplate` on the blocking stack or a `TransactionalOperator` on the reactor one, and says so in the code.
 The gap stops being silent because the shape of the API stops inviting the mistake.
 
