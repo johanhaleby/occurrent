@@ -23,6 +23,7 @@ import org.occurrent.annotation.StreamVersion;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameterKind;
+import org.springframework.context.support.GenericApplicationContext;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -336,5 +337,76 @@ class SubscriptionAnnotationsTest {
                 .hasMessageContaining(ReopenedEvent.class.getName())
                 .hasMessageContaining("reopened-subscription")
                 .hasMessageContaining("cannot all be enumerated");
+    }
+
+    // ------------------------------------------------------------------------------------------------------
+    // resolveFeedBeanType (the read-only mirror of resolveFeedBean's own resolution rules)
+    // ------------------------------------------------------------------------------------------------------
+
+    interface CandidateA {
+    }
+
+    interface CandidateB {
+    }
+
+    static class CandidateAImpl implements CandidateA {
+    }
+
+    static class CandidateBImpl implements CandidateB {
+    }
+
+    @Test
+    void resolveFeedBeanType_reads_an_explicit_subscriptionModel_type_straight_off_the_call_with_no_bean_lookup_at_all() {
+        // No bean of any candidate type is registered, and the context is never even refreshed, so this only passes
+        // if the explicit type short-circuits before touching the context.
+        GenericApplicationContext context = new GenericApplicationContext();
+        Class<?> type = SubscriptionAnnotations.resolveFeedBeanType(context, CandidateA.class, "", CandidateA.class, CandidateB.class);
+        assertThat(type).isEqualTo(CandidateA.class);
+    }
+
+    @Test
+    void resolveFeedBeanType_resolves_a_named_bean_by_its_actual_type() {
+        GenericApplicationContext context = new GenericApplicationContext();
+        context.registerBean("feed", CandidateBImpl.class);
+        context.refresh();
+        Class<?> type = SubscriptionAnnotations.resolveFeedBeanType(context, Void.class, "feed", CandidateA.class, CandidateB.class);
+        assertThat(type).isEqualTo(CandidateBImpl.class);
+    }
+
+    @Test
+    void resolveFeedBeanType_answers_null_for_a_name_with_no_such_bean() {
+        GenericApplicationContext context = new GenericApplicationContext();
+        context.refresh();
+        Class<?> type = SubscriptionAnnotations.resolveFeedBeanType(context, Void.class, "missing", CandidateA.class, CandidateB.class);
+        assertThat(type).isNull();
+    }
+
+    @Test
+    void resolveFeedBeanType_resolves_the_unique_bean_of_one_candidate_type() {
+        GenericApplicationContext context = new GenericApplicationContext();
+        context.registerBean("feed", CandidateAImpl.class);
+        context.refresh();
+        Class<?> type = SubscriptionAnnotations.resolveFeedBeanType(context, Void.class, "", CandidateA.class, CandidateB.class);
+        assertThat(type).isEqualTo(CandidateAImpl.class);
+    }
+
+    @Test
+    void resolveFeedBeanType_answers_null_when_no_candidate_bean_exists() {
+        GenericApplicationContext context = new GenericApplicationContext();
+        context.refresh();
+        Class<?> type = SubscriptionAnnotations.resolveFeedBeanType(context, Void.class, "", CandidateA.class, CandidateB.class);
+        assertThat(type).isNull();
+    }
+
+    @Test
+    void resolveFeedBeanType_answers_null_when_several_candidate_beans_exist() {
+        // The same ambiguity resolveFeedBean itself would refuse to pick between. A caller sees null here rather
+        // than a guess, and resolveFeedBean is still what raises the real error, at registration.
+        GenericApplicationContext context = new GenericApplicationContext();
+        context.registerBean("feedA", CandidateAImpl.class);
+        context.registerBean("feedB", CandidateBImpl.class);
+        context.refresh();
+        Class<?> type = SubscriptionAnnotations.resolveFeedBeanType(context, Void.class, "", CandidateA.class, CandidateB.class);
+        assertThat(type).isNull();
     }
 }

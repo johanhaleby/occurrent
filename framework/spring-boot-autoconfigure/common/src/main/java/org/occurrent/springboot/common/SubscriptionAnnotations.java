@@ -18,6 +18,7 @@
 package org.occurrent.springboot.common;
 
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.annotation.*;
 import org.occurrent.annotation.StreamSubscription.StartPosition;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -312,10 +313,7 @@ public final class SubscriptionAnnotations {
             if (byType) {
                 return applicationContext.getBean(subscriptionModelType);
             }
-            List<String> names = new ArrayList<>();
-            for (Class<?> candidateType : candidateTypes) {
-                Collections.addAll(names, applicationContext.getBeanNamesForType(candidateType));
-            }
+            List<String> names = candidateBeanNames(applicationContext, candidateTypes);
             if (names.isEmpty()) {
                 throw new IllegalStateException("%s '%s' with source=PUSH found no %s bean. Declare one, or name it with subscriptionModelName.".formatted(annotationName, id, acceptedTypes));
             }
@@ -325,6 +323,59 @@ public final class SubscriptionAnnotations {
             return applicationContext.getBean(names.get(0));
         } catch (BeansException e) {
             throw new IllegalArgumentException("%s '%s' with source=PUSH could not resolve a push feed bean (subscriptionModel=%s, subscriptionModelName='%s'): %s".formatted(annotationName, id, byType ? subscriptionModelType.getName() : "unset", subscriptionModelName, e.getMessage()), e);
+        }
+    }
+
+    // The bean names matching one of candidateTypes, shared by resolveFeedBean's own unique-bean fallback and by
+    // resolveFeedBeanType's read-only mirror of it, so the two cannot silently drift on what counts as a candidate.
+    private static List<String> candidateBeanNames(ApplicationContext applicationContext, Class<?>... candidateTypes) {
+        List<String> names = new ArrayList<>();
+        for (Class<?> candidateType : candidateTypes) {
+            Collections.addAll(names, applicationContext.getBeanNamesForType(candidateType));
+        }
+        return names;
+    }
+
+    /**
+     * The push feed bean's type, resolved by the same rule {@link #resolveFeedBean} uses to pick the bean itself
+     * (an explicit {@code subscriptionModelType}, {@code subscriptionModelName}, or the unique bean of one of
+     * {@code candidateTypes}), but never instantiating it. An explicit type is read straight off the annotation
+     * attribute, and a name or unique-type lookup goes through {@link ApplicationContext#getType(String)}, which
+     * answers from bean metadata rather than creating the bean, safe to call once every singleton already exists,
+     * which is the only time a caller needing this asks.
+     * <p>
+     * Returns {@code null} when the type cannot be determined this way, an unnamed bean with zero or several
+     * candidates, or a name Spring cannot type without creating it. A caller getting {@code null} back should treat
+     * the feed's flavor as unknown rather than guess one, since {@link #resolveFeedBean} is what raises the real,
+     * detailed error once the bean is actually resolved, at registration.
+     *
+     * @param applicationContext    the Spring context to read bean metadata from
+     * @param subscriptionModelType the annotation's {@code subscriptionModel} type, or {@code Void.class} if unset
+     * @param subscriptionModelName the annotation's {@code subscriptionModelName}, or blank if unset
+     * @param candidateTypes        the allowed feed bean types, matching what {@link #resolveFeedBean} was called
+     *                              with for the same annotation
+     * @return the feed bean's type, or {@code null} when it cannot be determined without instantiating the bean
+     */
+    public static @Nullable Class<?> resolveFeedBeanType(ApplicationContext applicationContext, Class<?> subscriptionModelType,
+                                                          String subscriptionModelName, Class<?>... candidateTypes) {
+        if (subscriptionModelType != Void.class) {
+            return subscriptionModelType;
+        }
+        if (!subscriptionModelName.isBlank()) {
+            try {
+                return applicationContext.getType(subscriptionModelName);
+            } catch (BeansException e) {
+                return null;
+            }
+        }
+        List<String> names = candidateBeanNames(applicationContext, candidateTypes);
+        if (names.size() != 1) {
+            return null;
+        }
+        try {
+            return applicationContext.getType(names.get(0));
+        } catch (BeansException e) {
+            return null;
         }
     }
 

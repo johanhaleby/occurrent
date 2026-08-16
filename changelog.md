@@ -4,6 +4,8 @@
 
 #### Changes
 
+* **A `@Projection(source = PUSH)` fed by a `DomainEventFeed` no longer fails startup under an id-sensitive `CheckpointStorage`, fixing behaviour shipped in 0.33.0.** The Spring Boot starter's fencing check used to ask about every push projection's id once `catchup` defaulted to `FROM_EVENT_STORE`, even for a `DomainEventFeed`-fed projection, which never resolves `CheckpointStorage` at all. A storage refusing that id's shape, `SpringRedisCheckpointStorage`'s Cluster-safe mode for example, could sink startup for a projection that would never have written a fenced checkpoint. See [section 8 of the upgrade guide](doc/migration/upgrading-to-0.33.0.md#8-three-ways-the-spring-boot-starter-now-refuses-to-start). Resolves [#788](https://github.com/johanhaleby/occurrent/issues/788).
+
 #### Breaking changes
 
 ### Changelog 0.33.0 (2026-08-16)

@@ -508,7 +508,8 @@ every singleton exists, the starter asks `evaluatesWriteConditionsFor` for the s
 `CheckpointStorageCannotFenceSubscriptionException`'s own javadoc names precisely, and throws that exception naming
 the storage and every refused id when the answer is `false` for at least one. That javadoc also says which ids are
 left out even though the storage might refuse them, a `@SynchronousSubscription` among them since it never writes a
-checkpoint at all, and which are asked about even though the storage refusing them would never matter.
+checkpoint at all, and a `@Projection(source = PUSH)` fed by a `DomainEventFeed` among them too, whatever `catchup`
+says, since that path never reaches `CheckpointStorage` either.
 Rename the affected id to a shape the storage accepts, use a storage that evaluates write
 conditions for it (`forStandalone(..)` on `SpringRedisCheckpointStorage`, if the deployment allows it), or fall back
 to `occurrent.subscription.competing-consumer.fence-checkpoints=false`. That third way out has the same limit under
