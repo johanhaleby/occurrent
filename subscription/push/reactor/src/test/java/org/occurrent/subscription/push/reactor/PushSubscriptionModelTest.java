@@ -213,6 +213,24 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void resubscribing_the_same_mono_observes_and_dispatches_the_event_again() {
+        // The Mono accept(..) returns is cold, the same way route(CloudEvent)'s already was, so "once per event"
+        // means once per subscription to it, not once per event handed to accept(..).
+        List<String> observed = new ArrayList<>();
+        List<String> handled = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, boolean matched) -> observed.add(cloudEvent.getId()));
+        model.subscribe("sub", cloudEvent -> Mono.fromRunnable(() -> handled.add(cloudEvent.getId())));
+
+        Mono<Void> pending = model.accept(cloudEvent("1", "NameDefined"));
+        StepVerifier.create(pending).verifyComplete();
+        StepVerifier.create(pending).verifyComplete();
+
+        assertThat(observed).containsExactly("1", "1");
+        assertThat(handled).containsExactly("1", "1");
+    }
+
+    @Test
     void the_observer_is_told_an_event_is_unmatched_when_nothing_is_registered() {
         List<Boolean> matches = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
