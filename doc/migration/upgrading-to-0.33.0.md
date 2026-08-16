@@ -66,9 +66,9 @@ If you implement in Java, run `UpgradeToOccurrent_0_33` first. On every Java imp
 adds the `save` overload and `writeVersion`, each marked with a `TODO [Occurrent 0.33 upgrade]` comment, so the
 module compiles again without a manual pass. This checkpoint-storage stub is Java only, the same limitation the saga
 timer rewrite in section 7 runs into, so a Kotlin implementer does the equivalent by hand, below. What it generates
-for a Java class with its own two-argument `save`, the shape every genuine 0.32.0 implementer has, is exactly the
-snippet below. `save` delegates `any()` to that existing two-argument override and refuses anything stronger, and
-`writeVersion` answers empty. A store that only ever wrote unconditionally can leave that exactly as generated:
+for a Java class is exactly the snippet below. `save` delegates `any()` to your existing two-argument override and refuses
+anything stronger, and `writeVersion` answers empty. A store that only ever wrote unconditionally can leave that
+exactly as generated:
 
 ```java
 @Override
@@ -88,22 +88,6 @@ public OptionalLong writeVersion(String subscriptionId) {
 That is not a stopgap you are expected to replace before compiling. It is the correct, permanent answer for a store
 that genuinely cannot evaluate a condition. `UnsupportedOperationException` is the same refusal an event store gives
 for a capability it was not built with.
-
-A class with no two-argument `save` of its own, relying only on `CheckpointStorage`'s own default (reachable if a
-partial hand-migration deleted its override, say), gets a `save` that refuses every write instead:
-
-```java
-@Override
-public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-    throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
-}
-```
-
-Delegating `any()` to `save(subscriptionId, checkpoint)` there would call the interface's own default, which calls
-this method right back with `any()`, recursing until the stack overflows on the first checkpoint write. This shape
-never calls back into a three-argument `save`, so it cannot recurse, whatever the class inherits. Give the class its
-own two-argument `save` and rerun the recipe to get the delegating shape above, or replace this stub with real
-condition handling.
 
 Such a store leaves `evaluatesWriteConditions()` alone, since the default already answers `false` for it. That answer
 is what lets a caller find out before it wires anything up, rather than on the first write, so leaving it at the
@@ -273,9 +257,7 @@ has the reasoning. `RepositionableSubscriptions.findIn` never shipped under the 
 `UpgradeToOccurrent_0_33` renames all five interfaces, both methods, the `of` to `findIn` rename above, and the TCK
 base class for you, in Java and Kotlin alike, the same way
 [section 5 of the 0.32.0 guide](upgrading-to-0.32.0.md#5-the-reactor-subscriptionmodel-is-now-fluxsubscriptionmodel)
-renamed the reactor `SubscriptionModel`. Run it once, as part of the upgrade. A Java caller that reaches `of` through
-an argument itself typed `Object`, the broader-static-type case two paragraphs up, gets a `TODO [Occurrent 0.33
-upgrade]` review comment on the call, since the recipe cannot narrow the argument's declared type for you.
+renamed the reactor `SubscriptionModel`. Run it once, as part of the upgrade.
 
 ### By hand
 

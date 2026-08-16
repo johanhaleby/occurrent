@@ -22,12 +22,9 @@ import org.openrewrite.TreeVisitor;
 import org.openrewrite.java.JavaIsoVisitor;
 import org.openrewrite.java.JavaParser;
 import org.openrewrite.java.JavaTemplate;
-import org.openrewrite.java.tree.Flag;
+import org.openrewrite.java.MethodMatcher;
 import org.openrewrite.java.tree.J;
-import org.openrewrite.java.tree.JavaType;
 import org.openrewrite.java.tree.TypeUtils;
-
-import java.util.List;
 
 import static org.openrewrite.java.tree.J.ClassDeclaration.Kind.Type.Interface;
 
@@ -41,19 +38,10 @@ import static org.openrewrite.java.tree.J.ClassDeclaration.Kind.Type.Interface;
  * reactor stack), and {@code writeVersion} always answers empty. That is the same permanent shape
  * doc/migration/upgrading-to-0.33.0.md documents for a store that cannot evaluate a condition, not a stopgap, and
  * it is what keeps a wrapper-managed checkpoint write, which calls the three-argument {@code save} with {@code
- * any()} whenever no write-version source answers, working as soon as the stub is generated.
- * <p>
- * The delegating {@code save} is only generated for a class that declares its own two-argument {@code save}. Every
- * genuine 0.32.0 implementer does, since the two-argument method was abstract before 0.33.0. A class reachable only
- * through {@code CheckpointStorage}'s own two-argument default (a partial hand-migration that deleted its override,
- * say) would otherwise recurse. The default calls the three-argument method with {@code any()}, straight back into
- * the generated stub, a {@link StackOverflowError} on the first checkpoint write. Such a class gets the old
- * always-refusing {@code save} instead, the shape this recipe generated before delegation was added, so the
- * generated code never calls back into itself on any inheritance shape.
- * <p>
- * A store that evaluates a condition for real still gets a review comment and is left marked for a manual pass, the
- * same best-effort-plus-marker shape as {@link MigrateEventStoreWriteStreamToList}. Java only, rewrite-kotlin has
- * no recipe for inserting a member into a class body, so a Kotlin implementer still needs the manual steps in
+ * any()} whenever no write-version source answers, working the moment the stub lands. A store that can evaluate a
+ * real condition still gets a review comment and is left marked for a manual pass, the same best-effort-plus-marker
+ * shape as {@link MigrateEventStoreWriteStreamToList}. Java only, rewrite-kotlin has no recipe for inserting a
+ * member into a class body, so a Kotlin implementer still needs the manual steps in
  * doc/migration/upgrading-to-0.33.0.md.
  */
 public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
@@ -67,13 +55,16 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
     private static final String OPTIONAL_LONG = "java.util.OptionalLong";
     private static final String MONO = "reactor.core.publisher.Mono";
 
-    private static final List<JavaType> SAVE_2_ARG_PARAMS =
-            List.of(JavaType.ShallowClass.build("java.lang.String"), JavaType.ShallowClass.build(CHECKPOINT));
-    private static final List<JavaType> SAVE_3_ARG_PARAMS =
-            List.of(JavaType.ShallowClass.build("java.lang.String"), JavaType.ShallowClass.build(CHECKPOINT),
-                    JavaType.ShallowClass.build(CHECKPOINT_WRITE_CONDITION));
-    private static final List<JavaType> WRITE_VERSION_PARAMS =
-            List.of(JavaType.ShallowClass.build("java.lang.String"));
+    // matchOverrides=true also matches a class whose implementation of the method comes from an in-source
+    // supertype, not only a class that names CheckpointStorage on its own implements clause.
+    private static final MethodMatcher BLOCKING_SAVE = new MethodMatcher(
+            BLOCKING_STORAGE + " save(java.lang.String, " + CHECKPOINT + ", " + CHECKPOINT_WRITE_CONDITION + ")", true);
+    private static final MethodMatcher BLOCKING_WRITE_VERSION = new MethodMatcher(
+            BLOCKING_STORAGE + " writeVersion(java.lang.String)", true);
+    private static final MethodMatcher REACTOR_SAVE = new MethodMatcher(
+            REACTOR_STORAGE + " save(java.lang.String, " + CHECKPOINT + ", " + CHECKPOINT_WRITE_CONDITION + ")", true);
+    private static final MethodMatcher REACTOR_WRITE_VERSION = new MethodMatcher(
+            REACTOR_STORAGE + " writeVersion(java.lang.String)", true);
 
     private static final String BLOCKING_SAVE_STUB = """
             /* TODO [%s]: this only refuses a condition stronger than any(), delegating any() to the existing two-argument save. Evaluate `condition` for real if this storage can, otherwise this is the permanent answer. See doc/migration/upgrading-to-0.33.0.md. */
@@ -83,17 +74,6 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                     throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
                 }
                 return save(subscriptionId, checkpoint);
-            }
-            """.formatted(MARKER_TAG);
-
-    // No own two-argument save to delegate to, only CheckpointStorage's own default, which calls this method right
-    // back for any(). Delegating here the way the usual stub does would recurse, so this refuses unconditionally
-    // instead, the shape this recipe generated before #731 added delegation.
-    private static final String BLOCKING_SAVE_STUB_NO_OWN_TWO_ARG_SAVE = """
-            /* TODO [%s]: this class has no own two-argument save, only the CheckpointStorage default, which calls this method for any(), so delegating any() here would recurse. This always refuses instead. Give the class its own two-argument save, or evaluate `condition` for real here. See doc/migration/upgrading-to-0.33.0.md. */
-            @Override
-            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
             }
             """.formatted(MARKER_TAG);
 
@@ -113,15 +93,6 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                     return Mono.error(new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported."));
                 }
                 return save(subscriptionId, checkpoint);
-            }
-            """.formatted(MARKER_TAG);
-
-    // Same no-own-save fallback as the blocking stub above, refusing unconditionally instead of delegating.
-    private static final String REACTOR_SAVE_STUB_NO_OWN_TWO_ARG_SAVE = """
-            /* TODO [%s]: this class has no own two-argument save, only the CheckpointStorage default, which calls this method for any(), so delegating any() here would recurse. This always refuses instead. Give the class its own two-argument save, or evaluate `condition` for real here. See doc/migration/upgrading-to-0.33.0.md. */
-            @Override
-            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                return Mono.error(new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported."));
             }
             """.formatted(MARKER_TAG);
 
@@ -172,13 +143,11 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
         return "Finds a class implementing the blocking or reactor `CheckpointStorage` that is missing the " +
                "three-argument `save` or `writeVersion` added for a fenced checkpoint write (ADR 116), and " +
                "inserts a stub for each missing member, marked with a review comment, so the class compiles " +
-               "again. A class with its own two-argument `save` gets a three-argument `save` that delegates " +
-               "`any()` to it and refuses a stronger condition. A class with no own two-argument `save`, only " +
-               "the interface default, gets one that always refuses, since delegating there would call back " +
-               "into the interface default and recurse. `writeVersion` always answers empty, the permanent " +
-               "shape for a store that cannot evaluate a condition. Evaluating a condition for real is still a " +
-               "manual pass, see doc/migration/upgrading-to-0.33.0.md. Java only, rewrite-kotlin has no recipe " +
-               "for inserting a member into a class body, so a Kotlin implementer needs the manual steps instead.";
+               "again. The stub delegates `any()` to the class's own two-argument `save`, refuses a stronger " +
+               "condition, and answers `writeVersion` empty, the permanent shape for a store that cannot " +
+               "evaluate a condition. Evaluating a condition for real is still a manual pass, see " +
+               "doc/migration/upgrading-to-0.33.0.md. Java only, rewrite-kotlin has no recipe for inserting a " +
+               "member into a class body, so a Kotlin implementer needs the manual steps instead.";
     }
 
     @Override
@@ -203,28 +172,23 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                 }
 
                 if (TypeUtils.isAssignableTo(BLOCKING_STORAGE, cd.getType())) {
-                    String saveTemplate = hasOwnConcreteImplementation(cd, BLOCKING_STORAGE, "save", SAVE_2_ARG_PARAMS)
-                            ? BLOCKING_SAVE_STUB
-                            : BLOCKING_SAVE_STUB_NO_OWN_TWO_ARG_SAVE;
-                    cd = stub(cd, BLOCKING_STORAGE, "save", SAVE_3_ARG_PARAMS, saveTemplate, CHECKPOINT, CHECKPOINT_WRITE_CONDITION);
-                    cd = stub(cd, BLOCKING_STORAGE, "writeVersion", WRITE_VERSION_PARAMS, BLOCKING_WRITE_VERSION_STUB, OPTIONAL_LONG);
+                    cd = stub(cd, BLOCKING_SAVE, BLOCKING_SAVE_STUB, CHECKPOINT, CHECKPOINT_WRITE_CONDITION);
+                    cd = stub(cd, BLOCKING_WRITE_VERSION, BLOCKING_WRITE_VERSION_STUB, OPTIONAL_LONG);
                 } else if (TypeUtils.isAssignableTo(REACTOR_STORAGE, cd.getType())) {
-                    String saveTemplate = hasOwnConcreteImplementation(cd, REACTOR_STORAGE, "save", SAVE_2_ARG_PARAMS)
-                            ? REACTOR_SAVE_STUB
-                            : REACTOR_SAVE_STUB_NO_OWN_TWO_ARG_SAVE;
-                    cd = stub(cd, REACTOR_STORAGE, "save", SAVE_3_ARG_PARAMS, saveTemplate, CHECKPOINT, CHECKPOINT_WRITE_CONDITION, MONO);
-                    cd = stub(cd, REACTOR_STORAGE, "writeVersion", WRITE_VERSION_PARAMS, REACTOR_WRITE_VERSION_STUB, MONO);
+                    cd = stub(cd, REACTOR_SAVE, REACTOR_SAVE_STUB, CHECKPOINT, CHECKPOINT_WRITE_CONDITION, MONO);
+                    cd = stub(cd, REACTOR_WRITE_VERSION, REACTOR_WRITE_VERSION_STUB, MONO);
                 }
                 return cd;
             }
 
-            // Inserts template as the class's last member unless `methodName`/`paramTypes` is already concretely
-            // implemented below `capabilityInterfaceFqn`, which is what makes a second run over an already-stubbed
-            // (or hand-migrated) class a no-op, and what keeps an inherited implementation from an in-source
-            // abstract base from being overridden by a generated stub.
-            private J.ClassDeclaration stub(J.ClassDeclaration cd, String capabilityInterfaceFqn, String methodName,
-                                             List<JavaType> paramTypes, String template, String... imports) {
-                if (hasOwnConcreteImplementation(cd, capabilityInterfaceFqn, methodName, paramTypes)) {
+            // Inserts template as the class's last member unless a method matching required is already declared,
+            // which is what makes a second run over an already-stubbed (or hand-migrated) class a no-op.
+            private J.ClassDeclaration stub(J.ClassDeclaration cd, MethodMatcher required, String template, String... imports) {
+                boolean alreadyDeclared = cd.getBody().getStatements().stream()
+                        .filter(J.MethodDeclaration.class::isInstance)
+                        .map(J.MethodDeclaration.class::cast)
+                        .anyMatch(method -> required.matches(method, cd));
+                if (alreadyDeclared) {
                     return cd;
                 }
 
@@ -232,8 +196,8 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                     maybeAddImport(fqn);
                 }
                 // contextSensitive binds the inserted method's owner to the class it lands in, which is what lets
-                // hasOwnConcreteImplementation's own-body check recognise it as already declared on a later cycle
-                // instead of inserting a second copy.
+                // a later MethodMatcher.matches(method, classDeclaration) recognise it as already declared instead
+                // of inserting a second copy on every following cycle.
                 J.Block newBody = JavaTemplate.builder(template)
                         .contextSensitive()
                         .imports(imports)
@@ -242,47 +206,6 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                         .build()
                         .apply(new Cursor(getCursor(), cd.getBody()), cd.getBody().getCoordinates().lastStatement());
                 return cd.withBody(newBody);
-            }
-
-            // Whether `methodName`/`paramTypes` is concretely implemented for `cd`, either on `cd` itself or on a
-            // supertype other than `capabilityInterfaceFqn`. `cd`'s own body is walked directly rather than through
-            // `cd.getType()`, since a method this same visit (or an earlier cycle) inserted into the body is not
-            // reflected by `cd.getType()`'s method list, only by the body itself. The supertype chain, in contrast,
-            // is never mutated by this recipe (an abstract class is never stubbed), so its type model stays
-            // reliable, and TypeUtils.findDeclaredMethod there finds either an override, or, once nothing
-            // overrides the method, `capabilityInterfaceFqn`'s own declaration (abstract for the three-argument
-            // save and writeVersion, a non-abstract default for the two-argument save). Filtering that out, by
-            // owner and by the abstract flag, is what tells a supertype override from nothing overriding the
-            // method at all.
-            private boolean hasOwnConcreteImplementation(J.ClassDeclaration cd, String capabilityInterfaceFqn, String methodName,
-                                                           List<JavaType> paramTypes) {
-                boolean declaredOnClassItself = cd.getBody().getStatements().stream()
-                        .filter(J.MethodDeclaration.class::isInstance)
-                        .map(J.MethodDeclaration.class::cast)
-                        .map(J.MethodDeclaration::getMethodType)
-                        .anyMatch(mt -> mt != null && methodName.equals(mt.getName()) && sameParameterTypes(mt.getParameterTypes(), paramTypes));
-                if (declaredOnClassItself) {
-                    return true;
-                }
-
-                JavaType.FullyQualified fq = TypeUtils.asFullyQualified(cd.getType());
-                JavaType.FullyQualified supertype = fq == null ? null : fq.getSupertype();
-                return TypeUtils.findDeclaredMethod(supertype, methodName, paramTypes)
-                        .filter(m -> !m.getFlags().contains(Flag.Abstract))
-                        .filter(m -> !capabilityInterfaceFqn.equals(m.getDeclaringType().getFullyQualifiedName()))
-                        .isPresent();
-            }
-
-            private boolean sameParameterTypes(List<JavaType> actual, List<JavaType> expected) {
-                if (actual.size() != expected.size()) {
-                    return false;
-                }
-                for (int i = 0; i < actual.size(); i++) {
-                    if (!TypeUtils.isOfType(actual.get(i), expected.get(i))) {
-                        return false;
-                    }
-                }
-                return true;
             }
         };
     }

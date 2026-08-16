@@ -29,12 +29,8 @@ description: >-
   base class IntrospectableSubscriptionModelConformance moves with the interface it is named after, to
   IntrospectableSubscriptionsConformance. ReplayAwareSubscriptions.of and IntrospectableSubscriptions.of are
   renamed to findIn, since of is the Java convention for constructing a value that never returns empty while this
-  method searches a wrapper chain and can, so findIn says what it actually does. A caller that reaches of(Object)
-  through an argument itself typed Object, rather than one of the capability interfaces, gets a review comment
-  before the rename, since the narrower findIn(SubscriptionModelCapability) parameter no longer accepts it and
-  there is no fix this recipe can prove.
+  method searches a wrapper chain and can, so findIn says what it actually does.
 recipeList:
-  - org.occurrent.rewrite.FlagObjectTypedCapabilityLookup
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.ReplayAwareSubscriptionModel
       newFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions
