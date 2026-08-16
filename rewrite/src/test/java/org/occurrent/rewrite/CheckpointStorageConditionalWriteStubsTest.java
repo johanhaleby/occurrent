@@ -254,10 +254,10 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                                 return false;
                             }
 
-                            /* TODO [Occurrent 0.33 upgrade]: this class has no own two-argument save, only the CheckpointStorage default, which calls this method for any(), so delegating any() here would recurse. This always refuses instead. Give the class its own two-argument save, or evaluate `condition` for real here. See doc/migration/upgrading-to-0.33.0.md. */
+                            /* TODO [Occurrent 0.33 upgrade]: this class has no own two-argument save, only the CheckpointStorage default, which calls this method for any(), so delegating any() here would recurse. This always refuses instead, even any(). Give the class its own two-argument save, or evaluate `condition` for real here. See doc/migration/upgrading-to-0.33.0.md. */
                             @Override
                             public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                                throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
+                                throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ". It has no two-argument save to fall back on, so even any() is refused.");
                             }
 
                             /* TODO [Occurrent 0.33 upgrade]: this always answers empty, correct if this storage cannot evaluate a condition. Return the version a condition is judged against if it can. See doc/migration/upgrading-to-0.33.0.md. */
@@ -320,10 +320,10 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                                 return null;
                             }
 
-                            /* TODO [Occurrent 0.33 upgrade]: this class has no own two-argument save, only the CheckpointStorage default, which calls this method for any(), so delegating any() here would recurse. This always refuses instead. Give the class its own two-argument save, or evaluate `condition` for real here. See doc/migration/upgrading-to-0.33.0.md. */
+                            /* TODO [Occurrent 0.33 upgrade]: this class has no own two-argument save, only the CheckpointStorage default, which calls this method for any(), so delegating any() here would recurse. This always refuses instead, even any(). Give the class its own two-argument save, or evaluate `condition` for real here. See doc/migration/upgrading-to-0.33.0.md. */
                             @Override
                             public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                                return Mono.error(new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported."));
+                                return Mono.error(new UnsupportedOperationException("This storage cannot evaluate " + condition + ". It has no two-argument save to fall back on, so even any() is refused."));
                             }
 
                             /* TODO [Occurrent 0.33 upgrade]: this always answers an empty Mono, correct if this storage cannot evaluate a condition. Signal the version a condition is judged against if it can. See doc/migration/upgrading-to-0.33.0.md. */
@@ -380,6 +380,74 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                         import org.occurrent.subscription.Checkpoint;
 
                         class InMemoryCheckpointStorage extends AbstractCheckpointStorage {
+                            @Override
+                            public Checkpoint read(String subscriptionId) {
+                                return null;
+                            }
+
+                            @Override
+                            public void delete(String subscriptionId) {
+                            }
+
+                            @Override
+                            public boolean exists(String subscriptionId) {
+                                return false;
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void leavesABlockingImplementerWhoseSaveComesFromTwoLevelsUpAnInSourceAbstractBaseUntouched() {
+        // BaseCheckpointStorage declares the three-argument save two levels above the concrete class.
+        // MiddleCheckpointStorage, the immediate superclass, declares neither save nor writeVersion itself, only
+        // inheriting both. hasOwnConcreteImplementation has to walk past that immediate superclass to find the
+        // concrete declaration, not stop there and conclude nothing overrides the interface.
+        rewriteRun(
+                java(CHECKPOINT),
+                java(CHECKPOINT_WRITE_CONDITION),
+                java(BLOCKING_CHECKPOINT_STORAGE),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+                        import org.occurrent.subscription.CheckpointWriteCondition;
+                        import org.occurrent.subscription.api.blocking.CheckpointStorage;
+
+                        import java.util.OptionalLong;
+
+                        abstract class BaseCheckpointStorage implements CheckpointStorage {
+                            @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                                return checkpoint;
+                            }
+
+                            @Override
+                            public OptionalLong writeVersion(String subscriptionId) {
+                                return OptionalLong.empty();
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        abstract class MiddleCheckpointStorage extends BaseCheckpointStorage {
+                        }
+                        """
+                ),
+                // No change expected: both members are concretely implemented two levels up, on BaseCheckpointStorage.
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+
+                        class InMemoryCheckpointStorage extends MiddleCheckpointStorage {
                             @Override
                             public Checkpoint read(String subscriptionId) {
                                 return null;

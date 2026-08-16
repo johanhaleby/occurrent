@@ -106,7 +106,7 @@ partial hand-migration deleted its override, say), gets a `save` that refuses ev
 ```java
 @Override
 public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-    throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
+    throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ". It has no two-argument save to fall back on, so even any() is refused.");
 }
 ```
 

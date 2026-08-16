@@ -90,10 +90,10 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
     // back for any(). Delegating here the way the usual stub does would recurse, so this refuses unconditionally
     // instead, the shape this recipe generated before #731 added delegation.
     private static final String BLOCKING_SAVE_STUB_NO_OWN_TWO_ARG_SAVE = """
-            /* TODO [%s]: this class has no own two-argument save, only the CheckpointStorage default, which calls this method for any(), so delegating any() here would recurse. This always refuses instead. Give the class its own two-argument save, or evaluate `condition` for real here. See doc/migration/upgrading-to-0.33.0.md. */
+            /* TODO [%s]: this class has no own two-argument save, only the CheckpointStorage default, which calls this method for any(), so delegating any() here would recurse. This always refuses instead, even any(). Give the class its own two-argument save, or evaluate `condition` for real here. See doc/migration/upgrading-to-0.33.0.md. */
             @Override
             public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
+                throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ". It has no two-argument save to fall back on, so even any() is refused.");
             }
             """.formatted(MARKER_TAG);
 
@@ -118,10 +118,10 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
 
     // Same no-own-save fallback as the blocking stub above, refusing unconditionally instead of delegating.
     private static final String REACTOR_SAVE_STUB_NO_OWN_TWO_ARG_SAVE = """
-            /* TODO [%s]: this class has no own two-argument save, only the CheckpointStorage default, which calls this method for any(), so delegating any() here would recurse. This always refuses instead. Give the class its own two-argument save, or evaluate `condition` for real here. See doc/migration/upgrading-to-0.33.0.md. */
+            /* TODO [%s]: this class has no own two-argument save, only the CheckpointStorage default, which calls this method for any(), so delegating any() here would recurse. This always refuses instead, even any(). Give the class its own two-argument save, or evaluate `condition` for real here. See doc/migration/upgrading-to-0.33.0.md. */
             @Override
             public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
-                return Mono.error(new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported."));
+                return Mono.error(new UnsupportedOperationException("This storage cannot evaluate " + condition + ". It has no two-argument save to fall back on, so even any() is refused."));
             }
             """.formatted(MARKER_TAG);
 
