@@ -85,6 +85,8 @@ How docs branches work there, and why it matters:
 - **One branch per feature, named `docs/<feature>`, and never push to `main`.** `main` documents the API that has shipped, so a branch documenting an unreleased feature is held until the matching library release goes out. `_config.yml` carries `occurrentversion`, which is what makes `main` a statement about a released version rather than about the current code.
 - **Several such branches are usually held at once.** They all touch `pages/docs/docs.md`, so what looks like a one-line fix is really one commit per held branch. Before editing, `git grep -l <what-you-are-changing> <branch> -- pages/docs/docs.md` over every branch, because a regex sweep undercounts.
 - **Write the prose as settled fact, never as unreleased or upcoming.** The branch only merges once the release ships, so by the time anyone reads the merged text the feature is already out and any "not yet released" framing is false. When the prose still needs checking against a library change that is landing in parallel, put that note in the pull request body, where a reviewer reads it before the merge, rather than in the documentation, where a reader only meets it afterwards.
+- **A correction to a claim is complete only when every surface carrying that claim is corrected in the same pass**, meaning the changelog, the javadoc, the ADR, and every held docs branch. A branch that joined the held set late is checked against corrections it predates, not only against new edits, since the corrections it missed do not announce themselves in any diff.
+- **A held branch earns its place only while it has current content the publishing branch lacks.** Before patching a defect on a held branch, check whether another branch has superseded it. A superseded branch is retired unmerged rather than maintained. The deciding test for any docs question is whether the published docs will correctly reflect the code at the moment they merge.
 - Being a separate repository means the docs never appear in this repository's diff, which is exactly how they get forgotten. Treat them as part of the change, not as follow-up.
 
 ## Design intentions
@@ -104,6 +106,13 @@ is still a loss. A change that narrows one is a step on a recorded path to closi
 version right after this one, so when more work now makes a component safe or complete, prefer doing that work now.
 This is a per-case call, not a mandate: polish and conveniences can wait for the next release, but a known hole in
 correctness is not a follow-up candidate.
+
+**An absolute claim about behavior is checked against the code's error and empty branches, not only the path it
+describes.** This holds for javadoc, the changelog, ADRs and the documentation site alike, and it holds for tests
+too. A test that asserts fallback behavior on a failure path is such a claim, and it must say why the fallback is
+correct, because a green test next to a rationale comment is exactly how a defect gets read as design. The event-loss
+bug caught only days before the 0.33.0 tag hid behind exactly that pair, a test named for its fallback and a comment
+explaining it.
 
 **Every component ships production-ready, and that includes surviving a transient outage of the store it talks
 to.** A component that reads or writes an external store (MongoDB, Redis, a broker) accepts a configurable
