@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 49
-updated_at: 2026-08-17T10:30:00Z
+revision: 50
+updated_at: 2026-08-17T11:00:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -233,14 +233,14 @@ units:
   U11:
     issue: 737
     goal: "Four lifecycle-leak findings, items 1-3 small fixes, item 4 per-attempt identity coordinated across both catch-up models, plan-first"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_bb9a30d1 ended DONE with the conflict standing and two substantive concurrency threads unanswered (opt-out marker cleared before delegate acceptance, unconditional catchingUp.remove racing newer replays). Remediation subagent dispatched 02:5xZ, then the original session resumed and pushed the thread fixes, subagent stood down untouched. worker fixed the first two findings (checkpoint-delete reordering both stacks), Copilot re-review added three deeper ones: a TOCTOU where a blocked callback outlives its identity check and overwrites a replacement checkpoint (both models), and a protected-hook signature break for downstream subclasses needing a compat shim or a breaking-changes entry. Branch still checked out in the live worker worktree, worker has resumed twice, deadline extended to 10:00Z before weighing takeover, and the compat break joins the queue for Johan if unresolved by then"
+    session: "chip task_bb9a30d1 COMPLETE after four review rounds: two findings fixed, two reasoned-deferred to the broadened 827, the tombstone leak fixed in the final head, orchestrator finished the thread bookkeeping"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "737", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "823", met: true, evidence: "merged 02fda6ef1 2026-08-17T11:0xZ, CAS pin 1c0f33f04, 26/26 green, five threads resolved with outcomes, changelog verified"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "737", met: true, evidence: "closed by the squash, verified"}
   U12:
     issue: 746
     goal: "Stretch: re-check whether the post-#739 wrapper surface makes the cheap replay-aware fix sufficient (forwarding adapter plus contract test), ship if so; drops first if the release runs long"
