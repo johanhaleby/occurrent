@@ -621,15 +621,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return currentStreamVersion(streamId)
                 .flatMap(currentStreamVersion -> {
                     // Uses "lte" currentStreamVersion instead of a transaction on read, so an event another thread
-                    // inserts after currentStreamVersion is read does not matter.
-                    Query query = streamIdAndStreamVersionLessThanOrEqualTo(streamId, currentStreamVersion);
+                    // inserts after currentStreamVersion is read does not matter. "skip" is folded into the version
+                    // bound here, before the filter narrows the query, so it keeps counting stream positions
+                    // instead of filtered documents.
+                    Query query = streamIdAndStreamVersionBetween(streamId, skip, currentStreamVersion);
                     if (streamReadFilter != null) {
                         StreamReadFilterValidator.validate(streamReadFilter);
                         Filter mapped = StreamReadFilterToFilterMapper.map(streamReadFilter);
                         Criteria criteria = FilterConverter.convertFilterToCriteria(null, timeRepresentation, mapped);
                         query.addCriteria(criteria);
                     }
-                    Flux<Document> cloudEventDocuments = readCloudEvents(readOptions.apply(query), skip, limit, SortBy.streamVersion(ASCENDING));
+                    Flux<Document> cloudEventDocuments = readCloudEvents(readOptions.apply(query), 0, limit, SortBy.streamVersion(ASCENDING));
                     return Mono.just(new EventStreamImpl(streamId, currentStreamVersion, cloudEventDocuments));
                 })
                 .switchIfEmpty(Mono.fromSupplier(() -> new EventStreamImpl(streamId, 0, Flux.empty())));
@@ -972,8 +974,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         return where(STREAM_ID).is(streamId);
     }
 
-    private static Query streamIdAndStreamVersionLessThanOrEqualTo(String streamId, long streamVersion) {
-        return Query.query(streamIdEqualToCriteria(streamId).and(STREAM_VERSION).lte(streamVersion));
+    // "afterVersion" is exclusive, matching ExecuteOptions.fromStreamVersion and the "skip N stream positions"
+    // reading of EventStore.read's skip parameter, so a skip of 0 keeps every event and a skip of N drops the
+    // first N regardless of whether a StreamReadFilter narrows the result further.
+    private static Query streamIdAndStreamVersionBetween(String streamId, long afterVersion, long uptoAndIncludingVersion) {
+        return Query.query(streamIdEqualToCriteria(streamId).and(STREAM_VERSION).gt(afterVersion).lte(uptoAndIncludingVersion));
     }
 
     private static Query cloudEventIdIs(String cloudEventId, URI cloudEventSource) {
