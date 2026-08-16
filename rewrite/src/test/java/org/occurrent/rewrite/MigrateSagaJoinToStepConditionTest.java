@@ -149,6 +149,62 @@ class MigrateSagaJoinToStepConditionTest implements RewriteTest {
     }
 
     @Test
+    void rewritesAnArraysAsListExpectingArgumentTheSameWayAsListOf() {
+        rewriteRun(
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.flow.Continuation;
+                        import org.occurrent.dsl.saga.flow.Expectation;
+                        import org.occurrent.dsl.saga.flow.StepBuilder;
+
+                        import java.util.Arrays;
+
+                        class Steps {
+                            void configure(StepBuilder<Event, Command> step) {
+                                step.join(Arrays.asList(Expectation.of(PlayerReady.class, 2)), Continuation.end());
+                            }
+
+                            interface Event {
+                            }
+
+                            static class PlayerReady implements Event {
+                            }
+
+                            interface Command {
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.dsl.saga.flow.Continuation;
+                        import org.occurrent.dsl.saga.flow.StepBuilder;
+                        import org.occurrent.dsl.saga.flow.StepCondition;
+
+                        import java.util.Arrays;
+
+                        class Steps {
+                            void configure(StepBuilder<Event, Command> step) {
+                                step.on(StepCondition.allOf(StepCondition.event(PlayerReady.class, 2)), Continuation.end());
+                            }
+
+                            interface Event {
+                            }
+
+                            static class PlayerReady implements Event {
+                            }
+
+                            interface Command {
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
     void rewritesSeveralDistinctTypedExpectationsInFirstAppearanceOrder() {
         rewriteRun(
                 java(
