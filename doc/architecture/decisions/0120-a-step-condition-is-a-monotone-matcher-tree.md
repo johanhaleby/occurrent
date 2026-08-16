@@ -282,3 +282,20 @@ secondary constructor that supplies `-1`, and degrades the same way. Two tests c
 old-document one seeds the document by hand, since a document this store wrote a moment ago only proves the store agrees
 with itself. Separately, this record claimed the self-loop window-reset rule appears in
 `StepBuilder.on(StepCondition, Continuation)`'s javadoc when it did not. It does now.
+
+## Amendment (2026-08-16): the guard and leaf predicates differ in what they can see, and that is the practical choice between them
+
+**The Decision section above states why a guard is not lowered into a window leaf but never states what each one is
+allowed to see, and that turned out to be the fact a caller actually needs when choosing between them.** `StepBuilder`'s
+guarded overload takes `BiPredicate<T, ReceivedEvents<E>>`, so `onlyIf` receives the arriving event and the whole
+retained history in one call. `StepCondition.event(Class, Predicate)` takes a bare `Predicate<T>`, the arriving event
+and nothing else. `StepCondition`'s javadoc already states why that side has to stay narrow. A leaf's predicate has to
+be a deterministic function of the one event it is given, because it is re-run whenever a count is derived from the
+step window rather than read off a count the instance already carries. That happens on every delivery for a step with
+no `stepWindow` cap, and again on a rescan whenever a capped step's carried counts do not already describe its current
+declaration, its first delivery into the step included ([ADR 123](0123-a-step-conditions-counts-are-carried-so-the-steps-events-can-be-dropped.md)).
+That requirement is a contract stated on the javadoc, not one the `Predicate<T>` type itself can enforce, since a
+lambda can still close over a clock or mutable state regardless of what its parameter list says. The signature
+difference is still the practical rule for choosing between the two. A leaf's `Predicate<T>` can only look at the one
+event it is handed, so a decision that needs anything else, another event's contents or a running count among them,
+has to be a guard, which is exactly what handing it `ReceivedEvents` is for.
