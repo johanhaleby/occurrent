@@ -144,7 +144,8 @@ arguments, because a descriptor already has its handler where a `Projection` nee
 
 ### 2. The running handle becomes `SubscriptionHandle`
 
-`org.occurrent.subscription.api.blocking.Subscription` has two methods, `id()` and `waitUntilStarted(Duration)`. It is
+`org.occurrent.subscription.api.blocking.Subscription` has three methods, `id()`, `waitUntilStarted(Duration)` and a
+no-argument `waitUntilStarted()` default overload. It is
 what a caller holds after starting a subscription, not the subscription itself, and `SubscriptionHandle` says so. The
 reactor twin renames the same way.
 
@@ -161,8 +162,8 @@ interfaces.
 ### 3. The framework annotations are prefixed, and the descriptors keep their nouns
 
 The annotation and the descriptor name the same concept, so one of them has to stop naming it. The descriptor is what a
-user builds, tests and passes around in code that never sees Spring. The annotation exists only to register that value
-with a framework, and it is the only Spring-coupled part of the pair, so it is the one that changes:
+user builds, tests and passes around in code that runs on its own. The annotation does one thing on top of that, which
+is hand the value to a framework to run, so it is the one that changes:
 
 | Today | New name |
 | --- | --- |
@@ -181,8 +182,13 @@ either uniform choice. Neither of those two gets a descriptor of its own, since 
 subscription is an ordinary `Subscription<E>` and the capability is chosen on the annotation. Per ADR 26 each is a new
 annotation type with the old one deprecated `forRemoval`, and the bean post processor reads both until the old ones go.
 
-`@Occurrent`-prefixing follows what the JVM ecosystem already does when a framework annotation would otherwise take a
-generic word: `@KafkaListener`, `@RabbitListener`, `@JmsListener`. It costs nine characters at each use, once per
+The prefix is the library's own name rather than a framework's, and that is deliberate. `occurrent-annotations` is
+Spring-free by design, only an optional jspecify dependency, so that a Quarkus or other integration can reuse the same
+annotations and write its own registrars. Only the registrars are Spring. `@OccurrentProjection` stays true under any
+of them where `@SpringProjection` would not.
+
+Prefixing at all is what the JVM ecosystem already does when a framework annotation would otherwise take a generic
+word, as in `@KafkaListener`, `@RabbitListener` and `@JmsListener`. It costs nine characters at each use, once per
 declaration, against 144 qualified references in this repository and an unknown number outside it.
 
 Three alternatives were examined and rejected.
@@ -210,7 +216,7 @@ handler makes those failures compile errors.
 An OpenRewrite recipe rewrites the common case, moving the method body into a lambda inside a factory method and
 mapping `@StreamId` and `@StreamVersion` parameters onto the metadata the lambda receives.
 
-**The recipe must refuse the synchronous case rather than rewrite it, and only that case.** Spring advice reaches
+**The recipe refuses an advised synchronous handler rather than rewriting it, and refuses nothing else.** Spring advice reaches
 exactly one of the four annotations today. `processSynchronousSubscribeAnnotation` looks the bean up by name at dispatch
 time, and its own comment says why, because the bean post processor runs before Spring wraps the bean in its AOP proxy,
 so the instance it was handed is the raw target. The other three paths invoke that raw target, so a `@Transactional` on
@@ -220,7 +226,7 @@ So a body moved into a lambda loses working advice only on `@SynchronousSubscrip
 refuses and flags for a human, the way `FlagObjectTypedCapabilityLookup` already flags call sites a rename cannot safely
 rewrite.
 
-**The refusal is on the annotation, not on `@Transactional`.** Because that path invokes the proxy, everything Spring
+**The recipe looks for any advice, not only `@Transactional`.** Because that path invokes the proxy, everything Spring
 advises works there, so a class-level or meta-annotated `@Transactional` counts, and so does `@Retryable`, `@Cacheable`
 or anything else advised. A recipe that looked for a method-level `@Transactional` would rewrite those and drop the
 advice silently, which is the failure it exists to prevent. So it refuses every `@SynchronousSubscription` handler
@@ -265,8 +271,8 @@ time. ADR 26 renamed the original stream annotation to `@StreamSubscription`, th
 capability-agnostic annotation that exists today, and this ADR moves that one to `@OccurrentSubscription` while also
 changing what its method returns. So a user who has been on this library since 0.30 sees the same word mean three
 things. The recipe covers the mechanical part, and the migration guide covers what it cannot, which is Kotlin sources,
-every `@SynchronousSubscription` handler with `@Transactional` on it, and any handler advised by a pointcut the recipe
-cannot see.
+every `@SynchronousSubscription` handler the recipe refused for visible advice, and any handler advised by a pointcut
+the recipe cannot see.
 
 Two names for one word disappear. `Subscription` means the thing a user declares, `SubscriptionHandle` means the thing
 they hold afterwards, and neither can be confused with an annotation.
