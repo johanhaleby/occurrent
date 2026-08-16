@@ -24,6 +24,11 @@ description: >-
   Expectation.of(...) calls, collapsing a duplicate-typed pair to the higher of their counts the same way join
   did whenever both counts are integer literals. Everything else no longer compiles once join is gone, so the
   compiler finds it, and doc/migration/upgrading-to-0.34.0.md has the by-hand translation, including every
-  Kotlin call site.
+  Kotlin call site. Also renames occurrent.event-store.collection, occurrent.event-store.time-representation,
+  occurrent.subscription.collection and occurrent.subscription.restart-on-change-stream-history-lost to a
+  mongodb-qualified key on their existing prefix, in both .properties and .yaml, since each never described
+  anything but a MongoDB event store or subscription model. See doc/migration/upgrading-to-0.34.0.md for what
+  that rename cannot reach, such as an environment variable.
 recipeList:
   - org.occurrent.MigrateSagaJoinToStepCondition_0_34
+  - org.occurrent.MigrateStoreNeutralMongoConfigKeys_0_34

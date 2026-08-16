@@ -147,9 +147,9 @@ public class OccurrentMongoAutoConfiguration<E> {
     public EventStoreConfig occurrentEventStoreConfig(MongoTransactionManager transactionManager, OccurrentProperties occurrentProperties) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         EventStoreConfig.Builder builder = new EventStoreConfig.Builder()
-                .eventStoreCollectionName(eventStoreProperties.getCollection())
+                .eventStoreCollectionName(eventStoreProperties.resolveCollection())
                 .transactionConfig(transactionManager)
-                .timeRepresentation(eventStoreProperties.getTimeRepresentation())
+                .timeRepresentation(eventStoreProperties.resolveTimeRepresentation())
                 .eventStoreCapabilities(eventStoreProperties.getCapabilities());
         // The property is only applied when set. true enables position explicitly (kept on even for an unpositioned
         // store), false opts a STREAM-only store out. withoutStreamPosition() is rejected with DCB, so skip it then.
@@ -173,7 +173,7 @@ public class OccurrentMongoAutoConfiguration<E> {
     @ConditionalOnMissingBean(CheckpointStorage.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public CheckpointStorage occurrentCheckpointStorage(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
-        return new SpringMongoCheckpointStorage(mongoTemplate, occurrentProperties.getSubscription().getCollection());
+        return new SpringMongoCheckpointStorage(mongoTemplate, occurrentProperties.getSubscription().resolveCollection());
     }
 
     /**
@@ -221,8 +221,8 @@ public class OccurrentMongoAutoConfiguration<E> {
         CompetingConsumerStrategy competingConsumerStrategy = requireNonNull(CompetingConsumerStrategies.resolveUnique(competingConsumerStrategyProvider),
                 "A competing-consumer strategy is required to build " + CompetingConsumerSubscriptionModel.class.getSimpleName());
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
-        SpringMongoSubscriptionModelConfig mongoSubscriptionModelConfig = withConfig(eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation())
-                .restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost());
+        SpringMongoSubscriptionModelConfig mongoSubscriptionModelConfig = withConfig(eventStoreProperties.resolveCollection(), eventStoreProperties.resolveTimeRepresentation())
+                .restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().resolveRestartOnChangeStreamHistoryLost());
         if (environment.getProperty("spring.threads.virtual.enabled", Boolean.class, false)) {
             mongoSubscriptionModelConfig = mongoSubscriptionModelConfig.useVirtualThreads();
         }

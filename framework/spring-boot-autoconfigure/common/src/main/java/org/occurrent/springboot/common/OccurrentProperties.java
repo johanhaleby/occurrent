@@ -128,14 +128,29 @@ public class OccurrentProperties {
     public static class EventStoreProperties {
 
         /**
-         * The collection where events are stored
+         * The collection where events are stored.
+         *
+         * @deprecated Use {@code occurrent.event-store.mongodb.collection} instead. MongoDB is the only store this
+         * ever described, and a second store needs its own key under its own store-qualified path. Setting both is
+         * allowed only while they agree. This property is removed in the release after next.
          */
-        private String collection = DEFAULT_MONGO_EVENTS_COLLECTION;
+        @Deprecated(forRemoval = true)
+        private @Nullable String collection;
 
         /**
-         * Choose how to represent time in the cloud events
+         * Choose how to represent time in the cloud events.
+         *
+         * @deprecated Use {@code occurrent.event-store.mongodb.time-representation} instead. Whether time is a
+         * MongoDB {@code Date} or an RFC 3339 string is meaningless without a MongoDB event store. Setting both is
+         * allowed only while they agree. This property is removed in the release after next.
          */
-        private TimeRepresentation timeRepresentation = TimeRepresentation.DATE;
+        @Deprecated(forRemoval = true)
+        private @Nullable TimeRepresentation timeRepresentation;
+
+        /**
+         * MongoDB-specific event-store configuration.
+         */
+        private MongoProperties mongodb = new MongoProperties();
 
         /**
          * The event-store capabilities to enable.
@@ -164,20 +179,75 @@ public class OccurrentProperties {
          */
         private boolean enabled = true;
 
-        public String getCollection() {
+        // On the getter rather than the field, which is where Spring Boot's configuration-property processor reads
+        // it, so the generated metadata carries the replacement and an IDE can offer it.
+        @DeprecatedConfigurationProperty(replacement = "occurrent.event-store.mongodb.collection", reason = "MongoDB is the only store this ever described, and the key now says so.")
+        @Deprecated(forRemoval = true)
+        public @Nullable String getCollection() {
             return collection;
         }
 
-        public void setCollection(String collection) {
+        public void setCollection(@Nullable String collection) {
             this.collection = collection;
         }
 
-        public TimeRepresentation getTimeRepresentation() {
+        @DeprecatedConfigurationProperty(replacement = "occurrent.event-store.mongodb.time-representation", reason = "MongoDB is the only store this ever described, and the key now says so.")
+        @Deprecated(forRemoval = true)
+        public @Nullable TimeRepresentation getTimeRepresentation() {
             return timeRepresentation;
         }
 
-        public void setTimeRepresentation(TimeRepresentation timeRepresentation) {
+        public void setTimeRepresentation(@Nullable TimeRepresentation timeRepresentation) {
             this.timeRepresentation = timeRepresentation;
+        }
+
+        public MongoProperties getMongodb() {
+            return mongodb;
+        }
+
+        public void setMongodb(MongoProperties mongodb) {
+            this.mongodb = mongodb;
+        }
+
+        /**
+         * The collection to use, resolving the deprecated {@code occurrent.event-store.collection} when
+         * {@code occurrent.event-store.mongodb.collection} is not set.
+         *
+         * @return The resolved collection name, {@code "events"} when neither property is set.
+         * @throws IllegalStateException if both properties are set and contradict each other
+         */
+        public String resolveCollection() {
+            String mongodbCollection = mongodb.getCollection();
+            if (collection == null) {
+                return mongodbCollection == null ? DEFAULT_MONGO_EVENTS_COLLECTION : mongodbCollection;
+            } else if (mongodbCollection != null && !mongodbCollection.equals(collection)) {
+                throw new IllegalStateException(
+                        "occurrent.event-store.mongodb.collection is \"" + mongodbCollection + "\" but the deprecated occurrent.event-store.collection "
+                                + "is \"" + collection + "\". Remove occurrent.event-store.collection, and check for it in environment variables and "
+                                + "external configuration as well as your configuration files.");
+            }
+            return collection;
+        }
+
+        /**
+         * The time representation to use, resolving the deprecated {@code occurrent.event-store.time-representation}
+         * when {@code occurrent.event-store.mongodb.time-representation} is not set.
+         *
+         * @return The resolved time representation, {@link TimeRepresentation#DATE} when neither property is set.
+         * @throws IllegalStateException if both properties are set and contradict each other
+         */
+        public TimeRepresentation resolveTimeRepresentation() {
+            TimeRepresentation mongodbTimeRepresentation = mongodb.getTimeRepresentation();
+            if (timeRepresentation == null) {
+                return mongodbTimeRepresentation == null ? TimeRepresentation.DATE : mongodbTimeRepresentation;
+            } else if (mongodbTimeRepresentation != null && mongodbTimeRepresentation != timeRepresentation) {
+                throw new IllegalStateException(
+                        "occurrent.event-store.mongodb.time-representation is " + mongodbTimeRepresentation + " but the deprecated "
+                                + "occurrent.event-store.time-representation is " + timeRepresentation + ". Remove "
+                                + "occurrent.event-store.time-representation, and check for it in environment variables and external configuration "
+                                + "as well as your configuration files.");
+            }
+            return timeRepresentation;
         }
 
         public Set<EventStoreCapability> getCapabilities() {
@@ -206,6 +276,39 @@ public class OccurrentProperties {
         public void setStream(StreamProperties stream) {
             this.stream = stream;
         }
+
+        /**
+         * MongoDB-specific event-store configuration, replacing the store-neutral-named
+         * {@code occurrent.event-store.collection} and {@code occurrent.event-store.time-representation}.
+         */
+        public static class MongoProperties {
+
+            /**
+             * The collection where events are stored. Defaults to {@code "events"}.
+             */
+            private @Nullable String collection;
+
+            /**
+             * Choose how to represent time in the cloud events. Defaults to {@link TimeRepresentation#DATE}.
+             */
+            private @Nullable TimeRepresentation timeRepresentation;
+
+            public @Nullable String getCollection() {
+                return collection;
+            }
+
+            public void setCollection(@Nullable String collection) {
+                this.collection = collection;
+            }
+
+            public @Nullable TimeRepresentation getTimeRepresentation() {
+                return timeRepresentation;
+            }
+
+            public void setTimeRepresentation(@Nullable TimeRepresentation timeRepresentation) {
+                this.timeRepresentation = timeRepresentation;
+            }
+        }
     }
 
     public static class StreamProperties {
@@ -230,17 +333,32 @@ public class OccurrentProperties {
 
     public static class SubscriptionProperties {
         /**
-         * The collection into which checkpoints will be stored
+         * The collection into which checkpoints will be stored.
+         *
+         * @deprecated Use {@code occurrent.subscription.mongodb.collection} instead. MongoDB is the only store this
+         * ever described, and a second store needs its own key under its own store-qualified path. Setting both is
+         * allowed only while they agree. This property is removed in the release after next.
          */
-        private String collection = "subscriptions";
+        @Deprecated(forRemoval = true)
+        private @Nullable String collection;
 
         /**
          * If there’s not enough history available in the MongoDB oplog to resume a subscription created from a SpringMongoSubscriptionModel, you can configure it to restart the subscription from the current time automatically.
          * This is only of concern when an application is restarted, and the subscriptions are configured to start from a position in the oplog that is no longer available. It’s disabled by default since it might not be 100% safe
          * (meaning that you can miss some events when the subscription is restarted). It’s not 100% safe if you run subscriptions in a different process than the event store, and you have lots of writes happening to the event store.
          * It’s safe if you run the subscription in the same process as the writes to the event store if you make sure that the subscription is started before you accept writes to the event store on startup.
+         *
+         * @deprecated Use {@code occurrent.subscription.mongodb.restart-on-change-stream-history-lost} instead. A
+         * change stream is a MongoDB concept, meaningless without a MongoDB subscription model. Setting both is
+         * allowed only while they agree. This property is removed in the release after next.
          */
-        private boolean restartOnChangeStreamHistoryLost = true;
+        @Deprecated(forRemoval = true)
+        private @Nullable Boolean restartOnChangeStreamHistoryLost;
+
+        /**
+         * MongoDB-specific subscription configuration.
+         */
+        private MongoProperties mongodb = new MongoProperties();
 
         /**
          * How much of the subscription machinery to create and start, see {@link SubscriptionMode}. Defaults to
@@ -269,20 +387,76 @@ public class OccurrentProperties {
          */
         private SubscriptionCompetingConsumerProperties competingConsumer = new SubscriptionCompetingConsumerProperties();
 
-        public String getCollection() {
+        // On the getter rather than the field, which is where Spring Boot's configuration-property processor reads
+        // it, so the generated metadata carries the replacement and an IDE can offer it.
+        @DeprecatedConfigurationProperty(replacement = "occurrent.subscription.mongodb.collection", reason = "MongoDB is the only store this ever described, and the key now says so.")
+        @Deprecated(forRemoval = true)
+        public @Nullable String getCollection() {
             return collection;
         }
 
-        public void setCollection(String collection) {
+        public void setCollection(@Nullable String collection) {
             this.collection = collection;
         }
 
-        public boolean isRestartOnChangeStreamHistoryLost() {
+        @DeprecatedConfigurationProperty(replacement = "occurrent.subscription.mongodb.restart-on-change-stream-history-lost", reason = "A change stream is a MongoDB concept, and the key now says so.")
+        @Deprecated(forRemoval = true)
+        public @Nullable Boolean getRestartOnChangeStreamHistoryLost() {
             return restartOnChangeStreamHistoryLost;
         }
 
-        public void setRestartOnChangeStreamHistoryLost(boolean restartOnChangeStreamHistoryLost) {
+        public void setRestartOnChangeStreamHistoryLost(@Nullable Boolean restartOnChangeStreamHistoryLost) {
             this.restartOnChangeStreamHistoryLost = restartOnChangeStreamHistoryLost;
+        }
+
+        public MongoProperties getMongodb() {
+            return mongodb;
+        }
+
+        public void setMongodb(MongoProperties mongodb) {
+            this.mongodb = mongodb;
+        }
+
+        /**
+         * The collection to use, resolving the deprecated {@code occurrent.subscription.collection} when
+         * {@code occurrent.subscription.mongodb.collection} is not set.
+         *
+         * @return The resolved collection name, {@code "subscriptions"} when neither property is set.
+         * @throws IllegalStateException if both properties are set and contradict each other
+         */
+        public String resolveCollection() {
+            String mongodbCollection = mongodb.getCollection();
+            if (collection == null) {
+                return mongodbCollection == null ? "subscriptions" : mongodbCollection;
+            } else if (mongodbCollection != null && !mongodbCollection.equals(collection)) {
+                throw new IllegalStateException(
+                        "occurrent.subscription.mongodb.collection is \"" + mongodbCollection + "\" but the deprecated occurrent.subscription.collection"
+                                + " is \"" + collection + "\". Remove occurrent.subscription.collection, and check for it in environment variables and "
+                                + "external configuration as well as your configuration files.");
+            }
+            return collection;
+        }
+
+        /**
+         * Whether to restart the subscription from the current time when there isn't enough oplog history to resume
+         * it, resolving the deprecated {@code occurrent.subscription.restart-on-change-stream-history-lost} when
+         * {@code occurrent.subscription.mongodb.restart-on-change-stream-history-lost} is not set.
+         *
+         * @return The resolved value, {@code true} when neither property is set.
+         * @throws IllegalStateException if both properties are set and contradict each other
+         */
+        public boolean resolveRestartOnChangeStreamHistoryLost() {
+            Boolean mongodbValue = mongodb.getRestartOnChangeStreamHistoryLost();
+            if (restartOnChangeStreamHistoryLost == null) {
+                return mongodbValue == null || mongodbValue;
+            } else if (mongodbValue != null && !mongodbValue.equals(restartOnChangeStreamHistoryLost)) {
+                throw new IllegalStateException(
+                        "occurrent.subscription.mongodb.restart-on-change-stream-history-lost is " + mongodbValue + " but the deprecated "
+                                + "occurrent.subscription.restart-on-change-stream-history-lost is " + restartOnChangeStreamHistoryLost + ". Remove "
+                                + "occurrent.subscription.restart-on-change-stream-history-lost, and check for it in environment variables and external "
+                                + "configuration as well as your configuration files.");
+            }
+            return restartOnChangeStreamHistoryLost;
         }
 
         // On the getter rather than the field, which is where Spring Boot's configuration-property processor reads it,
@@ -329,6 +503,41 @@ public class OccurrentProperties {
 
         public void setCompetingConsumer(SubscriptionCompetingConsumerProperties competingConsumer) {
             this.competingConsumer = competingConsumer;
+        }
+
+        /**
+         * MongoDB-specific subscription configuration, replacing the store-neutral-named
+         * {@code occurrent.subscription.collection} and {@code occurrent.subscription.restart-on-change-stream-history-lost}.
+         */
+        public static class MongoProperties {
+
+            /**
+             * The collection into which checkpoints will be stored. Defaults to {@code "subscriptions"}.
+             */
+            private @Nullable String collection;
+
+            /**
+             * If there’s not enough history available in the MongoDB oplog to resume a subscription created from a
+             * SpringMongoSubscriptionModel, you can configure it to restart the subscription from the current time
+             * automatically. Defaults to {@code true}.
+             */
+            private @Nullable Boolean restartOnChangeStreamHistoryLost;
+
+            public @Nullable String getCollection() {
+                return collection;
+            }
+
+            public void setCollection(@Nullable String collection) {
+                this.collection = collection;
+            }
+
+            public @Nullable Boolean getRestartOnChangeStreamHistoryLost() {
+                return restartOnChangeStreamHistoryLost;
+            }
+
+            public void setRestartOnChangeStreamHistoryLost(@Nullable Boolean restartOnChangeStreamHistoryLost) {
+                this.restartOnChangeStreamHistoryLost = restartOnChangeStreamHistoryLost;
+            }
         }
 
         /**
