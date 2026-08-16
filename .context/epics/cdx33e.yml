@@ -1,9 +1,11 @@
 schema_version: 2
 epic: cdx33e
-revision: 8
-updated_at: 2026-08-16 08:10:00+00:00
-updated_by: 'orchestrator: E4 DONE and verified (preview 71a8f3a); E5 in flight; AGENTS.md additions proposed to Johan,
-  awaiting his word'
+revision: 9
+updated_at: 2026-08-16 08:55:00+00:00
+updated_by: 'orchestrator: EPIC RE-CLOSED COMPLETE, 5 of 5 units DONE and swept (E4 and E5 adopted post-closeout and both
+  verified on origin refs), no watchers running, no unresolved pending actions. AGENTS.md gained the three ruled lessons
+  (main b59e363, direct push under the session grant, gates run literally). Final held docs set for the two-branch release:
+  preview 71a8f3a, release-notes 6b4148f; fencing branch retired unmerged. 0.33.0 tags from current main b59e363'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -97,7 +99,7 @@ units:
       checklist item 4 for the branch that wins at release day. Docs-only, no monitor re-arm owed (no PR deliverable)'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -116,17 +118,21 @@ units:
       the release-notes post must carry the fencing announcement. Port the summary mention and highlight from the fencing
       branch''s post copy, claim-checked against 06f1b5e so the older snapshot''s corrected-away claims do not return; anchors
       resolved against preview''s docs.md'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-release-notes
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed cb383b5 -> 6b4148f, verified on the origin ref: the Checkpoint fencing Highlights section present,
+        no stale Cluster claim (the ported paragraphs never mentioned Redis, grep-confirmed), anchor resolves against preview
+        71a8f3a. Worker corrected the brief''s premise with evidence (summary and behavior bullets already announced fencing,
+        only the displaced Highlights section was missing) and removed the redundant stand-in bullet. It also caught a colon-reveal
+        the literal grep misses when a backtick follows the colon, a gate-pattern gap worth noting'
   CREG:
     issue: null
     goal: 'Register: the sweep''s no-blocker verdict recorded beside the release-readiness declaration; the four dispositions;
