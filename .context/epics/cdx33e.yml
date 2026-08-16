@@ -1,9 +1,15 @@
 schema_version: 2
 epic: cdx33e
-revision: 21
-updated_at: 2026-08-16 18:45:00+00:00
-updated_by: 'orchestrator: watcher-002 status corrected to RETIRED (the task was stopped at the E8 merge sweep but the
-  record lagged one revision)'
+revision: 22
+updated_at: 2026-08-16 19:20:00+00:00
+updated_by: 'orchestrator: EPIC RE-CLOSED COMPLETE for the second and final time, 11 of 11 units DONE and swept, all watchers
+  and the heartbeat retired, no unresolved pending actions. The post-closeout adopted tail delivered: E4 (reactive CheckpointStorage
+  section), E5 (fencing announcement port), E6 and E9 and E11 (three rounds of Johan''s docs feedback with the learnings
+  recorded to johan-writing before each rewrite), E7 (banned-pattern sweep and branch alignment), E8 (recipe fixes closing
+  732 and 736, ruled pre-tag, matrix 26/26 green on 00dfb24), E10 (the onlyIf rationale in ADR 120 and docs). Tracker scan
+  clean, only fleet PRs. FINAL RELEASE STATE: tag from main 00dfb24; merge docs/0.33.0-preview at c1043c4 then docs/0.33.0-release-notes
+  at d39d343 (docs content blob-identical between them, the second merge cannot conflict); docs/checkpoint-fencing retired
+  unmerged. The tag and both docs merges are Johan''s manual acts'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -141,7 +147,7 @@ units:
       at Johan''s flag; release-notes docs.md alignment to preview follows after E6 lands'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -166,7 +172,7 @@ units:
       second merge cannot conflict or resurrect stale text'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -193,7 +199,7 @@ units:
       on any inheritance shape'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -218,7 +224,7 @@ units:
       content must be RE-ALIGNED to preview (E7''s alignment predates this rewrite)'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -245,7 +251,7 @@ units:
       at first appearance, cold-reader order respected; release-notes re-aligned after'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -279,7 +285,7 @@ units:
       deliberately NOT extended: the writing skill already binds every docs surface via the global rule, duplication is bloat'
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: null
     deliverables:
