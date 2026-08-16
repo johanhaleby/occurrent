@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 15
-updated_at: 2026-08-16T21:00:00Z
+revision: 16
+updated_at: 2026-08-16T21:10:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -210,11 +210,11 @@ units:
   U10A:
     issue: 750
     goal: "Sealed-expansion ADR: uniformity across modules on the getPermittedSubclasses invariant, #753 likely no-change-recorded, #758 largely documentation"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_8da6cf7d, awaiting click"
+    session: "chip task_8da6cf7d, started by Johan 21:0xZ before going unattended"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
   U10B:
@@ -233,11 +233,11 @@ units:
   U11:
     issue: 737
     goal: "Four lifecycle-leak findings, items 1-3 small fixes, item 4 per-attempt identity coordinated across both catch-up models, plan-first"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_bb9a30d1, awaiting click"
+    session: "chip task_bb9a30d1, started by Johan 21:0xZ before going unattended"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "737", met: false, evidence: null}
@@ -255,22 +255,22 @@ units:
   U13:
     issue: 439
     goal: "Store-neutral config keys: names AND mechanism (alias vs rename+recipe, RenameMappedSubscriptionEnabledKey is the precedent #439 predates) settled at one Johan gate, #410 requirements as input"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_fbfcd1be, awaiting click"
+    session: "chip task_fbfcd1be, started by Johan 21:0xZ before going unattended"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "439", met: false, evidence: null}
   U14:
     issue: 806
     goal: "Join removal plan-first: recipe reachability map (two Java overloads, Kotlin trailing lambdas), UpgradeToOccurrent_0_34 recipe, prose migration for unreachable shapes, remove join/expect/Expectation, docs sweep"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_8628f8ca, awaiting click"
+    session: "chip task_8628f8ca, started by Johan 21:0xZ before going unattended"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "806", met: false, evidence: null}
@@ -288,10 +288,10 @@ units:
   U15:
     issue: 725
     goal: "Subscription-as-data-structure design round with the #721 name-clash answer inside it, plan-first Opus ADR; implementation registers as its own epic if the plan sizes it epic-scale"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_4f39a24b, awaiting click"
+    session: "chip task_4f39a24b, started by Johan 21:0xZ before going unattended"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
