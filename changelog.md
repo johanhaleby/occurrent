@@ -1,4 +1,12 @@
-### Changelog 0.33.0 (2026-08-14)
+### Changelog next version
+
+#### Highlights
+
+#### Changes
+
+#### Breaking changes
+
+### Changelog 0.33.0 (2026-08-16)
 
 #### Highlights
 
