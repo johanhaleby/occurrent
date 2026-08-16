@@ -217,8 +217,10 @@ public interface Saga<E, S extends @Nullable Object, C> {
      * A converted event the saga has no handler for costs the two builders differently. A saga from {@link Builder}
      * leaves its state untouched. A flow saga appends every correlated event it receives to the instance's retained
      * history before it looks at which branch handles it, so a selector broader than the types the flow names grows
-     * that history, and under a {@code stepWindow} cap those events take slots the step's own events would otherwise
-     * hold.
+     * that history. Such an event never counts against a {@code stepWindow} cap and never evicts one of the step's
+     * own events to make room for itself, but nothing evicts it either as long as the step's own declared-type
+     * events stay within their cap, so it can grow what a parked step stores without limit. See the flow saga's
+     * {@code stepWindow} javadoc for what that leaves you responsible for under a selector this broad.
      * <p>
      * Set together with a {@link #narrowingFilter()}, this is what the narrowing is combined with.
      */

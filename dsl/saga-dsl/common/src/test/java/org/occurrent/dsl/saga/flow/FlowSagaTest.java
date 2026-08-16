@@ -516,7 +516,7 @@ class FlowSagaTest {
     @Nested
     class StepWindowCap {
 
-        sealed interface CapEvent permits Opened, Approved, Noise {
+        sealed interface CapEvent permits Opened, Approved, Noise, Untracked {
             String id();
         }
 
@@ -529,23 +529,39 @@ class FlowSagaTest {
         record Noise(String id) implements CapEvent {
         }
 
+        /**
+         * A type no step below ever declares, in any branch or window-condition leaf, so {@code eventTypes()} never
+         * names it. Simulates what a caller reaches through a {@code narrowingFilter}/{@code replacementFilter} wider
+         * than the flow's own types, or a collapsing {@code CloudEventTypeMapper}: correlated and appended, but never
+         * counted or evicted by {@code stepWindow}.
+         */
+        record Untracked(String id) implements CapEvent {
+        }
+
         sealed interface CapCommand permits Report {
         }
 
         record Report(String what) implements CapCommand {
         }
 
-        /** Waits for 3 Approved in one step, with the step's own retained events capped at {@code stepWindow}. */
+        /**
+         * Waits for 3 Approved in one step, with the step's own retained events capped at {@code stepWindow}. Also
+         * declares Noise, with a guard that never fires, purely so it joins {@code eventTypes()} and so counts
+         * toward the cap like any of the step's own events: a step declaring a type it captures without acting on it
+         * is a real pattern, and it is what lets Noise stand in as declared-but-irrelevant filler below.
+         */
         private static Saga<CapEvent, FlowState<CapEvent>, CapCommand> waitingForThree(int stepWindow, List<String> saw) {
             return FlowSaga.<CapEvent, CapCommand>builder()
                     .stepWindow(stepWindow)
                     .startsOn(Opened.class)
                     .correlateAll(CapEvent::id)
-                    .step("wait", step -> step.on(StepCondition.event(Approved.class, 3), Continuation.end(),
-                            received -> {
-                                saw.add("approved=" + received.count(Approved.class) + " kept=" + received.asList().size());
-                                return List.of(new Report("done"));
-                            }))
+                    .step("wait", step -> step
+                            .on(StepCondition.event(Approved.class, 3), Continuation.end(),
+                                    received -> {
+                                        saw.add("approved=" + received.count(Approved.class) + " kept=" + received.asList().size());
+                                        return List.of(new Report("done"));
+                                    })
+                            .on(Noise.class, (noise, received) -> false, Continuation.end()))
                     .build();
         }
 
@@ -561,6 +577,14 @@ class FlowSagaTest {
             Noise[] events = new Noise[count];
             for (int i = 0; i < count; i++) {
                 events[i] = new Noise("c1");
+            }
+            return events;
+        }
+
+        private static Untracked[] untracked(int count) {
+            Untracked[] events = new Untracked[count];
+            for (int i = 0; i < count; i++) {
+                events[i] = new Untracked("c1");
             }
             return events;
         }
@@ -684,6 +708,89 @@ class FlowSagaTest {
         }
 
         @Test
+        void an_event_of_a_type_no_step_declares_is_retained_but_never_counted_or_evicted() {
+            // Untracked stands in for whatever reaches evolve through a narrowingFilter/replacementFilter wider than
+            // this flow's own types, or a collapsing CloudEventTypeMapper: no branch anywhere names it.
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(2, new ArrayList<>());
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            FlowState<CapEvent> afterFirstApproved = saga.evolve(opened, SagaInput.event(new Approved("c1", 1)));
+            FlowState<CapEvent> afterUntracked = deliver(saga, afterFirstApproved, untracked(3));
+            FlowState<CapEvent> afterSecondApproved = saga.evolve(afterUntracked, SagaInput.event(new Approved("c1", 2)));
+
+            assertAll(
+                    () -> assertThat(afterUntracked.receivedEvents().count(Untracked.class))
+                            .as("undeclared events are retained rather than dropped on arrival").isEqualTo(3),
+                    () -> assertThat(afterUntracked.receivedEvents().count(Approved.class))
+                            .as("the one declared event so far stayed too, well inside the cap of 2").isEqualTo(1),
+                    () -> assertThat(saga.isTerminal(afterSecondApproved))
+                            .as("two of the three declared Approved this step is waiting for").isFalse(),
+                    () -> assertThat(afterSecondApproved.receivedEvents().count(Approved.class))
+                            .as("neither Approved was evicted; three undeclared events never touched the cap of 2")
+                            .isEqualTo(2)
+            );
+        }
+
+        @Test
+        void a_step_fed_only_events_no_step_declares_is_not_bounded_by_stepwindow() {
+            // The scope limit ADR 129 records. stepWindow counts and evicts only the flow's own declared-type
+            // events, so a step reached through a selector wider than those types has no cap on the undeclared
+            // portion. The store-boundary warning, not stepWindow, is what surfaces that growth.
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(5, new ArrayList<>());
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            FlowState<CapEvent> untrackedOnly = deliver(saga, opened, untracked(200));
+
+            assertThat(untrackedOnly.received()).as("no declared event ever arrived, so nothing triggers eviction")
+                    .hasSize(201);
+        }
+
+        @Test
+        void the_cap_advances_past_an_undeclared_event_until_enough_declared_ones_are_actually_dropped() {
+            // Untracked sits ahead of the declared Approved events that push the cap over. Advancing by the raw
+            // excess of positions would stop after dropping Untracked alone and leave one declared event too many;
+            // the cap counts only declared events, so it keeps advancing until it has actually dropped excess of
+            // them, sweeping the interleaved Untracked away for free along the way.
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(2, new ArrayList<>());
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            FlowState<CapEvent> afterUntracked = saga.evolve(opened, SagaInput.event(new Untracked("c1")));
+            FlowState<CapEvent> afterFirstTwo = deliver(saga, afterUntracked, new Approved("c1", 1), new Approved("c1", 2));
+            FlowState<CapEvent> afterThird = saga.evolve(afterFirstTwo, SagaInput.event(new Approved("c1", 3)));
+
+            assertAll(
+                    () -> assertThat(saga.isTerminal(afterThird)).as("three Approved, carried counts and all").isTrue(),
+                    () -> assertThat(afterThird.receivedEvents().count(Approved.class))
+                            .as("the cap kept exactly 2 of the step's own events, not 3, even with an undeclared event ahead of them")
+                            .isEqualTo(2),
+                    () -> assertThat(afterThird.receivedEvents().count(Untracked.class))
+                            .as("the undeclared event was swept up once the cap needed to reach past it, not kept for free")
+                            .isZero()
+            );
+        }
+
+        @Test
+        void a_repeated_start_type_event_does_not_count_toward_the_cap_unless_a_step_also_declares_it() {
+            // eventTypes(), the subscription selector, unions in startType so an instance can ever be created, but a
+            // repeat of that type arriving after the instance already exists is not one of this step's own events
+            // just because it once created the instance. waitingForThree's "wait" step never declares Opened.
+            Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(2, new ArrayList<>());
+            FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
+
+            FlowState<CapEvent> afterTwoApproved = deliver(saga, opened, new Approved("c1", 1), new Approved("c1", 2));
+            FlowState<CapEvent> afterRepeatedStart = saga.evolve(afterTwoApproved, SagaInput.event(new Opened("c1")));
+
+            assertAll(
+                    () -> assertThat(afterRepeatedStart.receivedEvents().count(Approved.class))
+                            .as("the repeated start event did not evict either Approved, since no step declares Opened")
+                            .isEqualTo(2),
+                    () -> assertThat(afterRepeatedStart.receivedEvents().count(Opened.class))
+                            .as("the repeat is still retained, both it and the initiating event")
+                            .isEqualTo(2)
+            );
+        }
+
+        @Test
         void the_event_that_fired_the_condition_and_the_initiating_event_are_both_still_readable() {
             List<String> saw = new ArrayList<>();
             Saga<CapEvent, FlowState<CapEvent>, CapCommand> saga = waitingForThree(1, saw);
@@ -709,10 +816,12 @@ class FlowSagaTest {
                     .stepWindow(3)
                     .startsOn(Opened.class)
                     .correlateAll(CapEvent::id)
-                    .step("wait", step -> step.on(Approved.class, (approved, received) -> {
-                        guardSaw.add(received.count(Noise.class));
-                        return true;
-                    }, Continuation.end()))
+                    .step("wait", step -> step
+                            .on(Approved.class, (approved, received) -> {
+                                guardSaw.add(received.count(Noise.class));
+                                return true;
+                            }, Continuation.end())
+                            .on(Noise.class, (noise, received) -> false, Continuation.end()))
                     .build();
             FlowState<CapEvent> opened = saga.evolve(saga.initialState(), SagaInput.event(new Opened("c1")));
 
@@ -732,6 +841,7 @@ class FlowSagaTest {
                     .correlateAll(CapEvent::id)
                     .step("wait", step -> step
                             .on(StepCondition.event(Approved.class, 3), Continuation.end())
+                            .on(Noise.class, (noise, received) -> false, Continuation.end())
                             .timeout(Duration.ofMinutes(5), Continuation.end(), received -> {
                                 expirySaw.add(received.count(Noise.class));
                                 return List.of();
@@ -981,14 +1091,18 @@ class FlowSagaTest {
                     .hasMessageContaining("share the predicate name 'big'");
         }
 
+        // Declares Noise the same way waitingForThree does: a guard that never fires, purely so it joins
+        // eventTypes() and counts toward the cap like the step's own events, which is what lets the tests below use
+        // it as declared-but-irrelevant filler.
         private static Saga<CapEvent, FlowState<CapEvent>, CapCommand> highScoreSaga(String predicateName, int threshold) {
             return FlowSaga.<CapEvent, CapCommand>builder()
                     .stepWindow(1)
                     .startsOn(Opened.class)
                     .correlateAll(CapEvent::id)
-                    .step("wait", step -> step.on(
-                            StepCondition.event(Approved.class, 2, predicateName, (Approved a) -> a.score() > threshold),
-                            Continuation.end()))
+                    .step("wait", step -> step
+                            .on(StepCondition.event(Approved.class, 2, predicateName, (Approved a) -> a.score() > threshold),
+                                    Continuation.end())
+                            .on(Noise.class, (noise, received) -> false, Continuation.end()))
                     .build();
         }
 
