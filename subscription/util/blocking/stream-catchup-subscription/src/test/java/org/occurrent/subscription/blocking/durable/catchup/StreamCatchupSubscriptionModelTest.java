@@ -39,10 +39,12 @@ import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -402,6 +404,41 @@ class StreamCatchupSubscriptionModelTest {
                 .as("cancelSubscription deleted this id's position and expects it to stay gone, not be recreated "
                         + "by the stale attempt's own in-flight event")
                 .isNull();
+    }
+
+    /**
+     * Copilot review on PR #823 (issue #737). Replacing a cancelled attempt's map entry with a shared sentinel,
+     * instead of flagging the attempt object itself, meant nothing ever removed that entry for an id nobody
+     * resubscribed, growing the map without bound over the model's lifetime.
+     */
+    @Test
+    void cancelling_a_never_reused_subscription_id_does_not_leave_its_entry_registered_forever() throws Exception {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        String subscriptionId = "a-subscription-id-never-reused-again";
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+
+        subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        subscription.cancelSubscription(subscriptionId);
+        releaseReplay.countDown();
+
+        Field currentAttemptField = AbstractCatchupSubscriptionModel.class.getDeclaredField("currentAttempt");
+        currentAttemptField.setAccessible(true);
+        await().untilAsserted(() -> {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> currentAttempt = (Map<String, Object>) currentAttemptField.get(subscription);
+            assertThat(currentAttempt)
+                    .as("the cancelled attempt's own cleanup removes its entry once its replay thread notices, "
+                            + "instead of leaving a tombstone behind for an id that is never resubscribed")
+                    .doesNotContainKey(subscriptionId);
+        });
     }
 
     @Test

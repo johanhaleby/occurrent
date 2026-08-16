@@ -351,7 +351,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             // deletePositionFromStorage call just deleted. A stop() or shutdown deletes nothing, so priming it for
             // those still leaves a resumable position for the next restart, same as before this id had per-attempt
             // identity.
-            if (!wasCancelled(subscriptionId)) {
+            if (!wasCancelled()) {
                 doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
                     // Only get position if using storage and no position has been stored
                     if (!cfg.storage().exists(subscriptionId)) {
