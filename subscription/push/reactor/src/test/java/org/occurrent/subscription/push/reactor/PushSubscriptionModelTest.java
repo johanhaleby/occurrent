@@ -214,8 +214,8 @@ class PushSubscriptionModelTest {
 
     @Test
     void resubscribing_the_same_mono_observes_and_dispatches_the_event_again() {
-        // The Mono accept(..) returns is cold, the same way route(CloudEvent)'s already was, so "once per event"
-        // means once per subscription to it, not once per event handed to accept(..).
+        // The Mono accept(..) returns is cold, the same way route(CloudEvent)'s own Mono already is, so "once per
+        // event" means once per subscription to it, not once per event handed to accept(..).
         List<String> observed = new ArrayList<>();
         List<String> handled = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
@@ -333,6 +333,26 @@ class PushSubscriptionModelTest {
                         .hasMessage("payload assertion failed"));
 
         assertThat(matches).containsExactly(false);
+    }
+
+    @Test
+    void an_observer_error_while_reporting_a_filter_failure_is_suppressed_rather_than_replacing_it() {
+        // A badly behaved observer must never be able to swap out the filter's own exception for its own. That
+        // exception is the caller's redelivery signal, and reporting it to the observer must not risk losing it.
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw new IllegalStateException("payload unreadable");
+        };
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader, (CloudEvent cloudEvent, boolean matched) -> {
+            throw new Error("observer blew up too");
+        });
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> Mono.empty());
+
+        StepVerifier.create(model.accept(cloudEvent("1", "NameDefined")))
+                .verifyErrorSatisfies(error -> {
+                    assertThat(error).isInstanceOf(IllegalStateException.class).hasMessage("payload unreadable");
+                    assertThat(error.getSuppressed()).hasSize(1);
+                    assertThat(error.getSuppressed()[0]).isInstanceOf(Error.class).hasMessage("observer blew up too");
+                });
     }
 
     @Test

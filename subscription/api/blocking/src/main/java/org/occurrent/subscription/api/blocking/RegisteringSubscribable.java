@@ -282,7 +282,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * pure function of the event. The model not running, the sole subscription being paused, and the matcher itself
      * throwing all report {@code false} to {@code matchObserver}, the same way {@link #route(CloudEvent)} already
      * treats them for dispatch, and a throwing matcher's exception still propagates to the caller once
-     * {@code matchObserver} has been told.
+     * {@code matchObserver} has been told. If {@code matchObserver} itself then throws a {@link RuntimeException} or
+     * an {@link Error} while being told, that failure is suppressed onto the matcher's original exception rather
+     * than replacing it, so a badly behaved {@code matchObserver} can never change which exception, or whose, a
+     * caller sees.
      * <p>
      * Restricted to {@link Consumers#ONE} because sharing one evaluation across more than one registration would
      * mean deciding every registration's eligibility before dispatching any of them, changing which registration's
@@ -305,7 +308,11 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                 try {
                     eligible = !pausedSubscriptions.contains(registration.id()) && registration.matcher().test(cloudEvent);
                 } catch (RuntimeException | AssertionError e) {
-                    matchObserver.accept(cloudEvent, false);
+                    try {
+                        matchObserver.accept(cloudEvent, false);
+                    } catch (RuntimeException | Error observerFailure) {
+                        e.addSuppressed(observerFailure);
+                    }
                     throw e;
                 }
                 matchObserver.accept(cloudEvent, eligible);
