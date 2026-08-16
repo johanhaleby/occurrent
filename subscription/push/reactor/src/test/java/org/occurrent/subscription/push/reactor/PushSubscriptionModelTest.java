@@ -160,6 +160,103 @@ class PushSubscriptionModelTest {
         StepVerifier.create(started.waitUntilStarted()).verifyComplete();
     }
 
+    @Test
+    void the_observer_is_told_a_matched_event_before_the_handler_runs() {
+        List<String> observed = new ArrayList<>();
+        List<String> handled = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(
+                (CloudEvent cloudEvent, boolean matched) -> observed.add(cloudEvent.getId() + ":" + matched + ":" + handled.size()));
+        model.subscribe("sub", cloudEvent -> Mono.fromRunnable(() -> handled.add(cloudEvent.getId())));
+
+        StepVerifier.create(model.accept(cloudEvent("1", "NameDefined"))).verifyComplete();
+
+        assertThat(observed).containsExactly("1:true:0");
+        assertThat(handled).containsExactly("1");
+    }
+
+    @Test
+    void the_observer_is_told_an_event_is_unmatched_when_nothing_is_registered() {
+        List<Boolean> matches = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel((CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+
+        StepVerifier.create(model.accept(cloudEvent("1", "NameDefined"))).verifyComplete();
+
+        assertThat(matches).containsExactly(false);
+    }
+
+    @Test
+    void the_observer_is_told_an_event_is_unmatched_while_the_model_is_stopped() {
+        // A stopped model drops live events by design (ADR 85), and the observer contract mirrors that: matched
+        // reflects what would actually be delivered, not merely what the filter would have accepted.
+        List<Boolean> matches = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel((CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+        model.subscribe("sub", cloudEvent -> Mono.empty());
+        model.stop();
+
+        StepVerifier.create(model.accept(cloudEvent("1", "NameDefined"))).verifyComplete();
+
+        assertThat(matches).containsExactly(false);
+    }
+
+    @Test
+    void the_observer_is_told_an_event_is_unmatched_when_the_registered_filter_declines_it() {
+        List<Boolean> matches = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel((CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.type("SomethingElseHappened")), cloudEvent -> Mono.empty());
+
+        StepVerifier.create(model.accept(cloudEvent("1", "NameDefined"))).verifyComplete();
+
+        assertThat(matches).containsExactly(false);
+    }
+
+    @Test
+    void the_observer_still_sees_the_event_when_the_matching_handler_errors() {
+        List<Boolean> matches = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel((CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+        model.subscribe("boom", cloudEvent -> Mono.error(new IllegalStateException("handler failed")));
+
+        StepVerifier.create(model.accept(cloudEvent("1", "NameDefined")))
+                .verifyErrorMessage("handler failed");
+
+        assertThat(matches).containsExactly(true);
+    }
+
+    @Test
+    void a_throwing_observer_is_swallowed_and_the_matching_handler_still_runs() {
+        List<String> handled = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel((CloudEvent cloudEvent, boolean matched) -> {
+            throw new IllegalStateException("observer failed");
+        });
+        model.subscribe("sub", cloudEvent -> Mono.fromRunnable(() -> handled.add(cloudEvent.getId())));
+
+        StepVerifier.create(model.accept(cloudEvent("1", "NameDefined"))).verifyComplete();
+
+        assertThat(handled).containsExactly("1");
+    }
+
+    @Test
+    void a_batch_stops_observing_once_a_handler_errors() {
+        List<String> observed = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel((CloudEvent cloudEvent, boolean matched) -> observed.add(cloudEvent.getId()));
+        model.subscribe("boom", cloudEvent -> cloudEvent.getId().equals("2")
+                ? Mono.error(new IllegalStateException("handler failed"))
+                : Mono.empty());
+
+        StepVerifier.create(model.accept(List.of(
+                        cloudEvent("1", "NameDefined"), cloudEvent("2", "NameDefined"), cloudEvent("3", "NameDefined"))))
+                .verifyErrorMessage("handler failed");
+
+        assertThat(observed).containsExactly("1", "2");
+    }
+
+    @Test
+    void the_default_observer_is_a_no_op() {
+        // No PushObserver constructor argument at all: PushObserver.noop() changes nothing for existing code.
+        PushSubscriptionModel model = new PushSubscriptionModel();
+
+        StepVerifier.create(model.accept(cloudEvent("1", "NameDefined"))).verifyComplete();
+    }
+
     private static CloudEvent cloudEvent(String id, String type) {
         return CloudEventBuilder.v1()
                 .withId(id)

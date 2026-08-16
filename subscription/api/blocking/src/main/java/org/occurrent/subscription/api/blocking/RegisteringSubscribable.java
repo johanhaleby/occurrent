@@ -273,6 +273,33 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     }
 
     /**
+     * Whether {@code cloudEvent} would currently be routed to at least one registered handler. True when the model
+     * is running and some unpaused registration's filter accepts the event.
+     * <p>
+     * A snapshot, like {@link #hasSubscriptions()}. A subscription concurrently added, cancelled or paused can make
+     * {@link #route(CloudEvent)} moments later disagree with the answer given here. Deliberately not reused by
+     * {@link #route(CloudEvent)} itself, which decides eligibility and dispatch for every registration in one pass,
+     * in order, so a handler that throws stops the registrations behind it from being invoked. A subclass that
+     * dispatches inside a transaction relies on that. Answering this ahead of {@link #route(CloudEvent)} instead of
+     * inside it keeps that one-pass, stop-on-throw contract intact for every subclass, at the cost of duplicating
+     * this small condition.
+     *
+     * @param cloudEvent The event to test.
+     */
+    protected final boolean hasMatchingRegistration(CloudEvent cloudEvent) {
+        Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
+        if (!running) {
+            return false;
+        }
+        for (Registration registration : registrations) {
+            if (!pausedSubscriptions.contains(registration.id()) && registration.matcher().test(cloudEvent)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Route a single event to every registered handler whose filter matches, in registration order, on the calling
      * thread. A handler exception propagates to the caller.
      * <p>

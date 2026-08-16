@@ -1,3 +1,11 @@
+### Changelog next version
+
+#### Highlights
+
+#### Changes
+
+* **`PushSubscriptionModel` and its reactor counterpart take an optional `PushObserver`, told about every event `accept(...)` is asked to deliver and whether a currently registered subscription matched it.** `accept(...)` itself stays silent on both counts by design, since it cannot refuse an event that might also have come from the write path (see ADR 104), so a misconfigured queue binding, a missing declared event type, or a type-mapping typo has looked identical to a saga or projection that simply chose not to react. The observer is constructor-injected on both stacks, next to the existing `DataFieldReader` overload, and `PushObserver.noop()` is the default, so nothing changes for existing code. It runs before delivery is attempted, matched or not, independent of whether the handler that follows succeeds or throws, and a throwing observer is caught and logged rather than turning a delivered event into a broker redelivery. Resolves [#802](https://github.com/johanhaleby/occurrent/issues/802).
+
 ### Changelog 0.33.0 (2026-08-14)
 
 #### Highlights
