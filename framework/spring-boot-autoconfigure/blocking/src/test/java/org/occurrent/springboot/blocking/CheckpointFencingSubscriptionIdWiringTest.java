@@ -33,6 +33,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -67,6 +68,7 @@ class CheckpointFencingSubscriptionIdWiringTest {
     private static final String SUBSCRIPTION_ID_SYNC = "proj-sync";
     private static final String SUBSCRIPTION_ID_NO_CATCHUP = "proj-no-catchup";
     private static final String SUBSCRIPTION_ID_DOMAIN_FEED = "proj-domain-feed";
+    private static final String SUBSCRIPTION_ID_PUSH_MODEL = "proj-push-model";
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -169,6 +171,50 @@ class CheckpointFencingSubscriptionIdWiringTest {
                     assertThat(context).hasNotFailed();
                     verify(checkpointStorage, never()).evaluatesWriteConditionsFor(SUBSCRIPTION_ID_DOMAIN_FEED);
                 });
+    }
+
+    @Test
+    void a_push_projections_id_fed_by_a_confirmed_pushSubscriptionModel_is_still_asked_about_at_the_default_catchup() {
+        // The mirror of the DomainEventFeed test above. Once resolveFeedBeanType confirms the feed bean is a
+        // PushSubscriptionModel rather than leaving it unknown, the id must stay in idsToCheck, since that path
+        // does resolve CheckpointStorage once catchup defaults to FROM_EVENT_STORE.
+        CompetingConsumerStrategy strategy = mock(CompetingConsumerStrategy.class);
+        CheckpointStorage checkpointStorage = mock(CheckpointStorage.class);
+        when(checkpointStorage.evaluatesWriteConditions()).thenReturn(true);
+        when(checkpointStorage.evaluatesWriteConditionsFor(any())).thenReturn(false);
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(ConfirmedPushSubscriptionModelProjectionConfiguration.class)
+                .withBean(CompetingConsumerStrategy.class, () -> strategy)
+                .withBean(CheckpointStorage.class, () -> checkpointStorage)
+                .run(context -> assertThat(context).getFailure()
+                        .isInstanceOf(CheckpointStorageCannotFenceSubscriptionException.class)
+                        .hasMessageContaining(SUBSCRIPTION_ID_PUSH_MODEL));
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class ConfirmedPushSubscriptionModelProjectionConfiguration {
+        @Bean
+        PushSubscriptionModel pushSubscriptionModel() {
+            return mock(PushSubscriptionModel.class);
+        }
+
+        @Bean
+        ConfirmedPushModelProjection confirmedPushModelProjection() {
+            return new ConfirmedPushModelProjection();
+        }
+    }
+
+    static class ConfirmedPushModelProjection {
+        @Projection(id = SUBSCRIPTION_ID_PUSH_MODEL, source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
     }
 
     @Configuration(proxyBeanMethods = false)

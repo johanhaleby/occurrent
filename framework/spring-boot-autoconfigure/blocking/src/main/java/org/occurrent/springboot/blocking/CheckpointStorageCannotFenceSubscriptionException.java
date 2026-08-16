@@ -36,7 +36,10 @@ import java.util.List;
  * {@code DomainEventFeed}, whatever catchup says. That path resolves no {@code CheckpointStorage} at all, and a
  * domain-event feed's own optional catch-up marker, a separate bean the feed is built with directly, only ever
  * calls {@code exists} and the unconditional two-argument {@code save}, never the conditional write this check is
- * about. None of those ids are ever named here even when the storage would refuse them.
+ * about. None of those ids are ever named here even when the storage would refuse them, with one exception. The
+ * exclusion for a {@code DomainEventFeed}-fed push projection depends on reading the feed bean's type from Spring
+ * bean metadata without creating it, and an id whose feed bean cannot be typed that way, an ambiguous or otherwise
+ * unresolvable one, stays asked about rather than excluded on a guess.
  * <p>
  * A subscription id built or read only at runtime is outside what this check can enumerate at all. So is one an
  * annotation declares whose registration writes a checkpoint before this check runs, which {@code @Subscription},

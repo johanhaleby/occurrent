@@ -339,13 +339,16 @@ public final class SubscriptionAnnotations {
     /**
      * The push feed bean's type, resolved by the same rule {@link #resolveFeedBean} uses to pick the bean itself
      * (an explicit {@code subscriptionModelType}, {@code subscriptionModelName}, or the unique bean of one of
-     * {@code candidateTypes}), but never instantiating it. An explicit type is read straight off the annotation
-     * attribute, and a name or unique-type lookup goes through {@link ApplicationContext#getType(String)}, which
-     * answers from bean metadata rather than creating the bean, safe to call once every singleton already exists,
-     * which is the only time a caller needing this asks.
+     * {@code candidateTypes}), but never creating the feed bean itself. An explicit type is read straight off the
+     * annotation attribute, and a name or unique-type lookup goes through {@link ApplicationContext#getType(String)}
+     * and {@link ApplicationContext#getBeanNamesForType(Class)}, which answer from bean metadata rather than
+     * creating the feed bean, safe to call once every singleton already exists, which is the only time a caller
+     * needing this asks. A plain {@code @Lazy} feed bean stays uncreated. A feed bean built by a
+     * {@code FactoryBean} is the one case where Spring may still invoke that factory to answer the type question,
+     * the same as it would for any other bean's type lookup.
      * <p>
      * Returns {@code null} when the type cannot be determined this way, an unnamed bean with zero or several
-     * candidates, or a name Spring cannot type without creating it. A caller getting {@code null} back should treat
+     * candidates, or a name or type Spring cannot resolve at all. A caller getting {@code null} back should treat
      * the feed's flavor as unknown rather than guess one, since {@link #resolveFeedBean} is what raises the real,
      * detailed error once the bean is actually resolved, at registration.
      *
@@ -354,7 +357,7 @@ public final class SubscriptionAnnotations {
      * @param subscriptionModelName the annotation's {@code subscriptionModelName}, or blank if unset
      * @param candidateTypes        the allowed feed bean types, matching what {@link #resolveFeedBean} was called
      *                              with for the same annotation
-     * @return the feed bean's type, or {@code null} when it cannot be determined without instantiating the bean
+     * @return the feed bean's type, or {@code null} when it cannot be determined this way
      */
     public static @Nullable Class<?> resolveFeedBeanType(ApplicationContext applicationContext, Class<?> subscriptionModelType,
                                                           String subscriptionModelName, Class<?>... candidateTypes) {
@@ -368,11 +371,11 @@ public final class SubscriptionAnnotations {
                 return null;
             }
         }
-        List<String> names = candidateBeanNames(applicationContext, candidateTypes);
-        if (names.size() != 1) {
-            return null;
-        }
         try {
+            List<String> names = candidateBeanNames(applicationContext, candidateTypes);
+            if (names.size() != 1) {
+                return null;
+            }
             return applicationContext.getType(names.get(0));
         } catch (BeansException e) {
             return null;
