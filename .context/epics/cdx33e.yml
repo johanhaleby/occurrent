@@ -1,10 +1,9 @@
 schema_version: 2
 epic: cdx33e
-revision: 7
-updated_at: 2026-08-16 07:40:00+00:00
-updated_by: 'orchestrator: E5 adopted and dispatched under the docs-reflect-code derivation (fencing branch retired unmerged,
-  the release post gains the fencing announcement); E4 still running. The fussy fencing routing at revision 6 is superseded:
-  Johan directed decide-not-route and the principle answers it'
+revision: 8
+updated_at: 2026-08-16 08:10:00+00:00
+updated_by: 'orchestrator: E4 DONE and verified (preview 71a8f3a); E5 in flight; AGENTS.md additions proposed to Johan,
+  awaiting his word'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -96,7 +95,7 @@ units:
     goal: 'Adopted post-closeout unit (Johan''s word, 2026-08-16): rewrite the preview branch''s stale reactive CheckpointStorage
       section to the 0.33 interface at 06f1b5e, structured like the branch''s corrected blocking section, executing release-day
       checklist item 4 for the branch that wins at release day. Docs-only, no monitor re-arm owed (no PR deliverable)'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -105,8 +104,11 @@ units:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-preview
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed 3293762 -> 71a8f3a, verified on the origin ref: the reactive CheckpointStorage section now lists
+        the 0.33 interface (three-argument save, writeVersion, both capability members) mirroring the blocking section minus
+        exists which the reactor interface lacks, old two-argument-only listing gone, every claim source-cited incl. the
+        empty-save refusal and the blocking-only fencing check attribution. Jekyll exit 0 per worker'
   E5:
     issue: null
     goal: 'Adopted unit, decided by derivation from Johan''s docs-must-reflect-code principle (his explicit direction to
