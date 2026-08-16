@@ -1,7 +1,7 @@
 schema_version: 2
 epic: cdx33e
-revision: 24
-updated_at: 2026-08-16 21:20:00+00:00
+revision: 25
+updated_at: 2026-08-17 05:50:00+00:00
 updated_by: 'orchestrator: EPIC RE-CLOSED COMPLETE for the second and final time, 11 of 11 units DONE and swept, all watchers
   and the heartbeat retired, no unresolved pending actions. The post-closeout adopted tail delivered: E4 (reactive CheckpointStorage
   section), E5 (fencing announcement port), E6 and E9 and E11 (three rounds of Johan''s docs feedback with the learnings
@@ -10,8 +10,10 @@ updated_by: 'orchestrator: EPIC RE-CLOSED COMPLETE for the second and final time
   clean, only fleet PRs. FINAL RELEASE STATE, docs heads advanced twice on 2026-08-16 by post-closeout prose fixes in
   Step Conditions, both raised by Johan reading the section (the stepWindow counting paragraph, then the predicateId
   cluster whose opener implied the stored count was optional), each mirrored to both branches so their docs.md stays
-  blob-identical: tag from main 00dfb24; merge docs/0.33.0-preview at 791a176 then docs/0.33.0-release-notes at 4d2e6af
-  (docs.md blob def074e13f on both, the second merge cannot conflict); docs/checkpoint-fencing retired unmerged. The tag
+  blob-identical, then advanced a third time 2026-08-17 for three gaps Johan found (push feed bean selection and name
+  optionality, the register-only-models-do-not-replace-the-default-model rule, and the missing Upgrading to 0.33.0
+  section): tag from main 00dfb24; merge docs/0.33.0-preview at cc06670 then docs/0.33.0-release-notes at cf13e53
+  (docs.md blob 9281827cf4 on both, the second merge cannot conflict); docs/checkpoint-fencing retired unmerged. The tag
   and both docs merges are Johan''s manual acts'
 baseline:
   repo: johanhaleby/occurrent
