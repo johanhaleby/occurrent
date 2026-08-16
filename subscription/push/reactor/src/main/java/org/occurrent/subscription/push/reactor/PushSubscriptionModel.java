@@ -136,19 +136,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
         if (!observing) {
             return route(cloudEvent);
         }
-        // Deferred so the observer call and the routing decision both happen on subscribe, not when this Mono is
-        // assembled, matching the laziness route(CloudEvent) already documents.
-        return Mono.defer(() -> {
-            boolean matched;
-            try {
-                matched = hasMatchingRegistration(cloudEvent);
-            } catch (RuntimeException | AssertionError e) {
-                notifyObserver(cloudEvent, false);
-                throw e;
-            }
-            notifyObserver(cloudEvent, matched);
-            return route(cloudEvent);
-        });
+        return routeReportingMatch(cloudEvent, this::notifyObserver);
     }
 
     // Keeps a broken observer from masquerading as a handler failure. accept(...) erroring is what tells a broker

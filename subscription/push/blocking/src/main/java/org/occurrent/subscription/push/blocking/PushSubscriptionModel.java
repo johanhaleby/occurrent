@@ -141,16 +141,10 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     // existed the batch path never touched an overridable method at all, and this helper keeps it that way.
     private void acceptEvent(CloudEvent cloudEvent) {
         if (observing) {
-            boolean matched;
-            try {
-                matched = hasMatchingRegistration(cloudEvent);
-            } catch (RuntimeException | AssertionError e) {
-                notifyObserver(cloudEvent, false);
-                throw e;
-            }
-            notifyObserver(cloudEvent, matched);
+            routeReportingMatch(cloudEvent, this::notifyObserver);
+        } else {
+            route(cloudEvent);
         }
-        route(cloudEvent);
     }
 
     // Keeps a broken observer from masquerading as a handler failure. accept(...) throwing is what tells a broker

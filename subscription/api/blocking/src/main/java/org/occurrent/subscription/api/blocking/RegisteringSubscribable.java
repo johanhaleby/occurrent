@@ -35,6 +35,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
@@ -273,30 +274,48 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     }
 
     /**
-     * Whether {@code cloudEvent} would currently be routed to at least one registered handler. True when the model
-     * is running and some unpaused registration's filter accepts the event.
+     * For a subclass declared {@link Consumers#ONE}: evaluate its at-most-one registration's eligibility exactly
+     * once, tell {@code matchObserver} the result, then dispatch that registration's handler if eligible.
      * <p>
-     * A snapshot, like {@link #hasSubscriptions()}. A subscription concurrently added, cancelled or paused can make
-     * {@link #route(CloudEvent)} moments later disagree with the answer given here. Deliberately not reused by
-     * {@link #route(CloudEvent)} itself, which decides eligibility and dispatch for every registration in one pass,
-     * in order, so a handler that throws stops the registrations behind it from being invoked. A subclass that
-     * dispatches inside a transaction relies on that. Answering this ahead of {@link #route(CloudEvent)} instead of
-     * inside it keeps that one-pass, stop-on-throw contract intact for every subclass, at the cost of duplicating
-     * this small condition.
+     * Sharing one evaluation between the two, unlike a separate pre-check ahead of {@link #route(CloudEvent)}, means
+     * the two can never disagree about whether the event matched, even for a matcher that is not a deterministic
+     * pure function of the event. The model not running, the sole subscription being paused, and the matcher itself
+     * throwing all report {@code false} to {@code matchObserver}, the same way {@link #route(CloudEvent)} already
+     * treats them for dispatch, and a throwing matcher's exception still propagates to the caller once
+     * {@code matchObserver} has been told.
+     * <p>
+     * Restricted to {@link Consumers#ONE} because sharing one evaluation across more than one registration would
+     * mean deciding every registration's eligibility before dispatching any of them, changing which registration's
+     * exception a caller sees first. With at most one registration that reordering cannot happen, which is what
+     * makes this safe where restructuring {@link #route(CloudEvent)} itself would not be.
      *
-     * @param cloudEvent The event to test.
+     * @param cloudEvent    The event to route.
+     * @param matchObserver Told, once, whether this event was eligible, before its registration's handler (if any)
+     *                      runs.
      */
-    protected final boolean hasMatchingRegistration(CloudEvent cloudEvent) {
+    protected final void routeReportingMatch(CloudEvent cloudEvent, BiConsumer<CloudEvent, Boolean> matchObserver) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
-        if (!running) {
-            return false;
+        Objects.requireNonNull(matchObserver, "matchObserver cannot be null");
+        if (consumers != Consumers.ONE) {
+            throw new IllegalStateException(getClass().getSimpleName() + " must declare Consumers.ONE to call routeReportingMatch(..)");
         }
-        for (Registration registration : registrations) {
-            if (!pausedSubscriptions.contains(registration.id()) && registration.matcher().test(cloudEvent)) {
-                return true;
+        if (running) {
+            for (Registration registration : registrations) {
+                boolean eligible;
+                try {
+                    eligible = !pausedSubscriptions.contains(registration.id()) && registration.matcher().test(cloudEvent);
+                } catch (RuntimeException | AssertionError e) {
+                    matchObserver.accept(cloudEvent, false);
+                    throw e;
+                }
+                matchObserver.accept(cloudEvent, eligible);
+                if (eligible) {
+                    registration.action().accept(cloudEvent);
+                }
+                return;
             }
         }
-        return false;
+        matchObserver.accept(cloudEvent, false);
     }
 
     /**

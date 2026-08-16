@@ -28,7 +28,8 @@ import org.jspecify.annotations.NullMarked;
  * <p>
  * Called once per event, whether or not a handler ends up running. {@code matched} is {@code true} only when the
  * model is running and a currently registered, unpaused subscription's filter accepted the event, independent of
- * whether that handler goes on to succeed or error. A filter that throws while being evaluated (a supplied
+ * whether that handler goes on to succeed or error. It shares the same filter evaluation the actual dispatch
+ * decision is made from, so the two can never disagree. A filter that throws while being evaluated (a supplied
  * {@code DataFieldReader} can) is reported as unmatched too, before that error propagates. A
  * {@link RuntimeException} or {@link AssertionError} the observer itself throws is caught and logged rather than
  * propagated, so a broken observer cannot turn an event that was actually delivered into a broker redelivery.
@@ -54,13 +55,6 @@ public interface PushObserver {
      * from "an observer that happens to do nothing" and skip the match check for the former.
      */
     static PushObserver noop() {
-        return Noop.INSTANCE;
-    }
-
-    // A holder rather than a lambda built fresh on every noop() call, so identity comparison against it means
-    // something.
-    class Noop {
-        private static final PushObserver INSTANCE = (cloudEvent, matched) -> {
-        };
+        return PushObserverNoop.INSTANCE;
     }
 }
