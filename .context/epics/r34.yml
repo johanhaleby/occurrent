@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 8
-updated_at: 2026-08-16T18:35:00Z
+revision: 9
+updated_at: 2026-08-16T19:05:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -77,7 +77,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_350dd4df, delivered PR 812 at 18:3xZ (re-registration race fix plus wording, checks running)"
+    session: "chip task_350dd4df, delivered PR 812, 26/26 green but 3 unresolved Copilot threads and now CONFLICTING after 809 changelog merge, worker owns both, expected clean by 19:45Z else escalate"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "791", met: false, evidence: null}
@@ -91,7 +91,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_7cd8b360, delivered PR 811 at 18:0xZ (checks running, design gate ran in its session per venue)"
+    session: "chip task_7cd8b360, delivered PR 811, answering review at b9b9a23, CONFLICTING after 809 changelog merge, worker owns rebase"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "788", met: false, evidence: null}
@@ -132,14 +132,14 @@ units:
   U6A:
     issue: 786
     goal: "Move SagaFilters to dsl/saga-dsl/common and make public, mirroring ProjectionFilters; independent of the expansion pass"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_545261f9, delivered PR 809, self-rebased to 2236e2a, 14 checks green 12 running at 18:1xZ, one unresolved review thread owned by the worker, expected resolved by 18:45Z else message the session"
+    session: "chip task_545161f9 COMPLETE, session name unmapped (generated peer names), no wind-down message sent"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "786", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "809", met: true, evidence: "merged 38274d24e 2026-08-16T19:0xZ, CAS pin eccbcd72c, 26/26 green on rerun (subscription-util java-25 was the CompetingConsumer awaitility flake), threads resolved, changelog entry included, branch deleted"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "786", met: true, evidence: "closed by the squash merge, verified via gh issue view"}
   U7:
     issue: 771
     goal: "Manual/reactor registration ordering residual plus checkpoint delete-recreate race, one decision across both stacks, plan-first, likely ADR"
