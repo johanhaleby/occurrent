@@ -49,8 +49,9 @@ fun <T : Any> DomainEventQueries<in T>.queryForSequence(
  * Query that returns a [Sequence] instead of a [java.util.stream.Stream].
  *
  * If you only want the first few elements, pass [limit] here rather than calling `.take(n)` on the result.
- * `limit` is a parameter the query itself carries, where `.take(n)` only trims what a fully iterated [Sequence]
- * already produced.
+ * `limit` is a parameter the query itself carries, telling it how many elements to return. `.take(n)` still leaves
+ * the query open to return everything and only stops pulling from it after `n`, which is exactly why closing it
+ * yourself, as below, still matters.
  *
  * A [Sequence] cannot be closed, and the underlying read may hold a database resource, so consume this to the end.
  * If you stop early, read through [DomainEventQueries.query] instead and close the stream yourself.
@@ -71,8 +72,9 @@ fun <T : Any> DomainEventQueries<in T>.queryForSequence(
  * Query by type of domain event ([T]).
  *
  * If you only want the first few elements, pass [limit] here rather than calling `.take(n)` on the result.
- * `limit` is a parameter the query itself carries, where `.take(n)` only trims what a fully iterated [Sequence]
- * already produced.
+ * `limit` is a parameter the query itself carries, telling it how many elements to return. `.take(n)` still leaves
+ * the query open to return everything and only stops pulling from it after `n`, which is exactly why closing it
+ * yourself, as below, still matters.
  *
  * A [Sequence] cannot be closed, and the underlying read may hold a database resource, so consume this to the end.
  * If you stop early, read through [DomainEventQueries.query] instead and close the stream yourself.
@@ -91,8 +93,9 @@ fun <T : Any> DomainEventQueries<in T>.queryForSequence(
  * Query by type of domain event ([T]).
  *
  * If you only want the first few elements, pass [limit] here rather than calling `.take(n)` on the result.
- * `limit` is a parameter the query itself carries, where `.take(n)` only trims what a fully iterated [Sequence]
- * already produced.
+ * `limit` is a parameter the query itself carries, telling it how many elements to return. `.take(n)` still leaves
+ * the query open to return everything and only stops pulling from it after `n`, which is exactly why closing it
+ * yourself, as below, still matters.
  *
  * A [Sequence] cannot be closed, and the underlying read may hold a database resource, so consume this to the end.
  * If you stop early, read through [DomainEventQueries.query] instead and close the stream yourself.
