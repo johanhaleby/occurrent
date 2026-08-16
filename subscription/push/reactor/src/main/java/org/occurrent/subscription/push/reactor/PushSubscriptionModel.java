@@ -109,6 +109,30 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      */
     public Mono<Void> accept(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
+        return acceptEvent(cloudEvent);
+    }
+
+    /**
+     * Feed a batch of events to the model, routing each in iteration order, sequentially.
+     * <p>
+     * Drops the batch when no subscription is registered, with the caveat {@link #accept(CloudEvent)} describes. An
+     * event whose predecessor's handler errored is neither observed nor routed, since the batch stops there.
+     *
+     * @param cloudEvents The events received from the external source.
+     * @return A {@link Mono} that completes when every event has been dispatched.
+     */
+    public Mono<Void> accept(Iterable<CloudEvent> cloudEvents) {
+        Objects.requireNonNull(cloudEvents, "cloudEvents cannot be null");
+        return Flux.fromIterable(cloudEvents)
+                .concatMap(this::acceptEvent)
+                .then();
+    }
+
+    // Never call the overridable accept(CloudEvent) from here. This class is public and not final, and a subclass
+    // overriding accept(CloudEvent) by delegating to accept(Iterable) for a single event would recurse indefinitely
+    // if the batch pipeline called back into it. route(..) itself is already final, so before this observer feature
+    // existed the batch path never touched an overridable method at all, and this helper keeps it that way.
+    private Mono<Void> acceptEvent(CloudEvent cloudEvent) {
         if (!observing) {
             return route(cloudEvent);
         }
@@ -125,22 +149,6 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
             notifyObserver(cloudEvent, matched);
             return route(cloudEvent);
         });
-    }
-
-    /**
-     * Feed a batch of events to the model, routing each in iteration order, sequentially.
-     * <p>
-     * Drops the batch when no subscription is registered, with the caveat {@link #accept(CloudEvent)} describes. An
-     * event whose predecessor's handler errored is neither observed nor routed, since the batch stops there.
-     *
-     * @param cloudEvents The events received from the external source.
-     * @return A {@link Mono} that completes when every event has been dispatched.
-     */
-    public Mono<Void> accept(Iterable<CloudEvent> cloudEvents) {
-        Objects.requireNonNull(cloudEvents, "cloudEvents cannot be null");
-        return Flux.fromIterable(cloudEvents)
-                .concatMap(this::accept)
-                .then();
     }
 
     // Keeps a broken observer from masquerading as a handler failure. accept(...) erroring is what tells a broker

@@ -207,6 +207,25 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void a_subclass_that_delegates_accept_to_the_batch_overload_does_not_recurse() {
+        // PushSubscriptionModel is public and not final, so a subclass overriding accept(CloudEvent) to hand a
+        // singleton list to accept(Iterable) is a legitimate pattern. The batch loop must never call back into the
+        // overridable accept(CloudEvent), or this would recurse until the stack overflows.
+        List<String> received = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel() {
+            @Override
+            public void accept(CloudEvent cloudEvent) {
+                accept(List.of(cloudEvent));
+            }
+        };
+        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
+
+        model.accept(cloudEvent("1", "NameDefined"));
+
+        assertThat(received).containsExactly("1");
+    }
+
+    @Test
     void the_observer_is_told_a_matched_event_before_the_handler_runs() {
         List<String> observed = new ArrayList<>();
         List<String> handled = new ArrayList<>();

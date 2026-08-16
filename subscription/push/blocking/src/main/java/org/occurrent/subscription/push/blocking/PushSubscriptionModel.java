@@ -117,17 +117,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     @Override
     public void accept(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
-        if (observing) {
-            boolean matched;
-            try {
-                matched = hasMatchingRegistration(cloudEvent);
-            } catch (RuntimeException | AssertionError e) {
-                notifyObserver(cloudEvent, false);
-                throw e;
-            }
-            notifyObserver(cloudEvent, matched);
-        }
-        route(cloudEvent);
+        acceptEvent(cloudEvent);
     }
 
     /**
@@ -141,8 +131,26 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     public void accept(Iterable<CloudEvent> cloudEvents) {
         Objects.requireNonNull(cloudEvents, "cloudEvents cannot be null");
         for (CloudEvent cloudEvent : cloudEvents) {
-            accept(cloudEvent);
+            acceptEvent(cloudEvent);
         }
+    }
+
+    // Never call the overridable accept(CloudEvent) from here. This class is public and not final, and a subclass
+    // overriding accept(CloudEvent) by delegating to accept(Iterable) for a single event would recurse indefinitely
+    // if the batch loop called back into it. route(..) itself is already final, so before this observer feature
+    // existed the batch path never touched an overridable method at all, and this helper keeps it that way.
+    private void acceptEvent(CloudEvent cloudEvent) {
+        if (observing) {
+            boolean matched;
+            try {
+                matched = hasMatchingRegistration(cloudEvent);
+            } catch (RuntimeException | AssertionError e) {
+                notifyObserver(cloudEvent, false);
+                throw e;
+            }
+            notifyObserver(cloudEvent, matched);
+        }
+        route(cloudEvent);
     }
 
     // Keeps a broken observer from masquerading as a handler failure. accept(...) throwing is what tells a broker
