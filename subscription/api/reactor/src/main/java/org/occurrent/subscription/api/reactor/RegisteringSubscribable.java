@@ -312,7 +312,13 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                         try {
                             matchObserver.accept(cloudEvent, false);
                         } catch (RuntimeException | Error observerFailure) {
-                            e.addSuppressed(observerFailure);
+                            // Skip the instance itself. A shared exception object thrown by both the matcher and the
+                            // observer would otherwise hit addSuppressed's self-suppression guard, an
+                            // IllegalArgumentException that would replace the matcher failure this is here to
+                            // protect. Same hazard HandlerFailures.combined(..) already guards against.
+                            if (observerFailure != e) {
+                                e.addSuppressed(observerFailure);
+                            }
                         }
                         throw e;
                     }
