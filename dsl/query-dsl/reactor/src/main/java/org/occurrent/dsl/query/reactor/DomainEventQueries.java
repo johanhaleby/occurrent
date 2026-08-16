@@ -25,6 +25,7 @@ import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.reactor.EventStoreQueries;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.filter.internal.EventTypeExpansion;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -38,6 +39,12 @@ import java.util.stream.Stream;
  * A {@code Projection} from the projection DSL can be folded over these queries for a strongly consistent read on
  * demand, with {@code Projections.project(projection, queries)} from Java or the {@code queries.project(projection)}
  * extension from Kotlin.
+ * <p>
+ * A query by type expands a sealed type into the concrete types it permits, the same expansion the saga DSL, the
+ * projection DSL and the subscription DSL apply, so a query keyed on a sealed supertype asks for every concrete type
+ * it permits. A type whose concrete types cannot all be found is refused, naming the type and the remedy. A query by a
+ * {@link Collection} of types treats a null or empty collection as no filter at all, matching nothing rather than
+ * expanding to {@link Filter#all()}, since that is what every {@code query(Collection, ..)} overload already promises.
  *
  * @param <T> The type of your event
  */
@@ -116,7 +123,7 @@ public class DomainEventQueries<T> {
      */
     public <E extends T> Mono<E> queryOne(Class<E> type, int skip, int limit, SortBy sortBy) {
         Objects.requireNonNull(type, "type cannot be null");
-        return this.<E>toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventConverter.getCloudEventType(type)), skip, limit, sortBy)).next();
+        return this.<E>toDomainEvents(eventStoreQueries.query(filterForType(type), skip, limit, sortBy)).next();
     }
 
     /**
@@ -127,7 +134,7 @@ public class DomainEventQueries<T> {
      * @return All cloud events matching the specified type.
      */
     public <E extends T> Flux<E> query(Class<E> type) {
-        return this.toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventConverter.getCloudEventType(type))));
+        return this.toDomainEvents(eventStoreQueries.query(filterForType(type)));
     }
 
     /**
@@ -138,7 +145,7 @@ public class DomainEventQueries<T> {
      * @return All cloud events matching the specified type, skip and limit.
      */
     public <E extends T> Flux<E> query(Class<E> type, int skip, int limit) {
-        return this.toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventConverter.getCloudEventType(type)), skip, limit));
+        return this.toDomainEvents(eventStoreQueries.query(filterForType(type), skip, limit));
     }
 
     /**
@@ -149,7 +156,7 @@ public class DomainEventQueries<T> {
      * @return All cloud events matching the specified type, skip, limit and sort by <code>sortBy</code>.
      */
     public <E extends T> Flux<E> query(Class<E> type, int skip, int limit, SortBy sortBy) {
-        return this.toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventConverter.getCloudEventType(type)), skip, limit, sortBy));
+        return this.toDomainEvents(eventStoreQueries.query(filterForType(type), skip, limit, sortBy));
     }
 
     /**
@@ -160,7 +167,7 @@ public class DomainEventQueries<T> {
      * @return All cloud events matching the specified type, sorted by <code>sortBy</code>.
      */
     public <E extends T> Flux<E> query(Class<E> type, SortBy sortBy) {
-        return this.toDomainEvents(eventStoreQueries.query(Filter.type(cloudEventConverter.getCloudEventType(type)), sortBy));
+        return this.toDomainEvents(eventStoreQueries.query(filterForType(type), sortBy));
     }
 
     /**
@@ -388,10 +395,39 @@ public class DomainEventQueries<T> {
         return flux.map(cloudEventConverter::toDomainEvent).map(t -> (E) t);
     }
 
+    // A null or empty collection means "match nothing" on this query path (every query(Collection, ..) overload above
+    // returns an empty Flux for it), so it is short-circuited before deriveFilter, which would otherwise turn it into
+    // Filter.all() the way a projection's or a subscription's empty declared types does.
     private @Nullable Filter createFilterFrom(Collection<Class<? extends T>> types) {
-        return (types == null ? Stream.<Class<? extends T>>empty() : types.stream())
-                .map(type -> Filter.type(cloudEventConverter.getCloudEventType(type)))
-                .reduce(Filter::or)
-                .orElse(null);
+        if (types == null || types.isEmpty()) {
+            return null;
+        }
+        return EventTypeExpansion.deriveFilter(new LinkedHashSet<>(types), this::cloudEventTypeOf, DomainEventQueries::cannotQueryOn);
+    }
+
+    private <E extends T> Filter filterForType(Class<E> type) {
+        Objects.requireNonNull(type, "type cannot be null");
+        return EventTypeExpansion.deriveFilter(Set.of(type), this::cloudEventTypeOf, DomainEventQueries::cannotQueryOn);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String cloudEventTypeOf(Class<?> type) {
+        return cloudEventConverter.getCloudEventType((Class<? extends T>) type);
+    }
+
+    private static IllegalArgumentException cannotQueryOn(Class<?> eventType) {
+        if (eventType.isArray()) {
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be queried by type, since this expansion does not support an array. Query the concrete event types instead.");
+        }
+        if (eventType.isPrimitive()) {
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be queried by type, since no event is ever an instance of a primitive type. Query the concrete event types instead.");
+        }
+        return new IllegalArgumentException("the concrete event types dispatch would accept for " + eventType.getName()
+                + " cannot all be enumerated, so a filter derived from it would miss some of them. Query the concrete "
+                + "event types instead, make " + eventType.getSimpleName() + " and every level below it final or sealed, "
+                + "or call query(Filter, ..) directly with a filter of your own, which is the way out when a "
+                + "CloudEventTypeMapper of your own maps the whole hierarchy onto a single CloudEvent type string.");
     }
 }
