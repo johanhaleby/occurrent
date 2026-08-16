@@ -1,9 +1,10 @@
 schema_version: 2
 epic: cdx33e
-revision: 15
-updated_at: 2026-08-16 14:00:00+00:00
-updated_by: 'orchestrator: E9 DONE and verified (preview 32464a1), release-notes re-aligned (8d87245), Johan''s local checkout
-  fast-forwarded; E8 in its Copilot loop on PR 798, the tag still waits only on its merge'
+revision: 16
+updated_at: 2026-08-16 15:10:00+00:00
+updated_by: 'orchestrator: E10 dispatched on Johan''s approval (ADR 120 amendment + the when-to-use-which docs passage,
+  both grounded in the read-only investigation''s code-cited synthesis); E8 still in its Copilot loop on PR 798. The work-item
+  monitor covers both open PRs'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -229,6 +230,34 @@ units:
       met: true
       evidence: 'Re-aligned by the orchestrator at 8d87245: docs.md byte-identical to preview 32464a1 (0-line diff verified
         before commit). Johan''s primary checkout also fast-forwarded to 32464a1 so his local jekyll shows the restructure'
+  E10:
+    issue: null
+    goal: 'Approved from the onlyIf-vs-condition investigation: ADR 120 gains one amendment paragraph recording the signature
+      asymmetry as design fact (the guard''s BiPredicate sees retained history, a condition leaf''s Predicate sees one event
+      by construction, which is what makes counts recount-safe and is the practical choosing criterion); the docs gain a
+      when-to-use-which passage after the collecting-payment example with the same branch written both ways, onlyIf introduced
+      at first appearance, cold-reader order respected; release-notes re-aligned after'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      repo: johanhaleby/occurrent
+      ref: null
+      met: false
+      evidence: null
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-preview
+      met: false
+      evidence: null
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-release-notes
+      met: false
+      evidence: null
   CREG:
     issue: null
     goal: 'Register: the sweep''s no-blocker verdict recorded beside the release-readiness declaration; the four dispositions;
