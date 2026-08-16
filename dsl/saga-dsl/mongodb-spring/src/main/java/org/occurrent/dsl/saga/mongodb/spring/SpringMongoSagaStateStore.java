@@ -104,9 +104,12 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             EventFormatProvider.getInstance().resolveFormat(JsonFormat.CONTENT_TYPE), "CloudEvents JSON format must be on the classpath");
 
     // A flow saga's retained events sit inside the same document as the rest of its state, so an instance that keeps
-    // accumulating them (an unbounded stepWindow, or a step that never transitions) heads toward MongoDB's 16 MB document
-    // limit with no signal before the write itself starts failing. This is an early warning, not an enforced cap: the
-    // unbounded default stays, ADR 123 already gives the remedy (a stepWindow cap), and this only makes the growth visible.
+    // accumulating them (an unbounded stepWindow, a step that never transitions, or a stepWindow-capped step reached
+    // through a narrowingFilter/replacementFilter or CloudEventTypeMapper wider than the flow's own declared types,
+    // whose events stepWindow does not bound, see ADR 129) heads toward MongoDB's 16 MB document limit with no signal
+    // before the write itself starts failing. This is an early warning, not an enforced cap. The unbounded default
+    // stays, ADR 123 already gives the remedy for the common case (a stepWindow cap), and this only makes the growth
+    // visible, including the growth stepWindow cannot reach.
     // A round number one to two orders of magnitude below the document limit for typical CloudEvent sizes (a few hundred
     // bytes to a few KB each): high enough that a normal, short-lived flow never sees it, low enough to warn well before a
     // runaway instance is anywhere near failing to save. Not made configurable: it is a diagnostic tripwire, not a
