@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 14
-updated_at: 2026-08-16T20:35:00Z
+revision: 15
+updated_at: 2026-08-16T21:00:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -56,6 +56,22 @@ pending_actions:
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-16T19:55:00Z
+  - id: act-007
+    type: dispatch-chip
+    target: "Wave 2 chips spawned 2026-08-16T20:5xZ: U8 task_ffc08735, U9 task_e2b2961c, U10A task_8da6cf7d, U11 task_bb9a30d1, U13 task_fbfcd1be, U14 task_8628f8ca, U15 task_4f39a24b (Opus). U8 and U9 started by Johan immediately. Held back: U7 (needs U1 merge), U10B (needs U10A), U12 (designated stretch). U16 and the U1 remediation chip also started ~20:4xZ"
+    expected: "each delivers per its brief with in-session plan gates; ADR units audit ADR numbers across all remote branches before numbering"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-16T21:00:00Z
+  - id: act-008
+    type: message-session
+    target: "Unmarked chip 'Check reactor Mongo store for the same skip-under-filter drift' was NOT orchestrator-spawned, likely a worker's freelance flag. Orchestrator verified the finding is real (ReactorMongoEventStore lines 620-640) and folded it into issue 810 as comment 5308808054, which U16 picks up via its claim-recheck. Recommended Johan dismiss the unmarked chip"
+    expected: "Johan dismisses the unmarked chip, U16 covers the reactor surface"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-16T21:00:00Z
 units:
   H1:
     issue: null
@@ -171,11 +187,11 @@ units:
   U8:
     issue: 773
     goal: "Retained-history counting vs stepWindow eviction (#773) and the explicit-retention-choice question (#764) as one ADR-backed decision; a no-forced-choice outcome is recorded, not dropped"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_ffc08735, started by Johan 20:5xZ"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "773", met: false, evidence: null}
@@ -183,11 +199,11 @@ units:
   U9:
     issue: 748
     goal: "Parked-instance behavior on renamed or removed step, lifecycle ADR plus fix, includes the IndexOutOfBoundsException sibling"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_e2b2961c, started by Johan 20:5xZ"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "748", met: false, evidence: null}
@@ -198,7 +214,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_8da6cf7d, awaiting click"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
   U10B:
@@ -221,7 +237,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_bb9a30d1, awaiting click"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "737", met: false, evidence: null}
@@ -243,7 +259,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_fbfcd1be, awaiting click"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "439", met: false, evidence: null}
@@ -254,18 +270,18 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_8628f8ca, awaiting click"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "806", met: false, evidence: null}
   U16:
     issue: 810
     goal: "Native Mongo store read fixes, plan-first: unsorted path applies skip/limit, returned Stream closes its MongoCursor via onClose, fromStreamVersion no longer drifts under a StreamReadFilter (candidate: translate the version into a query condition instead of a skip, worker's plan decides). Conformance coverage so the Spring store's correct behavior becomes the tested contract"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_33f7131a, started by Johan 20:4xZ, scope extended to the reactor store via issue comment 5308808054"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "810", met: false, evidence: null}
@@ -276,6 +292,6 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_4f39a24b, awaiting click"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
