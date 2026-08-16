@@ -23,6 +23,14 @@ import kotlin.streams.asSequence
 
 /**
  * Query that returns a [Sequence] instead of a [java.util.stream.Stream].
+ *
+ * If you only want the first few elements, pass [limit] here rather than calling `.take(n)` on the result. Passing
+ * it pushes the limit into the query, so the cursor exhausts on its own instead of staying open past what you asked
+ * for.
+ *
+ * A [Sequence] cannot be closed, and the underlying read may hold a database resource, so consume this to the end.
+ * If you stop early, read through [EventStoreQueries.query] instead and close the stream yourself.
+ *
  * @see EventStoreQueries.query
  */
 fun EventStoreQueries.queryForSequence(

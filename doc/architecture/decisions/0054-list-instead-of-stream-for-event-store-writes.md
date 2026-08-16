@@ -66,6 +66,31 @@ in-memory subscription model that consumes it, move from `Consumer<Stream<CloudE
 `Consumer<List<CloudEvent>>` for the same reason as the write API, since they are always handed an
 already-materialized batch.
 
+> **Amended on 2026-08-16, for #760.** This ADR argues the write side at length and never says anything about
+> the read that feeds a decision, which is a gap #760 found. `ApplicationService#execute` takes a
+> `Function<List<E>, List<E>>` for exactly the reason stated above, but the events reaching that function come
+> from a read, and this record's "the read side is untouched" claim does not cover them.
+>
+> `EventStore.read`, `query`, and `CloudEventConverter.toDomainEvents` are still lazy, and the stores still read
+> with a cursor, `autoClose(mongoTemplate.stream(...))` on the Spring store and
+> `StreamSupport.stream(FindIterable.spliterator(), false)` on the native driver. What changed is
+> `GenericApplicationService`, which now calls `cloudEventConverter.toDomainEvents(eventStream.events()).toList()`
+> before handing events to the domain function, where before 0.30.0 it passed the `Stream` straight through.
+>
+> `List` is still the right shape there, for reasons distinct from the write side's. A decider replays the whole
+> history to build its state, so it reads every event regardless of the input's shape. `CommandConversion` and
+> `StreamCommandComposition` already collected composed commands into a `List` before this change.
+> `SequentialFunctionComposer` re-reads the events already seen for each command in a chain, which a single-use
+> `Stream` cannot do. And `execute` retries the whole read-decide-write path when the write condition is not
+> fulfilled, which replays from the store regardless of what shape the first attempt read.
+>
+> A stream with a genuinely large number of events still has two ways out that keep the replay itself small.
+> `ExecuteOptions.fromStreamVersion(long)` tells `execute` to skip everything up to a version already reduced to
+> a known state, so it reads only the tail. The snapshot DSL from [ADR 61](0061-first-class-snapshot-support.md)
+> loads a snapshot, reads only the events after it, and saves a new snapshot automatically. A caller who wants to
+> reduce over a huge stream without loading it at all can still do so outside the application service, since
+> `eventStore.read(...)` and `toDomainEvents` stay lazy.
+
 The view DSL's `evolve`, `evolveAll`, and `evolveFrom` helpers gained `List` and `Iterable` overloads but keep
 their `Stream` (Java) and `Sequence` (Kotlin) forms. A view fold is a read-side operation, so a lazily-queried
 `Stream` or `Sequence` (for example a `queryForSequence` result) composes with it directly, without a caller

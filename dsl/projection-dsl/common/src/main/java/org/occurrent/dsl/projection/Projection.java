@@ -36,7 +36,10 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * Build one with the type-safe {@link #builder(Object) handler builder}, registering a fold per event type with
  * {@link Builder#on(Class, BiFunction)}. The handled types become the subscription filter, and the fold leaves the state
- * unchanged for any event type it does not handle, so feeding it a broader stream is safe.
+ * unchanged for any event type it does not handle, so feeding it a broader stream is safe as long as every event the
+ * filter admits is still one the {@code CloudEventConverter} can turn into an {@code E}. One it cannot fails that
+ * delivery instead of being ignored, and a subscription that keeps redelivering a failing event holds up everything
+ * queued behind it. See {@link Builder#filter(Filter) filter} for how this bears on an explicit filter.
  * <p>
  * One descriptor runs two ways. Feed it a subscription to keep a stored read model up to date, with a
  * {@code ProjectionRunner} or the Kotlin {@code project} extensions, or fold it over a query for a strongly consistent
@@ -298,9 +301,12 @@ public final class Projection<S extends @Nullable Object, E, ID> {
 
         /**
          * Sets an explicit selector that overrides the event-type-derived one. Use it to select on more than event type
-         * (subject, source, data, time). A filter broader than the registered handlers is safe (the fold no-ops on
-         * events it does not handle). A filter narrower than the handlers deliberately starves those handlers. Can be
-         * set only once.
+         * (subject, source, data, time). A filter broader than the registered handlers is safe for the fold, which
+         * no-ops on events it does not handle, but every CloudEvent the filter admits is converted to a domain event
+         * before the fold sees it. One the {@code CloudEventConverter} cannot turn into an {@code E} fails that
+         * delivery instead of being ignored, and a subscription that keeps redelivering a failing event holds up
+         * everything queued behind it, so keep the filter inside what the converter can convert. A filter narrower
+         * than the handlers deliberately starves those handlers. Can be set only once.
          */
         public Builder<S, E, ID> filter(Filter filter) {
             if (this.filter != null) {
