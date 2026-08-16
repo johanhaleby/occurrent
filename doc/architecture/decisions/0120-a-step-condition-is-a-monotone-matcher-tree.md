@@ -282,3 +282,17 @@ secondary constructor that supplies `-1`, and degrades the same way. Two tests c
 old-document one seeds the document by hand, since a document this store wrote a moment ago only proves the store agrees
 with itself. Separately, this record claimed the self-loop window-reset rule appears in
 `StepBuilder.on(StepCondition, Continuation)`'s javadoc when it did not. It does now.
+
+## Amendment (2026-08-16): the guard and leaf predicates differ in what they can see, and that is the practical choice between them
+
+**The Decision section above states why a guard is not lowered into a window leaf but never states what each one is
+allowed to see, and that turned out to be the fact a caller actually needs when choosing between them.** `StepBuilder`'s
+guarded overload takes `BiPredicate<T, ReceivedEvents<E>>`, so `onlyIf` receives the arriving event and the whole
+retained history in one call. `StepCondition.event(Class, Predicate)` takes a bare `Predicate<T>`, the arriving event
+and nothing else. The narrower signature is not an oversight. A leaf's count is re-derived from the step window on
+every delivery, and again from scratch once a redeploy replays it, so its predicate has to answer the same way every
+time it sees the same event, or the recount and the original run disagree. A predicate that could read
+`ReceivedEvents` would have a way around that on every single call. This is also the practical rule for choosing
+between the two. A decision that depends on anything beyond the one event in front of it, an earlier event's
+contents, a running count, elapsed time, can only be written as a guard, because `event(...)`'s `Predicate<T>` has
+nothing else to look at.
