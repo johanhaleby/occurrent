@@ -274,15 +274,14 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                 if (fq == null) {
                     return false;
                 }
-                String cdPackage = fq.getPackageName();
-                if (concretelyDeclaredBelow(fq.getSupertype(), capabilityInterfaceFqn, methodName, paramTypes, cdPackage)) {
+                if (concretelyDeclaredBelow(fq.getSupertype(), capabilityInterfaceFqn, methodName, paramTypes)) {
                     return true;
                 }
                 // cd's own directly-implemented interfaces, not only reachable through a superclass: a class that
                 // implements a capability interface of its own (extending CheckpointStorage with a default for
                 // this member) rather than CheckpointStorage directly has its real implementation here.
                 for (JavaType.FullyQualified i : fq.getInterfaces()) {
-                    if (concretelyDeclaredBelow(i, capabilityInterfaceFqn, methodName, paramTypes, cdPackage)) {
+                    if (concretelyDeclaredBelow(i, capabilityInterfaceFqn, methodName, paramTypes)) {
                         return true;
                     }
                 }
@@ -291,18 +290,18 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
 
             // An interface default method carries both the Abstract and the Default flag in this type model, not
             // Default alone, so excluding every Abstract-flagged method would also exclude a genuine default. Only
-            // a method that is Abstract without also being Default has no body to fall back on. A private or
-            // static method cannot override an instance member, and a package-private one only can from `cdPackage`,
-            // so a same-named, same-signature method with none of those access shapes does not override anything
-            // either, it just happens to match on name and parameters.
+            // a method that is Abstract without also being Default has no body to fall back on. The member being
+            // searched for is always a public interface member, and Java refuses to compile a class where a
+            // private, static, package-private or protected method of the same signature stands in for it, even
+            // from a same-package supertype, so only a Public candidate actually implements it. Confirmed with
+            // javac directly: a same-package package-private or protected method fails with "attempting to assign
+            // weaker access privileges".
             private boolean concretelyDeclaredBelow(JavaType.@Nullable FullyQualified type, String capabilityInterfaceFqn,
-                                                      String methodName, List<JavaType> paramTypes, String cdPackage) {
+                                                      String methodName, List<JavaType> paramTypes) {
                 return TypeUtils.findDeclaredMethod(type, methodName, paramTypes)
                         .filter(m -> !m.getFlags().contains(Flag.Abstract) || m.getFlags().contains(Flag.Default))
                         .filter(m -> !capabilityInterfaceFqn.equals(m.getDeclaringType().getFullyQualifiedName()))
-                        .filter(m -> !m.getFlags().contains(Flag.Private))
-                        .filter(m -> !m.getFlags().contains(Flag.Static))
-                        .filter(m -> m.getFlags().contains(Flag.Public) || m.getDeclaringType().getPackageName().equals(cdPackage))
+                        .filter(m -> m.getFlags().contains(Flag.Public))
                         .isPresent();
             }
 

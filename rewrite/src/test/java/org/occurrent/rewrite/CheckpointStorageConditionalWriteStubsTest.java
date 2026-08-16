@@ -618,6 +618,108 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
     }
 
     @Test
+    void generatesAWriteVersionStubWhenTheOnlyMatchingSignatureOnAnAbstractBaseIsPackagePrivate() {
+        // AbstractCheckpointStorage's own writeVersion(String) has no access modifier at all, package-private, even
+        // though it sits in the same package as InMemoryCheckpointStorage. Java refuses to compile a class where a
+        // package-private method stands in for a public interface member, same package or not (confirmed directly
+        // with javac: "attempting to assign weaker access privileges"), so it does not implement the interface, and
+        // the stub still has to be generated. InMemoryCheckpointStorage declares its own two-argument save, so the
+        // three-argument save gets the ordinary delegating stub, isolating this test to the writeVersion gap.
+        rewriteRun(
+                java(CHECKPOINT),
+                java(CHECKPOINT_WRITE_CONDITION),
+                java(BLOCKING_CHECKPOINT_STORAGE),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.api.blocking.CheckpointStorage;
+
+                        import java.util.OptionalLong;
+
+                        abstract class AbstractCheckpointStorage implements CheckpointStorage {
+                            OptionalLong writeVersion(String subscriptionId) {
+                                return OptionalLong.empty();
+                            }
+                        }
+                        """
+                ),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+
+                        class InMemoryCheckpointStorage extends AbstractCheckpointStorage {
+                            @Override
+                            public Checkpoint read(String subscriptionId) {
+                                return null;
+                            }
+
+                            @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+                                return checkpoint;
+                            }
+
+                            @Override
+                            public void delete(String subscriptionId) {
+                            }
+
+                            @Override
+                            public boolean exists(String subscriptionId) {
+                                return false;
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+                        import org.occurrent.subscription.CheckpointWriteCondition;
+
+                        import java.util.OptionalLong;
+
+                        class InMemoryCheckpointStorage extends AbstractCheckpointStorage {
+                            @Override
+                            public Checkpoint read(String subscriptionId) {
+                                return null;
+                            }
+
+                            @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+                                return checkpoint;
+                            }
+
+                            @Override
+                            public void delete(String subscriptionId) {
+                            }
+
+                            @Override
+                            public boolean exists(String subscriptionId) {
+                                return false;
+                            }
+
+                            /* TODO [Occurrent 0.33 upgrade]: this only refuses a condition stronger than any(), delegating any() to the existing two-argument save. Evaluate `condition` for real if this storage can, otherwise this is the permanent answer. See doc/migration/upgrading-to-0.33.0.md. */
+                            @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                                if (!(condition instanceof CheckpointWriteCondition.Any)) {
+                                    throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
+                                }
+                                return save(subscriptionId, checkpoint);
+                            }
+
+                            /* TODO [Occurrent 0.33 upgrade]: this always answers empty, correct if this storage cannot evaluate a condition. Return the version a condition is judged against if it can. See doc/migration/upgrading-to-0.33.0.md. */
+                            @Override
+                            public OptionalLong writeVersion(String subscriptionId) {
+                                return OptionalLong.empty();
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
     void leavesABlockingImplementerThatAlreadyHasBothMembersUntouched() {
         rewriteRun(
                 java(CHECKPOINT),
