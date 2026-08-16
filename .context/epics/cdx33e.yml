@@ -1,12 +1,11 @@
 schema_version: 2
 epic: cdx33e
-revision: 5
-updated_at: 2026-08-15 19:55:00+00:00
-updated_by: 'orchestrator: EPIC CLOSED COMPLETE with the ruled exit condition met, 3 of 3 units DONE and swept, watcher
-  and heartbeat retired, no unresolved pending actions. The enumeration exit ran in full: every cross-branch divergence dispositioned,
-  4 defects fixed (2 beyond the sweep''s findings), the deliberate list recorded, the ambiguous cluster ruled by Johan (preview
-  docs.md wins at release day). Verification of record: main 06f1b5e 24/24 green. Held docs heads: preview 3293762, fencing
-  5fcf235, release-notes cb383b5. Per the tag-sequencing ruling, 0.33.0 is tag-ready NOW'
+revision: 6
+updated_at: 2026-08-16 07:10:00+00:00
+updated_by: 'orchestrator: epic REOPENED by an adopted unit at Johan''s word: E4 rewrites preview''s reactive CheckpointStorage
+  section (checklist item 4 for the winning branch) ahead of the release. Also surfaced to Johan with ref evidence: the fencing
+  docs branch is superseded by preview (only preview-lacking heading is the old join-testing section preview replaced), recommendation
+  retire-not-merge with the fencing news highlight ported to the release-notes post, awaiting his ruling'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -93,6 +92,22 @@ units:
         and fixed beyond the ruled two, deliberate list recorded, and an AMBIGUOUS cluster routed to Johan: the branch''s
         own news post links to two DEAD ANCHORS (#replay-batching, #saga-step-conditions) whose sections exist only on preview,
         plus further preview-only 0.33 sections and stale-but-compiling timer examples'
+  E4:
+    issue: null
+    goal: 'Adopted post-closeout unit (Johan''s word, 2026-08-16): rewrite the preview branch''s stale reactive CheckpointStorage
+      section to the 0.33 interface at 06f1b5e, structured like the branch''s corrected blocking section, executing release-day
+      checklist item 4 for the branch that wins at release day. Docs-only, no monitor re-arm owed (no PR deliverable)'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-preview
+      met: false
+      evidence: null
   CREG:
     issue: null
     goal: 'Register: the sweep''s no-blocker verdict recorded beside the release-readiness declaration; the four dispositions;
