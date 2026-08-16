@@ -7,8 +7,10 @@ Date: 2026-08-16
 Accepted. This ADR decides a design and writes no code. The implementation it describes is epic scale, sized at the end,
 and registers as its own epic.
 
-It resolves [#725](https://github.com/johanhaleby/occurrent/issues/725) and answers
-[#721](https://github.com/johanhaleby/occurrent/issues/721) inside the same decision.
+It decides [#725](https://github.com/johanhaleby/occurrent/issues/725) and answers
+[#721](https://github.com/johanhaleby/occurrent/issues/721) inside the same decision. Both issues stay open, because
+each asks for a change to the code that this ADR only designs, and closing them on an ADR would leave the work
+untracked until the implementation epic is registered.
 
 ## Context
 
@@ -111,8 +113,10 @@ type-derived selector, the way `Projection.filter()` does.
 subscription annotations and `tags` on `@DcbSubscription` describe which events are wanted, which is the descriptor's
 half, and leaving them on the annotation would give one subscription two places to say it with no rule for which wins.
 The new annotations do not have them. The recipe moves a declared `eventTypes` into the descriptor's handler
-registrations and a declared `tags` into its criteria, and this is the one part of the rewrite that changes a
-selector rather than moving a body, so the migration guide calls it out.
+registrations and a declared `tags` into the builder's `tags(..)`, which narrows the handled types exactly as
+`buildDcbCriteria` does today. It must not move them into `criteria(..)`, which replaces the selector instead of
+narrowing it, and would therefore widen a migrated subscription to every type the tags admit. This is the one part of
+the rewrite that changes a selector rather than moving a body, so the migration guide calls it out.
 
 A third concept is right here, rather than pushing subscriptions into the two that exist. A subscription that sends
 mail, publishes to a broker or warms a cache keeps no state and issues no command. `Projection` requires a fold and a
@@ -139,12 +143,15 @@ behaviour, so declared tags narrow the handled types rather than replacing them,
 already promises its users and a subscription has a handler to derive types from where a `DcbProjection` has a fold and
 a separate read boundary.
 
-A caller who wants the criteria used verbatim asks the builder for it, `DcbSubscription.builder().criteria(c)`, and
-that replaces the derived selector instead of narrowing it. Refusing the combination is not open to it, since every
-handler registration derives a type, so a refusal rule would make the verbatim path unreachable. An event the criteria
-admits that no handler handles is ignored, which is the contract `Projection` already states for a fold meeting an
-event type it does not handle. What still fails the delivery is an event the `CloudEventConverter` cannot turn into an
-`E`, also as it does today.
+So the builder has two operations and they do different things. `tags(..)` narrows the handler-derived types, which is
+what `buildDcbCriteria` does today and what the annotation promises. `criteria(c)` replaces the derived selector with
+`c` verbatim, which is what a caller needs when the boundary is one the handlers cannot express. Refusing the
+combination outright is not open to us, since every handler registration derives a type, so a blanket refusal would
+make the verbatim path unreachable.
+
+An event the selector admits that no handler handles is ignored, which is the contract `Projection` already states for
+a fold meeting an event type it does not handle. What still fails the delivery is an event the `CloudEventConverter`
+cannot turn into an `E`, also as it does today.
 
 **There are four runners, not two, because DCB does not share a start position with the other capabilities.** A runner
 takes an id, a descriptor and an optional start position, and returns a `SubscriptionHandle`. That handle has started
@@ -250,7 +257,7 @@ or `tags` into the descriptor.
 `Mono.fromRunnable`. It picks the stack from which autoconfigure module the application depends on, the same thing
 that decides which registrar reads the annotation today.
 
-**The recipe refuses an advised synchronous handler rather than rewriting it, and refuses nothing else.** Spring advice reaches
+**The recipe refuses an advised synchronous handler rather than rewriting it.** Spring advice reaches
 exactly one of the four annotations today. `processSynchronousSubscribeAnnotation` looks the bean up by name at dispatch
 time, and its own comment says why, because the bean post processor runs before Spring wraps the bean in its AOP proxy,
 so the instance it was handed is the raw target. The other three paths invoke that raw target, so a `@Transactional` on
@@ -267,6 +274,17 @@ advice silently, which is the failure it exists to prevent. So it refuses every 
 whose class or method has any advice annotation it can see, and refuses rather than guesses when it cannot tell.
 Advice attached by an external pointcut is invisible to a source rewrite whatever it looks for, so the migration guide
 says to check those by hand rather than the recipe pretending to catch them.
+
+**A handler that declares a checked exception is the second refusal case.** The registrars invoke reflectively, so a
+`void` handler may declare `throws` today and the registrar wraps whatever comes back. A descriptor's handler is a
+`BiConsumer` on the blocking stack and a `BiFunction` returning `Mono<Void>` on the reactor one, and neither can throw
+a checked exception, so there is no lambda the recipe can write that compiles. Wrapping the body in a try/catch on the
+user's behalf would be the recipe inventing an error policy, which is the kind of decision it should hand back instead.
+So it refuses those too, and the migration guide gives the two ways out, catching inside the handler or changing what
+the method throws.
+
+Those are the two refusal cases, an advised synchronous handler and a handler with a checked `throws` clause.
+Everything else is rewritten.
 
 **The three asynchronous paths silently ignoring advice is a pre-existing defect, and the descriptor form is what fixes
 it.** Today a user writes `@Transactional` on a `@Subscription` handler, everything compiles, the tests pass, and no
@@ -287,7 +305,7 @@ The work this ADR describes, listed so it can be scoped as its own epic:
 4. Reworking both `SubscriptionAnnotationRegistrar` classes, 217 and 234 lines, onto descriptors, and deleting the
    parameter classification once nothing calls it.
 5. Seven new annotation types, seven deprecations, and normalization of both sets in the bean post processors.
-6. Recipes, declarative for the type and annotation renames, a Java visitor for the body rewrite with its refusal case.
+6. Recipes, declarative for the type and annotation renames, a Java visitor for the body rewrite with its two refusal cases.
 7. A section in `doc/migration/upgrading-to-0.34.0.md`, changelog entries, and a docs branch.
 8. Updating 35 test classes, 13 example files, and the 79 lines of the documentation site's reference page on `main`
    that mention one of these annotations.
@@ -305,7 +323,7 @@ time. ADR 26 renamed the original stream annotation to `@StreamSubscription`, th
 capability-agnostic annotation that exists today, and this ADR moves that one to `@OccurrentSubscription` while also
 changing what its method returns. So a user who has been on this library since 0.30 sees the same word mean three
 things. The recipe covers the mechanical part, and the migration guide covers what it cannot, which is Kotlin sources,
-every `@SynchronousSubscription` handler the recipe refused for visible advice, and any handler advised by a pointcut
+every handler the recipe refused, for visible advice or for a checked `throws` clause, and any handler advised by a pointcut
 the recipe cannot see.
 
 Two names for one word disappear. `Subscription` means the thing a user declares, `SubscriptionHandle` means the thing
