@@ -107,6 +107,13 @@ stay on the annotation, or become arguments to the runner, exactly the split
 `ProjectionRunner.project(subscriptionId, projection, view, startAt)` already uses. An explicit `Filter` overrides the
 type-derived selector, the way `Projection.filter()` does.
 
+**The split cuts the other way too, so the selector attributes leave the annotations.** `eventTypes` on all four
+subscription annotations and `tags` on `@DcbSubscription` describe which events are wanted, which is the descriptor's
+half, and leaving them on the annotation would give one subscription two places to say it with no rule for which wins.
+The new annotations do not carry them. The recipe moves a declared `eventTypes` into the descriptor's handler
+registrations and a declared `tags` into its criteria, and this is the one part of the rewrite that changes a
+selector rather than moving a body, so the migration guide calls it out.
+
 A third concept is right here, rather than pushing subscriptions into the two that exist. A subscription that sends
 mail, publishes to a broker or warms a cache keeps no state and issues no command. `Projection` requires a fold and a
 store it does not have, and `Saga` requires per-instance state and a command dispatcher it does not have. Reusing either
@@ -144,11 +151,16 @@ takes an id, a descriptor and an optional start position, and returns a `Subscri
 when the caller asked to wait for it, which is the same promise `ProjectionRunner` makes, since passing
 `waitUntilStarted = false` returns before the replay finishes and a manual-start model hands back a handle for a
 subscription nobody has started yet. The two
-non-DCB ones follow `ProjectionRunner`'s shape, the `agnostic` and `stream` factories that fix the capability, a
-`StartAt`, and a `waitUntilStarted` argument on the widest overload. The two DCB ones follow `DcbProjectionRunner` and
-`ReactiveDcbProjectionRunner` instead, a single `create` factory and a `DcbStartAt`, because DCB positions are not
-global positions and `DcbSubscriptions` is a different entry point. None of the four needs `ProjectionRunner`'s store
-arguments, because a descriptor already has its handler where a `Projection` needs somewhere to put its state.
+non-DCB ones follow `ProjectionRunner`'s shape, the `agnostic` and `stream` factories that fix the capability and a
+`StartAt`. The two DCB ones follow `DcbProjectionRunner` and `ReactiveDcbProjectionRunner` instead, a single `create`
+factory and a `DcbStartAt`, because DCB positions are not global positions and `DcbSubscriptions` is a different entry
+point. None of the four needs `ProjectionRunner`'s store arguments, because a descriptor already has its handler where a
+`Projection` needs somewhere to put its state.
+
+The `waitUntilStarted` argument is on the blocking runners only. The reactor handle's `waitUntilStarted()` returns a
+`Mono<Void>`, so a reactive runner that honoured such an argument would have to block to do it, and
+`ReactiveProjectionRunner` already avoids that by returning its handle straight away. The reactive runners do the same
+and the caller composes `handle.waitUntilStarted()` when it wants to wait.
 
 ### 2. The running handle becomes `SubscriptionHandle`
 
@@ -210,10 +222,11 @@ but `@RunSnapshot` and `@RunSynchronousSubscription` misdescribe what those two 
 seven members is not a scheme.
 
 **A single `@Occurrent(id = ..)`** dispatching on the return type becomes possible for the first time once every concept
-has a descriptor, which is why it was worth examining. It fails on attributes. `store`, `source`, `catchup`, `capability`, `mode`,
-`startAtGlobalPosition`, `startAtDcbPosition`, `startAtISO8601`, `tags` and the saga's command dispatcher apply to
-different subsets, so one annotation means roughly twenty attributes where most are wrong for any given method, checked
-at startup rather than by the compiler. That trades a naming problem for a worse one.
+has a descriptor, which is why it was worth examining. It fails on attributes. Even after the selector attributes move
+to the descriptors, `store`, `storeName`, `source`, `catchup`, `capability`, `mode`, `startAtGlobalPosition`,
+`startAtDcbPosition`, `startAtISO8601`, `subscriptionModel` and the saga's command dispatcher apply to different
+subsets, so one annotation means most of its attributes being wrong for any given method, checked at startup rather
+than by the compiler. That trades a naming problem for a worse one.
 
 ### 4. The `void` handler method goes, deprecated for one release
 
