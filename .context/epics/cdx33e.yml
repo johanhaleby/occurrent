@@ -1,10 +1,10 @@
 schema_version: 2
 epic: cdx33e
-revision: 16
-updated_at: 2026-08-16 15:10:00+00:00
-updated_by: 'orchestrator: E10 dispatched on Johan''s approval (ADR 120 amendment + the when-to-use-which docs passage,
-  both grounded in the read-only investigation''s code-cited synthesis); E8 still in its Copilot loop on PR 798. The work-item
-  monitor covers both open PRs'
+revision: 17
+updated_at: 2026-08-16 16:05:00+00:00
+updated_by: 'orchestrator: E10 DONE (ADR PR 799 merged d49ae19 after the orchestrator closed the re-review gap; docs passage
+  on preview db24b2d; release-notes re-aligned b6362e4). Only E8 remains open, all checks green on 355da56, DELIVERY_RESULT
+  owed'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -237,7 +237,7 @@ units:
       by construction, which is what makes counts recount-safe and is the practical choosing criterion); the docs gain a
       when-to-use-which passage after the collecting-payment example with the same branch written both ways, onlyIf introduced
       at first appearance, cold-reader order respected; release-notes re-aligned after'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -245,19 +245,24 @@ units:
     deliverables:
     - check: pr_merged
       repo: johanhaleby/occurrent
-      ref: null
-      met: false
-      evidence: null
+      ref: '799'
+      met: true
+      evidence: 'MERGED 2026-08-16 as squash d49ae19, CAS-pinned to 49a6dad. Copilot round 1 caught three overclaims in the
+        draft rationale (per-delivery re-derivation contradicting ADR 123''s carried counts, signature-enforces-purity, elapsed-time-is-guard-only),
+        all fixed against the actual javadoc contracts; the orchestrator closed the worker''s re-review gap (final head reviewed
+        clean on re-request), replied to and resolved the thread, squash body marker-free'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-preview
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed 32464a1 -> db24b2d, verified by ls-remote: onlyIf introduced at its true first appearance (:5876,
+        two prose mentions preceded the assumed spot), the written-both-ways passage with Java/Kotlin tabs, the four-difference
+        list and the rule of thumb, forward links only for not-yet-introduced mechanisms'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-release-notes
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Re-aligned at b6362e4, docs.md byte-identical to preview db24b2d'
   CREG:
     issue: null
     goal: 'Register: the sweep''s no-blocker verdict recorded beside the release-readiness declaration; the four dispositions;
