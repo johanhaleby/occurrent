@@ -86,9 +86,13 @@ does once, correctly, with a property test behind it.
 ADR 124 stated its property as "the derived filter must name every event type that dispatch
 would accept." That wording fit the saga DSL, where an `isInstance` dispatch is literally what
 decides whether a handler runs. A projection's handler is chosen by the same `isInstance`
-matching, a subscription's registered handler is invoked the same way, a snapshot view applies
-an event the same way, and a query in `DomainEventQueries` returns events by the same matching, walked over
-what is stored rather than over what arrives live. The mechanism differs and the property does
+matching, a subscription's registered handler is invoked the same way, and a snapshot view applies
+an event the same way. `DomainEventQueries` is the one surface with no dispatch at all: it sends the
+derived CloudEvent-type filter to the store and converts every event the store returns, so nothing
+downstream re-checks assignability. Its claim to the property comes from the API contract instead,
+since a caller passing `OrderEvent.class` to a method typed `Class<E>` is asking for the events
+assignable to it, and a filter naming only the supertype's own CloudEvent type answers a narrower
+question than the signature poses. The mechanism differs and the property does
 not, so it is restated once, at the level all four share:
 
 **A filter derived from a caller's declared event types must match every stored event that the
@@ -124,6 +128,13 @@ its absence.
 their own three-way branch on the expanded set (empty, one type, several), producing
 `Filter.all()`, a single `Filter.type(..)`, or an `or`-combined one. `DomainEventQueries` gets
 there with `.reduce(Filter::or)` instead, and `SubscriptionFilters.kt` with a Kotlin `when`.
+One semantic difference survives the consolidation and the shared step must not erase it:
+`DomainEventQueries.createFilterFrom` maps a null or empty type set to a null filter, which its
+collection overloads turn into an empty result, where the registrar branches map empty to
+`Filter.all()`. Routing the query DSL through a shared step that answers empty with
+`Filter.all()` would silently turn "match nothing" into "query the whole store", so its call
+sites short-circuit on a null or empty set before deriving, and the shared step is only ever
+handed a non-empty expanded set there.
 Six call sites, once this decision lands, would carry six near-identical copies of a branch that
 has never varied between them. That is exactly the shape #750's own history warns about. The
 saga DSL's expansion walk was itself a second copy of the annotation registrars' walk, written
