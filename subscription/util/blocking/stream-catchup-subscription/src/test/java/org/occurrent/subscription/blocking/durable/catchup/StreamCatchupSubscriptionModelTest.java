@@ -257,8 +257,8 @@ class StreamCatchupSubscriptionModelTest {
         AtomicBoolean runningMarkedBeforeCatchupRuns = new AtomicBoolean(false);
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100)) {
             @Override
-            protected Future<Subscription> startCatchupAsync(String subscriptionId, CatchupAttempt attempt, Callable<Subscription> catchup) {
-                return super.startCatchupAsync(subscriptionId, attempt, () -> {
+            protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
+                return super.startCatchupAsync(subscriptionId, () -> {
                     runningMarkedBeforeCatchupRuns.set(runningCatchupSubscriptions.containsKey(subscriptionId));
                     return catchup.call();
                 });

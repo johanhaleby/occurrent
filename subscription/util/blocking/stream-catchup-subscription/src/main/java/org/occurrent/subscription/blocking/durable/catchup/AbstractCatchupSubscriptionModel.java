@@ -49,7 +49,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     protected final CheckpointAwareSubscriptionModel subscriptionModel;
     protected final CatchupSubscriptionModelConfig config;
     protected final Class<?> subscriptionModelContextType;
-    protected final ConcurrentMap<String, CatchupAttempt> runningCatchupSubscriptions = new ConcurrentHashMap<>();
+    protected final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
     // Pause requested for a subscriptionId while its replay is still in-flight, before the delegate knows the id.
     // Applied via applyPendingPauseIfAny once the live delegate subscription exists.
     protected final ConcurrentMap<String, Boolean> pauseRequestedDuringCatchup = new ConcurrentHashMap<>();
@@ -57,6 +57,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // Set by stop(), cleared by start(...). Checked by the replay loops so stop() interrupts an in-flight
     // replay, not just the delegate the replay has not registered with yet.
     protected volatile boolean stopped = false;
+    // Identifies which attempt currently owns a subscriptionId, kept separately from runningCatchupSubscriptions
+    // (which stays a plain presence marker, its shipped shape) so a cancelled attempt's replay thread, resuming
+    // after a later attempt has taken the id over, can tell it is no longer current instead of clobbering the
+    // later attempt's bookkeeping. CURRENT_ATTEMPT carries the calling attempt's identity across this same call
+    // without threading it through every method signature; safe because startCatchupAsync gives each attempt its
+    // own dedicated virtual thread, never reused, and clears the value in a finally block.
+    private final ConcurrentMap<String, CatchupAttempt> currentAttempt = new ConcurrentHashMap<>();
+    private static final ThreadLocal<@Nullable CatchupAttempt> CURRENT_ATTEMPT = new ThreadLocal<>();
 
     protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
@@ -136,17 +144,55 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * noticed yet can be told apart from a later attempt for the same id. Identity is the entire point: no fields,
      * no {@code equals}/{@code hashCode} override, reference equality is exactly what every check here wants.
      */
-    protected static final class CatchupAttempt {
+    private static final class CatchupAttempt {
     }
 
     /**
-     * Whether {@code attempt}'s replay loop should keep going: not shutting down, not stopped, and still the
-     * current running catch-up for {@code subscriptionId}. Checks identity, not mere presence, so an attempt
-     * superseded by a later one for the same id (cancelled, then resubscribed before this attempt's thread noticed)
-     * correctly stops instead of running to completion or clobbering the later attempt's bookkeeping.
+     * Whether persisting a checkpoint for an event this call's own attempt already delivered is still safe: nobody
+     * else's, specifically not a different, {@code non-null} attempt for the same {@code subscriptionId}, has taken
+     * over since. {@code null} (nobody registered, for example {@link #cancelRunningCatchup} or
+     * {@link #markShuttingDown} clearing this same attempt's own entry) counts as safe too, because a stop or
+     * shutdown triggered by the very event being persisted does not put a newer attempt's position at risk, only an
+     * actually different attempt taking the id over does. This is deliberately looser than
+     * {@link #shouldKeepReplaying}, which needs exact identity to decide whether to keep replaying at all, not
+     * whether one already-delivered event's position is still safe to persist. Only meaningful on the virtual
+     * thread {@link #startCatchupAsync} started for this attempt.
      */
-    protected boolean shouldKeepReplaying(String subscriptionId, CatchupAttempt attempt) {
-        return !shuttingDown && !stopped && runningCatchupSubscriptions.get(subscriptionId) == attempt;
+    protected boolean isSafeToPersistFor(String subscriptionId) {
+        CatchupAttempt owner = currentAttempt.get(subscriptionId);
+        return owner == null || owner == CURRENT_ATTEMPT.get();
+    }
+
+    /**
+     * Whether the calling replay loop should keep going: not shutting down, not stopped, and this call's own
+     * attempt is still the current one registered for {@code subscriptionId}. Checks exact identity, not mere
+     * presence and not {@link #isSafeToPersistFor}'s looser null-is-fine rule, so an attempt superseded by a later
+     * one for the same id (cancelled, then resubscribed before this attempt's thread noticed), or simply cancelled
+     * outright with nothing yet taking its place, correctly stops instead of running to completion or clobbering
+     * the later attempt's bookkeeping. Only meaningful on the virtual thread {@link #startCatchupAsync} started for
+     * this attempt.
+     */
+    protected boolean shouldKeepReplaying(String subscriptionId) {
+        return !shuttingDown && !stopped && currentAttempt.get(subscriptionId) == CURRENT_ATTEMPT.get();
+    }
+
+    /**
+     * Atomically ends the calling attempt's ownership of {@code subscriptionId} if {@link #shouldKeepReplaying} is
+     * still true for it, and reports whether it did. A replay calls this exactly once, at the point where it
+     * decides whether it completed normally or was superseded, cancelled, or stopped: only an attempt that is
+     * still current when this runs may claim a normal completion, closing the same identity race
+     * {@link #shouldKeepReplaying} closes for the loop checks, for the one-time final decision.
+     */
+    protected boolean endReplayIfStillCurrent(String subscriptionId) {
+        CatchupAttempt attempt = CURRENT_ATTEMPT.get();
+        if (!shouldKeepReplaying(subscriptionId)) {
+            return false;
+        }
+        if (currentAttempt.remove(subscriptionId, attempt)) {
+            runningCatchupSubscriptions.remove(subscriptionId);
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -175,6 +221,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     public void cancelRunningCatchup(String subscriptionId) {
         runningCatchupSubscriptions.remove(subscriptionId);
+        currentAttempt.remove(subscriptionId);
         pauseRequestedDuringCatchup.remove(subscriptionId);
     }
 
@@ -185,6 +232,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     public void markShuttingDown() {
         shuttingDown = true;
         runningCatchupSubscriptions.clear();
+        currentAttempt.clear();
         pauseRequestedDuringCatchup.clear();
     }
 
@@ -249,29 +297,36 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * Registers {@code attempt} as the running catch-up for {@code subscriptionId} and runs {@code catchup} on its
-     * own virtual thread. This is the only place that puts into {@link #runningCatchupSubscriptions}; the caller
-     * creates {@code attempt} once and passes the same instance into {@code catchup} for its own identity-checked
-     * removal, so the marker is written exactly once per attempt instead of once here and again inside the callable.
+     * Registers a fresh attempt as the running catch-up for {@code subscriptionId} and runs {@code catchup} on its
+     * own dedicated virtual thread, never reused, which is what lets {@link #shouldKeepReplaying} and
+     * {@link #endReplayIfStillCurrent} read the attempt's identity from {@link #CURRENT_ATTEMPT} instead of a
+     * parameter. This is the only place that puts into {@link #runningCatchupSubscriptions}.
      */
-    protected Future<Subscription> startCatchupAsync(String subscriptionId, CatchupAttempt attempt, Callable<Subscription> catchup) {
-        runningCatchupSubscriptions.put(subscriptionId, attempt);
-        // catchup itself removes the running marker on normal completion, and deliberately leaves it in place when
-        // shouldKeepReplaying already turned false so a cancellation can still be told apart from a completion (see
-        // the comment on subscriptionsWasCancelledOrShutdown in the mode-specific classes). Neither path throws, so
-        // catching here only ever means the replay itself failed, and is the one place both modes share to stop such
-        // a failure from leaving the subscription looking like it is still running or catching up forever.
+    protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
+        CatchupAttempt attempt = new CatchupAttempt();
+        runningCatchupSubscriptions.put(subscriptionId, true);
+        currentAttempt.put(subscriptionId, attempt);
+        // catchup itself ends its attempt's ownership on normal completion (via endReplayIfStillCurrent), and
+        // deliberately leaves it in place when shouldKeepReplaying already turned false so a cancellation can
+        // still be told apart from a completion (see the comment on subscriptionsWasCancelledOrShutdown in the
+        // mode-specific classes). Neither path throws, so catching here only ever means the replay itself failed,
+        // and is the one place both modes share to stop such a failure from leaving the subscription looking like
+        // it is still running or catching up forever.
         FutureTask<Subscription> task = new FutureTask<>(() -> {
+            CURRENT_ATTEMPT.set(attempt);
             try {
                 return catchup.call();
             } catch (Throwable failure) {
                 // Conditional on this attempt still being the current one: an attempt already superseded by a later
                 // resubscribe for the same id must not remove the later attempt's running marker, and by the same
                 // reasoning must not clear a pause request the later attempt's caller may have just made either.
-                if (runningCatchupSubscriptions.remove(subscriptionId, attempt)) {
+                if (currentAttempt.remove(subscriptionId, attempt)) {
+                    runningCatchupSubscriptions.remove(subscriptionId);
                     pauseRequestedDuringCatchup.remove(subscriptionId);
                 }
                 throw failure;
+            } finally {
+                CURRENT_ATTEMPT.remove();
             }
         });
         Thread.ofVirtual().name("occurrent-catchup-" + subscriptionId).start(task);
