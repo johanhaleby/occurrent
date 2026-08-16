@@ -214,6 +214,16 @@ public abstract class ReactiveEventStoreConformance {
             assertThatThrownBy(() -> await(write))
                     .isExactlyInstanceOf(DuplicateCloudEventException.class);
         }
+
+        @Test
+        void a_negative_skip_reaches_the_subscriber_rather_than_the_assembling_call() {
+            Mono<EventStream<CloudEvent>> read = assertDoesNotThrow(
+                    () -> eventStore().read(STREAM_1, -1, 10),
+                    "assembling a read that is going to fail must not throw, or the failure never reaches onErrorResume");
+
+            assertThatThrownBy(() -> await(read))
+                    .isExactlyInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     @Nested

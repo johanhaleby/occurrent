@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 36
-updated_at: 2026-08-17T04:40:00Z
+revision: 44
+updated_at: 2026-08-17T08:00:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -191,7 +191,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_ffc08735, delivered PR 822 at 01:1xZ (stepWindow foreign-type eviction fix plus ADR). ADR COLLISION again, claims 127 which 819 holds. Orchestrator directed renumber to 129 via PR comment 5309149686, worker active, expected renumbered and rebased by 02:00Z else orchestrator does both. ADR RESERVATIONS: 127=U15/819, 128=MERGED/816, 129=U8/822, next free 130"
+    session: "chip task_ffc08735, delivered PR 822 at 01:1xZ (stepWindow foreign-type eviction fix plus ADR). ADR COLLISION again, claims 127 which 819 holds. Orchestrator directed renumber to 129 via PR comment 5309149686, worker active, expected renumbered and rebased by 02:00Z else orchestrator does both. ADR RESERVATIONS: 127=U15/819, 128=MERGED/816, 129=U8/822, next free 130. 27/27 green with 3 threads unanswered at 07:00Z, worker may resume per the DONE-flag lesson, orchestrator takes the threads at 08:00Z if untouched"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "773", met: false, evidence: null}
@@ -224,11 +224,11 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: [U10A]
-    session: "background subagent dispatched 2026-08-17T01:0xZ per the unattended vehicle, own worktree from origin/main, brief carries the finding-routing block and the semantic guard for the query DSL empty-set case"
+    session: "background subagent COMPLETE, full report received 06:3xZ: all four call sites routed through deriveFilter, empty-set semantics preserved with tests, every new test mutation-tested, migration and changelog sections in place, claims and comments verified by links. Orchestrator fixed all four Copilot findings on 829 (primitive literals in both affected lists, corrected ordering claims in two test comments), threads resolved, head e124404, merge on green. NOTE: 753 stays OPEN per ADR 126 overriding the brief, Johan re-defers or closes it at the release gate"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "750", met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "753", met: false, evidence: null}
+      - {check: manual_approval, repo: johanhaleby/occurrent, ref: "753", met: false, evidence: "ADR 126 instructs leaving 753 open as the tracker for the non-sealed-concrete residual, so its disposition is a Johan release-gate ruling, not a squash close"}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "758", met: false, evidence: null}
   U11:
     issue: 737
@@ -237,7 +237,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_bb9a30d1 ended DONE with the conflict standing and two substantive concurrency threads unanswered (opt-out marker cleared before delegate acceptance, unconditional catchingUp.remove racing newer replays). Remediation subagent dispatched 02:5xZ, then the original session resumed and pushed the thread fixes (ca63aa8e7), subagent stood down untouched. Worker owns the PR"
+    session: "chip task_bb9a30d1 ended DONE with the conflict standing and two substantive concurrency threads unanswered (opt-out marker cleared before delegate acceptance, unconditional catchingUp.remove racing newer replays). Remediation subagent dispatched 02:5xZ, then the original session resumed and pushed the thread fixes, subagent stood down untouched. 26/26 green at 07:1xZ with 5 threads (Copilot re-review added three), worker may resume, orchestrator takes the threads at 08:15Z if untouched"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "737", met: false, evidence: null}
@@ -259,7 +259,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_fbfcd1be, delivered PR 826 at 04:1xZ (mongodb-qualified key rename, held docs PR 70 already open). MERGE GATE: verify the recipe plus migration section exist for the rename mechanism, and that the PR body records the design-gate outcome"
+    session: "chip task_fbfcd1be, delivered PR 826, 26/26 green, recipe and migration and changelog verified present, 5 threads with the worker. HELD: the names-and-mechanism gate was Johan-owned and cannot have run (he went unattended minutes after the chip started), so 826 merges only after Johan ratifies occurrent.event-store.mongodb.* and occurrent.subscription.mongodb.* plus rename-with-recipe over alias. Queued for his return beside 819"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "439", met: false, evidence: null}
