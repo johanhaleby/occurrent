@@ -23,6 +23,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.occurrent.condition.Condition;
+import org.occurrent.filter.Filter;
 
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -414,5 +416,54 @@ class EventTypeExpansionTest {
         Set<Class<? extends OpenEvent>> expanded = EventTypeExpansion.expand(Set.of(ConcreteOpenEvent.class), REFUSAL);
 
         assertThat(expanded).containsExactly(ConcreteOpenEvent.class);
+    }
+
+    // deriveFilter: the shared step from a declared type set to a Filter, ADR 126.
+
+    private static final Function<Class<?>, String> SIMPLE_NAME = Class::getSimpleName;
+
+    @Test
+    void derive_filter_matches_everything_when_no_types_are_declared() {
+        Filter filter = EventTypeExpansion.deriveFilter(Set.<Class<? extends OrderEvent>>of(), SIMPLE_NAME, REFUSAL);
+
+        assertThat(filter).isEqualTo(Filter.all());
+    }
+
+    @Test
+    void derive_filter_names_a_single_condition_for_one_declared_type() {
+        Filter filter = EventTypeExpansion.deriveFilter(Set.of(OrderPlaced.class), SIMPLE_NAME, REFUSAL);
+
+        assertThat(filter).isEqualTo(Filter.type(Condition.eq("OrderPlaced")));
+    }
+
+    @Test
+    void derive_filter_ors_the_conditions_for_a_sealed_type_that_expands_to_several() {
+        Filter filter = EventTypeExpansion.deriveFilter(Set.of(OrderEvent.class), SIMPLE_NAME, REFUSAL);
+
+        assertThat(filter).isEqualTo(Filter.type(Condition.or(List.of(
+                Condition.eq("OrderEvent"), Condition.eq("OrderPlaced"), Condition.eq("PaymentReserved"), Condition.eq("PaymentFailed")))));
+    }
+
+    @Test
+    void derive_filter_names_the_declared_type_itself_alongside_the_types_it_expands_into() {
+        Filter filter = EventTypeExpansion.deriveFilter(Set.of(InstantiableBase.class), SIMPLE_NAME, REFUSAL);
+
+        assertThat(filter).isEqualTo(Filter.type(Condition.or(List.of(
+                Condition.eq("InstantiableBase"), Condition.eq("SealedSubclass")))));
+    }
+
+    @Test
+    void derive_filter_refuses_a_declared_type_whose_concrete_types_cannot_all_be_found() {
+        assertThatThrownBy(() -> EventTypeExpansion.deriveFilter(Set.of(OpenEvent.class), SIMPLE_NAME, REFUSAL))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(OpenEvent.class.getName());
+    }
+
+    @Test
+    void derive_filter_names_only_the_exempt_type_itself_missing_the_subclasses_expand_cannot_find() {
+        // A non-sealed concrete type is accepted and named, its own subclasses are not, the same exemption expand makes.
+        Filter filter = EventTypeExpansion.deriveFilter(Set.of(ExtensibleEvent.class), SIMPLE_NAME, REFUSAL);
+
+        assertThat(filter).isEqualTo(Filter.type(Condition.eq("ExtensibleEvent")));
     }
 }
