@@ -1,9 +1,10 @@
 schema_version: 2
 epic: cdx33e
-revision: 19
-updated_at: 2026-08-16 17:45:00+00:00
-updated_by: 'orchestrator: E11 DONE and verified (preview 56ff52f, release-notes f87d051 aligned); only E8 remains, calibration
-  queued at its next tool round'
+revision: 20
+updated_at: 2026-08-16 18:40:00+00:00
+updated_by: 'orchestrator: E8 DONE (PR 798 merged 00dfb24, issues 732 and 736 closed), watcher-002 retired at the merge
+  sweep, stray memory-branch commit reverted, the flagged recipe-shape docs sentence fixed on preview c1043c4 and release-notes
+  aligned d39d343; closeout waits only on the 00dfb24 matrix'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -191,7 +192,7 @@ units:
       the docs'' permanent-answer claim) and its alreadyDeclared supertype gap, plus number-732''s review-comment marker
       for Object-typed capability-lookup callers. Rewrite module only, invariant: generated code never re-enters itself
       on any inheritance shape'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -199,9 +200,16 @@ units:
     deliverables:
     - check: pr_merged
       repo: johanhaleby/occurrent
-      ref: null
-      met: false
-      evidence: null
+      ref: '798'
+      met: true
+      evidence: 'MERGED 2026-08-16 as squash 00dfb24, CAS-pinned to b05c3f2, Closes keywords verified (732 and 736 both
+        CLOSED). Ten Copilot rounds to natural convergence (round 10 zero comments, zero suppressed): the three ruled fixes
+        plus nine more real defects each revert-fails-confirmed, five reasoned declines with javac-grounded evidence, 107/107
+        module tests, 26/26 CI on the exact head. The worker''s correct refusal episode (brief contradicted the tracker)
+        and the environment hazard (its first commit landed on the memory branch when the concurrent orchestrator moved HEAD;
+        recovered by cherry-pick, stray commit reverted by the orchestrator at d6d31d2) both journaled. Its flagged docs
+        inaccuracy (the recipe''s one-shape description) fixed by the orchestrator on preview c1043c4 with the guide-sourced
+        two-shape scoping, release-notes re-aligned at d39d343. Main matrix on 00dfb24 watched'
   E9:
     issue: null
     goal: 'Round-two Flow DSL feedback (11 items): the Step Conditions material restructured for cold-reader order (counted
