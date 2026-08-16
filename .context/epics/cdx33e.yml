@@ -1,11 +1,10 @@
 schema_version: 2
 epic: cdx33e
-revision: 6
-updated_at: 2026-08-16 07:10:00+00:00
-updated_by: 'orchestrator: epic REOPENED by an adopted unit at Johan''s word: E4 rewrites preview''s reactive CheckpointStorage
-  section (checklist item 4 for the winning branch) ahead of the release. Also surfaced to Johan with ref evidence: the fencing
-  docs branch is superseded by preview (only preview-lacking heading is the old join-testing section preview replaced), recommendation
-  retire-not-merge with the fencing news highlight ported to the release-notes post, awaiting his ruling'
+revision: 7
+updated_at: 2026-08-16 07:40:00+00:00
+updated_by: 'orchestrator: E5 adopted and dispatched under the docs-reflect-code derivation (fencing branch retired unmerged,
+  the release post gains the fencing announcement); E4 still running. The fussy fencing routing at revision 6 is superseded:
+  Johan directed decide-not-route and the principle answers it'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -106,6 +105,24 @@ units:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-preview
+      met: false
+      evidence: null
+  E5:
+    issue: null
+    goal: 'Adopted unit, decided by derivation from Johan''s docs-must-reflect-code principle (his explicit direction to
+      decide rather than route): the fencing docs branch is superseded by preview and is NOT merged at release; therefore
+      the release-notes post must carry the fencing announcement. Port the summary mention and highlight from the fencing
+      branch''s post copy, claim-checked against 06f1b5e so the older snapshot''s corrected-away claims do not return; anchors
+      resolved against preview''s docs.md'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-release-notes
       met: false
       evidence: null
   CREG:
