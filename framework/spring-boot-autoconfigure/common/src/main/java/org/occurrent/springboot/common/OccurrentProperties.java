@@ -180,21 +180,24 @@ public class OccurrentProperties {
         private boolean enabled = true;
 
         // On the getter rather than the field, which is where Spring Boot's configuration-property processor reads
-        // it, so the generated metadata carries the replacement and an IDE can offer it.
+        // it, so the generated metadata carries the replacement and an IDE can offer it. Delegates to
+        // resolveCollection() rather than returning the raw field, so a caller compiled against the released
+        // non-null-by-default getter keeps seeing a resolved value instead of null once only the new key is set.
         @DeprecatedConfigurationProperty(replacement = "occurrent.event-store.mongodb.collection", reason = "MongoDB is the only store this ever described, and the key now says so.")
         @Deprecated(forRemoval = true)
-        public @Nullable String getCollection() {
-            return collection;
+        public String getCollection() {
+            return resolveCollection();
         }
 
         public void setCollection(@Nullable String collection) {
             this.collection = collection;
         }
 
+        // Delegates to resolveTimeRepresentation() for the same reason getCollection() does.
         @DeprecatedConfigurationProperty(replacement = "occurrent.event-store.mongodb.time-representation", reason = "MongoDB is the only store this ever described, and the key now says so.")
         @Deprecated(forRemoval = true)
-        public @Nullable TimeRepresentation getTimeRepresentation() {
-            return timeRepresentation;
+        public TimeRepresentation getTimeRepresentation() {
+            return resolveTimeRepresentation();
         }
 
         public void setTimeRepresentation(@Nullable TimeRepresentation timeRepresentation) {
@@ -344,7 +347,7 @@ public class OccurrentProperties {
 
         /**
          * If there’s not enough history available in the MongoDB oplog to resume a subscription created from a SpringMongoSubscriptionModel, you can configure it to restart the subscription from the current time automatically.
-         * This is only of concern when an application is restarted, and the subscriptions are configured to start from a position in the oplog that is no longer available. It’s disabled by default since it might not be 100% safe
+         * This is only of concern when an application is restarted, and the subscriptions are configured to start from a position in the oplog that is no longer available. It’s enabled by default even though it might not be 100% safe
          * (meaning that you can miss some events when the subscription is restarted). It’s not 100% safe if you run subscriptions in a different process than the event store, and you have lots of writes happening to the event store.
          * It’s safe if you run the subscription in the same process as the writes to the event store if you make sure that the subscription is started before you accept writes to the event store on startup.
          *
@@ -388,21 +391,27 @@ public class OccurrentProperties {
         private SubscriptionCompetingConsumerProperties competingConsumer = new SubscriptionCompetingConsumerProperties();
 
         // On the getter rather than the field, which is where Spring Boot's configuration-property processor reads
-        // it, so the generated metadata carries the replacement and an IDE can offer it.
+        // it, so the generated metadata carries the replacement and an IDE can offer it. Delegates to
+        // resolveCollection() rather than returning the raw field, so a caller compiled against the released
+        // non-null-by-default getter keeps seeing a resolved value instead of null once only the new key is set.
         @DeprecatedConfigurationProperty(replacement = "occurrent.subscription.mongodb.collection", reason = "MongoDB is the only store this ever described, and the key now says so.")
         @Deprecated(forRemoval = true)
-        public @Nullable String getCollection() {
-            return collection;
+        public String getCollection() {
+            return resolveCollection();
         }
 
         public void setCollection(@Nullable String collection) {
             this.collection = collection;
         }
 
+        // The released getter/setter shape (isX(): boolean / setX(boolean)) is kept, unlike the two getters above,
+        // because this field's original type was already the primitive boolean rather than a String or an enum, and
+        // isX() delegating to the resolver preserves both the method name and the non-null primitive return a
+        // pre-existing caller compiled against.
         @DeprecatedConfigurationProperty(replacement = "occurrent.subscription.mongodb.restart-on-change-stream-history-lost", reason = "A change stream is a MongoDB concept, and the key now says so.")
         @Deprecated(forRemoval = true)
-        public @Nullable Boolean getRestartOnChangeStreamHistoryLost() {
-            return restartOnChangeStreamHistoryLost;
+        public boolean isRestartOnChangeStreamHistoryLost() {
+            return resolveRestartOnChangeStreamHistoryLost();
         }
 
         public void setRestartOnChangeStreamHistoryLost(@Nullable Boolean restartOnChangeStreamHistoryLost) {

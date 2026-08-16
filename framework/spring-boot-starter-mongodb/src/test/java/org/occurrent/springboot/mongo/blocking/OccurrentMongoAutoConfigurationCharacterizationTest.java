@@ -33,6 +33,7 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -101,6 +102,49 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
             assertThat(cloudEvent.getDataContentType()).isEqualTo("application/json");
             assertThat(converter.toDomainEvent(cloudEvent)).isEqualTo(event);
         });
+    }
+
+    @Test
+    void binds_the_mongodb_qualified_keys_through_spring_property_binding() {
+        // A fresh runner rather than contextRunner, which already sets the deprecated
+        // occurrent.event-store.collection/occurrent.subscription.collection to a different value.
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OccurrentMongoAutoConfiguration.class))
+                .withUserConfiguration(EnabledOccurrentConfiguration.class, TestEventTypeMapperConfiguration.class)
+                .withBean(MongoDatabaseFactory.class, () -> mock(MongoDatabaseFactory.class))
+                .withBean(MongoTemplate.class, () -> mock(MongoTemplate.class))
+                .withPropertyValues(
+                        "occurrent.event-store.enabled=false",
+                        "occurrent.subscription.enabled=false",
+                        "occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:test",
+                        "occurrent.event-store.mongodb.collection=events-v3",
+                        "occurrent.event-store.mongodb.time-representation=RFC_3339_STRING",
+                        "occurrent.subscription.mongodb.collection=subscriptions-v3",
+                        "occurrent.subscription.mongodb.restart-on-change-stream-history-lost=false")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    OccurrentProperties properties = context.getBean(OccurrentProperties.class);
+
+                    assertThat(properties.getEventStore().resolveCollection()).isEqualTo("events-v3");
+                    assertThat(properties.getEventStore().resolveTimeRepresentation()).isEqualTo(TimeRepresentation.RFC_3339_STRING);
+                    assertThat(properties.getSubscription().resolveCollection()).isEqualTo("subscriptions-v3");
+                    assertThat(properties.getSubscription().resolveRestartOnChangeStreamHistoryLost()).isFalse();
+                });
+    }
+
+    @Test
+    void a_contradicting_old_and_new_collection_key_pair_fails_the_context_instead_of_silently_picking_one() {
+        eventStoreConfigContextRunner()
+                .withPropertyValues(
+                        "occurrent.event-store.collection=events-v2",
+                        "occurrent.event-store.mongodb.collection=events-v3")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(IllegalStateException.class)
+                            .hasMessageContaining("occurrent.event-store.mongodb.collection")
+                            .hasMessageContaining("occurrent.event-store.collection");
+                });
     }
 
     @Test

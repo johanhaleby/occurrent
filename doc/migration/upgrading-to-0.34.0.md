@@ -151,3 +151,8 @@ Two cases, both of which it steps around on purpose rather than guessing:
   both the old and the new key is tolerated while they agree.
 - **A file that already sets both the old and the new key.** The recipe drops the old one and keeps the
   `mongodb`-qualified key, on the assumption that the key you migrated to is the one you meant.
+- **A multi-document `.yaml` file where one profile sets the old key and a different profile sets the new one.**
+  The drop-the-old-key guard evaluates across the whole file, not the one profile that set the new key, so it
+  can also drop the old key from a profile that never set the new key at all, and remove that profile's document
+  entirely if the dropped key was its only content. Review the diff before you commit it, and see
+  [#828](https://github.com/johanhaleby/occurrent/issues/828) for the fix.

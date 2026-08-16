@@ -257,4 +257,70 @@ class OccurrentPropertiesTest {
             return properties.resolveRestartOnChangeStreamHistoryLost();
         }
     }
+
+    /**
+     * The four deprecated getters ({@code EventStoreProperties.getCollection()}, {@code getTimeRepresentation()},
+     * {@code SubscriptionProperties.getCollection()}, {@code isRestartOnChangeStreamHistoryLost()}) returned a
+     * non-null, defaulted value before {@code occurrent.event-store.mongodb.*}/{@code occurrent.subscription.mongodb.*}
+     * existed. Each now delegates to its {@code resolve*()} counterpart instead of returning the raw, possibly-unset
+     * field, so a caller compiled against the old non-null contract keeps seeing a resolved value, including one
+     * supplied only through the new key, rather than null.
+     */
+    @Nested
+    class Deprecated_getters_delegate_to_the_resolved_value {
+
+        @Test
+        void event_store_get_collection_reflects_the_new_key_when_the_deprecated_key_is_unset() {
+            EventStoreProperties properties = new EventStoreProperties();
+            properties.getMongodb().setCollection("events-v3");
+
+            assertThat(properties.getCollection()).isEqualTo("events-v3");
+        }
+
+        @Test
+        void event_store_get_time_representation_reflects_the_new_key_when_the_deprecated_key_is_unset() {
+            EventStoreProperties properties = new EventStoreProperties();
+            properties.getMongodb().setTimeRepresentation(TimeRepresentation.RFC_3339_STRING);
+
+            assertThat(properties.getTimeRepresentation()).isEqualTo(TimeRepresentation.RFC_3339_STRING);
+        }
+
+        @Test
+        void subscription_get_collection_reflects_the_new_key_when_the_deprecated_key_is_unset() {
+            SubscriptionProperties properties = new SubscriptionProperties();
+            properties.getMongodb().setCollection("subscriptions-v3");
+
+            assertThat(properties.getCollection()).isEqualTo("subscriptions-v3");
+        }
+
+        @Test
+        void is_restart_on_change_stream_history_lost_reflects_the_new_key_set_to_false_when_the_deprecated_key_is_unset() {
+            SubscriptionProperties properties = new SubscriptionProperties();
+            properties.getMongodb().setRestartOnChangeStreamHistoryLost(false);
+
+            assertThat(properties.isRestartOnChangeStreamHistoryLost()).isFalse();
+        }
+
+        // A getter that ignores the new key entirely and just returns "the deprecated field, defaulting to false
+        // when unset" would still pass the case above, since that default coincides with what was explicitly set
+        // here. Setting the new key to true, which the same broken shortcut would return as false, closes that gap.
+        @Test
+        void is_restart_on_change_stream_history_lost_reflects_the_new_key_set_to_true_when_the_deprecated_key_is_unset() {
+            SubscriptionProperties properties = new SubscriptionProperties();
+            properties.getMongodb().setRestartOnChangeStreamHistoryLost(true);
+
+            assertThat(properties.isRestartOnChangeStreamHistoryLost()).isTrue();
+        }
+
+        @Test
+        void none_of_the_four_deprecated_getters_return_null_when_nothing_is_set() {
+            EventStoreProperties eventStore = new EventStoreProperties();
+            SubscriptionProperties subscription = new SubscriptionProperties();
+
+            assertThat(eventStore.getCollection()).isEqualTo("events");
+            assertThat(eventStore.getTimeRepresentation()).isEqualTo(TimeRepresentation.DATE);
+            assertThat(subscription.getCollection()).isEqualTo("subscriptions");
+            assertThat(subscription.isRestartOnChangeStreamHistoryLost()).isTrue();
+        }
+    }
 }
