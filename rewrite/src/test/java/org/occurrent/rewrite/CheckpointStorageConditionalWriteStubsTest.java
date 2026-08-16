@@ -720,7 +720,7 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
     }
 
     @Test
-    void generatesAWriteVersionStubWhenTheClasssOwnMatchingSignatureIsPrivate() {
+    void generatesAWriteVersionStubWhenTheClassOwnMatchingSignatureIsPrivate() {
         // InMemoryCheckpointStorage's own writeVersion(String) is private, an unrelated helper. writeVersion did
         // not exist on CheckpointStorage in 0.32.0, so nothing about that name was reserved yet, and this could be
         // a genuine 0.32.0 implementation detail sharing the name by coincidence. A private method cannot
@@ -798,6 +798,103 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
                             }
 
                             private OptionalLong writeVersion(String subscriptionId) {
+                                return OptionalLong.empty();
+                            }
+
+                            /* TODO [Occurrent 0.33 upgrade]: this only refuses a condition stronger than any(), delegating any() to the existing two-argument save. Evaluate `condition` for real if this storage can, otherwise this is the permanent answer. See doc/migration/upgrading-to-0.33.0.md. */
+                            @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                                if (!(condition instanceof CheckpointWriteCondition.Any)) {
+                                    throw new UnsupportedOperationException("This storage cannot evaluate " + condition + ", only any() is supported.");
+                                }
+                                return save(subscriptionId, checkpoint);
+                            }
+
+                            /* TODO [Occurrent 0.33 upgrade]: this always answers empty, correct if this storage cannot evaluate a condition. Return the version a condition is judged against if it can. See doc/migration/upgrading-to-0.33.0.md. */
+                            @Override
+                            public OptionalLong writeVersion(String subscriptionId) {
+                                return OptionalLong.empty();
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void generatesAWriteVersionStubWhenTheClassOwnMatchingSignatureIsStatic() {
+        // InMemoryCheckpointStorage's own writeVersion(String) is public but static, another unrelated helper the
+        // interface's new member cannot reuse. A static method cannot override an instance member (confirmed
+        // directly with javac: "overriding method is static"), so this is the same coincidental-collision shape as
+        // the private case above, just with a different reason the method cannot implement the interface.
+        rewriteRun(
+                java(CHECKPOINT),
+                java(CHECKPOINT_WRITE_CONDITION),
+                java(BLOCKING_CHECKPOINT_STORAGE),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+                        import org.occurrent.subscription.api.blocking.CheckpointStorage;
+
+                        import java.util.OptionalLong;
+
+                        class InMemoryCheckpointStorage implements CheckpointStorage {
+                            @Override
+                            public Checkpoint read(String subscriptionId) {
+                                return null;
+                            }
+
+                            @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+                                return checkpoint;
+                            }
+
+                            @Override
+                            public void delete(String subscriptionId) {
+                            }
+
+                            @Override
+                            public boolean exists(String subscriptionId) {
+                                return false;
+                            }
+
+                            public static OptionalLong writeVersion(String subscriptionId) {
+                                return OptionalLong.empty();
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+                        import org.occurrent.subscription.CheckpointWriteCondition;
+                        import org.occurrent.subscription.api.blocking.CheckpointStorage;
+
+                        import java.util.OptionalLong;
+
+                        class InMemoryCheckpointStorage implements CheckpointStorage {
+                            @Override
+                            public Checkpoint read(String subscriptionId) {
+                                return null;
+                            }
+
+                            @Override
+                            public Checkpoint save(String subscriptionId, Checkpoint checkpoint) {
+                                return checkpoint;
+                            }
+
+                            @Override
+                            public void delete(String subscriptionId) {
+                            }
+
+                            @Override
+                            public boolean exists(String subscriptionId) {
+                                return false;
+                            }
+
+                            public static OptionalLong writeVersion(String subscriptionId) {
                                 return OptionalLong.empty();
                             }
 

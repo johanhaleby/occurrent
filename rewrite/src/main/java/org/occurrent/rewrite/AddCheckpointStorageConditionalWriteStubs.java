@@ -208,17 +208,17 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                 }
 
                 if (TypeUtils.isAssignableTo(BLOCKING_STORAGE, cd.getType())) {
-                    String saveTemplate = hasOwnConcreteImplementation(cd, BLOCKING_STORAGE, "save", SAVE_2_ARG_PARAMS)
+                    String saveTemplate = hasOwnConcreteImplementation(cd, BLOCKING_STORAGE, "save", SAVE_2_ARG_PARAMS, CHECKPOINT)
                             ? BLOCKING_SAVE_STUB
                             : BLOCKING_SAVE_STUB_NO_OWN_TWO_ARG_SAVE;
-                    cd = stub(cd, BLOCKING_STORAGE, "save", SAVE_3_ARG_PARAMS, saveTemplate, CHECKPOINT, CHECKPOINT_WRITE_CONDITION);
-                    cd = stub(cd, BLOCKING_STORAGE, "writeVersion", WRITE_VERSION_PARAMS, BLOCKING_WRITE_VERSION_STUB, OPTIONAL_LONG);
+                    cd = stub(cd, BLOCKING_STORAGE, "save", SAVE_3_ARG_PARAMS, CHECKPOINT, saveTemplate, CHECKPOINT, CHECKPOINT_WRITE_CONDITION);
+                    cd = stub(cd, BLOCKING_STORAGE, "writeVersion", WRITE_VERSION_PARAMS, OPTIONAL_LONG, BLOCKING_WRITE_VERSION_STUB, OPTIONAL_LONG);
                 } else if (TypeUtils.isAssignableTo(REACTOR_STORAGE, cd.getType())) {
-                    String saveTemplate = hasOwnConcreteImplementation(cd, REACTOR_STORAGE, "save", SAVE_2_ARG_PARAMS)
+                    String saveTemplate = hasOwnConcreteImplementation(cd, REACTOR_STORAGE, "save", SAVE_2_ARG_PARAMS, MONO)
                             ? REACTOR_SAVE_STUB
                             : REACTOR_SAVE_STUB_NO_OWN_TWO_ARG_SAVE;
-                    cd = stub(cd, REACTOR_STORAGE, "save", SAVE_3_ARG_PARAMS, saveTemplate, CHECKPOINT, CHECKPOINT_WRITE_CONDITION, MONO);
-                    cd = stub(cd, REACTOR_STORAGE, "writeVersion", WRITE_VERSION_PARAMS, REACTOR_WRITE_VERSION_STUB, MONO);
+                    cd = stub(cd, REACTOR_STORAGE, "save", SAVE_3_ARG_PARAMS, MONO, saveTemplate, CHECKPOINT, CHECKPOINT_WRITE_CONDITION, MONO);
+                    cd = stub(cd, REACTOR_STORAGE, "writeVersion", WRITE_VERSION_PARAMS, MONO, REACTOR_WRITE_VERSION_STUB, MONO);
                 }
                 return cd;
             }
@@ -228,8 +228,8 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
             // (or hand-migrated) class a no-op, and what keeps an inherited implementation from an in-source
             // abstract base from being overridden by a generated stub.
             private J.ClassDeclaration stub(J.ClassDeclaration cd, String capabilityInterfaceFqn, String methodName,
-                                             List<JavaType> paramTypes, String template, String... imports) {
-                if (hasOwnConcreteImplementation(cd, capabilityInterfaceFqn, methodName, paramTypes)) {
+                                             List<JavaType> paramTypes, String returnTypeFqn, String template, String... imports) {
+                if (hasOwnConcreteImplementation(cd, capabilityInterfaceFqn, methodName, paramTypes, returnTypeFqn)) {
                     return cd;
                 }
 
@@ -260,20 +260,22 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
             // owner and by the abstract flag, is what tells a supertype override from nothing overriding the
             // method at all.
             private boolean hasOwnConcreteImplementation(J.ClassDeclaration cd, String capabilityInterfaceFqn, String methodName,
-                                                           List<JavaType> paramTypes) {
-                // Public is required here too. writeVersion and the three-argument save are both new in 0.33.0, so
-                // a 0.32.0 class could already have a private or package-private method of the same name and
-                // parameters for an unrelated reason, and that coincidence cannot implement the new public member
-                // any more than the same shape could two levels up. Checked through the declaration's own modifier
-                // list rather than its MethodType's flags, since a template this same visit just inserted does not
-                // reliably carry Public in its (re-synthesized) MethodType until a later parse, while the printed
-                // `public` keyword is already right there on the declaration.
+                                                           List<JavaType> paramTypes, String returnTypeFqn) {
+                // Public and non-static are required here too, and the return type has to be override-compatible.
+                // writeVersion and the three-argument save are both new in 0.33.0, so a 0.32.0 class could already
+                // have a method of the same name and parameters for an unrelated reason, public static or with an
+                // incompatible return type included, and none of those shapes implement the new public interface
+                // member either. Public is checked through the declaration's own modifier list rather than its
+                // MethodType's flags, since a template this same visit just inserted does not reliably carry Public
+                // in its (re-synthesized) MethodType until a later parse, while the printed `public` keyword is
+                // already right there on the declaration.
                 boolean declaredOnClassItself = cd.getBody().getStatements().stream()
                         .filter(J.MethodDeclaration.class::isInstance)
                         .map(J.MethodDeclaration.class::cast)
-                        .filter(md -> md.hasModifier(J.Modifier.Type.Public))
+                        .filter(md -> md.hasModifier(J.Modifier.Type.Public) && !md.hasModifier(J.Modifier.Type.Static))
                         .map(J.MethodDeclaration::getMethodType)
-                        .anyMatch(mt -> mt != null && methodName.equals(mt.getName()) && sameParameterTypes(mt.getParameterTypes(), paramTypes));
+                        .anyMatch(mt -> mt != null && methodName.equals(mt.getName()) && sameParameterTypes(mt.getParameterTypes(), paramTypes)
+                                && TypeUtils.isAssignableTo(returnTypeFqn, mt.getReturnType()));
                 if (declaredOnClassItself) {
                     return true;
                 }
@@ -282,14 +284,14 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                 if (fq == null) {
                     return false;
                 }
-                if (concretelyDeclaredBelow(fq.getSupertype(), capabilityInterfaceFqn, methodName, paramTypes)) {
+                if (concretelyDeclaredBelow(fq.getSupertype(), capabilityInterfaceFqn, methodName, paramTypes, returnTypeFqn)) {
                     return true;
                 }
                 // cd's own directly-implemented interfaces, not only reachable through a superclass. A class that
                 // implements a capability interface of its own (extending CheckpointStorage with a default for
                 // this member) rather than CheckpointStorage directly has its real implementation here.
                 for (JavaType.FullyQualified i : fq.getInterfaces()) {
-                    if (concretelyDeclaredBelow(i, capabilityInterfaceFqn, methodName, paramTypes)) {
+                    if (concretelyDeclaredBelow(i, capabilityInterfaceFqn, methodName, paramTypes, returnTypeFqn)) {
                         return true;
                     }
                 }
@@ -299,17 +301,20 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
             // An interface default method carries both the Abstract and the Default flag in this type model, not
             // Default alone, so excluding every Abstract-flagged method would also exclude a genuine default. Only
             // a method that is Abstract without also being Default has no body to fall back on. The member being
-            // searched for is always a public interface member, and Java refuses to compile a class where a
-            // private, static, package-private or protected method of the same signature stands in for it, even
-            // from a same-package supertype, so only a Public candidate actually implements it. Confirmed directly
-            // with javac. A same-package package-private or protected method fails with "attempting to assign
-            // weaker access privileges".
+            // searched for is always a public, non-static instance member with a fixed return type, and Java
+            // refuses to compile a class where a private, static, package-private or protected method of the same
+            // signature stands in for it, even from a same-package supertype (confirmed directly with javac, both
+            // fail with "attempting to assign weaker access privileges" or "overriding method is static"), so
+            // candidates missing any of that are excluded, along with one whose return type is not the expected
+            // type or a subtype of it, an unrelated method that only coincidentally shares the name and parameters.
             private boolean concretelyDeclaredBelow(JavaType.@Nullable FullyQualified type, String capabilityInterfaceFqn,
-                                                      String methodName, List<JavaType> paramTypes) {
+                                                      String methodName, List<JavaType> paramTypes, String returnTypeFqn) {
                 return TypeUtils.findDeclaredMethod(type, methodName, paramTypes)
                         .filter(m -> !m.getFlags().contains(Flag.Abstract) || m.getFlags().contains(Flag.Default))
                         .filter(m -> !capabilityInterfaceFqn.equals(m.getDeclaringType().getFullyQualifiedName()))
                         .filter(m -> m.getFlags().contains(Flag.Public))
+                        .filter(m -> !m.getFlags().contains(Flag.Static))
+                        .filter(m -> TypeUtils.isAssignableTo(returnTypeFqn, m.getReturnType()))
                         .isPresent();
             }
 
