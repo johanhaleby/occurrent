@@ -29,11 +29,17 @@ import org.jspecify.annotations.NullMarked;
  * Called once per event, whether or not a handler ends up running. {@code matched} is {@code true} only when the
  * model is running and a currently registered, unpaused subscription's filter accepted the event, independent of
  * whether that handler goes on to succeed or error. It shares the same filter evaluation the actual dispatch
- * decision is made from, so the two can never disagree. A filter that throws while being evaluated (a supplied
- * {@code DataFieldReader} can) is reported as unmatched too, before that error propagates. A
- * {@link RuntimeException} or {@link AssertionError} the observer itself throws is caught and logged rather than
- * propagated, so a broken observer cannot turn an event that was actually delivered into a broker redelivery.
- * Another {@link Error} still propagates, as it does everywhere else on this stack.
+ * decision is made from, so the two can never disagree. A {@link RuntimeException} or {@link AssertionError} a
+ * filter throws while being evaluated (a supplied {@code DataFieldReader} can) is reported as unmatched too, before
+ * that error propagates. The same is true of the observer's own {@link RuntimeException} or {@link AssertionError},
+ * caught and logged rather than propagated, so a broken observer cannot turn an event that was actually delivered
+ * into a broker redelivery. Another {@link Error}, from either, still propagates without telling the observer, the
+ * same as everywhere else on this stack.
+ * <p>
+ * The returned {@link reactor.core.publisher.Mono} from {@link PushSubscriptionModel#accept(CloudEvent)} is cold, so
+ * "once per event" means once per subscription to it, not once per event handed to {@code accept(..)}. Subscribing
+ * twice to the same {@code Mono} observes and, if eligible, dispatches the same event twice, the same way
+ * {@code route(CloudEvent)} already re-dispatches on a resubscription.
  * <p>
  * The default, {@link #noop()}, changes nothing for existing code, and {@link PushSubscriptionModel} skips both this
  * call and the match check entirely when no other observer is configured.
