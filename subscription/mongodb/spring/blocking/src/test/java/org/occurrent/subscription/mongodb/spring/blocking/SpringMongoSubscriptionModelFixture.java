@@ -30,6 +30,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 import org.springframework.data.mongodb.core.query.Query;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
@@ -94,6 +95,21 @@ class SpringMongoSubscriptionModelFixture implements SubscriptionModelFixture {
     @Override
     public boolean deliversEventsPublishedWhilePaused() {
         return true;
+    }
+
+    /**
+     * Wider than the 10 second default (#781). This model resumes through Spring Data's
+     * {@code DefaultMessageListenerContainer}, which reopens a change-stream cursor and hands it to a task
+     * executor rather than resuming on the calling thread, so a pause/resume round trip pays for a hop through
+     * that machinery on top of the change-stream reconnect itself. On a CI runner sharing its two vCPUs with
+     * everything else in the job, that hop is occasionally slow enough to brush the 10 second default, which
+     * this suite's own pause-then-redeliver assertions are the most exposed to. 12 seconds keeps the six-way
+     * stop/start test's twelve chained waits under its own 150 second method timeout without raising the
+     * shared TCK ceiling that every other model waits against too.
+     */
+    @Override
+    public Duration deliveryTimeout() {
+        return Duration.ofSeconds(12);
     }
 
     /**
