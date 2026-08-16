@@ -36,7 +36,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.dsl.saga.flow.FlowSaga.stepTimer;
@@ -1991,7 +1990,13 @@ class FlowSagaTest {
             FlowState<FlowEvent> opened = before.evolve(before.initialState(), SagaInput.event(new Started("c1")));
             FlowState<FlowEvent> parked = before.evolve(opened, SagaInput.event(new Progressed("c1")));
 
-            assertThatCode(() -> after.step(parked, SagaInput.event(new Progressed("c1")))).doesNotThrowAnyException();
+            Saga.Step<FlowState<FlowEvent>, FlowCommand> result = after.step(parked, SagaInput.event(new Progressed("c1")));
+
+            assertAll(
+                    () -> assertThat(result.state().currentStep()).as("no branch matched, so the instance stays parked").isEqualTo("second"),
+                    () -> assertThat(after.isTerminal(result.state())).as("nothing transitioned it").isFalse(),
+                    () -> assertThat(result.effects()).as("no branch fired, so no reaction ran").isEmpty()
+            );
         }
     }
 }
