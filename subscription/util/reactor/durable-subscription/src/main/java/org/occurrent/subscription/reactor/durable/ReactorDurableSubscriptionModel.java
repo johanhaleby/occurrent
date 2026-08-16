@@ -305,17 +305,21 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     // No original throwable to carry here, since answering nothing is how the wrapped model reports a problem it
-    // cannot resolve, so this is what names the subscription and the way past it.
+    // cannot resolve, so this is what names the subscription and the way past it. Built at capturePositionNow's read
+    // failure too, before storage is asked, so it cannot claim storage holds nothing: a checkpoint stored by then, or
+    // a start position of its own, still lets the subscription start despite this failure, and only the caller
+    // consulting storage afterwards, in refusalOnceNothingIsStored or resolveStartAt, settles whether it is refused.
     private IllegalStateException positionSourceAnsweredNothing(String subscriptionId) {
         return new IllegalStateException("The wrapped subscription model " + subscription.getClass().getName() +
                                          " answered nothing when asked for the current position for subscription " +
-                                         subscriptionId + ", which is how it reports a problem it cannot resolve, and no " +
-                                         "checkpoint is stored for it either, so the registration is refused rather than " +
-                                         "started from wherever the feed has reached by then, which would skip whatever " +
-                                         "was written while it waited. Starting it is what releases the id, so " +
-                                         "register it again after that, or after cancelSubscription(String), once the model " +
-                                         "can answer. Subscribing with a StartAt of your own records no position and carries " +
-                                         "no such guarantee.");
+                                         subscriptionId + ", which is how it reports a problem it cannot resolve. A " +
+                                         "checkpoint already stored for it, or a start position of its own, still lets " +
+                                         "it start despite this failure; only when neither holds is the registration " +
+                                         "refused rather than started from wherever the feed has reached by then, " +
+                                         "which would skip whatever was written while it waited. Starting it is what " +
+                                         "releases the id, so register it again after that, or after " +
+                                         "cancelSubscription(String), once the model can answer. Subscribing with a " +
+                                         "StartAt of your own records no position and carries no such guarantee.");
     }
 
     private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt,
@@ -355,13 +359,15 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             return new ReactorDurableSubscription(subscriptionId, internalSubscription.started);
         }
         Sinks.Empty<Void> startedSink = Sinks.empty();
-        InternalSubscription placeholder = new InternalSubscription(Disposables.disposed(), currentStartAt, filter, action, startedSink.asMono(), positionAtRegistration);
-        runningSubscriptions.put(subscriptionId, placeholder);
-        // Tracks whichever entry this call currently owns in runningSubscriptions. Starts as the placeholder, then
-        // becomes the real InternalSubscription once one exists, updated right before the map is. A concurrent error
-        // handler reading this always sees whatever this call last put under subscriptionId, so its removal below
-        // stays scoped to this call's own entry.
-        AtomicReference<InternalSubscription> ownEntry = new AtomicReference<>(placeholder);
+        // One stable identity for this call's whole lifetime: put into runningSubscriptions before subscribing, and
+        // never replaced afterwards, so the error handler below always removes the same object it (or nothing) put
+        // there. A placeholder swapped for a real entry after subscribing would leave a window between installing
+        // the entry and recording its identity where a concurrent error neither matches the map nor gets undone by
+        // it; one entry, put once, has no such window. The disposable is filled in below once subscribing actually
+        // returns one; Disposables.swap() disposes it immediately if this entry is disposed first.
+        Disposable.Swap subscriptionDisposable = Disposables.swap();
+        InternalSubscription internalSubscription = new InternalSubscription(subscriptionDisposable, currentStartAt, filter, action, startedSink.asMono(), positionAtRegistration);
+        runningSubscriptions.put(subscriptionId, internalSubscription);
         Disposable disposable = resolveStartAt(subscriptionId, currentStartAt.get(), positionAtRegistration)
                 .flatMapMany(resolvedStartAt -> {
                     currentStartAt.set(resolvedStartAt);
@@ -375,16 +381,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                         }, throwable -> {
                             log.error("Subscription {} terminated with an unrecoverable error", subscriptionId, throwable);
                             startedSink.tryEmitError(throwable);
-                            // Removes only the entry this call owns, so a first attempt's late error cannot remove a
-                            // second registration's entry for the same subscriptionId.
-                            runningSubscriptions.remove(subscriptionId, ownEntry.get());
+                            // internalSubscription is the only entry this call ever puts under subscriptionId, so
+                            // this removal is unambiguous regardless of when the error races the line below.
+                            runningSubscriptions.remove(subscriptionId, internalSubscription);
                         });
-        InternalSubscription internalSubscription = new InternalSubscription(disposable, currentStartAt, filter, action, startedSink.asMono(), positionAtRegistration);
-        ownEntry.set(internalSubscription);
-        if (runningSubscriptions.replace(subscriptionId, internalSubscription) == null) {
-            // The placeholder was already removed by a synchronous error, so this subscription is already dead.
-            disposable.dispose();
-        }
+        subscriptionDisposable.update(disposable);
         return new ReactorDurableSubscription(subscriptionId, internalSubscription.started);
     }
 

@@ -31,18 +31,38 @@ import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
+import reactor.test.StepVerifier;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * A registration's position read runs on the wrapped model's own signal, so nothing orders it against a later
- * registration for the same id. Registering again under an id whose first attempt has not yet finished failing is
- * exactly the recovery the upgrade guide documents, cancelling first to free the id, so this covers that a first
- * attempt's error, however late it arrives, only ever removes its own entry.
+ * Registering again under an id whose earlier attempt has not settled is the documented recovery from a refused
+ * registration: {@link ReactorDurableSubscriptionModel#cancelSubscription(String)} to free the id, then
+ * {@code subscribe(..)} again. Cancelling disposes the first attempt's actual subscription, including whatever
+ * position read it was waiting on, so a signal that arrives for that read afterwards has nowhere left to go:
+ * Reactor drops a signal delivered to an already-cancelled subscriber instead of routing it anywhere, rather than
+ * resurrecting a subscription nothing is listening to any more. That is what keeps this recovery safe before any of
+ * {@link ReactorDurableSubscriptionModel}'s own per-call bookkeeping enters into it, and it is worth pinning down on
+ * its own rather than assuming it.
+ * <p>
+ * A narrower race lives one level down, inside a single registration's own bookkeeping: a late error could, in
+ * principle, land between that call installing its map entry and finishing recording its identity, which would let
+ * an already-terminated subscription be reported as running with nothing left able to remove it. That gap is
+ * closed in {@link ReactorDurableSubscriptionModel#startInternalSubscription} by giving each call one map entry for
+ * its whole lifetime rather than installing a placeholder and replacing it later, verifiable by reading the method:
+ * there is exactly one {@code put}, before the call ever subscribes, so a concurrent reader is never in a position
+ * to see one entry while the call's own bookkeeping still names another.
+ * <p>
+ * That gap was not reproducible here with a racing thread. A background thread armed to fail the position read the
+ * instant it saw the read subscribed to, competing against the registering thread's own remaining statements,
+ * landed safely outside the gap on every one of several hundred thousand contended attempts, run as many such pairs
+ * at once to oversubscribe the available cores on purpose. The two sides are consistently a cache line or more
+ * apart in timing rather than close enough for ordinary scheduling noise to land between them, so this file does
+ * not carry a timing-based regression test for that specific gap; its closure rests on the single-{@code put}
+ * argument above.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class ReactorDurableSubscriptionModelReRegistrationTest {
@@ -51,7 +71,7 @@ class ReactorDurableSubscriptionModelReRegistrationTest {
     private static final String SUBSCRIPTION_ID = "someSubscription";
 
     @Test
-    void a_first_registrations_late_error_does_not_remove_a_second_registrations_entry() {
+    void a_first_registrations_late_error_is_dropped_once_cancelled_and_does_not_affect_a_second_registration() {
         // The first registration's position read hangs here until the test completes it, standing in for an error
         // that is still on its way when the second registration below is made.
         Sinks.One<Checkpoint> firstAttemptRead = Sinks.one();
@@ -69,14 +89,21 @@ class ReactorDurableSubscriptionModelReRegistrationTest {
         second.waitUntilStarted().block(TIMEOUT);
         assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
 
-        // The first attempt's read now fails, arriving after the second registration has already replaced it.
+        // The first attempt's read now fails, arriving after cancellation already disposed of it. Sinks.One accepts
+        // an emission whether or not a subscriber is still attached (it is a replaying, not a multicast, sink), so
+        // acceptance alone says nothing about delivery; what matters is observed below, on the model itself.
         firstAttemptRead.tryEmitError(new IllegalStateException("first attempt: cannot read the position"));
 
-        assertThatThrownBy(() -> first.waitUntilStarted().block(TIMEOUT))
-                .as("the first attempt's own handle still reports its failure")
-                .isInstanceOf(IllegalStateException.class);
+        // A cancelled subscription's own handle never settles either way: cancelling severed it from
+        // firstAttemptRead before this error was emitted, so nothing carries the error to startedSink. Asserted as
+        // a timeout on the handle itself, not by catching whichever exception type block(Duration) happens to throw
+        // when it gives up.
+        StepVerifier.create(first.waitUntilStarted())
+                .expectTimeout(TIMEOUT)
+                .verify();
+
         assertThat(model.isRunning(SUBSCRIPTION_ID))
-                .as("the first attempt's late error must remove only the entry it put there, not the second registration's")
+                .as("the first attempt's cancelled, undelivered error must not affect the second registration")
                 .isTrue();
         assertThat(model.subscriptionIds()).containsExactly(SUBSCRIPTION_ID);
     }
