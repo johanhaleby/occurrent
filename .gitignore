@@ -29,6 +29,10 @@ nbdist/
 # JQWik
 .jqwik-database
 
+# Redis
+
+.rdb
+
 # Local durable context: ORCHESTRATOR.md, lessons.md, the orchestrator policy and the
 # per-epic state files are tracked, everything else here is local-only (ordered pattern
 # per the orchestrator skill's epic-state reference)
