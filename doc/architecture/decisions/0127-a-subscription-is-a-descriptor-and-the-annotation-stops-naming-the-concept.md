@@ -257,6 +257,15 @@ invoked to get the descriptor and its collaborators have to be wired before it i
 
 The deprecated annotations stay in `postProcessBeforeInitialization`, since nothing about them changed.
 
+**Moving there inherits how the existing descriptor annotations invoke a factory, including one hazard they already
+have.** `OccurrentBlockingAnnotationBeanPostProcessor` resolves the bean from the context and `invokeFactory` calls the
+declared method on whatever comes back. When that bean is proxied, a CGLIB proxy works and runs any class-level advice
+once at startup, while a JDK interface proxy fails outright, because the declared method's class is not the proxy's.
+Spring Boot proxies by target class by default, so this bites only an application that has asked for interface proxies,
+which is why `@Projection`, `@Snapshot` and `@Saga` have not tripped over it. It is a defect on that path today rather
+than anything this design introduces, and the epic inherits it rather than widening it. Fixing it means unwrapping to
+the target before invoking a factory, for all four descriptor annotations at once, and that is its own issue.
+
 This also closes something the current code calls out as a wart. Its comment notes that a `@Subscription` method
 registers per bean before the checkpoint fencing check runs, so one can write a checkpoint before that check happens,
 and marks it pre-existing. A descriptor annotation registered in the later phase is behind the check like every other
