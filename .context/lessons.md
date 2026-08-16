@@ -1378,3 +1378,18 @@ with trigger conditions. And when any unit's gate venue is `session`, the orches
 the user names the sessions holding questions for them, every time, because the venue that avoids
 round-tripping decisions also hides their existence. The skill now encodes the first three; the fourth
 is this epic's standing practice.
+
+## A pr-fix loop makes a unit multi-hour, so in attended mode it is a chip (2026-08-16, r34 dispatch)
+
+The r34 remainder plan labelled U1, U4, U5 and U6A as subagents because each looked like an
+hour of editing. Johan caught it at the plan gate. The recorded 2026-08-14 ruling already
+decided this: an expected-multi-hour unit is a chip in attended mode, and the wall clock of a
+unit that carries the standing pr-fix loop includes CI waits and review round trips, which
+puts every PR-delivering unit over the line regardless of how small its diff is. The
+bounded-sub-hour subagent carve-out is real but narrow: report-only work with no PR and no CI
+wait (H1's read-only verdict table qualifies, nothing else in the wave did).
+
+**How to apply:** when annotating vehicles, classify by expected wall clock including CI and
+review, not by editing effort. A unit whose deliverable is a merged PR is a chip in attended
+mode by default; the subagent label is reserved for results the orchestrator integrates
+directly within the session.
