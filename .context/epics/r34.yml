@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 17
-updated_at: 2026-08-16T21:30:00Z
+revision: 18
+updated_at: 2026-08-16T21:50:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -214,7 +214,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_8da6cf7d, started by Johan 21:0xZ before going unattended"
+    session: "chip task_8da6cf7d, delivered PR 815 at 21:4xZ: ADR 126, number audited across all remote branches, decision matches the approved meta-plan direction so the merge is principle-settled once review threads resolve. Body repointed from Fixes to Decides (750/753/758 close at U10B, 753 as recorded no-change). Copilot requested and read back. U10B dispatches as a background subagent after 815 merges"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
   U10B:
@@ -281,7 +281,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_33f7131a, delivered PR 814 at 21:2xZ covering native, Spring blocking, reactor, and in-memory stores. Worker refuted the unsorted skip/limit bug via mutation test (FindIterable aliases itself), so 810 finding one was never active. CONFLICTING on changelog, worker owns rebase. MERGE FOLLOW-UP: the ADR 54 amendment paragraph documenting the drift as permanent goes stale when 814 merges, orchestrator amends it in a small prose PR after merge"
+    session: "chip task_33f7131a, delivered PR 814 at 21:2xZ covering native, Spring blocking, reactor, and in-memory stores. Worker refuted the unsorted skip/limit bug via mutation test (FindIterable aliases itself), so 810 finding one was never active. CONFLICTING on changelog, worker owns rebase. MERGE FOLLOW-UP: the ADR 54 amendment paragraph documenting the drift as permanent goes stale when 814 merges, orchestrator amends it in a small prose PR after merge. CONFLICTING with DONE flag at 21:4xZ, worker may have ended, orchestrator rebases the changelog conflict itself if still standing at 22:15Z"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "810", met: false, evidence: null}
