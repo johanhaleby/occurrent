@@ -907,9 +907,10 @@ class SagaRunnerTest {
     @Nested
     class FlowSagaConditionStep {
 
-        // The lowered-join path already gets runner coverage for free through the unchanged InvocationSagaTest. A native
-        // on(StepCondition) step does not, so this drives one through the real executor, subscription, timer poller and
-        // command dispatch together, not the pure evolve/react unit tests FlowSagaTest and SagaFlowExtensionsTest cover.
+        // A single-leaf allOf window condition already gets runner coverage for free through InvocationSagaTest's
+        // twoPaymentsFlow. A richer on(StepCondition) tree does not, so this drives one through the real executor,
+        // subscription, timer poller and command dispatch together, not the pure evolve/react unit tests FlowSagaTest
+        // and SagaFlowExtensionsTest cover.
         sealed interface ReviewEvent permits ReviewRequested, Approved, Escalated {
             String eventId();
 

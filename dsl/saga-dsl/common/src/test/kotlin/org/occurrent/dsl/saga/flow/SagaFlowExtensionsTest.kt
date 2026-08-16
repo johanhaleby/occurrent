@@ -120,7 +120,7 @@ class SagaFlowExtensionsTest {
         }
     }
 
-    // --- Scenario B: game-start join with an ifNotFulfilled timeout ---------------------------------------------------
+    // --- Scenario B: game-start allOf condition with an ifNotFulfilled timeout ----------------------------------------
 
     sealed interface LobbyEvent
     data class LobbyOpened(val gameId: String) : LobbyEvent
@@ -138,7 +138,7 @@ class SagaFlowExtensionsTest {
             correlate<PlayerJoined> { it.gameId }
             correlate<FirstPlayerMadeMove> { it.gameId }
             step("awaiting-game-start") {
-                join(expect<PlayerJoined>(2), expect<FirstPlayerMadeMove>(), then = end) { r ->
+                on(allOf(event<PlayerJoined>(2), event<FirstPlayerMadeMove>()), then = end) { r ->
                     issue(SendStartEmail(r.initiating<LobbyOpened>().gameId))
                 }
                 timeout(after = Duration.ofMinutes(10), then = end) { r ->
@@ -148,12 +148,12 @@ class SagaFlowExtensionsTest {
         }
 
     @Nested
-    inner class GameStartJoin {
+    inner class GameStartAllOf {
 
         private val saga = gameStartSaga()
 
         @Test
-        fun `the start event arms the join step's timeout`() {
+        fun `the start event arms the step's timeout`() {
             val started = start(saga, LobbyOpened("g1"))
 
             assertThat(started.effects()).containsExactly(
@@ -162,7 +162,7 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
-        fun `one PlayerJoined does not fulfil the join`() {
+        fun `one PlayerJoined does not fulfil the condition`() {
             val started = start(saga, LobbyOpened("g1"))
 
             val step = saga.step(started.state(), SagaInput.event(PlayerJoined("g1")))
@@ -174,7 +174,7 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
-        fun `two PlayerJoined without a first move still does not fulfil the join`() {
+        fun `two PlayerJoined without a first move still does not fulfil the condition`() {
             val started = start(saga, LobbyOpened("g1"))
             val afterFirstJoin = saga.step(started.state(), SagaInput.event(PlayerJoined("g1")))
 
@@ -187,7 +187,7 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
-        fun `the first move fulfils the join, sends the start email and cancels the timeout`() {
+        fun `the first move fulfils the condition, sends the start email and cancels the timeout`() {
             val started = start(saga, LobbyOpened("g1"))
             val afterFirstJoin = saga.step(started.state(), SagaInput.event(PlayerJoined("g1")))
             val afterSecondJoin = saga.step(afterFirstJoin.state(), SagaInput.event(PlayerJoined("g1")))
@@ -206,7 +206,7 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
-        fun `a single PlayerJoined plus the first move does not fulfil the join because two joins are expected`() {
+        fun `a single PlayerJoined plus the first move does not fulfil the condition because two PlayerJoined are expected`() {
             val started = start(saga, LobbyOpened("g1"))
             val afterFirstJoin = saga.step(started.state(), SagaInput.event(PlayerJoined("g1")))
 
@@ -220,7 +220,7 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
-        fun `the second PlayerJoined is what tips the join over its expected count, regardless of arrival order`() {
+        fun `the second PlayerJoined is what tips the condition over its expected count, regardless of arrival order`() {
             val started = start(saga, LobbyOpened("g1"))
             val afterFirstJoin = saga.step(started.state(), SagaInput.event(PlayerJoined("g1")))
             val afterMove = saga.step(afterFirstJoin.state(), SagaInput.event(FirstPlayerMadeMove("g1")))
@@ -239,7 +239,7 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
-        fun `the timeout firing before the join is fulfilled reminds the players and completes the saga`() {
+        fun `the timeout firing before the condition is fulfilled reminds the players and completes the saga`() {
             val started = start(saga, LobbyOpened("g1"))
 
             val step = saga.step(started.state(), SagaInput.timeout("g1", stepTimer("awaiting-game-start")))
@@ -439,7 +439,7 @@ class SagaFlowExtensionsTest {
         }
     }
 
-    // --- Scenario D: a join whose whenFulfilled reads the joined events -----------------------------------------------
+    // --- Scenario D: an allOf condition whose whenFulfilled reads the fulfilling events ---------------------------------
 
     sealed interface ReviewEvent
     data class ReviewRequested(val documentId: String) : ReviewEvent
@@ -451,10 +451,10 @@ class SagaFlowExtensionsTest {
     data class Publish(val documentId: String, val amount: Int) : ReviewCommand
 
     /**
-     * The canonical `whenFulfilled` example: a join does not just fire, it hands the block every event it collected while
-     * waiting. Here two [Approved] and one [BudgetAssigned] must arrive; once they do, `whenFulfilled` reads each approving
-     * reviewer via [ReceivedEvents.all] and the assigned amount via [ReceivedEvents.first] to build commands from the actual
-     * joined payloads, not just the initiating event.
+     * The canonical `whenFulfilled` example: an allOf condition does not just fire, it hands the block every event it
+     * collected while waiting. Here two [Approved] and one [BudgetAssigned] must arrive; once they do, `whenFulfilled`
+     * reads each approving reviewer via [ReceivedEvents.all] and the assigned amount via [ReceivedEvents.first] to build
+     * commands from the actual fulfilling payloads, not just the initiating event.
      */
     private fun documentReviewSaga(): Saga<ReviewEvent, FlowState<ReviewEvent>, ReviewCommand> =
         saga {
@@ -463,7 +463,7 @@ class SagaFlowExtensionsTest {
             correlate<Approved> { it.documentId }
             correlate<BudgetAssigned> { it.documentId }
             step("awaiting-approvals") {
-                join(expect<Approved>(2), expect<BudgetAssigned>(), then = end) { received ->
+                on(allOf(event<Approved>(2), event<BudgetAssigned>()), then = end) { received ->
                     received.all<Approved>().forEach { approval -> issue(NotifyReviewer(approval.reviewer)) }
                     val budget = received.first<BudgetAssigned>()
                     issue(Publish(received.initiating<ReviewRequested>().documentId, budget!!.amount))
@@ -472,12 +472,12 @@ class SagaFlowExtensionsTest {
         }
 
     @Nested
-    inner class DocumentReviewJoin {
+    inner class DocumentReviewAllOf {
 
         private val saga = documentReviewSaga()
 
         @Test
-        fun `the join stays open until every expected event has arrived`() {
+        fun `the condition stays open until every expected event has arrived`() {
             val started = start(saga, ReviewRequested("d1"))
             val afterFirstApproval = saga.step(started.state(), SagaInput.event(Approved("d1", "alice")))
 
@@ -491,7 +491,7 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
-        fun `whenFulfilled reads every joined event to build its commands`() {
+        fun `whenFulfilled reads every fulfilling event to build its commands`() {
             val started = start(saga, ReviewRequested("d1"))
             val afterFirstApproval = saga.step(started.state(), SagaInput.event(Approved("d1", "alice")))
             val afterBudget = saga.step(afterFirstApproval.state(), SagaInput.event(BudgetAssigned("d1", 500)))
@@ -785,7 +785,6 @@ class SagaFlowExtensionsTest {
     sealed interface ValidationEvent
     data class Started(val id: String) : ValidationEvent
     data class Foo(val id: String) : ValidationEvent
-    data class Bar(val id: String) : ValidationEvent
 
     sealed interface ValidationCommand
     data class RecordValidation(val id: String) : ValidationCommand
@@ -794,13 +793,13 @@ class SagaFlowExtensionsTest {
     inner class BuildValidation {
 
         @Test
-        fun `a single-expectation join builds and fulfils on that one event`() {
+        fun `a single-leaf allOf builds and fulfils on that one event`() {
             val saga = saga<ValidationEvent, ValidationCommand> {
                 startsOn<Started>()
                 correlate<Started> { it.id }
                 correlate<Foo> { it.id }
                 step("await-foo") {
-                    join(expect<Foo>(), then = end) { r ->
+                    on(allOf(event<Foo>()), then = end) { r ->
                         issue(RecordValidation(r.initiating<Started>().id))
                     }
                 }
@@ -860,22 +859,6 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
-        fun `a step mixing a branch and a join fails immediately`() {
-            assertThatThrownBy {
-                saga<ValidationEvent, ValidationCommand> {
-                    startsOn<Started>()
-                    correlate<Started> { it.id }
-                    correlate<Foo> { it.id }
-                    correlate<Bar> { it.id }
-                    step("first") {
-                        on<Foo>(then = end)
-                        join(expect<Bar>(), then = end)
-                    }
-                }
-            }.isInstanceOf(IllegalStateException::class.java)
-        }
-
-        @Test
         fun `missing startsOn fails to build`() {
             assertThatThrownBy {
                 saga<ValidationEvent, ValidationCommand> {
@@ -897,9 +880,15 @@ class SagaFlowExtensionsTest {
         }
 
         @Test
-        fun `an Expectation of zero count is rejected`() {
-            assertThatThrownBy { Expectation.of(Foo::class.java, 0) }
-                .isInstanceOf(IllegalArgumentException::class.java)
+        fun `a leaf of zero count is rejected`() {
+            assertThatThrownBy {
+                saga<ValidationEvent, ValidationCommand> {
+                    startsOn<Started>()
+                    correlate<Started> { it.id }
+                    correlate<Foo> { it.id }
+                    step("first") { on(event<Foo>(0), then = end) }
+                }
+            }.isInstanceOf(IllegalArgumentException::class.java)
         }
 
         @Test
@@ -925,21 +914,6 @@ class SagaFlowExtensionsTest {
                 .hasMessageContaining("is used by a step")
         }
 
-        @Test
-        fun `a step mixing a window-condition branch and a join fails immediately, same as mixing a classic branch and a join`() {
-            assertThatThrownBy {
-                saga<ValidationEvent, ValidationCommand> {
-                    startsOn<Started>()
-                    correlate<Started> { it.id }
-                    correlate<Foo> { it.id }
-                    correlate<Bar> { it.id }
-                    step("first") {
-                        on(event<Foo>(), then = end)
-                        join(expect<Bar>(), then = end)
-                    }
-                }
-            }.isInstanceOf(IllegalStateException::class.java)
-        }
     }
 
     @Nested
