@@ -618,6 +618,9 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     }
 
     private Mono<EventStreamImpl> readEventStream(String streamId, @Nullable StreamReadFilter streamReadFilter, int skip, int limit) {
+        if (skip < 0) {
+            throw new IllegalArgumentException("skip cannot be negative");
+        }
         return currentStreamVersion(streamId)
                 .flatMap(currentStreamVersion -> {
                     // Uses "lte" currentStreamVersion instead of a transaction on read, so an event another thread

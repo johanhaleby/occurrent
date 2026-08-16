@@ -770,6 +770,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     private EventStreamImpl<Document> readEventStream(String streamId, @Nullable StreamReadFilter streamReadFilter, int skip, int limit) {
+        if (skip < 0) {
+            throw new IllegalArgumentException("skip cannot be negative");
+        }
         long currentStreamVersion = currentStreamVersion(streamId);
         if (currentStreamVersion == 0) {
             return new EventStreamImpl<>(streamId, 0, Stream.empty());
