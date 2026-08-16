@@ -28,11 +28,17 @@ import org.jspecify.annotations.NullMarked;
  * Called once per event, whether or not a handler ends up running. {@code matched} is {@code true} only when the
  * model is running and a currently registered, unpaused subscription's filter accepted the event, independent of
  * whether that handler goes on to succeed or throw. It shares the same filter evaluation the actual dispatch
- * decision is made from, so the two can never disagree. A filter that throws while being evaluated (a supplied
- * {@code DataFieldReader} can) is reported as unmatched too, before that exception propagates. A
- * {@link RuntimeException} or {@link AssertionError} the observer itself throws is caught and logged rather than
- * propagated, so a broken observer cannot turn an event that was actually delivered into a broker redelivery.
- * Another {@link Error} still propagates, as it does everywhere else on this stack.
+ * decision is made from, so the two can never disagree.
+ * <p>
+ * A filter that throws while being evaluated (a supplied {@code DataFieldReader} can) never gets to answer whether
+ * it matched. A {@link RuntimeException} or {@link AssertionError} is reported to the observer as {@code false}
+ * instead, standing in for the answer that never came, before that exception propagates. Any other {@link Error}
+ * skips the observer entirely and propagates straight out.
+ * <p>
+ * The observer itself can throw too, after being told the real {@code matched}. A {@link RuntimeException} or
+ * {@link AssertionError} it throws is caught and logged rather than propagated, so a broken observer cannot turn an
+ * event that was actually delivered into a broker redelivery. Any other {@link Error} it throws still propagates,
+ * once the observer has already run.
  * <p>
  * The default, {@link #noop()}, changes nothing for existing code, and {@link PushSubscriptionModel} skips both this
  * call and the match check entirely when no other observer is configured.
