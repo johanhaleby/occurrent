@@ -346,12 +346,19 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     private Subscription startDelegatedSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, boolean subscriptionsWasCancelledOrShutdown, StartAt startAtToUse, Consumer<CloudEvent> liveConsumer) {
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
-            doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                // Only get position if using storage and no position has been stored
-                if (!cfg.storage().exists(subscriptionId)) {
-                    startAtToUse.get(generateSubscriptionModelContext());
-                }
-            });
+            // Priming startAtToUse is skipped for an explicit cancellation of this exact id, since its get() call
+            // saves globalCheckpoint as a side effect, which would recreate the position cancelSubscription's own
+            // deletePositionFromStorage call just deleted. A stop() or shutdown deletes nothing, so priming it for
+            // those still leaves a resumable position for the next restart, same as before this id had per-attempt
+            // identity.
+            if (!wasCancelled(subscriptionId)) {
+                doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+                    // Only get position if using storage and no position has been stored
+                    if (!cfg.storage().exists(subscriptionId)) {
+                        startAtToUse.get(generateSubscriptionModelContext());
+                    }
+                });
+            }
             subscription = new CancelledSubscription(subscriptionId);
         } else {
             subscription = getWrappedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAtToUse, liveConsumer);

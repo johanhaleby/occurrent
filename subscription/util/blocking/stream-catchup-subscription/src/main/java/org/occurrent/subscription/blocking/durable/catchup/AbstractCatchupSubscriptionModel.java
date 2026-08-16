@@ -148,15 +148,26 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
+     * A sentinel stored in {@link #currentAttempt} by {@link #cancelRunningCatchup}, instead of removing the entry
+     * outright, so a stale attempt's in-flight save reaching {@link #isSafeToPersistFor} afterward can tell an
+     * explicit per-id cancellation apart from {@link #markShuttingDown} clearing the same entry. Both leave no real
+     * attempt registered, but only cancellation also deletes the stored checkpoint via
+     * {@code cancelSubscription}'s own {@code deletePositionFromStorage} call, and a stale save landing after that
+     * delete must not recreate what the cancellation just removed. A graceful shutdown deletes nothing, so the
+     * event that triggered it is still safe to persist.
+     */
+    private static final CatchupAttempt CANCELLED = new CatchupAttempt();
+
+    /**
      * Whether persisting a checkpoint for an event this call's own attempt already delivered is still safe: nobody
      * else's, specifically not a different, {@code non-null} attempt for the same {@code subscriptionId}, has taken
-     * over since. {@code null} (nobody registered, for example {@link #cancelRunningCatchup} or
-     * {@link #markShuttingDown} clearing this same attempt's own entry) counts as safe too, because a stop or
-     * shutdown triggered by the very event being persisted does not put a newer attempt's position at risk, only an
-     * actually different attempt taking the id over does. This is deliberately looser than
-     * {@link #shouldKeepReplaying}, which needs exact identity to decide whether to keep replaying at all, not
-     * whether one already-delivered event's position is still safe to persist. Only meaningful on the virtual
-     * thread {@link #startCatchupAsync} started for this attempt.
+     * over since, and this id was not itself explicitly cancelled. {@code null} (nobody registered, for example
+     * {@link #markShuttingDown} clearing this same attempt's own entry) counts as safe, because a shutdown
+     * triggered by the very event being persisted does not put a newer attempt's position at risk and deletes
+     * nothing itself, only an actually different attempt taking the id over, or an explicit cancellation of it,
+     * does. This is deliberately looser than {@link #shouldKeepReplaying}, which needs exact identity to decide
+     * whether to keep replaying at all, not whether one already-delivered event's position is still safe to
+     * persist. Only meaningful on the virtual thread {@link #startCatchupAsync} started for this attempt.
      */
     protected boolean isSafeToPersistFor(String subscriptionId) {
         CatchupAttempt owner = currentAttempt.get(subscriptionId);
@@ -221,8 +232,22 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     public void cancelRunningCatchup(String subscriptionId) {
         runningCatchupSubscriptions.remove(subscriptionId);
-        currentAttempt.remove(subscriptionId);
+        // Replaced with the CANCELLED sentinel, not removed outright, but only when an attempt is actually
+        // registered here: a dual-mode dispatcher calls this on both inner models for every cancellation, and the
+        // one with nothing running for this id must stay a no-op rather than start tracking an id that is not its
+        // concern.
+        currentAttempt.computeIfPresent(subscriptionId, (id, existingAttempt) -> CANCELLED);
         pauseRequestedDuringCatchup.remove(subscriptionId);
+    }
+
+    /**
+     * Whether {@code subscriptionId} currently carries the {@link #CANCELLED} sentinel, meaning this exact call's
+     * attempt was the one {@link #cancelRunningCatchup} evicted and nothing has taken the id over since. A later
+     * attempt superseding a stale one for the same id is not a cancellation from that stale attempt's own point of
+     * view, so it reports {@code false} here even though the stale attempt is itself no longer current.
+     */
+    protected boolean wasCancelled(String subscriptionId) {
+        return currentAttempt.get(subscriptionId) == CANCELLED;
     }
 
     /**

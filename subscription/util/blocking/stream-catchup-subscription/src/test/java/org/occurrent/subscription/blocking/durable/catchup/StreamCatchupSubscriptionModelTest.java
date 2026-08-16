@@ -34,7 +34,9 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import java.net.URI;
@@ -56,6 +58,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 
 /**
  * In-memory unit tests for {@link StreamCatchupSubscriptionModel}, used directly rather than through the
@@ -363,6 +366,42 @@ class StreamCatchupSubscriptionModelTest {
                 .as("the subscription actually in use must hand over to live delivery, not be told it was "
                         + "cancelled by someone else's stale attempt")
                 .isTrue();
+    }
+
+    /**
+     * Copilot review on PR #823 (issue #737). A stale in-flight event's checkpoint save survived being cancelled,
+     * since the identity check treated "nobody registered" as always safe to persist, not distinguishing a
+     * cancellation (which also deletes the stored checkpoint, expecting it gone) from a graceful shutdown (which
+     * deletes nothing and does want the last position kept).
+     */
+    @Test
+    void a_stale_events_checkpoint_save_does_not_recreate_a_position_cancelSubscription_just_deleted() throws InterruptedException {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, config);
+        String subscriptionId = "subscription";
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+
+        subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Cancels while the event's action is still blocked, deleting the (so far nonexistent) stored checkpoint.
+        subscription.cancelSubscription(subscriptionId);
+        releaseReplay.countDown();
+
+        // The stale attempt's action already returned and tried to persist by now if it was going to; give it a
+        // moment, then assert the cancellation's deletion is what stands, not a resurrected position.
+        Thread.sleep(200);
+        assertThat(storage.read(subscriptionId))
+                .as("cancelSubscription deleted this id's position and expects it to stay gone, not be recreated "
+                        + "by the stale attempt's own in-flight event")
+                .isNull();
     }
 
     @Test

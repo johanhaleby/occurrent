@@ -197,11 +197,16 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
-            doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                if (!cfg.storage().exists(subscriptionId)) {
-                    startAtToUse.get(generateSubscriptionModelContext());
-                }
-            });
+            // Same fix as the blocking stream side. Priming startAtToUse is skipped for an explicit cancellation of
+            // this exact id, since its get() call saves globalCheckpoint as a side effect, which would recreate the
+            // position cancelSubscription's own deletePositionFromStorage call just deleted.
+            if (!wasCancelled(subscriptionId)) {
+                doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+                    if (!cfg.storage().exists(subscriptionId)) {
+                        startAtToUse.get(generateSubscriptionModelContext());
+                    }
+                });
+            }
             subscription = new CancelledSubscription(subscriptionId);
         } else {
             subscription = startLiveDcbSubscription(subscriptionId, filter, startAtToUse, action, catchupPhaseCache);
