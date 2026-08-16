@@ -93,7 +93,7 @@ That option is closed on structure rather than on taste.
 Add a descriptor holding exactly two things, which events it wants and what to do with each one:
 
 ```java
-@Subscription(id = "notify-customer")
+@OccurrentSubscription(id = "notify-customer")
 Subscription<OrderEvent> notifyCustomer() {
     return Subscription.<OrderEvent>builder()
         .on(OrderShipped.class, (metadata, event) -> mailer.shipped(event))
@@ -134,9 +134,12 @@ a separate read boundary. A caller who wants the criteria used verbatim supplies
 explicit criteria and handler-derived types is refused rather than silently resolved, which is the same refusal
 `DcbProjection` already makes.
 
-Each stack gets a runner that takes an id, a descriptor and an optional `StartAt`, and returns a started
-`SubscriptionHandle`. It follows `ProjectionRunner`'s shape, the `agnostic` and `stream` factories that fix the
-capability and a `waitUntilStarted` argument on the widest overload, but it needs none of that runner's store
+**There are four runners, not two, because DCB does not share a start position with the other capabilities.** A runner
+takes an id, a descriptor and an optional start position, and returns a started `SubscriptionHandle`. The two
+non-DCB ones follow `ProjectionRunner`'s shape, the `agnostic` and `stream` factories that fix the capability, a
+`StartAt`, and a `waitUntilStarted` argument on the widest overload. The two DCB ones follow `DcbProjectionRunner` and
+`ReactiveDcbProjectionRunner` instead, a single `create` factory and a `DcbStartAt`, because DCB positions are not
+global positions and `DcbSubscriptions` is a different entry point. None of the four needs `ProjectionRunner`'s store
 arguments, because a descriptor already has its handler where a `Projection` needs somewhere to put its state.
 
 ### 2. The running handle becomes `SubscriptionHandle`
@@ -213,10 +216,17 @@ time, and its own comment says why, because the bean post processor runs before 
 so the instance it was handed is the raw target. The other three paths invoke that raw target, so a `@Transactional` on
 a `@Subscription`, `@StreamSubscription` or `@DcbSubscription` handler does not run today and has never run.
 
-So a body moved into a lambda loses a working transaction only on `@SynchronousSubscription`, and that is the case the
-recipe refuses and flags for a human, the way `FlagObjectTypedCapabilityLookup` already flags call sites a rename cannot
-safely rewrite. It flags on a statically visible annotation, which is all a source rewrite can see. Advice attached by an
-external pointcut is invisible to it, and the migration guide says so rather than the recipe pretending to catch it.
+So a body moved into a lambda loses working advice only on `@SynchronousSubscription`, and that is the case the recipe
+refuses and flags for a human, the way `FlagObjectTypedCapabilityLookup` already flags call sites a rename cannot safely
+rewrite.
+
+**The refusal is on the annotation, not on `@Transactional`.** Because that path invokes the proxy, everything Spring
+advises works there, so a class-level or meta-annotated `@Transactional` counts, and so does `@Retryable`, `@Cacheable`
+or anything else advised. A recipe that looked for a method-level `@Transactional` would rewrite those and drop the
+advice silently, which is the failure it exists to prevent. So it refuses every `@SynchronousSubscription` handler
+whose class or method has any advice annotation it can see, and refuses rather than guesses when it cannot tell.
+Advice attached by an external pointcut is invisible to a source rewrite whatever it looks for, so the migration guide
+says to check those by hand rather than the recipe pretending to catch them.
 
 **The three asynchronous paths silently ignoring advice is a pre-existing defect, and the descriptor form is what fixes
 it.** Today a user writes `@Transactional` on a `@Subscription` handler, everything compiles, the tests pass, and no
@@ -231,7 +241,8 @@ The work this ADR describes, listed so it can be scoped as its own epic:
 
 1. `Subscription<E>`, `ReactiveSubscription<E>`, `DcbSubscription<E>` and `ReactiveDcbSubscription<E>` with their
    builders, plus the shared selector logic in `dsl/subscription-dsl/common`.
-2. A runner per stack, mirroring `ProjectionRunner` and `ReactiveProjectionRunner`.
+2. Four runners, two following `ProjectionRunner` and `ReactiveProjectionRunner`, two following `DcbProjectionRunner`
+   and `ReactiveDcbProjectionRunner`.
 3. The `SubscriptionHandle` rename across `subscription/api/blocking` and `subscription/api/reactor`, 78 importing files.
 4. Reworking both `SubscriptionAnnotationRegistrar` classes, 217 and 234 lines, onto descriptors, and deleting the
    parameter classification once nothing calls it.
