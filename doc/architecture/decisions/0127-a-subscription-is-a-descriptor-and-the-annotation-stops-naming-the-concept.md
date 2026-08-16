@@ -134,8 +134,10 @@ a separate read boundary. A caller who wants the criteria used verbatim supplies
 explicit criteria and handler-derived types is refused rather than silently resolved, which is the same refusal
 `DcbProjection` already makes.
 
-Each stack gets a runner that takes a descriptor and returns a started subscription, mirroring `ProjectionRunner` and
-`ReactiveProjectionRunner` member for member.
+Each stack gets a runner that takes an id, a descriptor and an optional `StartAt`, and returns a started
+`SubscriptionHandle`. It follows `ProjectionRunner`'s shape, the `agnostic` and `stream` factories that fix the
+capability and a `waitUntilStarted` argument on the widest overload, but it needs none of that runner's store
+arguments, because a descriptor already has its handler where a `Projection` needs somewhere to put its state.
 
 ### 2. The running handle becomes `SubscriptionHandle`
 
@@ -169,10 +171,12 @@ with a framework, and it is the only Spring-coupled part of the pair, so it is t
 | `@DcbSubscription` | `@OccurrentDcbSubscription` |
 | `@SynchronousSubscription` | `@OccurrentSynchronousSubscription` |
 
-All seven move, including the three with no collision today. A set where four annotations are prefixed and three are
-bare is harder to remember than either uniform choice, and `@StreamSubscription` and `@DcbSubscription` acquire the
-collision anyway once their descriptors exist. Per ADR 26 each is a new annotation type with the old one deprecated
-`forRemoval`, and the bean post processor reads both until the old ones go.
+All seven move, including the three with no collision today. `@DcbSubscription` acquires one as soon as
+`DcbSubscription<E>` exists, so it is really two annotations that stay clean, `@StreamSubscription` and
+`@SynchronousSubscription`, and a set where five annotations are prefixed and two are bare is harder to remember than
+either uniform choice. Neither of those two gets a descriptor of its own, since a stream-scoped or synchronous
+subscription is an ordinary `Subscription<E>` and the capability is chosen on the annotation. Per ADR 26 each is a new
+annotation type with the old one deprecated `forRemoval`, and the bean post processor reads both until the old ones go.
 
 `@Occurrent`-prefixing follows what the JVM ecosystem already does when a framework annotation would otherwise take a
 generic word: `@KafkaListener`, `@RabbitListener`, `@JmsListener`. It costs nine characters at each use, once per
