@@ -31,16 +31,15 @@ import java.util.List;
  * <p>
  * Only an id whose own registration path actually reaches {@link CheckpointStorage} is asked about, at the point
  * every singleton exists and before any of them registers. A {@code @SynchronousSubscription} never reaches it, and
- * neither does a {@code @Projection} or {@code @Snapshot} in synchronous mode, or a {@code @Projection} or
- * {@code @Saga} whose push feed catches up from nothing, so none of those ids are ever named here even when the
- * storage would refuse them.
- * <p>
- * A {@code @Projection(source = PUSH)} fed by a domain-event feed is the opposite mistake, over-coverage rather than
- * under. It is still asked about, even though its optional catch-up marker, when the feed bean has one, only ever
+ * neither does a {@code @Projection} or {@code @Snapshot} in synchronous mode, a {@code @Projection} or
+ * {@code @Saga} whose push feed catches up from nothing, or a {@code @Projection(source = PUSH)} fed by a
+ * {@code DomainEventFeed}, whatever catchup says. That path resolves no {@code CheckpointStorage} at all, and a
+ * domain-event feed's own optional catch-up marker, a separate bean the feed is built with directly, only ever
  * calls {@code exists} and the unconditional two-argument {@code save}, never the conditional write this check is
- * about, so a storage that refuses this id for a conditional write never actually refuses anything this projection
- * writes. That makes a startup failure over an id like this a false one, not a real one this check is right to
- * raise (see #788).
+ * about. None of those ids are ever named here even when the storage would refuse them, with one exception. The
+ * exclusion for a {@code DomainEventFeed}-fed push projection depends on reading the feed bean's type from Spring
+ * bean metadata without creating it, and an id whose feed bean cannot be typed that way, an ambiguous or otherwise
+ * unresolvable one, stays asked about rather than excluded on a guess.
  * <p>
  * A subscription id built or read only at runtime is outside what this check can enumerate at all. So is one an
  * annotation declares whose registration writes a checkpoint before this check runs, which {@code @Subscription},

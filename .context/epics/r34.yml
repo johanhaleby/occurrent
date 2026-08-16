@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 8
-updated_at: 2026-08-16T18:35:00Z
+revision: 17
+updated_at: 2026-08-16T21:30:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -18,10 +18,19 @@ pending_actions:
     type: merge
     target: "PR 808 (U4), held until Johan approves the ADR 54 amendment wording. REVISED after first presentation: head e36cfce99 adds the fromStreamVersion+StreamReadFilter skip-drift caveat and softens the native-store limit/close claims, both driven by Copilot's balanced review, which also produced issue 810 (worker-filed, orchestrator-verified in code). Worker asked 17:4xZ to resolve its five addressed threads. Related but Johan's own merges: docs PRs 66 and 67, docs issue 57 closes after 67 lands"
     expected: "Johan rules on the revised amendment, then 808 merges under standing authority with a CAS pin at e36cfce99 or later, threads resolved first"
-    status: PENDING
-    attempts: 0
+    status: VERIFIED
+    attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-16T17:20:00Z
+    resolved: "Johan approved as written 2026-08-16T19:2xZ via structured ask. Merged f71d4fae2 with CAS pin ccef8bd, all three commit diffs read, two reasoned-decline threads left open per policy"
+  - id: act-005
+    type: merge
+    target: "Close docs issue 57 AFTER Johan merges docs PR 67, per his ruling 2026-08-16T19:2xZ (close on his behalf with a short closing comment). The docs repo has no monitor, so check PR 67 state on every wake until it merges"
+    expected: "docs 67 merged by Johan, then orchestrator closes 57 citing the closeout verification and the badge fix, writing gate on the comment"
+    status: PENDING
+    attempts: 0
+    safe_to_repeat: true
+    issued_at: 2026-08-16T19:30:00Z
   - id: act-003
     type: message-session
     target: "Issue 810 (native Mongo store: unsorted path drops skip/limit, no onClose cursor release, fromStreamVersion skip drifts under a filter) awaits Johan's triage ruling, presented 2026-08-16T17:45Z. Orchestrator recommendation: adopt as a new r34 unit and milestone it, the unsorted default makes the limit drop a silent correctness bug, though pre-existing so arguably not release-blocking"
@@ -39,6 +48,30 @@ pending_actions:
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-16T18:00:00Z
+  - id: act-006
+    type: dispatch-chip
+    target: "U1 remediation chip task_2cf40682 spawned 2026-08-16T19:55Z on PR branch johan/r34-u1-reactor-subscription-fixes, plan gate in session for the atomicity redesign"
+    expected: "PR 812 rebased, three threads fixed or refuted with evidence, green with resolved threads, then DELIVERY_RESULT"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-16T19:55:00Z
+  - id: act-007
+    type: dispatch-chip
+    target: "Wave 2 chips spawned 2026-08-16T20:5xZ: U8 task_ffc08735, U9 task_e2b2961c, U10A task_8da6cf7d, U11 task_bb9a30d1, U13 task_fbfcd1be, U14 task_8628f8ca, U15 task_4f39a24b (Opus). U8 and U9 started by Johan immediately. Held back: U7 (needs U1 merge), U10B (needs U10A), U12 (designated stretch). U16 and the U1 remediation chip also started ~20:4xZ"
+    expected: "each delivers per its brief with in-session plan gates; ADR units audit ADR numbers across all remote branches before numbering"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-16T21:00:00Z
+  - id: act-008
+    type: message-session
+    target: "Unmarked chip 'Check reactor Mongo store for the same skip-under-filter drift' was NOT orchestrator-spawned, likely a worker's freelance flag. Orchestrator verified the finding is real (ReactorMongoEventStore lines 620-640) and folded it into issue 810 as comment 5308808054, which U16 picks up via its claim-recheck. Recommended Johan dismiss the unmarked chip"
+    expected: "Johan dismisses the unmarked chip, U16 covers the reactor surface"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-16T21:00:00Z
 units:
   H1:
     issue: null
@@ -77,7 +110,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_350dd4df, delivered PR 812 at 18:3xZ (re-registration race fix plus wording, checks running)"
+    session: "chip task_350dd4df went idle at DONE with 3 substantive Copilot threads unresolved (atomicity gap in the fix, test does not exercise the race, false WARN) and the changelog conflict standing. Remediation chip task_2cf40682 spawned 19:55Z on the same PR branch, awaiting Johan click. Dismiss it if the original session resumes first"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "791", met: false, evidence: null}
@@ -87,14 +120,14 @@ units:
   U2:
     issue: 788
     goal: "Fencing configuration check sees DomainEventFeed-backed push projections; scope is the annotation scan and resolveFeedBean, CheckpointStorage SPI out of bounds"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_7cd8b360, delivered PR 811 at 18:0xZ (checks running, design gate ran in its session per venue)"
+    session: "chip task_7cd8b360 COMPLETE (worker self-rebased the conflict and answered review before ending)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "788", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "811", met: true, evidence: "merged 68ceb5472 2026-08-16T20:1xZ, CAS pin 48b46167c, 26/26 green, threads resolved, changelog and 0.33.0 migration-guide touch included, branch deleted"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "788", met: true, evidence: "closed by the squash, verified"}
   U3:
     issue: 802
     goal: "Observation hook on PushSubscriptionModel, design gate on the hook's home (push models vs RegisteringSubscribable)"
@@ -109,15 +142,15 @@ units:
   U4:
     issue: 775
     goal: "Docs-corrections bundle: #775 javadoc and docs-site check, #761 cursor warnings on six Sequence extensions, #760 ADR 54 read-side amendment (issue close is Johan's)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_52b639cb, delivered PR 808 (held on act-002 ADR gate) and docs PR 66"
+    session: "chip task_52b639cb COMPLETE (also filed issue 810 and docs PR 66, which stays Johan's merge)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "775", met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "761", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "808", met: true, evidence: "merged f71d4fae2 2026-08-16T19:2xZ after Johan approved the ADR 54 amendment, CAS pin ccef8bd, branch deleted"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "775", met: true, evidence: "closed by the squash, verified"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "761", met: true, evidence: "closed by the squash, verified. 760 deliberately stays open, its close is Johan's"}
   U5:
     issue: 781
     goal: "Flake-rate investigation SubscriptionModelConformance$TheLifeCycle, timeboxed; TCK fixture changes may tighten or add, never loosen"
@@ -125,21 +158,21 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_e01a9bfc, started by Johan 2026-08-16T17:0xZ"
+    session: "chip task_e01a9bfc COMPLETE per timebox. PR 813 merged 0285887cc (timeout widening, no assertion touched). Issue 781 kept OPEN by orchestrator: the PR its own CI failed the paused-hold test at 12s with the held event absent while a later one arrived, a lost-redelivery signature, counter-evidence to slowness. Comment 5308784125 records the next diagnostic step. Johan closes or re-defers 781 at the release gate"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "781", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "813", met: true, evidence: "merged 0285887cc 2026-08-16T20:3xZ, CAS pin 90be8c0b4, 26/26 green, no unresolved threads, body repointed from Fixes to Part-of before merge"}
+      - {check: manual_approval, repo: johanhaleby/occurrent, ref: "781", met: false, evidence: "781 deliberately open with the 12s counter-example recorded; Johan rules close vs re-defer at the release gate"}
   U6A:
     issue: 786
     goal: "Move SagaFilters to dsl/saga-dsl/common and make public, mirroring ProjectionFilters; independent of the expansion pass"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_545261f9, delivered PR 809, self-rebased to 2236e2a, 14 checks green 12 running at 18:1xZ, one unresolved review thread owned by the worker, expected resolved by 18:45Z else message the session"
+    session: "chip task_545161f9 COMPLETE, session name unmapped (generated peer names), no wind-down message sent"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "786", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "809", met: true, evidence: "merged 38274d24e 2026-08-16T19:0xZ, CAS pin eccbcd72c, 26/26 green on rerun (subscription-util java-25 was the CompetingConsumer awaitility flake), threads resolved, changelog entry included, branch deleted"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "786", met: true, evidence: "closed by the squash merge, verified via gh issue view"}
   U7:
     issue: 771
     goal: "Manual/reactor registration ordering residual plus checkpoint delete-recreate race, one decision across both stacks, plan-first, likely ADR"
@@ -154,11 +187,11 @@ units:
   U8:
     issue: 773
     goal: "Retained-history counting vs stepWindow eviction (#773) and the explicit-retention-choice question (#764) as one ADR-backed decision; a no-forced-choice outcome is recorded, not dropped"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_ffc08735, started by Johan 20:5xZ"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "773", met: false, evidence: null}
@@ -166,22 +199,22 @@ units:
   U9:
     issue: 748
     goal: "Parked-instance behavior on renamed or removed step, lifecycle ADR plus fix, includes the IndexOutOfBoundsException sibling"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_e2b2961c, started by Johan 20:5xZ"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "748", met: false, evidence: null}
   U10A:
     issue: 750
     goal: "Sealed-expansion ADR: uniformity across modules on the getPermittedSubclasses invariant, #753 likely no-change-recorded, #758 largely documentation"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_8da6cf7d, started by Johan 21:0xZ before going unattended"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
   U10B:
@@ -200,11 +233,11 @@ units:
   U11:
     issue: 737
     goal: "Four lifecycle-leak findings, items 1-3 small fixes, item 4 per-attempt identity coordinated across both catch-up models, plan-first"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_bb9a30d1, started by Johan 21:0xZ before going unattended"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "737", met: false, evidence: null}
@@ -222,43 +255,43 @@ units:
   U13:
     issue: 439
     goal: "Store-neutral config keys: names AND mechanism (alias vs rename+recipe, RenameMappedSubscriptionEnabledKey is the precedent #439 predates) settled at one Johan gate, #410 requirements as input"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_fbfcd1be, started by Johan 21:0xZ before going unattended"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "439", met: false, evidence: null}
   U14:
     issue: 806
     goal: "Join removal plan-first: recipe reachability map (two Java overloads, Kotlin trailing lambdas), UpgradeToOccurrent_0_34 recipe, prose migration for unreachable shapes, remove join/expect/Expectation, docs sweep"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_8628f8ca, started by Johan 21:0xZ before going unattended"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "806", met: false, evidence: null}
   U16:
     issue: 810
     goal: "Native Mongo store read fixes, plan-first: unsorted path applies skip/limit, returned Stream closes its MongoCursor via onClose, fromStreamVersion no longer drifts under a StreamReadFilter (candidate: translate the version into a query condition instead of a skip, worker's plan decides). Conformance coverage so the Spring store's correct behavior becomes the tested contract"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_33f7131a, delivered PR 814 at 21:2xZ covering native, Spring blocking, reactor, and in-memory stores. Worker refuted the unsorted skip/limit bug via mutation test (FindIterable aliases itself), so 810 finding one was never active. CONFLICTING on changelog, worker owns rebase. MERGE FOLLOW-UP: the ADR 54 amendment paragraph documenting the drift as permanent goes stale when 814 merges, orchestrator amends it in a small prose PR after merge"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "810", met: false, evidence: null}
   U15:
     issue: 725
     goal: "Subscription-as-data-structure design round with the #721 name-clash answer inside it, plan-first Opus ADR; implementation registers as its own epic if the plan sizes it epic-scale"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_4f39a24b, started by Johan 21:0xZ before going unattended"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
