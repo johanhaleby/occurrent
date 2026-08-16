@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 29
-updated_at: 2026-08-17T02:10:00Z
+revision: 30
+updated_at: 2026-08-17T02:30:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -266,14 +266,14 @@ units:
   U14:
     issue: 806
     goal: "Join removal plan-first: recipe reachability map (two Java overloads, Kotlin trailing lambdas), UpgradeToOccurrent_0_34 recipe, prose migration for unreachable shapes, remove join/expect/Expectation, docs sweep"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_8628f8ca, started by Johan 21:0xZ before going unattended"
+    session: "chip task_8628f8ca COMPLETE. The held docs branch was authored local-only in the shared checkout, orchestrator pushed it and opened held docs PR 71"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "806", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "821", met: true, evidence: "merged 62eb23c61 2026-08-17T02:2xZ, CAS pin b4c814b8a, 26/26 green, zero threads, recipe plus tests plus migration guide plus both changelog subsections verified, held docs PR 71 opened"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "806", met: true, evidence: "closed by the squash, verified"}
   U16:
     issue: 810
     goal: "Native Mongo store read fixes, plan-first: unsorted path applies skip/limit, returned Stream closes its MongoCursor via onClose, fromStreamVersion no longer drifts under a StreamReadFilter (candidate: translate the version into a query condition instead of a skip, worker's plan decides). Conformance coverage so the Spring store's correct behavior becomes the tested contract"
