@@ -109,6 +109,14 @@ stay on the annotation, or become arguments to the runner, exactly the split
 `ProjectionRunner.project(subscriptionId, projection, view, startAt)` already uses. An explicit `Filter` overrides the
 type-derived selector, the way `Projection.filter()` does.
 
+**A registered sealed type expands to its permitted subtypes, which follows `Saga` rather than `Projection`.**
+`.on(OrderEvent.class, ..)` where `OrderEvent` is sealed selects every concrete event it permits, because that is what
+`@Subscription` does today through `EventTypeExpansion` and a migration must not change which events arrive.
+`ProjectionFilters` derives its filter from the registered classes as given, so a descriptor that copied it would
+subscribe to the sealed parent's CloudEvent type and receive nothing. `Saga` already expands the same way through the
+same `EventTypeExpansion`, so this reuses that rather than adding a third derivation, which AGENTS.md warns about by
+name.
+
 **The split cuts the other way too, so the selector attributes leave the annotations.** `eventTypes` on all four
 subscription annotations and `tags` on `@DcbSubscription` describe which events are wanted, which is the descriptor's
 half, and leaving them on the annotation would give one subscription two places to say it with no rule for which wins.
@@ -254,8 +262,11 @@ or `tags` into the descriptor.
 **A reactor handler needs one extra step.** The reactor registrar accepts a `void` method as readily as a
 `Mono`-returning one, wrapping the first in an empty `Mono`, while a `ReactiveSubscription` handler has to return
 `Mono<Void>`. So a `void` reactor body moved straight into a lambda does not compile, and the recipe wraps it in
-`Mono.fromRunnable`. It picks the stack from which autoconfigure module the application depends on, the same thing
-that decides which registrar reads the annotation today.
+`Mono.fromRunnable`. A handler returning some other `Mono<T>` needs the same treatment from the other direction, a
+trailing `.then()`, because the registrar applies exactly that today and
+`ReactiveStreamSubscriptionHandlerReturnTypeAnnotationMongoTest` covers a `Mono<String>` handler as supported
+behaviour. The recipe picks the stack from which autoconfigure module the application depends on, the same thing that
+decides which registrar reads the annotation today.
 
 **The recipe refuses an advised synchronous handler rather than rewriting it.** Spring advice reaches
 exactly one of the four annotations today. `processSynchronousSubscribeAnnotation` looks the bean up by name at dispatch
@@ -302,8 +313,8 @@ The work this ADR describes, listed so it can be scoped as its own epic:
 2. Four runners, two following `ProjectionRunner` and `ReactiveProjectionRunner`, two following `DcbProjectionRunner`
    and `ReactiveDcbProjectionRunner`.
 3. The `SubscriptionHandle` rename across `subscription/api/blocking` and `subscription/api/reactor`, 78 importing files.
-4. Reworking both `SubscriptionAnnotationRegistrar` classes, 217 and 234 lines, onto descriptors, and deleting the
-   parameter classification once nothing calls it.
+4. Adding descriptor paths to both `SubscriptionAnnotationRegistrar` classes, 217 and 234 lines, beside the existing
+   reflective path, which the deprecated annotations still need and which is deleted with them a release later.
 5. Seven new annotation types, seven deprecations, and normalization of both sets in the bean post processors.
 6. Recipes, declarative for the type and annotation renames, a Java visitor for the body rewrite with its two refusal cases.
 7. A section in `doc/migration/upgrading-to-0.34.0.md`, changelog entries, and a docs branch.
