@@ -350,6 +350,47 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void an_observer_error_while_reporting_a_filter_failure_is_suppressed_rather_than_replacing_it() {
+        // A badly behaved observer must never be able to swap out the filter's own exception for its own. That
+        // exception is the caller's redelivery signal, and reporting it to the observer must not risk losing it.
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw new IllegalStateException("payload unreadable");
+        };
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader, (CloudEvent cloudEvent, boolean matched) -> {
+            throw new Error("observer blew up too");
+        });
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
+        });
+
+        Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage("payload unreadable");
+        assertThat(thrown.getSuppressed()).hasSize(1);
+        assertThat(thrown.getSuppressed()[0]).isInstanceOf(Error.class).hasMessage("observer blew up too");
+    }
+
+    @Test
+    void a_shared_exception_instance_thrown_by_both_the_filter_and_the_observer_is_not_self_suppressed() {
+        // Throwable.addSuppressed refuses to suppress an exception onto itself, throwing an IllegalArgumentException
+        // instead. Left unguarded, that would replace the filter's own exception with an unrelated one, exactly the
+        // failure the suppression in the test above exists to prevent.
+        RuntimeException shared = new IllegalStateException("shared failure");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw shared;
+        };
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader, (CloudEvent cloudEvent, boolean matched) -> {
+            throw shared;
+        });
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
+        });
+
+        Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
+
+        assertThat(thrown).isSameAs(shared);
+        assertThat(thrown.getSuppressed()).isEmpty();
+    }
+
+    @Test
     void a_throwing_observer_is_swallowed_and_the_matching_handler_still_runs() {
         List<String> handled = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (CloudEvent cloudEvent, boolean matched) -> {
