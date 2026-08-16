@@ -130,12 +130,20 @@ that also has an explicit filter. `@DcbSubscription` does the opposite, combinin
 handler with the declared tags through `SubscriptionAnnotations.buildDcbCriteria`. The descriptor keeps the annotation's
 behaviour, so declared tags narrow the handled types rather than replacing them, because that is what the annotation
 already promises its users and a subscription has a handler to derive types from where a `DcbProjection` has a fold and
-a separate read boundary. A caller who wants the criteria used verbatim supplies it explicitly, and supplying both an
-explicit criteria and handler-derived types is refused rather than silently resolved, which is the same refusal
-`DcbProjection` already makes.
+a separate read boundary.
+
+A caller who wants the criteria used verbatim asks the builder for it, `DcbSubscription.builder().criteria(c)`, and
+that replaces the derived selector instead of narrowing it. Refusing the combination is not open to it, since every
+handler registration derives a type, so a refusal rule would make the verbatim path unreachable. An event the criteria
+admits that no handler handles is ignored, which is the contract `Projection` already states for a fold meeting an
+event type it does not handle. What still fails the delivery is an event the `CloudEventConverter` cannot turn into an
+`E`, also as it does today.
 
 **There are four runners, not two, because DCB does not share a start position with the other capabilities.** A runner
-takes an id, a descriptor and an optional start position, and returns a started `SubscriptionHandle`. The two
+takes an id, a descriptor and an optional start position, and returns a `SubscriptionHandle`. That handle has started
+when the caller asked to wait for it, which is the same promise `ProjectionRunner` makes, since passing
+`waitUntilStarted = false` returns before the replay finishes and a manual-start model hands back a handle for a
+subscription nobody has started yet. The two
 non-DCB ones follow `ProjectionRunner`'s shape, the `agnostic` and `stream` factories that fix the capability, a
 `StartAt`, and a `waitUntilStarted` argument on the widest overload. The two DCB ones follow `DcbProjectionRunner` and
 `ReactiveDcbProjectionRunner` instead, a single `create` factory and a `DcbStartAt`, because DCB positions are not
@@ -238,8 +246,8 @@ says to check those by hand rather than the recipe pretending to catch them.
 it.** Today a user writes `@Transactional` on a `@Subscription` handler, everything compiles, the tests pass, and no
 transaction is ever opened. There is nothing in the API that could tell them. Once the handler is a lambda inside a
 factory method, nobody expects method-level advice on it, and a handler that needs a transaction takes a
-`TransactionTemplate` and says so in the code. The gap stops being silent because the shape of the API stops inviting
-the mistake.
+`TransactionTemplate` on the blocking stack or a `TransactionalOperator` on the reactor one, and says so in the code.
+The gap stops being silent because the shape of the API stops inviting the mistake.
 
 ### 5. This is an epic
 
