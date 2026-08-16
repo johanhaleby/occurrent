@@ -121,6 +121,14 @@ public final class FlowSaga {
          * the event that fired a branch is always the last element of {@link ReceivedEvents#asList()}, and
          * {@link ReceivedEvents#initiating()} reaches the start event as always.
          * <p>
+         * The cap counts only events of a type this flow declares (a step's {@code on(...)} and its window-condition
+         * leaves). A correlated event of any other type, reachable through a {@link #narrowingFilter} or
+         * {@link #replacementFilter} wider than the flow's own types, or a {@code CloudEventTypeMapper} that collapses
+         * several domain types onto one CloudEvent type string, is still retained, exactly as {@link Saga#replacementFilter()}
+         * says, but it neither counts against {@code events} nor evicts one of the step's own events to make room for
+         * itself. So this cap does not bound a step fed only such events, and the store-boundary warning is what
+         * surfaces that growth instead.
+         * <p>
          * A step that is inside its cap keeps whatever carry-over {@link #historyWindow(int)} granted, and one that is over
          * it keeps only its own newest {@code events}, because reaching its oldest events means dropping the carry-over
          * standing ahead of them. A transition keeps the events of the step it left as well, for that step's reaction, and

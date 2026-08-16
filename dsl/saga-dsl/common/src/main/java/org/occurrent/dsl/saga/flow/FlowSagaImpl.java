@@ -199,7 +199,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         List<Integer> counts = stepConditionCounts(state, step, appended, event);
         // Drop the current step's oldest events past stepWindow now that counts exist, so a guard and a reaction in
         // this delivery see exactly what gets persisted.
-        int windowStart = boundedWindowStart(state.stepEntryIndex(), state.windowStart(), appended.size());
+        int windowStart = boundedWindowStart(state.stepEntryIndex(), state.windowStart(), appended);
         List<E> received = retain(appended, state.windowStart(), windowStart);
         List<E> window = received.subList(windowStartIndex(state.stepEntryIndex(), windowStart, received.size()), received.size());
         int[] leafCursor = {0};
@@ -274,23 +274,71 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         return Math.min(Math.max(1, entryPosition - windowStart + 1), size);
     }
 
-    // Where the retained tail has to start so that at most stepWindow of the current step's own events are kept.
-    // The tail is one run of events, and the current step's events sit at the end of it behind whatever carry-over
-    // historyWindow granted, so dropping the step's oldest events means dropping the whole carry-over ahead of them first.
-    // Advancing the start by the excess alone would drop that many carry-over events and leave every one of the step's,
-    // which caps nothing and takes the history a guard was promised.
-    private int boundedWindowStart(int stepEntryIndex, int windowStart, int size) {
+    // Where the retained tail has to start so that at most stepWindow of the current step's own DECLARED-type events
+    // (isDeclared, i.e. eventTypes()) are kept. The tail is one run of events, and the current step's events sit at
+    // the end of it behind whatever carry-over historyWindow granted, so dropping the step's oldest events means
+    // dropping the whole carry-over ahead of them first. Advancing the start by the excess alone would drop that many
+    // carry-over events and leave every one of the step's, which caps nothing and takes the history a guard was
+    // promised.
+    //
+    // A correlated event of a type no step in the flow declares (reachable only through a narrowingFilter or
+    // replacementFilter wider than the flow's own types, or a CloudEventTypeMapper that collapses several domain
+    // types onto one CloudEvent type string, see Saga#replacementFilter()) is still counted in appended above it,
+    // but it does not count here: only a declared event both fills the budget and gets evicted to make room. Such a
+    // foreign event is retained for as long as the window does not have to advance past it to evict enough declared
+    // events, and is swept up for free when it does, never targeted on its own. This is what keeps the isolation
+    // rule intact (a genuinely correlated event is never discarded on arrival), at the cost of no longer bounding a
+    // step fed only foreign-typed events; see the ADR for that trade-off.
+    private int boundedWindowStart(int stepEntryIndex, int windowStart, List<E> appended) {
         if (stepWindow == UNBOUNDED_STEP_WINDOW) {
             return windowStart;
         }
+        int size = appended.size();
         int firstStepEvent = windowStartIndex(stepEntryIndex, windowStart, size);
-        int kept = size - firstStepEvent;
-        if (kept <= stepWindow) {
+        int declared = countDeclared(appended, firstStepEvent, size);
+        if (declared <= stepWindow) {
             // The step is within its cap, so the carry-over is left exactly as historyWindow left it.
             return windowStart;
         }
+        int excess = declared - stepWindow;
+        int i = firstStepEvent;
+        int declaredDropped = 0;
+        while (declaredDropped < excess) {
+            if (isDeclared(appended.get(i))) {
+                declaredDropped++;
+            }
+            i++;
+        }
         int carryOver = firstStepEvent - 1;
-        return windowStart + carryOver + (kept - stepWindow);
+        return windowStart + carryOver + (i - firstStepEvent);
+    }
+
+    // How many of appended's tail (the half-open range [from, to)) are of a type the flow declares. Counted
+    // separately from the eviction walk above so boundedWindowStart's early return (no eviction needed) never pays
+    // for the walk it does not need.
+    private int countDeclared(List<E> appended, int from, int to) {
+        int count = 0;
+        for (int i = from; i < to; i++) {
+            if (isDeclared(appended.get(i))) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    // Whether event is of a type this flow declares, i.e. a member of eventTypes() (already expanded to concrete
+    // types, see ADR 124). An empty eventTypes means "no narrowing", the same reading eventTypes()'s own javadoc
+    // gives it, so every event counts when it is empty.
+    private boolean isDeclared(E event) {
+        if (eventTypes.isEmpty()) {
+            return true;
+        }
+        for (Class<? extends E> type : eventTypes) {
+            if (type.isInstance(event)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Every transition resets stepEntryIndex to the new step's entry, including a transitionTo back into the current step
