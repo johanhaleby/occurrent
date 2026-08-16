@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 21
-updated_at: 2026-08-16T22:50:00Z
+revision: 22
+updated_at: 2026-08-16T23:30:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -135,7 +135,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_a33f0879 in session adoring-heisenberg-470b55, claimed 802 at 16:34Z, no PR after 5.5h, likely parked at its in-session design gate since Johan went unattended, QUEUED for the return ask"
+    session: "chip task_a33f0879 in session adoring-heisenberg-470b55, was parked at its design gate, Johan answered it 23:2xZ and told it to continue"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "802", met: false, evidence: null}
@@ -154,14 +154,14 @@ units:
   U5:
     issue: 781
     goal: "Flake-rate investigation SubscriptionModelConformance$TheLifeCycle, timeboxed; TCK fixture changes may tighten or add, never loosen"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: "chip task_e01a9bfc COMPLETE per timebox. PR 813 merged 0285887cc (timeout widening, no assertion touched). Issue 781 kept OPEN by orchestrator: the PR its own CI failed the paused-hold test at 12s with the held event absent while a later one arrived, a lost-redelivery signature, counter-evidence to slowness. Comment 5308784125 records the next diagnostic step. Johan closes or re-defers 781 at the release gate"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: "813", met: true, evidence: "merged 0285887cc 2026-08-16T20:3xZ, CAS pin 90be8c0b4, 26/26 green, no unresolved threads, body repointed from Fixes to Part-of before merge"}
-      - {check: manual_approval, repo: johanhaleby/occurrent, ref: "781", met: false, evidence: "781 deliberately open with the 12s counter-example recorded; Johan rules close vs re-defer at the release gate"}
+      - {check: manual_approval, repo: johanhaleby/occurrent, ref: "781", met: true, evidence: "Johan ruled 2026-08-16T23:2xZ: keep 781 open for a while, continue only if the failure recurs. Not a release blocker"}
   U6A:
     issue: 786
     goal: "Move SagaFilters to dsl/saga-dsl/common and make public, mirroring ProjectionFilters; independent of the expansion pass"
