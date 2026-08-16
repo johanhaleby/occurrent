@@ -25,6 +25,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.eventstore.api.EventStoreCapability;
+import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
 
 import java.net.URI;
@@ -160,6 +161,16 @@ public abstract class EventStoreOperationsConformance extends EventStoreConforma
             operations().deleteEvent("a", URI.create("urn:occurrent:somewhere-else"));
 
             assertThat(idsOf(eventStore().read(STREAM_ID))).containsExactly("a");
+        }
+
+        @Test
+        void skip_still_counts_stream_positions_after_an_earlier_event_is_deleted() {
+            eventStore().write(STREAM_ID, List.of(event("a", DEFINED), event("b", CHANGED), event("c", ARCHIVED)));
+
+            operations().deleteEvent("a", SOURCE);
+
+            EventStream<CloudEvent> stream = eventStore().read(STREAM_ID, 1, 10);
+            assertThat(idsOf(stream.eventList())).containsExactly("b", "c");
         }
     }
 

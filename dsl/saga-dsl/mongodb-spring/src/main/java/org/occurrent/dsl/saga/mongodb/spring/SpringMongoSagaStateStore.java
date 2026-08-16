@@ -106,7 +106,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // A flow saga's retained events sit inside the same document as the rest of its state, so an instance that keeps
     // accumulating them (an unbounded stepWindow, a step that never transitions, or a stepWindow-capped step reached
     // through a narrowingFilter/replacementFilter or CloudEventTypeMapper wider than the flow's own declared types,
-    // whose events stepWindow does not bound, see ADR 127) heads toward MongoDB's 16 MB document limit with no signal
+    // whose events stepWindow does not bound, see ADR 129) heads toward MongoDB's 16 MB document limit with no signal
     // before the write itself starts failing. This is an early warning, not an enforced cap. The unbounded default
     // stays, ADR 123 already gives the remedy for the common case (a stepWindow cap), and this only makes the growth
     // visible, including the growth stepWindow cannot reach.

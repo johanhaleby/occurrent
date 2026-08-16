@@ -1,4 +1,4 @@
-# 127. A flow saga's stepWindow caps only its own declared events
+# 129. A flow saga's stepWindow caps only its own declared events
 
 Date: 2026-08-16
 
