@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 6
-updated_at: 2026-08-16T18:00:00Z
+revision: 7
+updated_at: 2026-08-16T18:10:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -91,7 +91,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_7cd8b360, started by Johan 2026-08-16T17:0xZ"
+    session: "chip task_7cd8b360, delivered PR 811 at 18:0xZ (checks running, design gate ran in its session per venue)"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "788", met: false, evidence: null}
@@ -136,7 +136,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_545261f9, delivered PR 809 at 17:3xZ, worker self-rebased onto post-807 main, MERGEABLE with checks running at 2236e2a"
+    session: "chip task_545261f9, delivered PR 809, self-rebased to 2236e2a, 14 checks green 12 running at 18:1xZ, one unresolved review thread owned by the worker, expected resolved by 18:45Z else message the session"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "786", met: false, evidence: null}
