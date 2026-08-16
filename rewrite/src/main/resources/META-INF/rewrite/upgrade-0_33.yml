@@ -21,8 +21,10 @@ description: >-
   Migrates an application from Occurrent 0.32.0 to 0.33.0. CheckpointStorage and its reactor twin gained a
   conditional save and a writeVersion read, for the checkpoint fence in ADR 116. This recipe finds a class
   implementing either interface that is missing the two members and inserts a stub for each, marked with a
-  review comment, so the class compiles again. The stub delegates any() to the class's own two-argument
-  save, refuses a stronger condition, and answers writeVersion empty, the permanent shape for a store that
+  review comment, so the class compiles again. A class with its own two-argument save gets a three-argument
+  save that delegates any() to it and refuses a stronger condition. A class with no own two-argument save,
+  only the interface default, gets one that always refuses, since delegating there would call back into the
+  interface default and recurse. writeVersion always answers empty, the permanent shape for a store that
   cannot evaluate a condition. Evaluating a condition for real is still a manual pass, see
   doc/migration/upgrading-to-0.33.0.md. Also renames ReplayAwareSubscriptionModel and
   IntrospectableSubscriptionModel to ReplayAwareSubscriptions and IntrospectableSubscriptions on both the

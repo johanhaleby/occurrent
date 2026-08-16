@@ -112,9 +112,12 @@ public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointW
 
 Delegating `any()` to `save(subscriptionId, checkpoint)` there would call the interface's own default, which calls
 this method right back with `any()`, recursing until the stack overflows on the first checkpoint write. This shape
-never calls back into a three-argument `save`, so it cannot recurse, whatever the class inherits. Give the class its
-own two-argument `save` and rerun the recipe to get the delegating shape above, or replace this stub with real
-condition handling.
+never calls back into a three-argument `save`, so it cannot recurse, whatever the class inherits. Rerunning the
+recipe after adding the class's own two-argument `save` does not turn this into the delegating shape above, since
+the recipe already finds a three-argument `save` declared here and skips the class. Give the class its own
+two-argument `save`, then either edit this stub's body by hand into the delegating shape above, or delete it and
+rerun the recipe to generate that shape fresh. Replacing the stub with real condition handling is the other way
+out.
 
 Such a store leaves `evaluatesWriteConditions()` alone, since the default already answers `false` for it. That answer
 is what lets a caller find out before it wires anything up, rather than on the first write, so leaving it at the

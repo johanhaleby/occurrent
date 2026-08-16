@@ -15,6 +15,7 @@
  */
 package org.occurrent.rewrite;
 
+import org.jspecify.annotations.Nullable;
 import org.openrewrite.Cursor;
 import org.openrewrite.ExecutionContext;
 import org.openrewrite.Recipe;
@@ -266,9 +267,30 @@ public class AddCheckpointStorageConditionalWriteStubs extends Recipe {
                 }
 
                 JavaType.FullyQualified fq = TypeUtils.asFullyQualified(cd.getType());
-                JavaType.FullyQualified supertype = fq == null ? null : fq.getSupertype();
-                return TypeUtils.findDeclaredMethod(supertype, methodName, paramTypes)
-                        .filter(m -> !m.getFlags().contains(Flag.Abstract))
+                if (fq == null) {
+                    return false;
+                }
+                if (concretelyDeclaredBelow(fq.getSupertype(), capabilityInterfaceFqn, methodName, paramTypes)) {
+                    return true;
+                }
+                // cd's own directly-implemented interfaces, not only reachable through a superclass: a class that
+                // implements a capability interface of its own (extending CheckpointStorage with a default for
+                // this member) rather than CheckpointStorage directly has its real implementation here.
+                for (JavaType.FullyQualified i : fq.getInterfaces()) {
+                    if (concretelyDeclaredBelow(i, capabilityInterfaceFqn, methodName, paramTypes)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            // An interface default method carries both the Abstract and the Default flag in this type model, not
+            // Default alone, so excluding every Abstract-flagged method would also exclude a genuine default. Only
+            // a method that is Abstract without also being Default has no body to fall back on.
+            private boolean concretelyDeclaredBelow(JavaType.@Nullable FullyQualified type, String capabilityInterfaceFqn,
+                                                      String methodName, List<JavaType> paramTypes) {
+                return TypeUtils.findDeclaredMethod(type, methodName, paramTypes)
+                        .filter(m -> !m.getFlags().contains(Flag.Abstract) || m.getFlags().contains(Flag.Default))
                         .filter(m -> !capabilityInterfaceFqn.equals(m.getDeclaringType().getFullyQualifiedName()))
                         .isPresent();
             }

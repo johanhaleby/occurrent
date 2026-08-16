@@ -468,6 +468,68 @@ class CheckpointStorageConditionalWriteStubsTest implements RewriteTest {
     }
 
     @Test
+    void leavesABlockingImplementerOfACustomInterfaceThatDefaultsBothMembersUntouched() {
+        // CustomCheckpointStorage is a capability interface of its own, extending CheckpointStorage and supplying
+        // both members as defaults. InMemoryCheckpointStorage implements CustomCheckpointStorage directly, with no
+        // class in between, so the concrete class's own declared interface, not a superclass, is where the real
+        // implementation lives. hasOwnConcreteImplementation has to look at that interface too, not only the
+        // superclass chain, or it would discard both defaults.
+        rewriteRun(
+                java(CHECKPOINT),
+                java(CHECKPOINT_WRITE_CONDITION),
+                java(BLOCKING_CHECKPOINT_STORAGE),
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+                        import org.occurrent.subscription.CheckpointWriteCondition;
+                        import org.occurrent.subscription.api.blocking.CheckpointStorage;
+
+                        import java.util.OptionalLong;
+
+                        interface CustomCheckpointStorage extends CheckpointStorage {
+                            @Override
+                            default Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                                return checkpoint;
+                            }
+
+                            @Override
+                            default OptionalLong writeVersion(String subscriptionId) {
+                                return OptionalLong.empty();
+                            }
+                        }
+                        """
+                ),
+                // No change expected: both members are concretely implemented on CustomCheckpointStorage, the
+                // interface this class directly implements.
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.subscription.Checkpoint;
+
+                        class InMemoryCheckpointStorage implements CustomCheckpointStorage {
+                            @Override
+                            public Checkpoint read(String subscriptionId) {
+                                return null;
+                            }
+
+                            @Override
+                            public void delete(String subscriptionId) {
+                            }
+
+                            @Override
+                            public boolean exists(String subscriptionId) {
+                                return false;
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
     void leavesABlockingImplementerThatAlreadyHasBothMembersUntouched() {
         rewriteRun(
                 java(CHECKPOINT),
