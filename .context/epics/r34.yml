@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 5
-updated_at: 2026-08-16T17:45:00Z
+revision: 6
+updated_at: 2026-08-16T18:00:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -26,10 +26,19 @@ pending_actions:
     type: message-session
     target: "Issue 810 (native Mongo store: unsorted path drops skip/limit, no onClose cursor release, fromStreamVersion skip drifts under a filter) awaits Johan's triage ruling, presented 2026-08-16T17:45Z. Orchestrator recommendation: adopt as a new r34 unit and milestone it, the unsorted default makes the limit drop a silent correctness bug, though pre-existing so arguably not release-blocking"
     expected: "Johan rules in or out. In: register U16, milestone 0.34.0, dispatch as a chip. Out: milestone-less, next release"
-    status: PENDING
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-16T17:45:00Z
+    resolved: "Johan ruled IN 2026-08-16T18:00Z (incorporate the new issues). U16 registered, issue 810 milestoned, chip spawned"
+  - id: act-004
+    type: dispatch-chip
+    target: "U16 chip task_33f7131a spawned 2026-08-16T18:00Z, starts on Johan's click, worker claims issue 810 itself per brief"
+    expected: "one PR after an in-session plan gate, then a DELIVERY_RESULT"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-16T18:00:00Z
 units:
   H1:
     issue: null
@@ -232,6 +241,17 @@ units:
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "806", met: false, evidence: null}
+  U16:
+    issue: 810
+    goal: "Native Mongo store read fixes, plan-first: unsorted path applies skip/limit, returned Stream closes its MongoCursor via onClose, fromStreamVersion no longer drifts under a StreamReadFilter (candidate: translate the version into a query condition instead of a skip, worker's plan decides). Conformance coverage so the Spring store's correct behavior becomes the tested contract"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "810", met: false, evidence: null}
   U15:
     issue: 725
     goal: "Subscription-as-data-structure design round with the #721 name-clash answer inside it, plan-first Opus ADR; implementation registers as its own epic if the plan sizes it epic-scale"
