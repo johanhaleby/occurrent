@@ -172,6 +172,20 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                 + (state == null ? "null" : state.getClass().getName()));
     }
 
+    // A step name is the persisted position, so a step renamed or removed since an instance entered it leaves that
+    // instance with no route: nothing in the current definition says what its branches, timeout or leaves are. Thrown
+    // from both evolveOnEvent and evolveOnTimeout, right after the stepsByName lookup that would otherwise NPE. See ADR
+    // 126 for why this refuses rather than guessing a recovery, and why that is enough to also keep reactToBranch's
+    // matchedBranchIndex lookup in range: react only ever runs on the state evolve just returned in this same call, so
+    // once evolve refuses here, nothing downstream can observe a step or branch index this build does not have.
+    private static IllegalStateException missingStep(String stepName) {
+        return new IllegalStateException("step '" + stepName + "' no longer exists in this flow's definition, but an"
+                + " instance is parked in it, most likely because the step was renamed or removed while the instance"
+                + " was waiting there. Put the step back under its old name, or add a temporary step under '" + stepName
+                + "' that transitions its instances onward, until every parked instance has moved past it. To unblock"
+                + " immediately without a redeploy, delete the instance from the SagaStateStore instead.");
+    }
+
     private FlowStateImpl<E> evolveOnEvent(FlowStateImpl<E> state, E event) {
         if (!state.completed() && state.currentStep() == null) {
             // Instance creation: the start event enters the first step, its window opens after the start event itself. The
@@ -190,6 +204,9 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
             return state;
         }
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());
+        if (step == null) {
+            throw missingStep(state.currentStep());
+        }
         List<E> appended = append(state.received(), event);
         // Counts are derived from the step's events as this delivery actually finds them, before stepWindow trims
         // anything. A backlog that exceeds a newly configured cap is counted against what genuinely arrived, not
@@ -242,6 +259,9 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
             return unchangedExceptBookkeeping(state);
         }
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());
+        if (step == null) {
+            throw missingStep(state.currentStep());
+        }
         if (step.timeout() == null) {
             return unchangedExceptBookkeeping(state);
         }
@@ -370,7 +390,9 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     // ActionKind.BRANCH with its real index, so this one method reacts to both: BranchReaction always receives the
     // triggering event's metadata and the event itself, a classic-on adapter uses them, a window-condition adapter ignores
     // them and reads only the received window. BRANCH is only ever set from evolveOnEvent, so the input here is always a
-    // SagaInput.Event and the cast is safe.
+    // SagaInput.Event and the cast is safe. from and matchedBranchIndex are also safe unguarded: evolveOnEvent's own
+    // missingStep check already refused this delivery if state.previousStep() (the step it just left) were absent from
+    // stepsByName, and matchedBranchIndex was set from a loop bounded by that same step's branches() in the same call.
     private List<SagaEffect<C>> reactToBranch(FlowStateImpl<E> state, SagaInput<E> input) {
         CompiledStep<E, C> from = stepsByName.get(state.previousStep());
         Branch<E, C> branch = from.branches().get(state.matchedBranchIndex());
@@ -416,6 +438,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         return effects;
     }
 
+    // from is safe unguarded for the same reason as in reactToBranch: evolveOnTimeout's own missingStep check already
+    // refused this delivery if the step firing the timeout were absent from stepsByName.
     private List<SagaEffect<C>> reactToTimeout(FlowStateImpl<E> state) {
         CompiledStep<E, C> from = stepsByName.get(state.previousStep());
         TimeoutSpec<E, C> timeout = from.timeout();
@@ -440,6 +464,11 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         armTimeoutIfAny(effects, state.currentStep(), ReceivedEvents.of(state.received()));
     }
 
+    // stepName is safe unguarded here too, but for a different reason than reactToBranch/reactToTimeout: this is called
+    // only with steps.get(0).name() (onStart, always this saga's own first step) or with a step retargetTimers just
+    // entered via applyTransition, i.e. steps.get(next).name() or a transitionTo target, both drawn from this same
+    // build's own step list and, for transitionTo, checked to exist in it by FlowSaga.Builder.validateTransitionToTargets
+    // at build() time. Neither path can ever hand this a step name from a stale, persisted document.
     private void armTimeoutIfAny(List<SagaEffect<C>> effects, @Nullable String stepName, ReceivedEvents<E> received) {
         if (stepName == null) {
             return;

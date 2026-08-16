@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.dsl.saga.flow.FlowSaga.stepTimer;
@@ -1911,6 +1912,86 @@ class FlowSagaTest {
         @Test
         void a_steps_timer_is_stored_under_the_step_name_behind_a_step_prefix() {
             assertThat(stepTimer("awaiting-payment").encode()).isEqualTo("step:awaiting-payment");
+        }
+    }
+
+    @Nested
+    class MissingStep {
+
+        sealed interface FlowEvent permits Started, Progressed {
+            String id();
+        }
+
+        record Started(String id) implements FlowEvent {
+        }
+
+        record Progressed(String id) implements FlowEvent {
+        }
+
+        record FlowCommand() {
+        }
+
+        // "second" is where an instance parks once "first" transitions it on. Building with a different name for that
+        // same step is what a rename or a removal looks like to evolve, which is pure: two builds over one persisted
+        // state, the same idiom StepConditions.ReconstructedState-style declaration-change tests already use.
+        private static Saga<FlowEvent, FlowState<FlowEvent>, FlowCommand> flow(String secondStepName) {
+            return FlowSaga.<FlowEvent, FlowCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(FlowEvent::id)
+                    .step("first", step -> step.on(Progressed.class, Continuation.transitionTo(secondStepName)))
+                    .step(secondStepName, step -> step
+                            .on(Progressed.class, Continuation.end())
+                            .timeout(Duration.ofMinutes(5), Continuation.end(), received -> List.of()))
+                    .build();
+        }
+
+        @Test
+        void an_event_delivered_to_a_step_that_has_been_renamed_or_removed_refuses_the_delivery() {
+            Saga<FlowEvent, FlowState<FlowEvent>, FlowCommand> before = flow("second");
+            Saga<FlowEvent, FlowState<FlowEvent>, FlowCommand> after = flow("renamed");
+            FlowState<FlowEvent> opened = before.evolve(before.initialState(), SagaInput.event(new Started("c1")));
+            FlowState<FlowEvent> parked = before.evolve(opened, SagaInput.event(new Progressed("c1")));
+
+            assertThatThrownBy(() -> after.step(parked, SagaInput.event(new Progressed("c1"))))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("step 'second'")
+                    .hasMessageContaining("no longer exists");
+        }
+
+        @Test
+        void a_due_timer_firing_into_a_step_that_has_been_renamed_or_removed_refuses_the_delivery() {
+            Saga<FlowEvent, FlowState<FlowEvent>, FlowCommand> before = flow("second");
+            Saga<FlowEvent, FlowState<FlowEvent>, FlowCommand> after = flow("renamed");
+            FlowState<FlowEvent> opened = before.evolve(before.initialState(), SagaInput.event(new Started("c1")));
+            FlowState<FlowEvent> parked = before.evolve(opened, SagaInput.event(new Progressed("c1")));
+
+            assertThatThrownBy(() -> after.step(parked, SagaInput.timeout("c1", stepTimer("second"))))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("step 'second'")
+                    .hasMessageContaining("no longer exists");
+        }
+
+        @Test
+        void a_step_still_present_but_with_fewer_branches_matches_nothing_rather_than_reading_a_stale_branch_index() {
+            // The IndexOutOfBoundsException shape #748 also describes comes from reactToBranch reading a branch index
+            // evolve computed against a step that has since lost that branch. "after" keeps "second" but drops the
+            // branch "before" would have matched on Progressed, leaving only its timeout. saga.step(...) runs evolve
+            // then react in the same call, and evolve re-evaluates branches fresh against "after"'s own (now smaller)
+            // list every time, so it just finds no match instead of handing react a stale index. No branch removed from
+            // a step that still exists can reach react with an index that step's own branches() does not have.
+            Saga<FlowEvent, FlowState<FlowEvent>, FlowCommand> before = flow("second");
+            Saga<FlowEvent, FlowState<FlowEvent>, FlowCommand> after = FlowSaga.<FlowEvent, FlowCommand>builder()
+                    .startsOn(Started.class)
+                    .correlateAll(FlowEvent::id)
+                    .step("first", step -> step.on(Progressed.class, Continuation.transitionTo("second")))
+                    .step("second", step -> step
+                            .on(Started.class, Continuation.end())
+                            .timeout(Duration.ofMinutes(5), Continuation.end(), received -> List.of()))
+                    .build();
+            FlowState<FlowEvent> opened = before.evolve(before.initialState(), SagaInput.event(new Started("c1")));
+            FlowState<FlowEvent> parked = before.evolve(opened, SagaInput.event(new Progressed("c1")));
+
+            assertThatCode(() -> after.step(parked, SagaInput.event(new Progressed("c1")))).doesNotThrowAnyException();
         }
     }
 }
