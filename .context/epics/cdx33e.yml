@@ -1,9 +1,9 @@
 schema_version: 2
 epic: cdx33e
-revision: 18
-updated_at: 2026-08-16 16:55:00+00:00
-updated_by: 'orchestrator: E11 dispatched (Opus, round-three feedback with skill rules recorded first); E8 at its ninth
-  head processing suppressed-block findings, one more round of grace before a calibration nudge'
+revision: 19
+updated_at: 2026-08-16 17:45:00+00:00
+updated_by: 'orchestrator: E11 DONE and verified (preview 56ff52f, release-notes f87d051 aligned); only E8 remains, calibration
+  queued at its next tool round'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -270,7 +270,7 @@ units:
       rules (reaction vs guard vs timeout scope) given their own structural home, then the five disease patterns swept across
       the section. Five new rules recorded in johan-writing (a11fcc7) BEFORE dispatch so the worker writes under them. AGENTS.md
       deliberately NOT extended: the writing skill already binds every docs surface via the global rule, duplication is bloat'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -279,13 +279,18 @@ units:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-preview
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed db24b2d -> 56ff52f, verified on the origin ref: all six quoted phrasings gone, three new subsections
+        (What a Reaction Reads, Loops and Absolute Timeouts, What Each Callback Reads) with TOC entries, the snippet-first
+        opener with the verified 1000-event and 16MB motivation, 13 broader-sweep fixes, the full-symbol cold-reader table
+        clean with one honestly-flagged pre-existing gap (issue defined later, out of this brief''s scope), and a factual
+        correction (the old sentence''s timer-calls claim was wrong for the flow DSL). Johan''s primary checkout fast-forwarded
+        to 56ff52f'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-release-notes
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Re-aligned at f87d051, docs.md blob-identical to preview 56ff52f'
   CREG:
     issue: null
     goal: 'Register: the sweep''s no-blocker verdict recorded beside the release-readiness declaration; the four dispositions;
