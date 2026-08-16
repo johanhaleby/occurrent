@@ -38,7 +38,7 @@ import static org.mockito.Mockito.mock;
 /**
  * A {@code @Snapshot} factory method's derived filter goes through {@code EventTypeExpansion.deriveFilter} (ADR 126),
  * so a handler registered on a sealed event type reopened below its declared level is refused at context startup,
- * before any store or subscription bean is resolved, the same way a saga or a subscription registration is refused.
+ * before the event store is looked up, the same way a saga or a subscription registration is refused.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SnapshotFilterExpansionTest {

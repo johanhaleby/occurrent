@@ -126,6 +126,7 @@ You are affected when a declared or registered type is one of these:
 | An abstract class that is not sealed | `abstract class OrderEvent` | `abstract class OrderEvent` |
 | A sealed hierarchy reopened below the declared type | `non-sealed class Base implements OrderEvent` | `open class Base : OrderEvent` or `abstract class Base : OrderEvent` |
 | An array type | `OrderEvent[]` | `Array<OrderEvent>` |
+| A primitive class literal | `int.class` | `Int::class` |
 
 A projection, a subscription, a query, or a snapshot that declares concrete types, or a sealed type whose
 every level is sealed or final, is unaffected. Java records and Kotlin data classes are final already, so an
