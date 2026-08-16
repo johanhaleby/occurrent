@@ -124,6 +124,16 @@ two types, `Subscription<E>` in `dsl/subscription-dsl/blocking` and `ReactiveSub
 DCB gets its own pair, `DcbSubscription<E>` and `ReactiveDcbSubscription<E>`, because DCB delivers `DcbEventMetadata`
 and selects on tags as well as types. This is the same reason `DcbProjection` sits beside `Projection` today.
 
+**The two DCB mechanisms that exist disagree about how the selector is built, and the new descriptor follows the
+annotation.** `DcbProjection` takes a `DcbCriteria` and uses it verbatim, to the point of rejecting a wrapped projection
+that also has an explicit filter. `@DcbSubscription` does the opposite, combining the cloud event types derived from the
+handler with the declared tags through `SubscriptionAnnotations.buildDcbCriteria`. The descriptor keeps the annotation's
+behaviour, so declared tags narrow the handled types rather than replacing them, because that is what the annotation
+already promises its users and a subscription has a handler to derive types from where a `DcbProjection` has a fold and
+a separate read boundary. A caller who wants the criteria used verbatim supplies it explicitly, and supplying both an
+explicit criteria and handler-derived types is refused rather than silently resolved, which is the same refusal
+`DcbProjection` already makes.
+
 Each stack gets a runner that takes a descriptor and returns a started subscription, mirroring `ProjectionRunner` and
 `ReactiveProjectionRunner` member for member.
 
@@ -193,12 +203,23 @@ handler makes those failures compile errors.
 An OpenRewrite recipe rewrites the common case, moving the method body into a lambda inside a factory method and
 mapping `@StreamId` and `@StreamVersion` parameters onto the metadata the lambda receives.
 
-**There is one case the recipe must refuse rather than rewrite.** A `@Transactional` on today's handler method works
-because Spring proxies the bean and the framework invokes the method through that proxy. Move the body into a lambda
-inside a factory method and there is no proxied call left, so the transaction quietly disappears while the code still
-compiles and the tests still pass. Any handler method with a proxied annotation gets flagged for a human instead, the
-way `FlagObjectTypedCapabilityLookup` already flags call sites a rename cannot safely rewrite. The same applies to a
-handler that Spring AOP advises for any other reason.
+**The recipe must refuse the synchronous case rather than rewrite it, and only that case.** Spring advice reaches
+exactly one of the four annotations today. `processSynchronousSubscribeAnnotation` looks the bean up by name at dispatch
+time, and its own comment says why, because the bean post processor runs before Spring wraps the bean in its AOP proxy,
+so the instance it was handed is the raw target. The other three paths invoke that raw target, so a `@Transactional` on
+a `@Subscription`, `@StreamSubscription` or `@DcbSubscription` handler does not run today and has never run.
+
+So a body moved into a lambda loses a working transaction only on `@SynchronousSubscription`, and that is the case the
+recipe refuses and flags for a human, the way `FlagObjectTypedCapabilityLookup` already flags call sites a rename cannot
+safely rewrite. It flags on a statically visible annotation, which is all a source rewrite can see. Advice attached by an
+external pointcut is invisible to it, and the migration guide says so rather than the recipe pretending to catch it.
+
+**The three asynchronous paths silently ignoring advice is a pre-existing defect, and the descriptor form is what fixes
+it.** Today a user writes `@Transactional` on a `@Subscription` handler, everything compiles, the tests pass, and no
+transaction is ever opened. There is nothing in the API that could tell them. Once the handler is a lambda inside a
+factory method, nobody expects method-level advice on it, and a handler that needs a transaction takes a
+`TransactionTemplate` and says so in the code. The gap stops being silent because the shape of the API stops inviting
+the mistake.
 
 ### 5. This is an epic
 
@@ -213,8 +234,8 @@ The work this ADR describes, listed so it can be scoped as its own epic:
 5. Seven new annotation types, seven deprecations, and normalization of both sets in the bean post processors.
 6. Recipes, declarative for the type and annotation renames, a Java visitor for the body rewrite with its refusal case.
 7. A section in `doc/migration/upgrading-to-0.34.0.md`, changelog entries, and a docs branch.
-8. Updating 35 test classes, 13 example files, and the 42 lines of the documentation site's reference page that mention
-   one of these annotations.
+8. Updating 35 test classes, 13 example files, and the 79 lines of the documentation site's reference page on `main`
+   that mention one of these annotations.
 
 ## Consequences
 
@@ -228,8 +249,9 @@ Every application using these annotations changes, which is the cost. The word `
 time. ADR 26 renamed the original stream annotation to `@StreamSubscription`, the name was then reused for the
 capability-agnostic annotation that exists today, and this ADR moves that one to `@OccurrentSubscription` while also
 changing what its method returns. So a user who has been on this library since 0.30 sees the same word mean three
-things. The recipe covers the mechanical part, and the migration guide covers what it cannot, which is Kotlin sources
-and every handler with a proxied annotation.
+things. The recipe covers the mechanical part, and the migration guide covers what it cannot, which is Kotlin sources,
+every `@SynchronousSubscription` handler with `@Transactional` on it, and any handler advised by a pointcut the recipe
+cannot see.
 
 Two names for one word disappear. `Subscription` means the thing a user declares, `SubscriptionHandle` means the thing
 they hold afterwards, and neither can be confused with an annotation.
