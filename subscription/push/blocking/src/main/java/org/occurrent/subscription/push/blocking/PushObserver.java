@@ -25,12 +25,14 @@ import org.jspecify.annotations.NullMarked;
  * apart from a saga or projection that received an event and chose not to act on it. {@code accept(...)} itself
  * stays silent about all of these by design, see ADR 104.
  * <p>
- * Called once per event, whether or not a handler ends up running: {@code matched} is {@code true} when a currently
+ * Called once per event, whether or not a handler ends up running. {@code matched} is {@code true} when a currently
  * registered, unpaused subscription's filter accepted the event, independent of whether that handler goes on to
- * succeed or throw. An observer that throws is caught and logged, never propagated, so a broken observer cannot turn
- * an event that was actually delivered into a broker redelivery.
+ * succeed or throw. A {@link RuntimeException} or {@link AssertionError} the observer throws is caught and logged
+ * rather than propagated, so a broken observer cannot turn an event that was actually delivered into a broker
+ * redelivery. Another {@link Error} still propagates, as it does everywhere else on this stack.
  * <p>
- * The default, {@link #noop()}, changes nothing for existing code.
+ * The default, {@link #noop()}, changes nothing for existing code, and {@link PushSubscriptionModel} skips both this
+ * call and the match check entirely when no other observer is configured.
  */
 @NullMarked
 @FunctionalInterface
@@ -44,10 +46,17 @@ public interface PushObserver {
 
     /**
      * An observer that does nothing, the default every {@link PushSubscriptionModel} constructor uses when none is
-     * given.
+     * given. Always the same instance, which is what lets {@link PushSubscriptionModel} tell "nobody is observing"
+     * from "an observer that happens to do nothing" and skip the match check for the former.
      */
     static PushObserver noop() {
-        return (cloudEvent, matched) -> {
+        return Noop.INSTANCE;
+    }
+
+    // A holder rather than a lambda built fresh on every noop() call, so identity comparison against it means
+    // something.
+    class Noop {
+        private static final PushObserver INSTANCE = (cloudEvent, matched) -> {
         };
     }
 }

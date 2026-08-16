@@ -22,6 +22,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.filter.Filter;
+import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 
@@ -208,7 +209,7 @@ class PushSubscriptionModelTest {
     void the_observer_is_told_a_matched_event_before_the_handler_runs() {
         List<String> observed = new ArrayList<>();
         List<String> handled = new ArrayList<>();
-        PushSubscriptionModel model = new PushSubscriptionModel(
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
                 (CloudEvent cloudEvent, boolean matched) -> observed.add(cloudEvent.getId() + ":" + matched + ":" + handled.size()));
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent.getId()));
 
@@ -221,7 +222,8 @@ class PushSubscriptionModelTest {
     @Test
     void the_observer_is_told_an_event_is_unmatched_when_nothing_is_registered() {
         List<Boolean> matches = new ArrayList<>();
-        PushSubscriptionModel model = new PushSubscriptionModel((CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
 
         model.accept(cloudEvent("1", "NameDefined"));
 
@@ -233,7 +235,8 @@ class PushSubscriptionModelTest {
         // A stopped model drops live events by design (ADR 85), and the observer contract mirrors that: matched
         // reflects what would actually be delivered, not merely what the filter would have accepted.
         List<Boolean> matches = new ArrayList<>();
-        PushSubscriptionModel model = new PushSubscriptionModel((CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
         model.subscribe("sub", cloudEvent -> {
         });
         model.stop();
@@ -244,9 +247,26 @@ class PushSubscriptionModelTest {
     }
 
     @Test
+    void the_observer_is_told_an_event_is_unmatched_while_the_subscription_is_paused_on_a_running_model() {
+        // Distinct from the stopped case above. Here the model itself is running, only the one subscription is
+        // paused, so hasMatchingRegistration(..) has to walk the paused set to see it, not just the running flag.
+        List<Boolean> matches = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+        model.subscribe("sub", cloudEvent -> {
+        });
+        model.pauseSubscription("sub");
+
+        model.accept(cloudEvent("1", "NameDefined"));
+
+        assertThat(matches).containsExactly(false);
+    }
+
+    @Test
     void the_observer_is_told_an_event_is_unmatched_when_the_registered_filter_declines_it() {
         List<Boolean> matches = new ArrayList<>();
-        PushSubscriptionModel model = new PushSubscriptionModel((CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.type("SomethingElseHappened")), cloudEvent -> {
         });
 
@@ -258,7 +278,8 @@ class PushSubscriptionModelTest {
     @Test
     void the_observer_still_sees_the_event_when_the_matching_handler_throws() {
         List<Boolean> matches = new ArrayList<>();
-        PushSubscriptionModel model = new PushSubscriptionModel((CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
         model.subscribe("boom", cloudEvent -> {
             throw new IllegalStateException("handler failed");
         });
@@ -272,8 +293,25 @@ class PushSubscriptionModelTest {
     @Test
     void a_throwing_observer_is_swallowed_and_the_matching_handler_still_runs() {
         List<String> handled = new ArrayList<>();
-        PushSubscriptionModel model = new PushSubscriptionModel((CloudEvent cloudEvent, boolean matched) -> {
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (CloudEvent cloudEvent, boolean matched) -> {
             throw new IllegalStateException("observer failed");
+        });
+        model.subscribe("sub", cloudEvent -> handled.add(cloudEvent.getId()));
+
+        Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
+
+        assertThat(thrown).isNull();
+        assertThat(handled).containsExactly("1");
+    }
+
+    @Test
+    void an_observer_that_fails_an_assertion_is_swallowed_and_the_matching_handler_still_runs() {
+        // A test spy used as an observer is the likely source of an AssertionError, not just a RuntimeException.
+        // The same guarantee has to hold for it. Observing must never be what turns a delivered event into a
+        // broker redelivery.
+        List<String> handled = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (CloudEvent cloudEvent, boolean matched) -> {
+            throw new AssertionError("observer assertion failed");
         });
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent.getId()));
 
@@ -286,7 +324,8 @@ class PushSubscriptionModelTest {
     @Test
     void a_batch_stops_observing_once_a_handler_throws() {
         List<String> observed = new ArrayList<>();
-        PushSubscriptionModel model = new PushSubscriptionModel((CloudEvent cloudEvent, boolean matched) -> observed.add(cloudEvent.getId()));
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, boolean matched) -> observed.add(cloudEvent.getId()));
         model.subscribe("boom", cloudEvent -> {
             if (cloudEvent.getId().equals("2")) {
                 throw new IllegalStateException("handler failed");
@@ -301,13 +340,17 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void the_default_observer_is_a_no_op() {
-        // No PushObserver constructor argument at all: PushObserver.noop() changes nothing for existing code.
+    void the_default_observer_is_a_no_op_and_delivery_is_unaffected() {
+        // No PushObserver constructor argument at all: PushObserver.noop() changes nothing for existing code,
+        // including that the handler still receives the event.
+        List<String> received = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel();
+        model.subscribe("sub", cloudEvent -> received.add(cloudEvent.getId()));
 
         Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
 
         assertThat(thrown).isNull();
+        assertThat(received).containsExactly("1");
     }
 
     private static CloudEvent cloudEvent(String id, String type) {

@@ -63,6 +63,10 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     private static final Logger log = LoggerFactory.getLogger(PushSubscriptionModel.class);
 
     private final PushObserver observer;
+    // Precomputed once rather than compared on every accept(..). Identity against PushObserver.noop()'s singleton is
+    // how "nobody is observing" is told from "an observer that happens to do nothing", so the match check this model
+    // does purely for the observer's benefit is skipped for every existing caller that configured none.
+    private final boolean observing;
 
     /**
      * Creates a model that refuses a subscription filter on a {@code data} payload field, which is what it has always
@@ -82,22 +86,15 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     }
 
     /**
-     * Creates a model that tells {@code observer} about every event {@link #accept(CloudEvent)} is asked to deliver,
-     * see {@link PushObserver}. Refuses a subscription filter on a {@code data} payload field, which is what this
-     * model has always done without a {@link DataFieldReader}.
-     */
-    public PushSubscriptionModel(PushObserver observer) {
-        this(DataFieldReader.refusing(), observer);
-    }
-
-    /**
      * Creates a model that both answers a subscription filter on a {@code data} payload field through
      * {@code dataFieldReader} and tells {@code observer} about every event {@link #accept(CloudEvent)} is asked to
-     * deliver, see {@link PushObserver}.
+     * deliver, see {@link PushObserver}. Pass {@link DataFieldReader#refusing()} to get the observer without also
+     * answering a payload filter.
      */
     public PushSubscriptionModel(DataFieldReader dataFieldReader, PushObserver observer) {
         super(Consumers.ONE, dataFieldReader);
         this.observer = Objects.requireNonNull(observer, PushObserver.class.getSimpleName() + " cannot be null");
+        this.observing = observer != PushObserver.noop();
     }
 
     /**
@@ -118,7 +115,9 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     @Override
     public void accept(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
-        notifyObserver(cloudEvent, hasMatchingRegistration(cloudEvent));
+        if (observing) {
+            notifyObserver(cloudEvent, hasMatchingRegistration(cloudEvent));
+        }
         route(cloudEvent);
     }
 
@@ -139,13 +138,14 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
 
     // Keeps a broken observer from masquerading as a handler failure. accept(...) throwing is what tells a broker
     // listener to redeliver (ADR 104), so an observer exception must never trigger that for an event that was, or
-    // would have been, delivered normally. Only a RuntimeException is caught, matching how a handler failure is
-    // caught elsewhere on this stack (routeIsolated), and an Error still propagates.
+    // would have been, delivered normally. RuntimeException and AssertionError are caught, the same as a handler
+    // failure elsewhere on this stack (routeIsolated) plus the assertion an observer used as a test spy is likely to
+    // throw. Another Error still propagates.
     private void notifyObserver(CloudEvent cloudEvent, boolean matched) {
         try {
             observer.observe(cloudEvent, matched);
-        } catch (RuntimeException e) {
-            log.warn("A PushObserver threw while observing an event pushed to {}. The event was still routed normally.",
+        } catch (RuntimeException | AssertionError e) {
+            log.warn("A PushObserver threw while observing an event pushed to {}. The observer failure did not affect routing.",
                     getClass().getSimpleName(), e);
         }
     }
