@@ -10,6 +10,8 @@
 - Authority: `.context/orchestrator-policy.yml`. No session-scoped deviations.
 - Active units: see `.context/epics/r34.yml` (revision 2, H3 DONE, rest READY/PLANNED). Nothing dispatched yet.
 - Next action: H2 (changelog skeleton + date fix PR, inline, prose-only so `[ci skip]` + merge-by-compare), arm the v7 work-item monitor plus the review-thread watch, then dispatch Wave 1 as CHIPS (U1-U6A, per Johan's vehicle correction at the plan gate: any unit with a pr-fix loop is multi-hour, so the 2026-08-14 chip ruling covers it) and H1 as the one subagent (bounded read-only verdict table, the recorded carve-out). U4's ADR-54 amendment is design-gated to Johan before merge. Epic start order after Wave 1 dispatch: ayi first, brk after Wave 1 settles. Sweep-loop ceiling: 40 ticks or 400k output tokens.
+- Monitors: work-item `b3ae1qein` (v7, repo-wide, MONITOR-READY at 2 open PRs 2026-08-16 ~16:2xZ, arming sweep clean: #807 waits on its requested Copilot review, #801 is community), review-thread watch `bs9p96l3j`. Retirement condition for both: stop in the sweep that completes the last r34 unit holding an unmet deliverable a PR event could advance, per the lifetime rule.
+- H2 delivered as PR 807 (`r34/h2-changelog-skeleton`, head `f73555a`, prose-only `[ci skip]`): changelog date fix + next-version skeleton + `doc/migration/upgrading-to-0.34.0.md` shell. Copilot review requested and verified via reviewRequests read-back. Merge by compare once the review is read (no checks on a `[ci skip]` head).
 - Verification: none run this session (no code changed); the release tag implies green main, re-verified at the first merge gate.
 - Tracker: github (block below)
 - Mode: Attended (Johan at the computer, answered the r34 gate 2026-08-16 ~16:00Z)
