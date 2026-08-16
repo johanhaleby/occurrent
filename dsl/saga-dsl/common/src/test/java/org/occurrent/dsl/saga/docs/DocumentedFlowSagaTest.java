@@ -21,7 +21,6 @@ import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInput;
 import org.occurrent.dsl.saga.flow.Continuation;
-import org.occurrent.dsl.saga.flow.Expectation;
 import org.occurrent.dsl.saga.flow.FlowSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.StepCondition;
@@ -217,16 +216,16 @@ class DocumentedFlowSagaTest {
     }
 
     @Nested
-    @DisplayName("when a step joins on two players readying up")
-    class When_a_step_joins_on_two_players_readying_up {
+    @DisplayName("when a step waits for two players readying up")
+    class When_a_step_waits_for_two_players_readying_up {
 
         @Test
-        void one_player_readying_up_does_not_leave_the_join_step() {
+        void one_player_readying_up_does_not_leave_the_waiting_step() {
             // Given
-            FlowState<GameEvent> joining = joinStepEntered();
+            FlowState<GameEvent> waiting = waitingStepEntered();
 
             // When
-            Saga.Step<FlowState<GameEvent>, CloseGame> step = lobby().step(joining, SagaInput.event(new PlayerReady(GAME_ID)));
+            Saga.Step<FlowState<GameEvent>, CloseGame> step = lobby().step(waiting, SagaInput.event(new PlayerReady(GAME_ID)));
 
             // Then
             assertAll(
@@ -236,10 +235,10 @@ class DocumentedFlowSagaTest {
         }
 
         @Test
-        void the_second_player_readying_up_fulfils_the_join_and_completes_the_saga() {
+        void the_second_player_readying_up_fulfils_the_condition_and_completes_the_saga() {
             // Given
             Saga.Step<FlowState<GameEvent>, CloseGame> afterFirst =
-                    lobby().step(joinStepEntered(), SagaInput.event(new PlayerReady(GAME_ID)));
+                    lobby().step(waitingStepEntered(), SagaInput.event(new PlayerReady(GAME_ID)));
 
             // When
             Saga.Step<FlowState<GameEvent>, CloseGame> afterSecond =
@@ -249,7 +248,7 @@ class DocumentedFlowSagaTest {
             assertThat(afterSecond.state().completed()).isTrue();
         }
 
-        private FlowState<GameEvent> joinStepEntered() {
+        private FlowState<GameEvent> waitingStepEntered() {
             Saga.Step<FlowState<GameEvent>, CloseGame> started = start(lobby(), new GameCreated(GAME_ID));
             return lobby().step(started.state(), SagaInput.event(new PlayerJoined(GAME_ID))).state();
         }
@@ -562,7 +561,7 @@ class DocumentedFlowSagaTest {
                         .timeout(Duration.ofMinutes(10), Continuation.end(),
                                 received -> List.of(new CloseGame(received.initiating(GameCreated.class).gameId()))))
                 .step("waiting-for-both-players", step -> step
-                        .join(List.of(Expectation.of(PlayerReady.class, 2)), Continuation.end()))
+                        .on(StepCondition.allOf(StepCondition.event(PlayerReady.class, 2)), Continuation.end()))
                 .build();
     }
 

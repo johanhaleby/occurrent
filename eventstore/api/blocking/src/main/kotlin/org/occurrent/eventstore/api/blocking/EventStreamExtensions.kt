@@ -20,5 +20,8 @@ import kotlin.streams.asSequence
 
 /**
  * Simply a convenience function that allows you to get the events as a [Sequence]
+ *
+ * A [Sequence] cannot be closed, and the underlying read may hold a database resource, so consume this to the end.
+ * If you stop early, read through [EventStream.events] instead and close the stream yourself.
  */
 fun <T : Any> EventStream<T>.eventSequence() = events().asSequence()

@@ -28,6 +28,7 @@ import org.occurrent.dsl.saga.flow.Continuation;
 import org.occurrent.dsl.saga.flow.FlowSaga;
 import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.dsl.saga.flow.StepCondition;
+import org.occurrent.dsl.saga.internal.SagaFilters;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 

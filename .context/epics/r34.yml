@@ -1,32 +1,98 @@
 schema_version: 1
 epic: r34
-revision: 2
-updated_at: 2026-08-16T16:06:00Z
-updated_by: "orchestrator session 2ca6ca90 (registration; meta-plan approved by Johan 2026-08-16 at the structured-ask gate, /Users/johan/.claude/plans/occurrent-0-34-0-meta-plan.md)"
+revision: 33
+updated_at: 2026-08-17T03:20:00Z
+updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
-pending_actions: []
+pending_actions:
+  - id: act-001
+    type: dispatch-chip
+    target: "Wave 1 chips spawned 2026-08-16T16:3xZ: U1 task_350dd4df, U2 task_7cd8b360, U3 task_a33f0879, U4 task_52b639cb, U5 task_e01a9bfc, U6A task_545261f9. Each starts on Johan's click; workers claim their issues themselves per brief"
+    expected: "each chip delivers a PR and a DELIVERY_RESULT; U2/U3 present design gates in their own sessions; U4's ADR-54 amendment wording comes to Johan before merge"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-16T16:35:30Z
+  - id: act-002
+    type: merge
+    target: "PR 808 (U4), held until Johan approves the ADR 54 amendment wording. REVISED after first presentation: head e36cfce99 adds the fromStreamVersion+StreamReadFilter skip-drift caveat and softens the native-store limit/close claims, both driven by Copilot's balanced review, which also produced issue 810 (worker-filed, orchestrator-verified in code). Worker asked 17:4xZ to resolve its five addressed threads. Related but Johan's own merges: docs PRs 66 and 67, docs issue 57 closes after 67 lands"
+    expected: "Johan rules on the revised amendment, then 808 merges under standing authority with a CAS pin at e36cfce99 or later, threads resolved first"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-16T17:20:00Z
+    resolved: "Johan approved as written 2026-08-16T19:2xZ via structured ask. Merged f71d4fae2 with CAS pin ccef8bd, all three commit diffs read, two reasoned-decline threads left open per policy"
+  - id: act-005
+    type: merge
+    target: "Close docs issue 57 AFTER Johan merges docs PR 67, per his ruling 2026-08-16T19:2xZ (close on his behalf with a short closing comment). The docs repo has no monitor, so check PR 67 state on every wake until it merges"
+    expected: "docs 67 merged by Johan, then orchestrator closes 57 citing the closeout verification and the badge fix, writing gate on the comment"
+    status: PENDING
+    attempts: 0
+    safe_to_repeat: true
+    issued_at: 2026-08-16T19:30:00Z
+  - id: act-003
+    type: message-session
+    target: "Issue 810 (native Mongo store: unsorted path drops skip/limit, no onClose cursor release, fromStreamVersion skip drifts under a filter) awaits Johan's triage ruling, presented 2026-08-16T17:45Z. Orchestrator recommendation: adopt as a new r34 unit and milestone it, the unsorted default makes the limit drop a silent correctness bug, though pre-existing so arguably not release-blocking"
+    expected: "Johan rules in or out. In: register U16, milestone 0.34.0, dispatch as a chip. Out: milestone-less, next release"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-16T17:45:00Z
+    resolved: "Johan ruled IN 2026-08-16T18:00Z (incorporate the new issues). U16 registered, issue 810 milestoned, chip spawned"
+  - id: act-004
+    type: dispatch-chip
+    target: "U16 chip task_33f7131a spawned 2026-08-16T18:00Z, starts on Johan's click, worker claims issue 810 itself per brief"
+    expected: "one PR after an in-session plan gate, then a DELIVERY_RESULT"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-16T18:00:00Z
+  - id: act-006
+    type: dispatch-chip
+    target: "U1 remediation chip task_2cf40682 spawned 2026-08-16T19:55Z on PR branch johan/r34-u1-reactor-subscription-fixes, plan gate in session for the atomicity redesign. DISCREPANCY 00:0xZ: the session reports itself done pending CI and review, but PR 812 sits at the ORIGINAL head 24b2f650c with zero thread replies and the conflict standing, so nothing it did ever reached the PR. Johan asked to have that session push its branch and reply to the threads, no movement for 2h, then the ORIGINAL session pushed the real remediation at 02:0xZ (head 4901b295, race fix plus refusal wording), so the redispatched subagent was stood down by message before touching the remote. Its earlier done-claim was a premature report of unpushed local work, not fabrication"
+    expected: "PR 812 rebased, three threads fixed or refuted with evidence, green with resolved threads, then DELIVERY_RESULT"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-16T19:55:00Z
+  - id: act-007
+    type: dispatch-chip
+    target: "Wave 2 chips spawned 2026-08-16T20:5xZ: U8 task_ffc08735, U9 task_e2b2961c, U10A task_8da6cf7d, U11 task_bb9a30d1, U13 task_fbfcd1be, U14 task_8628f8ca, U15 task_4f39a24b (Opus). U8 and U9 started by Johan immediately. Held back: U7 (needs U1 merge), U10B (needs U10A), U12 (designated stretch). U16 and the U1 remediation chip also started ~20:4xZ"
+    expected: "each delivers per its brief with in-session plan gates; ADR units audit ADR numbers across all remote branches before numbering"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-16T21:00:00Z
+  - id: act-008
+    type: message-session
+    target: "Unmarked chip 'Check reactor Mongo store for the same skip-under-filter drift' was NOT orchestrator-spawned, likely a worker's freelance flag. Orchestrator verified the finding is real (ReactorMongoEventStore lines 620-640) and folded it into issue 810 as comment 5308808054, which U16 picks up via its claim-recheck. Recommended Johan dismiss the unmarked chip"
+    expected: "Johan dismisses the unmarked chip, U16 covers the reactor surface"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-16T21:00:00Z
 units:
   H1:
     issue: null
     goal: "Docs closeout verification: reconstruct closed docs PRs 49/52/55/61/62/63/64/65 diffs via API, verify content reached docs main or is legitimately dead, verdict table plus recommendation on closing docs issue 57"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "subagent a83e224630286a3dd, completed 2026-08-16T17:0xZ"
     deliverables:
-      - {check: manual_approval, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
+      - {check: manual_approval, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: "verdict 2026-08-16: all eight closed docs PRs clean, 52/63 confirmed deliberate non-merges, historyWindow paragraph appears once. Sole gap saga-step-conditions missing from addedTags, fixed as docs PR 67, orchestrator re-verified the gap and anchor on docs main itself. Awaiting Johan: merge 67, then close docs issue 57"}
   H2:
     issue: null
     goal: "Changelog next-version skeleton plus 0.33.0 date fix to 2026-08-16, and the doc/migration/upgrading-to-0.34.0.md shell"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: null
+    session: "orchestrator inline"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "807", met: true, evidence: "PR 807 merged as 4f52632089bf 2026-08-16T17:1xZ, CAS pin 55455c7c8a, Copilot inline finding fixed in that head and replied to"}
   H3:
     issue: null
     goal: "Milestone and tracker bookkeeping: milestone 0.34.0 created, 35 issues assigned, stale milestones closed, #806 filed, #71 closed superseded"
@@ -40,11 +106,11 @@ units:
   U1:
     issue: 791
     goal: "One ReactorDurableSubscriptionModel correctness-and-wording PR: #791 remove(key,value), #803 comment, #804 log level, #805 message (also touches ManualStartSubscriptionModel, shared with U7, U1 lands first)"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_350dd4df went idle at DONE with 3 substantive Copilot threads unresolved (atomicity gap in the fix, test does not exercise the race, false WARN) and the changelog conflict standing. Remediation chip task_2cf40682 spawned 19:55Z on the same PR branch, awaiting Johan click. Dismiss it if the original session resumes first"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "791", met: false, evidence: null}
@@ -54,59 +120,59 @@ units:
   U2:
     issue: 788
     goal: "Fencing configuration check sees DomainEventFeed-backed push projections; scope is the annotation scan and resolveFeedBean, CheckpointStorage SPI out of bounds"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: null
+    session: "chip task_7cd8b360 COMPLETE (worker self-rebased the conflict and answered review before ending)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "788", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "811", met: true, evidence: "merged 68ceb5472 2026-08-16T20:1xZ, CAS pin 48b46167c, 26/26 green, threads resolved, changelog and 0.33.0 migration-guide touch included, branch deleted"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "788", met: true, evidence: "closed by the squash, verified"}
   U3:
     issue: 802
     goal: "Observation hook on PushSubscriptionModel, design gate on the hook's home (push models vs RegisteringSubscribable)"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_a33f0879, delivered PR 824, DONE flag with the changelog conflict standing at the original head. No task-end notification, so the session may resume per the DONE-flag lesson. If unmoved by 04:15Z orchestrator merges main into the branch remotely (the 816 route, never entering the worker worktree)"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "802", met: false, evidence: null}
   U4:
     issue: 775
     goal: "Docs-corrections bundle: #775 javadoc and docs-site check, #761 cursor warnings on six Sequence extensions, #760 ADR 54 read-side amendment (issue close is Johan's)"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: null
+    session: "chip task_52b639cb COMPLETE (also filed issue 810 and docs PR 66, which stays Johan's merge)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "775", met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "761", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "808", met: true, evidence: "merged f71d4fae2 2026-08-16T19:2xZ after Johan approved the ADR 54 amendment, CAS pin ccef8bd, branch deleted"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "775", met: true, evidence: "closed by the squash, verified"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "761", met: true, evidence: "closed by the squash, verified. 760 deliberately stays open, its close is Johan's"}
   U5:
     issue: 781
     goal: "Flake-rate investigation SubscriptionModelConformance$TheLifeCycle, timeboxed; TCK fixture changes may tighten or add, never loosen"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: null
+    session: "chip task_e01a9bfc COMPLETE per timebox. PR 813 merged 0285887cc (timeout widening, no assertion touched). Issue 781 kept OPEN by orchestrator: the PR its own CI failed the paused-hold test at 12s with the held event absent while a later one arrived, a lost-redelivery signature, counter-evidence to slowness. Comment 5308784125 records the next diagnostic step. Johan closes or re-defers 781 at the release gate"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "781", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "813", met: true, evidence: "merged 0285887cc 2026-08-16T20:3xZ, CAS pin 90be8c0b4, 26/26 green, no unresolved threads, body repointed from Fixes to Part-of before merge"}
+      - {check: manual_approval, repo: johanhaleby/occurrent, ref: "781", met: true, evidence: "Johan ruled 2026-08-16T23:2xZ: keep 781 open for a while, continue only if the failure recurs. Not a release blocker"}
   U6A:
     issue: 786
     goal: "Move SagaFilters to dsl/saga-dsl/common and make public, mirroring ProjectionFilters; independent of the expansion pass"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: null
+    session: "chip task_545161f9 COMPLETE, session name unmapped (generated peer names), no wind-down message sent"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "786", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "809", met: true, evidence: "merged 38274d24e 2026-08-16T19:0xZ, CAS pin eccbcd72c, 26/26 green on rerun (subscription-util java-25 was the CompetingConsumer awaitility flake), threads resolved, changelog entry included, branch deleted"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "786", met: true, evidence: "closed by the squash merge, verified via gh issue view"}
   U7:
     issue: 771
     goal: "Manual/reactor registration ordering residual plus checkpoint delete-recreate race, one decision across both stacks, plan-first, likely ADR"
@@ -121,11 +187,11 @@ units:
   U8:
     issue: 773
     goal: "Retained-history counting vs stepWindow eviction (#773) and the explicit-retention-choice question (#764) as one ADR-backed decision; a no-forced-choice outcome is recorded, not dropped"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_ffc08735, delivered PR 822 at 01:1xZ (stepWindow foreign-type eviction fix plus ADR). ADR COLLISION again, claims 127 which 819 holds. Orchestrator directed renumber to 129 via PR comment 5309149686, worker active, expected renumbered and rebased by 02:00Z else orchestrator does both. ADR RESERVATIONS: 127=U15/819, 128=MERGED/816, 129=U8/822, next free 130"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "773", met: false, evidence: null}
@@ -133,32 +199,32 @@ units:
   U9:
     issue: 748
     goal: "Parked-instance behavior on renamed or removed step, lifecycle ADR plus fix, includes the IndexOutOfBoundsException sibling"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: null
+    session: "chip task_e2b2961c ended DONE with the conflict standing. Orchestrator merged main into the branch (05b366d9d) and RENUMBERED its ADR 126 to 128 (number collision with the in-flight 815, 127 taken by 819). Checks rerunning. ADR reservations now orchestrator-allocated per the skill update"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "748", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "816", met: true, evidence: "merged 1aec01af7 2026-08-17T00:3xZ, CAS pin 05b366d9d, 27/27 green, ADR renumbered to 128 by orchestrator, both threads resolved with reasoned outcomes, stale ORCHESTRATOR.md deferral line fixed in the same checkpoint"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "748", met: true, evidence: "closed by the squash, verified"}
   U10A:
     issue: 750
     goal: "Sealed-expansion ADR: uniformity across modules on the getPermittedSubclasses invariant, #753 likely no-change-recorded, #758 largely documentation"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: null
+    session: "chip task_8da6cf7d, delivered PR 815 at 21:4xZ: ADR 126, number audited across all remote branches, decision matches the approved meta-plan direction so the merge is principle-settled once review threads resolve. Body repointed from Fixes to Decides (750/753/758 close at U10B, 753 as recorded no-change). Copilot requested and read back. Review landed with two factual claims about DomainEventQueries (worker owns) and the Fixes-line flag (orchestrator resolved, already fixed). U10B dispatches as a background subagent after 815 merges"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "815", met: true, evidence: "ADR 126 merged 9c523bafc 2026-08-17T00:5xZ, CAS pin 2080996. Worker session ended with two factual Copilot threads open, orchestrator verified both against DomainEventQueries.createFilterFrom, corrected the ADR in place (unreleased, allowed), replied and resolved"}
   U10B:
     issue: 750
     goal: "Sealed-expansion module pass per U10A's decision: projection DSL, subscription DSL, query DSL both stacks, Spring registrars; migration-guide section for any released-surface refusal"
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U10A]
-    session: null
+    session: "background subagent dispatched 2026-08-17T01:0xZ per the unattended vehicle, own worktree from origin/main, brief carries the finding-routing block and the semantic guard for the query DSL empty-set case"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "750", met: false, evidence: null}
@@ -167,11 +233,11 @@ units:
   U11:
     issue: 737
     goal: "Four lifecycle-leak findings, items 1-3 small fixes, item 4 per-attempt identity coordinated across both catch-up models, plan-first"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_bb9a30d1 ended DONE with the conflict standing and two substantive concurrency threads unanswered (opt-out marker cleared before delegate acceptance, unconditional catchingUp.remove racing newer replays). Remediation subagent dispatched 02:5xZ, then the original session resumed and pushed the thread fixes (ca63aa8e7), subagent stood down untouched. Worker owns the PR"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "737", met: false, evidence: null}
@@ -189,32 +255,43 @@ units:
   U13:
     issue: 439
     goal: "Store-neutral config keys: names AND mechanism (alias vs rename+recipe, RenameMappedSubscriptionEnabledKey is the precedent #439 predates) settled at one Johan gate, #410 requirements as input"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_fbfcd1be, started by Johan 21:0xZ before going unattended"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "439", met: false, evidence: null}
   U14:
     issue: 806
     goal: "Join removal plan-first: recipe reachability map (two Java overloads, Kotlin trailing lambdas), UpgradeToOccurrent_0_34 recipe, prose migration for unreachable shapes, remove join/expect/Expectation, docs sweep"
-    phase: READY
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: null
+    session: "chip task_8628f8ca COMPLETE. The held docs branch was authored local-only in the shared checkout, orchestrator pushed it and opened held docs PR 71"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "806", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "821", met: true, evidence: "merged 62eb23c61 2026-08-17T02:2xZ, CAS pin b4c814b8a, 26/26 green, zero threads, recipe plus tests plus migration guide plus both changelog subsections verified, held docs PR 71 opened"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "806", met: true, evidence: "closed by the squash, verified"}
+  U16:
+    issue: 810
+    goal: "Native Mongo store read fixes, plan-first: unsorted path applies skip/limit, returned Stream closes its MongoCursor via onClose, fromStreamVersion no longer drifts under a StreamReadFilter (candidate: translate the version into a query condition instead of a skip, worker's plan decides). Conformance coverage so the Spring store's correct behavior becomes the tested contract"
+    phase: DONE
+    health: PROGRESSING
+    swept: true
+    depends_on: []
+    session: "chip task_33f7131a, delivered PR 814 at 21:2xZ covering native, Spring blocking, reactor, and in-memory stores. Worker refuted the unsorted skip/limit bug via mutation test (FindIterable aliases itself), so 810 finding one was never active. CONFLICTING on changelog, worker owns rebase. MERGE FOLLOW-UP: the ADR 54 amendment paragraph documenting the drift as permanent goes stale when 814 merges, orchestrator amends it in a small prose PR after merge. COMPLETE. ADR 54 follow-up delivered as PR 817 (orchestrator inline, prose-only, Copilot requested), merge by compare when review lands"
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "814", met: true, evidence: "merged a6bab6872 2026-08-16T22:2xZ, CAS pin e662fd9, 26/26 green, threads resolved, all four stores fixed uniformly, unsorted-paging finding refuted by mutation test"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "810", met: true, evidence: "closed by the squash, verified"}
   U15:
     issue: 725
     goal: "Subscription-as-data-structure design round with the #721 name-clash answer inside it, plan-first Opus ADR; implementation registers as its own epic if the plan sizes it epic-scale"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_4f39a24b, started by Johan 21:0xZ before going unattended"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}

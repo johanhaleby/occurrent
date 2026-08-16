@@ -736,6 +736,42 @@ public abstract class EventStoreQueriesConformance extends EventStoreConformance
                     .containsExactly("a", "b", "c", "d", "e");
         }
 
+        // Skip and limit still narrow the result with no explicit sort, i.e. SortBy.unsorted(), the default on
+        // every overload that doesn't take a SortBy. Order isn't asserted here since unsorted has no order
+        // contract, only that the count is what skip and limit demand.
+        @Nested
+        @DisplayName("with no explicit sort")
+        class WithNoExplicitSort {
+
+            @Test
+            void limits_the_result_to_the_requested_count() {
+                writeFive();
+
+                assertThat(idsOf(queries().all(2, 2))).hasSize(2);
+            }
+
+            @Test
+            void returns_the_remainder_when_the_limit_exceeds_what_is_left_after_skipping() {
+                writeFive();
+
+                assertThat(idsOf(queries().all(3, 100))).hasSize(2);
+            }
+
+            @Test
+            void skipping_past_the_end_returns_nothing() {
+                writeFive();
+
+                assertThat(idsOf(queries().all(10, 5))).isEmpty();
+            }
+
+            @Test
+            void pages_a_filtered_query() {
+                writeFive();
+
+                assertThat(idsOf(queries().query(Filter.type(CHANGED), 1, 1))).hasSize(1);
+            }
+        }
+
         private void writeFive() {
             eventStore().write(STREAM_ID, List.of(
                     eventAt("a", DEFINED, TIME),

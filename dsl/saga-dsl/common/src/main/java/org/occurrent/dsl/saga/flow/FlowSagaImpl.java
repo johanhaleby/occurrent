@@ -172,12 +172,26 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
                 + (state == null ? "null" : state.getClass().getName()));
     }
 
+    // A step name is the persisted position, so a step renamed or removed since an instance entered it leaves that
+    // instance with no route: nothing in the current definition says what its branches, timeout or leaves are. Thrown
+    // from both evolveOnEvent and evolveOnTimeout, right after the stepsByName lookup that would otherwise NPE. See ADR
+    // 128 for why this refuses rather than guessing a recovery, and why that is enough to also keep reactToBranch's
+    // matchedBranchIndex lookup in range: react only ever runs on the state evolve just returned in this same call, so
+    // once evolve refuses here, nothing downstream can observe a step or branch index this build does not have.
+    private static IllegalStateException missingStep(String stepName) {
+        return new IllegalStateException("step '" + stepName + "' no longer exists in this flow's definition, but an"
+                + " instance is parked in it, most likely because the step was renamed or removed while the instance"
+                + " was waiting there. Put the step back under its old name, or add a temporary step under '" + stepName
+                + "' that transitions its instances onward, until every parked instance has moved past it. To unblock"
+                + " immediately without a redeploy, delete the instance from the SagaStateStore instead.");
+    }
+
     private FlowStateImpl<E> evolveOnEvent(FlowStateImpl<E> state, E event) {
         if (!state.completed() && state.currentStep() == null) {
             // Instance creation: the start event enters the first step, its window opens after the start event itself. The
             // start event is received.get(0) and is always retained. The retained tail begins at absolute position 1. A
             // first-step window condition naming the start type therefore counts only post-start arrivals, never the start
-            // delivery itself, exactly as a first-step join or classic on(...) already behaves.
+            // delivery itself, the same way a classic on(...) branch already behaves.
             if (!startType.isInstance(event)) {
                 return state;
             }
@@ -190,6 +204,9 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
             return state;
         }
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());
+        if (step == null) {
+            throw missingStep(state.currentStep());
+        }
         List<E> appended = append(state.received(), event);
         // Counts are derived from the step's events as this delivery actually finds them, before stepWindow trims
         // anything. A backlog that exceeds a newly configured cap is counted against what genuinely arrived, not
@@ -219,7 +236,7 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     // A classic on(Class, ...) branch fires only on a matching arriving event (a guard reads the event plus the received
     // log, but a guarded branch is deliberately NOT re-checked on later, unrelated events, see StepBuilder's javadoc). A
-    // window-condition branch (on(StepCondition, ...) or the join sugar) fires whenever the accumulating window since step
+    // window-condition branch (on(StepCondition, ...)) fires whenever the accumulating window since step
     // entry satisfies its tree, so it is re-evaluated on every arriving event regardless of that event's own type, since a
     // tree can span several leaf types. received is wrapped in ReceivedEvents only inside the guard branch, since an
     // unguarded classic branch (the common case) and a window condition never read it.
@@ -242,6 +259,9 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
             return unchangedExceptBookkeeping(state);
         }
         CompiledStep<E, C> step = stepsByName.get(state.currentStep());
+        if (step == null) {
+            throw missingStep(state.currentStep());
+        }
         if (step.timeout() == null) {
             return unchangedExceptBookkeeping(state);
         }
@@ -295,9 +315,9 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     // Every transition resets stepEntryIndex to the new step's entry, including a transitionTo back into the current step
     // (a self-loop), so re-entering a step, classic branch or window condition alike, restarts every window that step
-    // carries. In a mixed step, a classic branch self-looping wipes a sibling window condition's partial count the same
-    // way it already wipes a join's. This is today's join semantics generalized, kept deliberately, and becomes visible
-    // once branches mix, so it is also stated in ADR 120, the on(StepCondition) javadoc and the docs, and asserted by a test.
+    // carries. In a mixed step, a classic branch self-looping wipes a sibling window condition's partial count too, kept
+    // deliberately, and becomes visible once branches mix, so it is also stated in ADR 120, the on(StepCondition) javadoc
+    // and the docs, and asserted by a test.
     private FlowStateImpl<E> applyTransition(FlowStateImpl<E> from, int windowStart, Continuation continuation, List<E> received, ActionKind kind, int branchIndex) {
         // The new step is entered after every event received so far, so its entry is the absolute event count. received holds
         // the initiating event (position 0) plus the tail starting at windowStart, so that count is windowStart plus the tail
@@ -366,11 +386,13 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         };
     }
 
-    // Every classic on(...) branch and every window-condition branch (on(StepCondition, ...), and the join sugar) writes
+    // Every classic on(...) branch and every window-condition branch (on(StepCondition, ...)) writes
     // ActionKind.BRANCH with its real index, so this one method reacts to both: BranchReaction always receives the
     // triggering event's metadata and the event itself, a classic-on adapter uses them, a window-condition adapter ignores
     // them and reads only the received window. BRANCH is only ever set from evolveOnEvent, so the input here is always a
-    // SagaInput.Event and the cast is safe.
+    // SagaInput.Event and the cast is safe. from and matchedBranchIndex are also safe unguarded: evolveOnEvent's own
+    // missingStep check already refused this delivery if state.previousStep() (the step it just left) were absent from
+    // stepsByName, and matchedBranchIndex was set from a loop bounded by that same step's branches() in the same call.
     private List<SagaEffect<C>> reactToBranch(FlowStateImpl<E> state, SagaInput<E> input) {
         CompiledStep<E, C> from = stepsByName.get(state.previousStep());
         Branch<E, C> branch = from.branches().get(state.matchedBranchIndex());
@@ -381,8 +403,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         return effects;
     }
 
-    // What a firing branch's reaction reads. Every WindowCondition trigger, on(StepCondition, ...) and the lowered join
-    // sugar alike, gets whatever of the events received since the step it fired from was entered is still retained, all
+    // What a firing branch's reaction reads. Every WindowCondition trigger, built by on(StepCondition, ...), gets
+    // whatever of the events received since the step it fired from was entered is still retained, all
     // of them unless a stepWindow cap has already evicted the step's own oldest ones. The condition still fires on the
     // count it counted regardless, since that count is carried forward rather than re-derived from what remains. A
     // classic branch reads the whole retained history instead, and so does a WindowCondition whose state has
@@ -416,6 +438,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         return effects;
     }
 
+    // from is safe unguarded for the same reason as in reactToBranch: evolveOnTimeout's own missingStep check already
+    // refused this delivery if the step firing the timeout were absent from stepsByName.
     private List<SagaEffect<C>> reactToTimeout(FlowStateImpl<E> state) {
         CompiledStep<E, C> from = stepsByName.get(state.previousStep());
         TimeoutSpec<E, C> timeout = from.timeout();
@@ -440,6 +464,11 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
         armTimeoutIfAny(effects, state.currentStep(), ReceivedEvents.of(state.received()));
     }
 
+    // stepName is safe unguarded here too, but for a different reason than reactToBranch/reactToTimeout: this is called
+    // only with steps.get(0).name() (onStart, always this saga's own first step) or with a step retargetTimers just
+    // entered via applyTransition, i.e. steps.get(next).name() or a transitionTo target, both drawn from this same
+    // build's own step list and, for transitionTo, checked to exist in it by FlowSaga.Builder.validateTransitionToTargets
+    // at build() time. Neither path can ever hand this a step name from a stale, persisted document.
     private void armTimeoutIfAny(List<SagaEffect<C>> effects, @Nullable String stepName, ReceivedEvents<E> received) {
         if (stepName == null) {
             return;
@@ -688,9 +717,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
     }
 
     /**
-     * A window condition trigger, built by {@code on(StepCondition, ...)} directly and by the deprecated {@code
-     * join(...)}'s lowering alike. Both read the window {@code condition} was evaluated over, the events received since the
-     * step this branch fired from was entered.
+     * A window condition trigger, built by {@code on(StepCondition, ...)}. Reads the window {@code condition} was
+     * evaluated over, the events received since the step this branch fired from was entered.
      */
     record WindowCondition<E>(StepCondition<E> condition) implements Trigger<E> {
     }
@@ -700,8 +728,8 @@ final class FlowSagaImpl<E, C> implements Saga<E, FlowState<E>, C> {
 
     /**
      * A branch's reaction, unified across both trigger kinds. A classic on(...) adapter uses {@code metadata} and
-     * {@code triggering} and ignores {@code received}. A window-condition adapter (on(StepCondition, ...), and the join
-     * sugar) reads only {@code received} and ignores the other two, so it tolerates the null {@code triggering} that
+     * {@code triggering} and ignores {@code received}. A window-condition adapter (on(StepCondition, ...)) reads only
+     * {@code received} and ignores the other two, so it tolerates the null {@code triggering} that
      * {@code reactToJoin}'s defensive path passes.
      */
     @FunctionalInterface

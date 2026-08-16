@@ -22,7 +22,9 @@ import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
+import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.SmartInitializingSingleton;
@@ -113,7 +115,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
                 if (projection != null) {
                     projectionMethods.add(new Object[]{beanName, method, projection});
-                    if (projection.mode() != org.occurrent.annotation.Mode.SYNCHRONOUS && checkpointsWhenPush(projection.source(), projection.catchup())) {
+                    if (projection.mode() != org.occurrent.annotation.Mode.SYNCHRONOUS && checkpointsWhenPush(projection.source(), projection.catchup())
+                            && !isDomainEventFeedFed(projection)) {
                         idsToCheck.add(projection.id());
                     }
                 }
@@ -175,6 +178,18 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // for either annotation, is ever built.
     private static boolean checkpointsWhenPush(org.occurrent.annotation.Source source, org.occurrent.annotation.Catchup catchup) {
         return source != org.occurrent.annotation.Source.PUSH || catchup != org.occurrent.annotation.Catchup.NONE;
+    }
+
+    // A DomainEventFeed-fed @Projection(source = PUSH) never resolves CheckpointStorage, whatever catchup says.
+    // Resolved read-only, so an id whose feed bean type cannot be determined this way stays in idsToCheck rather
+    // than being excluded on a guess.
+    private boolean isDomainEventFeedFed(org.occurrent.annotation.Projection projection) {
+        if (projection.source() != org.occurrent.annotation.Source.PUSH) {
+            return false;
+        }
+        Class<?> feedType = SubscriptionAnnotations.resolveFeedBeanType(applicationContext, projection.subscriptionModel(),
+                projection.subscriptionModelName(), PushSubscriptionModel.class, DomainEventFeed.class);
+        return feedType != null && DomainEventFeed.class.isAssignableFrom(feedType);
     }
 
     @Override

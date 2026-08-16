@@ -182,15 +182,6 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
     fun transitionTo(step: String): Continuation = Continuation.transitionTo(step)
 
     /**
-     * An expectation of [count] events of type [T], for a [join].
-     *
-     * @deprecated in favor of [event], for [on] with [allOf]/[anyOf]. `join` and `expect` are the sugar for a step that
-     * is nothing but a conjunction of counts. [StepCondition] expresses that plus alternatives and predicates.
-     */
-    @Deprecated("Replaced by event<T>(count), used with on(allOf(...)) or on(anyOf(...)). See StepCondition.")
-    inline fun <reified T : E> expect(count: Int = 1): Expectation<E> = Expectation(T::class.java, count)
-
-    /**
      * A leaf [StepCondition] matching [count] events of type [T], optionally also satisfying [predicate]. Combine leaves
      * with [allOf]/[anyOf] and hand the tree to [on].
      *
@@ -314,18 +305,6 @@ class StepScope<E : Any, C : Any> @PublishedApi internal constructor(@PublishedA
         whenFulfilled: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { nothing }
     ) {
         delegate.on(condition, then) { received -> FlowReactions<C>().whenFulfilled(received).build() }
-    }
-
-    /**
-     * A join that waits until all [expecting] are met (counted since the step was entered), then issues commands and
-     * follows [then].
-     *
-     * @deprecated in favor of `on(allOf(...))`, which this now lowers to internally. An expectation of `n` events of a
-     * type becomes `event<T>(n)`, and the whole list becomes one `allOf(...)` tree. See [StepCondition].
-     */
-    @Deprecated("Replaced by on(allOf(...)), see StepCondition.")
-    fun join(expecting: Expectation<E>, vararg more: Expectation<E>, then: Continuation, whenFulfilled: FlowReactions<C>.(ReceivedEvents<E>) -> FlowReactions<C> = { nothing }) {
-        delegate.join(listOf(expecting, *more), then) { received -> FlowReactions<C>().whenFulfilled(received).build() }
     }
 
     /** A relative timeout: if it fires before the step completes, issue commands and follow [then]. */
