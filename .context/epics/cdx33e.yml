@@ -1,10 +1,9 @@
 schema_version: 2
 epic: cdx33e
-revision: 17
-updated_at: 2026-08-16 16:05:00+00:00
-updated_by: 'orchestrator: E10 DONE (ADR PR 799 merged d49ae19 after the orchestrator closed the re-review gap; docs passage
-  on preview db24b2d; release-notes re-aligned b6362e4). Only E8 remains open, all checks green on 355da56, DELIVERY_RESULT
-  owed'
+revision: 18
+updated_at: 2026-08-16 16:55:00+00:00
+updated_by: 'orchestrator: E11 dispatched (Opus, round-three feedback with skill rules recorded first); E8 at its ninth
+  head processing suppressed-block findings, one more round of grace before a calibration nudge'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -263,6 +262,30 @@ units:
       ref: docs/0.33.0-release-notes
       met: true
       evidence: 'Re-aligned at b6362e4, docs.md byte-identical to preview db24b2d'
+  E11:
+    issue: null
+    goal: 'Round-three docs feedback (6 items plus the apply-broadly mandate): example-anchored mechanism introduction for
+      the Counted Conditions opener per Johan''s supplied shape, the unstated-norm appeal killed, the ReceivedEvents non-sequitur
+      given a real transition or boundary, count and none() introduced before use, directional snippet references, the visibility
+      rules (reaction vs guard vs timeout scope) given their own structural home, then the five disease patterns swept across
+      the section. Five new rules recorded in johan-writing (a11fcc7) BEFORE dispatch so the worker writes under them. AGENTS.md
+      deliberately NOT extended: the writing skill already binds every docs surface via the global rule, duplication is bloat'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-preview
+      met: false
+      evidence: null
+    - check: branch_pushed
+      repo: occurrent-org/occurrent-org.github.io
+      ref: docs/0.33.0-release-notes
+      met: false
+      evidence: null
   CREG:
     issue: null
     goal: 'Register: the sweep''s no-blocker verdict recorded beside the release-readiness declaration; the four dispositions;
