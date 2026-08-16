@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 19
-updated_at: 2026-08-16T22:10:00Z
+revision: 20
+updated_at: 2026-08-16T22:30:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -277,14 +277,14 @@ units:
   U16:
     issue: 810
     goal: "Native Mongo store read fixes, plan-first: unsorted path applies skip/limit, returned Stream closes its MongoCursor via onClose, fromStreamVersion no longer drifts under a StreamReadFilter (candidate: translate the version into a query condition instead of a skip, worker's plan decides). Conformance coverage so the Spring store's correct behavior becomes the tested contract"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_33f7131a, delivered PR 814 at 21:2xZ covering native, Spring blocking, reactor, and in-memory stores. Worker refuted the unsorted skip/limit bug via mutation test (FindIterable aliases itself), so 810 finding one was never active. CONFLICTING on changelog, worker owns rebase. MERGE FOLLOW-UP: the ADR 54 amendment paragraph documenting the drift as permanent goes stale when 814 merges, orchestrator amends it in a small prose PR after merge. CONFLICTING with DONE flag at 21:4xZ, worker may have ended, orchestrator rebases the changelog conflict itself if still standing at 22:15Z"
+    session: "chip task_33f7131a, delivered PR 814 at 21:2xZ covering native, Spring blocking, reactor, and in-memory stores. Worker refuted the unsorted skip/limit bug via mutation test (FindIterable aliases itself), so 810 finding one was never active. CONFLICTING on changelog, worker owns rebase. MERGE FOLLOW-UP: the ADR 54 amendment paragraph documenting the drift as permanent goes stale when 814 merges, orchestrator amends it in a small prose PR after merge. COMPLETE. ADR 54 follow-up delivered as PR 817 (orchestrator inline, prose-only, Copilot requested), merge by compare when review lands"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "810", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "814", met: true, evidence: "merged a6bab6872 2026-08-16T22:2xZ, CAS pin e662fd9, 26/26 green, threads resolved, all four stores fixed uniformly, unsorted-paging finding refuted by mutation test"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "810", met: true, evidence: "closed by the squash, verified"}
   U15:
     issue: 725
     goal: "Subscription-as-data-structure design round with the #721 name-clash answer inside it, plan-first Opus ADR; implementation registers as its own epic if the plan sizes it epic-scale"
