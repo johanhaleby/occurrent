@@ -534,10 +534,10 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     private IllegalStateException positionSourceAnsweredNothing(String subscriptionId) {
         return new IllegalStateException("The position source " + requireNonNull(positionSource).getClass().getName() +
                                          " answered nothing when asked for the current position while registering subscription " +
-                                         subscriptionId + ", which is how it reports a problem it cannot resolve. There is " +
-                                         "no position to start this subscription from, and starting it anyway would begin " +
-                                         "wherever the feed has reached by then and skip whatever was written while it " +
-                                         "waited, so the registration is refused. Register again once the source can answer, " +
+                                         subscriptionId + ", which is how it reports a problem it cannot resolve, and no " +
+                                         "checkpoint is stored for it either, so the registration is refused rather than " +
+                                         "started from wherever the feed has reached by then, which would skip whatever " +
+                                         "was written while it waited. Register again once the source can answer, " +
                                          "or use " + ManualStartSubscriptionModel.class.getSimpleName() +
                                          ".stoppedByDefault(SubscriptionModel), or a StartAt of your own, neither of which " +
                                          "records a position and neither of which carries such a guarantee.");
