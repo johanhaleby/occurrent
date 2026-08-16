@@ -289,10 +289,13 @@ with itself. Separately, this record claimed the self-loop window-reset rule app
 allowed to see, and that turned out to be the fact a caller actually needs when choosing between them.** `StepBuilder`'s
 guarded overload takes `BiPredicate<T, ReceivedEvents<E>>`, so `onlyIf` receives the arriving event and the whole
 retained history in one call. `StepCondition.event(Class, Predicate)` takes a bare `Predicate<T>`, the arriving event
-and nothing else. The narrower signature is not an oversight. A leaf's count is re-derived from the step window on
-every delivery, and again from scratch once a redeploy replays it, so its predicate has to answer the same way every
-time it sees the same event, or the recount and the original run disagree. A predicate that could read
-`ReceivedEvents` would have a way around that on every single call. This is also the practical rule for choosing
-between the two. A decision that depends on anything beyond the one event in front of it, an earlier event's
-contents, a running count, elapsed time, can only be written as a guard, because `event(...)`'s `Predicate<T>` has
-nothing else to look at.
+and nothing else. `StepCondition`'s javadoc already states why that side has to stay narrow. A leaf's predicate has to
+be a deterministic function of the one event it is given, because it is re-run whenever a count is derived from the
+step window rather than read off a count the instance already carries. That happens on every delivery for a step with
+no `stepWindow` cap, and again on a rescan whenever a capped step's carried counts do not already describe its current
+declaration, its first delivery into the step included ([ADR 123](0123-a-step-conditions-counts-are-carried-so-the-steps-events-can-be-dropped.md)).
+That requirement is a contract stated on the javadoc, not one the `Predicate<T>` type itself can enforce, since a
+lambda can still close over a clock or mutable state regardless of what its parameter list says. The signature
+difference is still the practical rule for choosing between the two. A leaf's `Predicate<T>` can only look at the one
+event it is handed, so a decision that needs anything else, another event's contents or a running count among them,
+has to be a guard, which is exactly what handing it `ReceivedEvents` is for.
