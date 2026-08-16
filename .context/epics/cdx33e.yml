@@ -1,17 +1,18 @@
 schema_version: 2
 epic: cdx33e
-revision: 23
-updated_at: 2026-08-16 20:40:00+00:00
+revision: 24
+updated_at: 2026-08-16 21:20:00+00:00
 updated_by: 'orchestrator: EPIC RE-CLOSED COMPLETE for the second and final time, 11 of 11 units DONE and swept, all watchers
   and the heartbeat retired, no unresolved pending actions. The post-closeout adopted tail delivered: E4 (reactive CheckpointStorage
   section), E5 (fencing announcement port), E6 and E9 and E11 (three rounds of Johan''s docs feedback with the learnings
   recorded to johan-writing before each rewrite), E7 (banned-pattern sweep and branch alignment), E8 (recipe fixes closing
   732 and 736, ruled pre-tag, matrix 26/26 green on 00dfb24), E10 (the onlyIf rationale in ADR 120 and docs). Tracker scan
-  clean, only fleet PRs. FINAL RELEASE STATE, docs heads advanced 2026-08-16 20:40Z by a post-closeout prose fix (Johan
-  could not follow the stepWindow counting paragraph in Step Conditions, rewritten as three short paragraphs and mirrored
-  to both branches so their docs.md stays blob-identical): tag from main 00dfb24; merge docs/0.33.0-preview at e645eaa then
-  docs/0.33.0-release-notes at d085dac (docs.md blob 7f56b7853a on both, the second merge cannot conflict); docs/checkpoint-fencing
-  retired unmerged. The tag and both docs merges are Johan''s manual acts'
+  clean, only fleet PRs. FINAL RELEASE STATE, docs heads advanced twice on 2026-08-16 by post-closeout prose fixes in
+  Step Conditions, both raised by Johan reading the section (the stepWindow counting paragraph, then the predicateId
+  cluster whose opener implied the stored count was optional), each mirrored to both branches so their docs.md stays
+  blob-identical: tag from main 00dfb24; merge docs/0.33.0-preview at 791a176 then docs/0.33.0-release-notes at 4d2e6af
+  (docs.md blob def074e13f on both, the second merge cannot conflict); docs/checkpoint-fencing retired unmerged. The tag
+  and both docs merges are Johan''s manual acts'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
