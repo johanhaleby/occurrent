@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 26
-updated_at: 2026-08-17T01:20:00Z
+revision: 31
+updated_at: 2026-08-17T02:50:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -50,7 +50,7 @@ pending_actions:
     issued_at: 2026-08-16T18:00:00Z
   - id: act-006
     type: dispatch-chip
-    target: "U1 remediation chip task_2cf40682 spawned 2026-08-16T19:55Z on PR branch johan/r34-u1-reactor-subscription-fixes, plan gate in session for the atomicity redesign. DISCREPANCY 00:0xZ: the session reports itself done pending CI and review, but PR 812 sits at the ORIGINAL head 24b2f650c with zero thread replies and the conflict standing, so nothing it did ever reached the PR. Johan asked to have that session push its branch and reply to the threads, else respawn"
+    target: "U1 remediation chip task_2cf40682 spawned 2026-08-16T19:55Z on PR branch johan/r34-u1-reactor-subscription-fixes, plan gate in session for the atomicity redesign. DISCREPANCY 00:0xZ: the session reports itself done pending CI and review, but PR 812 sits at the ORIGINAL head 24b2f650c with zero thread replies and the conflict standing, so nothing it did ever reached the PR. Johan asked to have that session push its branch and reply to the threads, no movement for 2h, then the ORIGINAL session pushed the real remediation at 02:0xZ (head 4901b295, race fix plus refusal wording), so the redispatched subagent was stood down by message before touching the remote. Its earlier done-claim was a premature report of unpushed local work, not fabrication"
     expected: "PR 812 rebased, three threads fixed or refuted with evidence, green with resolved threads, then DELIVERY_RESULT"
     status: PENDING
     attempts: 1
@@ -135,7 +135,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_a33f0879 in session adoring-heisenberg-470b55, was parked at its design gate, Johan answered it 23:2xZ and told it to continue"
+    session: "chip task_a33f0879, delivered PR 824 at 02:0xZ (observation hook, changelog conflict, worker active)"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "802", met: false, evidence: null}
@@ -237,7 +237,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_bb9a30d1, started by Johan 21:0xZ before going unattended"
+    session: "chip task_bb9a30d1 ended DONE with the conflict standing and two substantive concurrency threads unanswered (opt-out marker cleared before delegate acceptance, unconditional catchingUp.remove racing newer replays). Remediation subagent dispatched 02:5xZ on the PR branch, stops on non-fast-forward"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "737", met: false, evidence: null}
@@ -266,14 +266,14 @@ units:
   U14:
     issue: 806
     goal: "Join removal plan-first: recipe reachability map (two Java overloads, Kotlin trailing lambdas), UpgradeToOccurrent_0_34 recipe, prose migration for unreachable shapes, remove join/expect/Expectation, docs sweep"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_8628f8ca, started by Johan 21:0xZ before going unattended"
+    session: "chip task_8628f8ca COMPLETE. The held docs branch was authored local-only in the shared checkout, orchestrator pushed it and opened held docs PR 71"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "806", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "821", met: true, evidence: "merged 62eb23c61 2026-08-17T02:2xZ, CAS pin b4c814b8a, 26/26 green, zero threads, recipe plus tests plus migration guide plus both changelog subsections verified, held docs PR 71 opened"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "806", met: true, evidence: "closed by the squash, verified"}
   U16:
     issue: 810
     goal: "Native Mongo store read fixes, plan-first: unsorted path applies skip/limit, returned Stream closes its MongoCursor via onClose, fromStreamVersion no longer drifts under a StreamReadFilter (candidate: translate the version into a query condition instead of a skip, worker's plan decides). Conformance coverage so the Spring store's correct behavior becomes the tested contract"
