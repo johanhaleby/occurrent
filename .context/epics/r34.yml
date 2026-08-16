@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 35
-updated_at: 2026-08-17T04:15:00Z
+revision: 36
+updated_at: 2026-08-17T04:40:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -106,17 +106,17 @@ units:
   U1:
     issue: 791
     goal: "One ReactorDurableSubscriptionModel correctness-and-wording PR: #791 remove(key,value), #803 comment, #804 log level, #805 message (also touches ManualStartSubscriptionModel, shared with U7, U1 lands first)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_350dd4df went idle at DONE with 3 substantive Copilot threads unresolved (atomicity gap in the fix, test does not exercise the race, false WARN) and the changelog conflict standing. Remediation chip task_2cf40682 spawned 19:55Z on the same PR branch, awaiting Johan click. Dismiss it if the original session resumes first"
+    session: "chip task_350dd4df COMPLETE after its long-quiet resume, all three review findings fixed for real (Disposables.swap identity, rewritten race test, hedged refusal message)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "791", met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "803", met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "804", met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "805", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "812", met: true, evidence: "merged 35b0910a7 2026-08-17T04:3xZ, CAS pin 45c6aeb40, 26/26 green, three threads fixed and resolved"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "791", met: true, evidence: "closed by the squash, verified"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "803", met: true, evidence: "closed by the squash, verified"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "804", met: true, evidence: "closed by the squash, verified"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "805", met: true, evidence: "closed by the squash, verified"}
   U2:
     issue: 788
     goal: "Fencing configuration check sees DomainEventFeed-backed push projections; scope is the annotation scan and resolveFeedBean, CheckpointStorage SPI out of bounds"
