@@ -228,14 +228,27 @@ to the descriptors, `store`, `storeName`, `source`, `catchup`, `capability`, `mo
 subsets, so one annotation means most of its attributes being wrong for any given method, checked at startup rather
 than by the compiler. That trades a naming problem for a worse one.
 
-### 4. The `void` handler method goes, deprecated for one release
+### 4. The `void` handler method goes with the old annotation names
 
-The descriptor becomes the only supported form of all four subscription annotations. Retiring the parameter
-classification in `SubscriptionAnnotations` is the point of the change rather than a side effect of it, since a typed
-handler makes those failures compile errors.
+**The deprecation is one thing, not two, and that is what keeps the release coherent.** A new annotation takes a
+descriptor and nothing else. A deprecated one keeps accepting a `void` handler and behaves exactly as it does today,
+which is the same promise ADR 26 made when it froze `@Subscription` rather than changing it under its users. So the
+parameter classification in `SubscriptionAnnotations` lives exactly as long as the deprecated annotations do and is
+deleted together with them, in the release that removes them. There is no window where an application has to have
+both.
 
-An OpenRewrite recipe rewrites the common case, moving the method body into a lambda inside a factory method and
-mapping `@StreamId` and `@StreamVersion` parameters onto the metadata the lambda receives.
+Retiring that classification is the point of the change rather than a side effect of it, since a typed handler turns
+its startup failures into compile errors.
+
+An OpenRewrite recipe rewrites the common case, moving the method body into a lambda inside a factory method, mapping
+`@StreamId` and `@StreamVersion` parameters onto the metadata the lambda receives, and moving a declared `eventTypes`
+or `tags` into the descriptor.
+
+**A reactor handler needs one extra step.** The reactor registrar accepts a `void` method as readily as a
+`Mono`-returning one, wrapping the first in an empty `Mono`, while a `ReactiveSubscription` handler has to return
+`Mono<Void>`. So a `void` reactor body moved straight into a lambda does not compile, and the recipe wraps it in
+`Mono.fromRunnable`. It picks the stack from which autoconfigure module the application depends on, the same thing
+that decides which registrar reads the annotation today.
 
 **The recipe refuses an advised synchronous handler rather than rewriting it, and refuses nothing else.** Spring advice reaches
 exactly one of the four annotations today. `processSynchronousSubscribeAnnotation` looks the bean up by name at dispatch
