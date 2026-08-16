@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 4
-updated_at: 2026-08-16T17:20:00Z
+revision: 5
+updated_at: 2026-08-16T17:45:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -16,12 +16,20 @@ pending_actions:
     issued_at: 2026-08-16T16:35:30Z
   - id: act-002
     type: merge
-    target: "PR 808 (U4), held until Johan approves the ADR 54 amendment wording, presented 2026-08-16T17:20Z. Related but Johan's own merges: docs PRs 66 (U4 projection filter correction) and 67 (saga-step-conditions addedTags badge, closes the H1 gap). Docs issue 57 closes after 67 lands"
-    expected: "Johan rules on the amendment, then 808 merges under standing authority with a CAS pin. If he amends the wording, the fix lands on the branch first"
+    target: "PR 808 (U4), held until Johan approves the ADR 54 amendment wording. REVISED after first presentation: head e36cfce99 adds the fromStreamVersion+StreamReadFilter skip-drift caveat and softens the native-store limit/close claims, both driven by Copilot's balanced review, which also produced issue 810 (worker-filed, orchestrator-verified in code). Worker asked 17:4xZ to resolve its five addressed threads. Related but Johan's own merges: docs PRs 66 and 67, docs issue 57 closes after 67 lands"
+    expected: "Johan rules on the revised amendment, then 808 merges under standing authority with a CAS pin at e36cfce99 or later, threads resolved first"
     status: PENDING
     attempts: 0
     safe_to_repeat: false
     issued_at: 2026-08-16T17:20:00Z
+  - id: act-003
+    type: message-session
+    target: "Issue 810 (native Mongo store: unsorted path drops skip/limit, no onClose cursor release, fromStreamVersion skip drifts under a filter) awaits Johan's triage ruling, presented 2026-08-16T17:45Z. Orchestrator recommendation: adopt as a new r34 unit and milestone it, the unsorted default makes the limit drop a silent correctness bug, though pre-existing so arguably not release-blocking"
+    expected: "Johan rules in or out. In: register U16, milestone 0.34.0, dispatch as a chip. Out: milestone-less, next release"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: true
+    issued_at: 2026-08-16T17:45:00Z
 units:
   H1:
     issue: null
@@ -119,7 +127,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_545261f9, started by Johan 2026-08-16T17:0xZ"
+    session: "chip task_545261f9, delivered PR 809 at 17:3xZ, worker self-rebased onto post-807 main, MERGEABLE with checks running at 2236e2a"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "786", met: false, evidence: null}
