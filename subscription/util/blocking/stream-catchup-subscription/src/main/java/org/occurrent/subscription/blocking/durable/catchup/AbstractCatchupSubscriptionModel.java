@@ -57,6 +57,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // Set by stop(), cleared by start(...). Checked by the replay loops so stop() interrupts an in-flight
     // replay, not just the delegate the replay has not registered with yet.
     protected volatile boolean stopped = false;
+    // Identifies which attempt currently owns a subscriptionId, kept separately from runningCatchupSubscriptions
+    // (which stays a plain presence marker, its shipped shape) so a cancelled attempt's replay thread, resuming
+    // after a later attempt has taken the id over, can tell it is no longer current instead of clobbering the
+    // later attempt's bookkeeping. CURRENT_ATTEMPT carries the calling attempt's identity across this same call
+    // without threading it through every method signature; safe because startCatchupAsync gives each attempt its
+    // own dedicated virtual thread, never reused, and clears the value in a finally block.
+    private final ConcurrentMap<String, CatchupAttempt> currentAttempt = new ConcurrentHashMap<>();
+    private static final ThreadLocal<@Nullable CatchupAttempt> CURRENT_ATTEMPT = new ThreadLocal<>();
 
     protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
@@ -132,11 +140,72 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * Whether the replay loop for {@code subscriptionId} should keep going: not shutting down, not stopped, and
-     * still registered as a running catch-up (removed on cancellation).
+     * Identifies one catch-up attempt for a subscription id, so a cancelled attempt whose replay thread has not
+     * noticed yet can be told apart from a later attempt for the same id. Identity is the point of the class itself,
+     * reference equality is exactly what every check here wants, but {@link #cancelled} also needs to reach this
+     * exact attempt's own thread without touching {@link #currentAttempt}'s entry for it: flagging the attempt
+     * object in place, instead of swapping in a sentinel, keeps the map entry itself untouched by cancellation, so
+     * {@link #endReplayIfStillCurrent} remains the only remover and a cancelled id cannot linger in the map for the
+     * rest of the model's lifetime the way a shared sentinel value would.
+     */
+    private static final class CatchupAttempt {
+        private volatile boolean cancelled = false;
+    }
+
+    /**
+     * Whether persisting a checkpoint for an event this call's own attempt already delivered is still safe: this
+     * attempt was not itself explicitly cancelled, and nobody else's, specifically not a different, {@code non-null}
+     * attempt for the same {@code subscriptionId}, has taken over since. {@code null} (nobody registered, for
+     * example {@link #markShuttingDown} clearing this same attempt's own entry) counts as safe, because a shutdown
+     * triggered by the very event being persisted does not put a newer attempt's position at risk and deletes
+     * nothing itself, only an actually different attempt taking the id over, or an explicit cancellation of it,
+     * does. This is deliberately looser than {@link #shouldKeepReplaying}, which needs exact identity to decide
+     * whether to keep replaying at all, not whether one already-delivered event's position is still safe to
+     * persist. Only meaningful on the virtual thread {@link #startCatchupAsync} started for this attempt.
+     */
+    protected boolean isSafeToPersistFor(String subscriptionId) {
+        CatchupAttempt attempt = CURRENT_ATTEMPT.get();
+        if (attempt.cancelled) {
+            return false;
+        }
+        CatchupAttempt owner = currentAttempt.get(subscriptionId);
+        return owner == null || owner == attempt;
+    }
+
+    /**
+     * Whether the calling replay loop should keep going: not shutting down, not stopped, this call's own attempt was
+     * not itself explicitly cancelled, and it is still the current one registered for {@code subscriptionId}. Checks
+     * exact identity, not mere presence and not {@link #isSafeToPersistFor}'s looser null-is-fine rule, so an
+     * attempt superseded by a later one for the same id (cancelled, then resubscribed before this attempt's thread
+     * noticed), or simply cancelled outright with nothing yet taking its place, correctly stops instead of running
+     * to completion or clobbering the later attempt's bookkeeping. Only meaningful on the virtual thread
+     * {@link #startCatchupAsync} started for this attempt.
      */
     protected boolean shouldKeepReplaying(String subscriptionId) {
-        return !shuttingDown && !stopped && runningCatchupSubscriptions.containsKey(subscriptionId);
+        CatchupAttempt attempt = CURRENT_ATTEMPT.get();
+        return !shuttingDown && !stopped && !attempt.cancelled && currentAttempt.get(subscriptionId) == attempt;
+    }
+
+    /**
+     * Ends the calling attempt's ownership of {@code subscriptionId} and reports whether it completed normally, that
+     * is {@link #shouldKeepReplaying} was still true for it right before this ran. A replay calls this exactly once,
+     * at the point where it decides whether it completed normally or was superseded, cancelled, or stopped, closing
+     * the same identity race {@link #shouldKeepReplaying} closes for the loop checks, for the one-time final
+     * decision. The map entry is atomically removed whenever it is still this attempt's own, whether ending
+     * normally, cancelled, or stopped, so an id does not linger in {@link #currentAttempt} for the rest of the
+     * model's lifetime once this attempt is done with it. Left alone when a later attempt has already taken the id
+     * over, since only that later attempt may remove its own entry.
+     */
+    protected boolean endReplayIfStillCurrent(String subscriptionId) {
+        CatchupAttempt attempt = CURRENT_ATTEMPT.get();
+        if (shuttingDown || stopped) {
+            return false;
+        }
+        if (currentAttempt.remove(subscriptionId, attempt)) {
+            runningCatchupSubscriptions.remove(subscriptionId);
+            return !attempt.cancelled;
+        }
+        return false;
     }
 
     /**
@@ -165,7 +234,27 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     public void cancelRunningCatchup(String subscriptionId) {
         runningCatchupSubscriptions.remove(subscriptionId);
+        // Flags whichever attempt is currently registered, atomically with respect to a concurrent resubscribe for
+        // the same id, instead of removing or replacing the entry: a dual-mode dispatcher calls this on both inner
+        // models for every cancellation, and the one with nothing running for this id must stay a no-op rather than
+        // start tracking an id that is not its concern. The entry itself is left for the flagged attempt's own
+        // endReplayIfStillCurrent to remove, so this call can never race a newer attempt's map removal.
+        currentAttempt.computeIfPresent(subscriptionId, (id, attempt) -> {
+            attempt.cancelled = true;
+            return attempt;
+        });
         pauseRequestedDuringCatchup.remove(subscriptionId);
+    }
+
+    /**
+     * Whether this call's own attempt was the one {@link #cancelRunningCatchup} flagged. Reads the calling thread's
+     * own {@link CatchupAttempt}, not {@link #currentAttempt}'s entry for the id, so a later attempt superseding a
+     * stale one for the same id is not a cancellation from that stale attempt's own point of view, even though the
+     * stale attempt is itself no longer current. Only meaningful on the virtual thread {@link #startCatchupAsync}
+     * started for this attempt.
+     */
+    protected boolean wasCancelled() {
+        return CURRENT_ATTEMPT.get().cancelled;
     }
 
     /**
@@ -175,6 +264,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     public void markShuttingDown() {
         shuttingDown = true;
         runningCatchupSubscriptions.clear();
+        currentAttempt.clear();
         pauseRequestedDuringCatchup.clear();
     }
 
@@ -238,20 +328,37 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
+    /**
+     * Registers a fresh attempt as the running catch-up for {@code subscriptionId} and runs {@code catchup} on its
+     * own dedicated virtual thread, never reused, which is what lets {@link #shouldKeepReplaying} and
+     * {@link #endReplayIfStillCurrent} read the attempt's identity from {@link #CURRENT_ATTEMPT} instead of a
+     * parameter. This is the only place that puts into {@link #runningCatchupSubscriptions}.
+     */
     protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
+        CatchupAttempt attempt = new CatchupAttempt();
         runningCatchupSubscriptions.put(subscriptionId, true);
-        // catchup itself removes the running marker on normal completion, and deliberately leaves it in place when
-        // shouldKeepReplaying already turned false so a cancellation can still be told apart from a completion (see
-        // the comment on subscriptionsWasCancelledOrShutdown in the mode-specific classes). Neither path throws, so
-        // catching here only ever means the replay itself failed, and is the one place both modes share to stop such
-        // a failure from leaving the subscription looking like it is still running or catching up forever.
+        currentAttempt.put(subscriptionId, attempt);
+        // catchup itself ends its attempt's ownership on normal completion (via endReplayIfStillCurrent), and
+        // deliberately leaves it in place when shouldKeepReplaying already turned false so a cancellation can
+        // still be told apart from a completion (see the comment on subscriptionsWasCancelledOrShutdown in the
+        // mode-specific classes). Neither path throws, so catching here only ever means the replay itself failed,
+        // and is the one place both modes share to stop such a failure from leaving the subscription looking like
+        // it is still running or catching up forever.
         FutureTask<Subscription> task = new FutureTask<>(() -> {
+            CURRENT_ATTEMPT.set(attempt);
             try {
                 return catchup.call();
             } catch (Throwable failure) {
-                runningCatchupSubscriptions.remove(subscriptionId);
-                pauseRequestedDuringCatchup.remove(subscriptionId);
+                // Conditional on this attempt still being the current one: an attempt already superseded by a later
+                // resubscribe for the same id must not remove the later attempt's running marker, and by the same
+                // reasoning must not clear a pause request the later attempt's caller may have just made either.
+                if (currentAttempt.remove(subscriptionId, attempt)) {
+                    runningCatchupSubscriptions.remove(subscriptionId);
+                    pauseRequestedDuringCatchup.remove(subscriptionId);
+                }
                 throw failure;
+            } finally {
+                CURRENT_ATTEMPT.remove();
             }
         });
         Thread.ofVirtual().name("occurrent-catchup-" + subscriptionId).start(task);

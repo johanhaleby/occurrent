@@ -10,6 +10,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionNotRunningException;
+import org.occurrent.subscription.SubscriptionRefusedException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
@@ -362,7 +363,15 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                 // it back and sit on it, and every other node would stay locked out until this one is resumed.
                 competingConsumerStrategy.unregisterCompetingConsumer(competingConsumer.getSubscriptionId(), competingConsumer.getSubscriberId());
             } else {
-                delegate.pauseSubscription(subscriptionId);
+                try {
+                    delegate.pauseSubscription(subscriptionId);
+                } catch (SubscriptionRefusedException e) {
+                    // The delegate no longer knows this id, most likely a catch-up subscription whose replay had
+                    // already failed before this call. That leaves nothing to pause downstream, but the lease still
+                    // needs releasing below, otherwise this node reports itself Running while holding a lease no
+                    // delegate is actually serving.
+                    logDebug("Delegate refused to pause subscription, continuing to release the lease (subscriptionId={}, subscriberId={})", subscriptionId, competingConsumer.getSubscriberId(), e);
+                }
                 pauseConsumer(competingConsumer, pausedByUser);
                 if (pausedByUser) {
                     logDebug("Will unregister competing consumer because subscription was paused explicitly by user (subscriptionId={}, subscriberId={})", subscriptionId, competingConsumer.getSubscriberId());

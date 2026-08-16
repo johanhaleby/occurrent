@@ -126,6 +126,64 @@ class DurableSubscriptionModelResumeRepositioningTest {
         assertThat(delegate.repositionedTo).as("an opted-out subscription must not be repositioned from storage").isNull();
     }
 
+    /**
+     * Issue #737, finding 2. The opt-out marker used to be cleared only on a failed delegate subscribe (the #690
+     * guarantee above); nothing cleared it on the managed path, so a stale marker left by an earlier opt-out call
+     * for this id survived into a later, managed call for the same id, still same id resubscribe without an
+     * intervening cancel, e.g. a stateful {@code StartAt.dynamic} that answers differently across calls.
+     */
+    @Test
+    void a_later_subscribe_that_resolves_managed_clears_the_opt_out_marker_an_earlier_call_left_behind() {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        RecordingRepositionableSubscriptionModel delegate = new RecordingRepositionableSubscriptionModel();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
+        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+        }).waitUntilStarted();
+
+        // Same id, no intervening cancel, but this call resolves managed rather than opting out.
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), event -> {
+        }).waitUntilStarted();
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delegate.repositionedTo)
+                .as("this id is managed now, so the stale opt-out marker must not make resumeSubscription skip "
+                        + "repositioning from the stored checkpoint")
+                .isInstanceOf(StartAt.StartAtCheckpoint.class);
+    }
+
+    /**
+     * Copilot review on PR #823 (issue #737, finding 2). The managed path's marker removal ran before the delegate
+     * subscribe call, so a managed subscribe the delegate refused as a duplicate against a still-active, opted-out
+     * subscription for the same id still lost that active subscription's marker, even though nothing about it
+     * actually changed.
+     */
+    @Test
+    void a_failed_managed_subscribe_against_an_active_opted_out_id_does_not_disturb_its_marker() {
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        DuplicateRejectingRepositionableSubscriptionModel delegate = new DuplicateRejectingRepositionableSubscriptionModel();
+        DurableSubscriptionModel model = new DurableSubscriptionModel(delegate, storage);
+        StartAt optOut = StartAt.dynamic(ctx -> ctx.hasSubscriptionModelType(DurableSubscriptionModel.class) ? null : StartAt.subscriptionModelDefault());
+        model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+        }).waitUntilStarted();
+
+        // Same id, still active and opted out. This call resolves managed, and the delegate refuses it as a
+        // duplicate of the still-registered opted-out subscription.
+        assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), event -> {
+        })).isInstanceOf(RuntimeException.class);
+
+        storage.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("stored-checkpoint"));
+        model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThat(delegate.repositionedTo)
+                .as("the failed managed subscribe must not have cleared the still-active opted-out subscription's "
+                        + "marker, or its next resume gets wrongly repositioned from storage")
+                .isNull();
+        assertThat(delegate.plainResumeCalled).isTrue();
+    }
+
     @Test
     void a_delegate_subscribe_that_throws_leaves_no_opt_out_marker_behind_for_a_later_resubscribe() {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
