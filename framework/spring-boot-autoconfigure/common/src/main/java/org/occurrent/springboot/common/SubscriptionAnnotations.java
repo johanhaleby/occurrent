@@ -313,7 +313,7 @@ public final class SubscriptionAnnotations {
             if (byType) {
                 return applicationContext.getBean(subscriptionModelType);
             }
-            List<String> names = candidateBeanNames(applicationContext, candidateTypes);
+            List<String> names = candidateBeanNames(applicationContext, true, candidateTypes);
             if (names.isEmpty()) {
                 throw new IllegalStateException("%s '%s' with source=PUSH found no %s bean. Declare one, or name it with subscriptionModelName.".formatted(annotationName, id, acceptedTypes));
             }
@@ -328,10 +328,13 @@ public final class SubscriptionAnnotations {
 
     // The bean names matching one of candidateTypes, shared by resolveFeedBean's own unique-bean fallback and by
     // resolveFeedBeanType's read-only mirror of it, so the two cannot silently drift on what counts as a candidate.
-    private static List<String> candidateBeanNames(ApplicationContext applicationContext, Class<?>... candidateTypes) {
+    // resolveFeedBean passes allowEagerInit = true, since it is about to call getBean on the result anyway.
+    // resolveFeedBeanType passes false, so a FactoryBean-backed candidate is not asked to build its product just to
+    // be counted.
+    private static List<String> candidateBeanNames(ApplicationContext applicationContext, boolean allowEagerInit, Class<?>... candidateTypes) {
         List<String> names = new ArrayList<>();
         for (Class<?> candidateType : candidateTypes) {
-            Collections.addAll(names, applicationContext.getBeanNamesForType(candidateType));
+            Collections.addAll(names, applicationContext.getBeanNamesForType(candidateType, true, allowEagerInit));
         }
         return names;
     }
@@ -340,17 +343,16 @@ public final class SubscriptionAnnotations {
      * The push feed bean's type, resolved by the same rule {@link #resolveFeedBean} uses to pick the bean itself
      * (an explicit {@code subscriptionModelType}, {@code subscriptionModelName}, or the unique bean of one of
      * {@code candidateTypes}), but never creating the feed bean itself. An explicit type is read straight off the
-     * annotation attribute, and a name or unique-type lookup goes through {@link ApplicationContext#getType(String)}
-     * and {@link ApplicationContext#getBeanNamesForType(Class)}, which answer from bean metadata rather than
-     * creating the feed bean, safe to call once every singleton already exists, which is the only time a caller
-     * needing this asks. A plain {@code @Lazy} feed bean stays uncreated. A feed bean built by a
-     * {@code FactoryBean} is the one case where Spring may still invoke that factory to answer the type question,
-     * the same as it would for any other bean's type lookup.
+     * annotation attribute, and a name or unique-type lookup goes through the {@code allowFactoryBeanInit = false}
+     * overloads of {@link ApplicationContext#getType(String, boolean)} and
+     * {@link ApplicationContext#getBeanNamesForType(Class, boolean, boolean)}, so answering the type question never
+     * builds a {@code FactoryBean}'s product and never creates a plain {@code @Lazy} feed bean, safe to call once
+     * every singleton already exists, which is the only time a caller needing this asks.
      * <p>
      * Returns {@code null} when the type cannot be determined this way, an unnamed bean with zero or several
-     * candidates, or a name or type Spring cannot resolve at all. A caller getting {@code null} back should treat
-     * the feed's flavor as unknown rather than guess one, since {@link #resolveFeedBean} is what raises the real,
-     * detailed error once the bean is actually resolved, at registration.
+     * candidates, or a name or type Spring cannot resolve without creating it. A caller getting {@code null} back
+     * should treat the feed's flavor as unknown rather than guess one, since {@link #resolveFeedBean} is what
+     * raises the real, detailed error once the bean is actually resolved, at registration.
      *
      * @param applicationContext    the Spring context to read bean metadata from
      * @param subscriptionModelType the annotation's {@code subscriptionModel} type, or {@code Void.class} if unset
@@ -366,17 +368,17 @@ public final class SubscriptionAnnotations {
         }
         if (!subscriptionModelName.isBlank()) {
             try {
-                return applicationContext.getType(subscriptionModelName);
+                return applicationContext.getType(subscriptionModelName, false);
             } catch (BeansException e) {
                 return null;
             }
         }
         try {
-            List<String> names = candidateBeanNames(applicationContext, candidateTypes);
+            List<String> names = candidateBeanNames(applicationContext, false, candidateTypes);
             if (names.size() != 1) {
                 return null;
             }
-            return applicationContext.getType(names.get(0));
+            return applicationContext.getType(names.get(0), false);
         } catch (BeansException e) {
             return null;
         }
