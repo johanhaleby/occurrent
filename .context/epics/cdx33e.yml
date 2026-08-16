@@ -1,10 +1,10 @@
 schema_version: 2
 epic: cdx33e
-revision: 12
-updated_at: 2026-08-16 11:30:00+00:00
-updated_by: 'orchestrator: E8 adopted and dispatched (recipe fixes for 732 and 736, ruled fix-both-pre-tag after the orchestrator''s
-  investigation found 736''s runtime-recursion half to be the release-gating one); watcher-002 armed per the lifetime invariant
-  since a PR deliverable exists again. Tag now waits on E8''s merge'
+revision: 13
+updated_at: 2026-08-16 12:20:00+00:00
+updated_by: 'orchestrator: E7 DONE and verified on both origin refs (preview cd41668, release-notes 1f32c7d aligned identical);
+  E8 implementing after its correct refusal was resolved by landing the deferral reversal on the tracker in the same tick,
+  lesson recorded'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -165,7 +165,7 @@ units:
       a-real intensifier, tree leaves, bold fragment labels, command-pair remedies) swept across the whole preview docs.md
       beyond E6''s two sections; then release-notes docs.md and shared includes made byte-identical to preview so the release-day
       second merge cannot conflict or resurrect stale text'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -174,13 +174,17 @@ units:
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-preview
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed 3c92140 -> cd41668, verified on the origin ref: 0 Reach-for hits file-wide, 7 intensifier fixes
+        with 2 genuine literals correctly kept, both bare windows unpacked, 3 fragment labels sentence-formed, verb-leaves
+        correctly untouched'
     - check: branch_pushed
       repo: occurrent-org/occurrent-org.github.io
       ref: docs/0.33.0-release-notes
-      met: false
-      evidence: null
+      met: true
+      evidence: 'Pushed 6ffe405 -> 1f32c7d: docs.md, three decider includes and main.js byte-identical to preview cd41668
+        (verified by empty cross-branch diff), news post untouched, jekyll exit 0. The release-day second merge can no longer
+        conflict on docs content'
   E8:
     issue: null
     goal: 'Recipe completeness before the tag, ruled by Johan (fix both pre-tag): number-736''s generated-stub any() delegation
