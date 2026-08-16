@@ -1,3 +1,9 @@
+### Changelog next version
+
+#### Changes
+
+* **`SagaFilters` is now public, in `dsl/saga-dsl/common` (`org.occurrent.dsl.saga.internal.SagaFilters`), instead of package-private in `dsl/saga-dsl/blocking`.** It composes the filter a saga subscribes on, mirroring the already-public `ProjectionFilters` in `dsl/projection-dsl/common`, so a future reactive saga runner can reuse it instead of writing the same composition again. Nothing public shipped from the old location, so this is a straight addition. Resolves [#786](https://github.com/johanhaleby/occurrent/issues/786).
+
 ### Changelog 0.33.0 (2026-08-14)
 
 #### Highlights

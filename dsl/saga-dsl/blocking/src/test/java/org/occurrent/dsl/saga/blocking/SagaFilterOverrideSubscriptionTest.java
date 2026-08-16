@@ -24,6 +24,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.saga.Saga;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaStateStore;
+import org.occurrent.dsl.saga.internal.SagaFilters;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;

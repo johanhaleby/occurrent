@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.saga.blocking;
+package org.occurrent.dsl.saga.internal;
 
+import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.condition.Condition;
 import org.occurrent.dsl.saga.Saga;
@@ -23,18 +24,25 @@ import org.occurrent.filter.Filter;
 
 import java.util.List;
 
+import static java.util.Objects.requireNonNull;
+
 /**
- * Works out the plain {@link Filter} a {@link Saga} subscribes on. It starts from the saga's
- * {@link Saga#replacementFilter() replacementFilter} when it has one, and otherwise derives a type filter over its
- * handled event types, resolved to CloudEvent type strings, or {@link Filter#all()} when it declares none. A
- * {@link Saga#narrowingFilter() narrowingFilter} is then combined with that.
+ * Works out the plain {@link Filter} a {@link Saga} subscribes on. Shared by the blocking and reactor runners so the
+ * composition rule lives in one place, independent of the subscription stack.
+ * <p>
+ * It starts from the saga's {@link Saga#replacementFilter() replacementFilter} when it has one, and otherwise derives a
+ * type filter over its handled event types, resolved to CloudEvent type strings, or {@link Filter#all()} when it
+ * declares none. A {@link Saga#narrowingFilter() narrowingFilter} is then combined with that.
  */
-final class SagaFilters {
+@NullMarked
+public final class SagaFilters {
 
     private SagaFilters() {
     }
 
-    static <E> Filter filterFor(CloudEventConverter<E> cloudEventConverter, Saga<E, ?, ?> saga) {
+    public static <E> Filter filterFor(CloudEventConverter<E> cloudEventConverter, Saga<E, ?, ?> saga) {
+        requireNonNull(cloudEventConverter, "cloudEventConverter cannot be null");
+        requireNonNull(saga, "saga cannot be null");
         Filter replacement = saga.replacementFilter();
         Filter base = replacement != null ? replacement : derivedFrom(cloudEventConverter, saga);
         Filter narrowing = saga.narrowingFilter();
