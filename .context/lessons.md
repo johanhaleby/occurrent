@@ -1393,3 +1393,4 @@ wait (H1's read-only verdict table qualifies, nothing else in the wave did).
 review, not by editing effort. A unit whose deliverable is a merged PR is a chip in attended
 mode by default; the subagent label is reserved for results the orchestrator integrates
 directly within the session.
+- Reading a call chain is not verifying behavior when the API is a mutable fluent builder: MongoEventStore's "dropped skip/limit" read as a dead assignment but FindIterable mutates in place and returns this, so both locals aliased one already-paged object. Copilot, a doc worker, and the orchestrator all misread it the same way; one hand-run mutation test settled it (2026-08-16, r34/U16, PR 814)
