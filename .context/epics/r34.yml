@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 38
-updated_at: 2026-08-17T05:50:00Z
+revision: 39
+updated_at: 2026-08-17T06:20:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -259,7 +259,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_fbfcd1be, delivered PR 826 at 04:1xZ (mongodb-qualified key rename, held docs PR 70 already open). MERGE GATE: verify the recipe plus migration section exist for the rename mechanism, and that the PR body records the design-gate outcome"
+    session: "chip task_fbfcd1be, delivered PR 826, 26/26 green, recipe and migration and changelog verified present, 5 threads with the worker. HELD: the names-and-mechanism gate was Johan-owned and cannot have run (he went unattended minutes after the chip started), so 826 merges only after Johan ratifies occurrent.event-store.mongodb.* and occurrent.subscription.mongodb.* plus rename-with-recipe over alias. Queued for his return beside 819"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "439", met: false, evidence: null}
