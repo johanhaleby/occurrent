@@ -23,9 +23,7 @@ import org.occurrent.dsl.saga.flow.FlowSagaImpl.*;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
 import java.util.function.Function;
@@ -34,8 +32,7 @@ import static java.util.Objects.requireNonNull;
 
 /**
  * Configures one step of a {@link FlowSaga}, one or more {@code on(...)} branches, evaluated in declaration order with the
- * first satisfied one winning, or the deprecated {@code join(...)} sugar instead of {@code on(...)}, never both, plus at
- * most one {@code timeout(...)}. Violating either throws {@link IllegalStateException}.
+ * first satisfied one winning, plus at most one {@code timeout(...)}. Violating either throws {@link IllegalStateException}.
  * <p>
  * A branch is either a classic type match, {@code on(Class, ...)}, firing on a matching arriving event, or a window
  * condition, {@code on(StepCondition, ...)}, firing once the events received since the step was entered satisfy a
@@ -48,7 +45,6 @@ import static java.util.Objects.requireNonNull;
 public final class StepBuilder<E, C> {
     private final String stepName;
     private final List<Branch<E, C>> branches = new ArrayList<>();
-    private boolean joinDeclared = false;
     private @Nullable TimeoutSpec<E, C> timeout;
 
     StepBuilder(String stepName) {
@@ -90,7 +86,6 @@ public final class StepBuilder<E, C> {
         requireNonNull(type, "type cannot be null");
         requireNonNull(then, "then cannot be null");
         requireNonNull(commands, "commands cannot be null");
-        requireNoJoin();
         ArrivingEvent<E> trigger = new ArrivingEvent<>(type, (BiPredicate<E, ReceivedEvents<E>>) onlyIf);
         BranchReaction<E, C> reaction = (metadata, triggering, received) -> commands.apply(metadata, (T) triggering);
         branches.add(new Branch<>(trigger, reaction, then));
@@ -105,8 +100,8 @@ public final class StepBuilder<E, C> {
      * <p>
      * The window a condition counts over opens when the step is entered, and <em>every</em> transition into a step resets it,
      * a {@code transitionTo} naming the step it is already in included. So a self-loop restarts every window in this step,
-     * and in a mixed step a classic branch that self-loops wipes a sibling condition's partial count, the same way
-     * it already wipes a {@code join}'s. That is deliberate, since the step has been re-entered and its waiting starts over.
+     * and in a mixed step a classic branch that self-loops wipes a sibling condition's partial count too. That is
+     * deliberate, since the step has been re-entered and its waiting starts over.
      */
     public StepBuilder<E, C> on(StepCondition<? extends E> condition, Continuation then) {
         return on(condition, then, received -> List.of());
@@ -132,77 +127,10 @@ public final class StepBuilder<E, C> {
         requireNonNull(condition, "condition cannot be null");
         requireNonNull(then, "then cannot be null");
         requireNonNull(whenFulfilled, "whenFulfilled cannot be null");
-        requireNoJoin();
         WindowCondition<E> trigger = new WindowCondition<>((StepCondition<E>) condition);
         BranchReaction<E, C> reaction = (metadata, triggering, received) -> whenFulfilled.apply(received);
         branches.add(new Branch<>(trigger, reaction, then));
         return this;
-    }
-
-    /**
-     * Makes this a join step that waits until all {@code expecting} are met (counted since the step was entered), then
-     * runs {@code whenFulfilled} and follows {@code then}.
-     *
-     * @deprecated in favor of {@code on(allOf(...))}, which this now lowers to internally. An expectation of {@code n}
-     * events of a type becomes {@code event(type, n)}, and the whole list becomes one {@code allOf(...)} tree. Two
-     * expectations naming the same type collapse to the higher of their counts, which is what such a join has always meant,
-     * since each expectation is checked against the same window independently. {@code whenFulfilled} reads the same window
-     * the condition was evaluated over, exactly as {@link #on(StepCondition, Continuation, Function)}'s does, including
-     * how a {@code stepWindow} cap narrows that window further while leaving the condition counting exactly as it did.
-     * That narrows what {@code join} shipped with in 0.31.0, when the callback read the whole retained history no matter
-     * which step it fired from. See {@code doc/migration/upgrading-to-0.33.0.md}, section 11, and {@link StepCondition}.
-     */
-    @Deprecated
-    public StepBuilder<E, C> join(List<Expectation<E>> expecting, Continuation then, Function<ReceivedEvents<E>, List<C>> whenFulfilled) {
-        requireNonNull(expecting, "expecting cannot be null");
-        requireNonNull(then, "then cannot be null");
-        requireNonNull(whenFulfilled, "whenFulfilled cannot be null");
-        if (!branches.isEmpty()) {
-            throw new IllegalStateException("step '" + stepName + "' has on(...) branches and cannot also be a join step");
-        }
-        if (joinDeclared) {
-            throw new IllegalStateException("join(...) has already been set for step '" + stepName + "' and can only be set once");
-        }
-        if (expecting.isEmpty()) {
-            throw new IllegalArgumentException("a join step needs at least one expectation");
-        }
-        joinDeclared = true;
-        WindowCondition<E> trigger = new WindowCondition<>(StepCondition.allOf(toConditions(expecting)));
-        BranchReaction<E, C> reaction = (metadata, triggering, received) -> whenFulfilled.apply(received);
-        branches.add(new Branch<>(trigger, reaction, then));
-        return this;
-    }
-
-    /**
-     * As {@link #join(List, Continuation, Function)}, but issues no commands when fulfilled.
-     *
-     * @deprecated in favor of {@code on(allOf(...))}, see {@link #join(List, Continuation, Function)}.
-     */
-    @Deprecated
-    public StepBuilder<E, C> join(List<Expectation<E>> expecting, Continuation then) {
-        return join(expecting, then, events -> List.of());
-    }
-
-    // Collapse expectations naming the same type to the highest count asked for, before the tree is built. allOf refuses two
-    // children that match the same events, and a join is allowed to carry them, because join(expect(A, 2), expect(A, 3))
-    // already means "at least three A" and inheriting allOf's rejection would turn a working declaration in a shipped,
-    // deprecated API into a startup failure on a patch upgrade. Declaration order follows each type's first appearance.
-    private static <E> List<StepCondition<E>> toConditions(List<Expectation<E>> expecting) {
-        Map<Class<? extends E>, Integer> highestCount = new LinkedHashMap<>();
-        for (Expectation<E> expectation : expecting) {
-            highestCount.merge(expectation.eventType(), expectation.count(), Math::max);
-        }
-        List<StepCondition<E>> conditions = new ArrayList<>();
-        for (Map.Entry<Class<? extends E>, Integer> entry : highestCount.entrySet()) {
-            conditions.add(StepCondition.event(entry.getKey(), entry.getValue()));
-        }
-        return conditions;
-    }
-
-    private void requireNoJoin() {
-        if (joinDeclared) {
-            throw new IllegalStateException("step '" + stepName + "' is a join step and cannot also have on(...) branches");
-        }
     }
 
     /** Sets a relative timeout: if it fires before the step completes, run {@code onExpiry} and follow {@code then}. */
@@ -242,7 +170,7 @@ public final class StepBuilder<E, C> {
 
     CompiledStep<E, C> compile() {
         if (branches.isEmpty()) {
-            throw new IllegalStateException("step '" + stepName + "' needs at least one on(...) branch or a join(...)");
+            throw new IllegalStateException("step '" + stepName + "' needs at least one on(...) branch");
         }
         List<Branch<E, C>> compiled = List.copyOf(branches);
         return new CompiledStep<>(stepName, compiled, timeout, StepLeaves.of(stepName, compiled));

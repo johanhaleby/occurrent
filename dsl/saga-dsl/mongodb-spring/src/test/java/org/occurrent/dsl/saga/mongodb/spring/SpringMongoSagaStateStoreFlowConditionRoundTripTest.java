@@ -60,7 +60,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 /**
  * Docker-based. Round-trips a flow saga's {@link FlowStateImpl} through real MongoDB, checking the persisted-field-compat
  * claim ({@code SpringMongoSagaStateStore}'s class javadoc, and ADR 63's compatibility note on the bookkeeping fields)
- * with evidence rather than reasoning, for an instance parked mid-way through a window condition rather than a join.
+ * with evidence rather than reasoning, for an instance parked mid-way through a window condition.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)

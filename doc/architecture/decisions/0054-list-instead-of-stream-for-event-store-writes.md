@@ -86,10 +86,10 @@ already-materialized batch.
 >
 > A stream with a genuinely large number of events still has two ways out that keep the replay itself small.
 > `ExecuteOptions.fromStreamVersion(long)` tells `execute` to skip everything up to a version already reduced to
-> a known state, so it reads only the tail, as long as `ExecuteOptions` carries no `StreamReadFilter`.
-> `GenericApplicationService` turns the version into a plain `skip`, and both Mongo stores combine the stream's own
-> query with the filter before applying that skip, so a filtered read's skip count moves against the filtered
-> documents rather than against the stream's own version numbering. The snapshot DSL from
+> a known state, so it reads only the tail, with or without a `StreamReadFilter`. An earlier revision of this
+> amendment documented a drift here, where the stores applied the version as a plain `skip` after the filter had
+> narrowed the result. #810 fixed that by folding the version into a stream-version lower bound on the base query,
+> so the skip counts stream positions again. The snapshot DSL from
 > [ADR 61](0061-first-class-snapshot-support.md) loads a snapshot, reads only the events after it, and saves a new
 > snapshot automatically. A caller who wants to reduce over a huge stream without loading it at all can still do so
 > outside the application service, since `eventStore.read(...)` and `toDomainEvents` stay lazy.

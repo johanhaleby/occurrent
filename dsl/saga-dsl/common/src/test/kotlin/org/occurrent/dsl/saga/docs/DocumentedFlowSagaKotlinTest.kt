@@ -105,16 +105,16 @@ class DocumentedFlowSagaKotlinTest {
     }
 
     @Nested
-    @DisplayName("when a step joins on two players readying up")
-    inner class WhenAStepJoinsOnTwoPlayersReadyingUp {
+    @DisplayName("when a step waits for two players readying up")
+    inner class WhenAStepWaitsForTwoPlayersReadyingUp {
 
         @Test
-        fun `one player readying up does not leave the join step`() {
+        fun `one player readying up does not leave the waiting step`() {
             // Given
-            val joining = joinStepEntered()
+            val waiting = waitingStepEntered()
 
             // When
-            val step = lobby().step(joining, SagaInput.event(PlayerReady(GAME_ID)))
+            val step = lobby().step(waiting, SagaInput.event(PlayerReady(GAME_ID)))
 
             // Then
             assertAll(
@@ -124,9 +124,9 @@ class DocumentedFlowSagaKotlinTest {
         }
 
         @Test
-        fun `the second player readying up fulfils the join and completes the saga`() {
+        fun `the second player readying up fulfils the condition and completes the saga`() {
             // Given
-            val afterFirst = lobby().step(joinStepEntered(), SagaInput.event(PlayerReady(GAME_ID)))
+            val afterFirst = lobby().step(waitingStepEntered(), SagaInput.event(PlayerReady(GAME_ID)))
 
             // When
             val afterSecond = lobby().step(afterFirst.state, SagaInput.event(PlayerReady(GAME_ID)))
@@ -135,7 +135,7 @@ class DocumentedFlowSagaKotlinTest {
             assertThat(afterSecond.state.completed()).isTrue()
         }
 
-        private fun joinStepEntered(): FlowState<GameEvent> {
+        private fun waitingStepEntered(): FlowState<GameEvent> {
             val started = start(lobby(), GameCreated(GAME_ID))
             return lobby().step(started.state, SagaInput.event(PlayerJoined(GAME_ID))).state
         }
@@ -500,7 +500,7 @@ class DocumentedFlowSagaKotlinTest {
                 }
             }
             step("waiting-for-both-players") {
-                join(expect<PlayerReady>(2), then = end)
+                on(allOf(event<PlayerReady>(2)), then = end)
             }
         }
 

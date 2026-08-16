@@ -148,13 +148,13 @@ class InvocationSagaTest {
         }
     }
 
-    /** Covers the remaining flow reaction form, `join`. */
+    /** Covers the remaining flow reaction form, a window-condition branch (`on(allOf(...), ...)`). */
     private fun twoPaymentsFlow() = saga<OrderEvent, Invocation<OrderEvent>> {
         correlateAll { it.orderId }
         startsOn<OrderPlaced>()
 
         step("await-both-payments") {
-            join(expect<PaymentReserved>(2), then = end) { received ->
+            on(allOf(event<PaymentReserved>(2)), then = end) { received ->
                 val orderId = received.initiating<OrderPlaced>().orderId
                 issue("shipment-$orderId") { events -> ship(events, orderId) }
             }
@@ -195,8 +195,8 @@ class InvocationSagaTest {
         }
 
         @Test
-        fun `a join reaction dispatches an invocation once its expectation is met`() {
-            run("invocation-join", twoPaymentsFlow())
+        fun `a window-condition reaction dispatches an invocation once its condition is fulfilled`() {
+            run("invocation-window-condition", twoPaymentsFlow())
 
             write("order-3", OrderPlaced(newId(), "order-3"))
             write("order-3", PaymentReserved(newId(), "order-3"))
