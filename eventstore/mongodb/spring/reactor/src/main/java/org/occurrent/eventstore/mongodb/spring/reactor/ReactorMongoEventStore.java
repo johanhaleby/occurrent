@@ -619,7 +619,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
 
     private Mono<EventStreamImpl> readEventStream(String streamId, @Nullable StreamReadFilter streamReadFilter, int skip, int limit) {
         if (skip < 0) {
-            throw new IllegalArgumentException("skip cannot be negative");
+            return Mono.error(new IllegalArgumentException("skip cannot be negative"));
         }
         return currentStreamVersion(streamId)
                 .flatMap(currentStreamVersion -> {
