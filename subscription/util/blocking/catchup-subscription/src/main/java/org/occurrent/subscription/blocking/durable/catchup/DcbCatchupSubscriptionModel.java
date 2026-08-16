@@ -105,7 +105,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             return startLiveDcbSubscription(subscriptionId, filter, firstStartAt, action, null);
         }
 
-        Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId, () -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
+        CatchupAttempt attempt = new CatchupAttempt();
+        Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId, attempt, () -> startDcbCatchupSubscription(subscriptionId, attempt, filter, startAt, action, firstStartAt));
         return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
     }
 
@@ -125,8 +126,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         };
     }
 
-    private Subscription startDcbCatchupSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
-        runningCatchupSubscriptions.put(subscriptionId, true);
+    private Subscription startDcbCatchupSubscription(String subscriptionId, CatchupAttempt attempt, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
         long windowSize = config.dcbCatchupPositionWindowSize;
 
         StartAt nextStartAt = firstStartAt.get(generateSubscriptionModelContext());
@@ -157,8 +157,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             }
         };
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(dcbReader, windowSize);
-        pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId),
-                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache), catchupPhaseCache);
+        pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId, attempt),
+                (events, cache) -> deliverCatchupEvents(events, subscriptionId, attempt, action, cache), catchupPhaseCache);
 
         if (delegatedStartAt == null) {
             returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
@@ -167,13 +167,15 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             });
         }
 
-        final boolean subscriptionsWasCancelledOrShutdown;
-        if (shouldKeepReplaying(subscriptionId)) {
-            subscriptionsWasCancelledOrShutdown = false;
-            runningCatchupSubscriptions.remove(subscriptionId);
-        } else {
-            subscriptionsWasCancelledOrShutdown = true;
-        }
+        // shouldKeepReplaying gates on stopped/shuttingDown as well as identity, so a stop() that lands before this
+        // point still leaves this attempt's marker in place instead of removing it. Passing that gate on identity
+        // alone is not enough to call this a normal completion though: the atomic remove is what actually decides,
+        // since a later attempt can still have taken over in the narrow window between the check and here, and only
+        // removing its own entry may count as this attempt completing normally rather than being superseded.
+        // Mirrors the blocking stream catch-up's identical reasoning.
+        final boolean subscriptionsWasCancelledOrShutdown = shouldKeepReplaying(subscriptionId, attempt)
+                ? !runningCatchupSubscriptions.remove(subscriptionId, attempt)
+                : true;
 
         StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
                         cfg -> () -> {
@@ -214,11 +216,11 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
      * Delivers catch-up events to {@code action}, optionally deduping against {@code cache}, and persists the DCB
      * subscription position for events matching the catch-up persist predicate.
      */
-    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, Consumer<CloudEvent> action, @Nullable BoundedIdCache cache) {
+    private void deliverCatchupEvents(Stream<CloudEvent> cloudEvents, String subscriptionId, CatchupAttempt attempt, Consumer<CloudEvent> action, @Nullable BoundedIdCache cache) {
         // try-with-resources closes the source stream even when takeWhile short-circuits on shutdown, so a
         // resource-backed read does not leak its cursor.
         try (cloudEvents) {
-            Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> shouldKeepReplaying(subscriptionId));
+            Stream<CloudEvent> takeWhile = cloudEvents.takeWhile(__ -> shouldKeepReplaying(subscriptionId, attempt));
             if (cache != null) {
                 // Skip events already delivered in an earlier reconciliation pass (the delta is re-read until it
                 // stabilises, so passes overlap) and record the rest so the live subscription can skip them at the

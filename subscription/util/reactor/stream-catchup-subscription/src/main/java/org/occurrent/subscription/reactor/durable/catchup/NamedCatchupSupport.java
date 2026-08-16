@@ -211,7 +211,11 @@ final class NamedCatchupSupport {
             if (state.pendingPause.get() && delegate.isRunning(subscriptionId)) {
                 delegate.pauseSubscription(subscriptionId);
             }
-            catchingUp.remove(subscriptionId);
+            // Identity-checked so this removal can never race a later attempt's entry for the same id, even though
+            // the putIfAbsent/isRunning guards at subscribeWithCatchup already make that provably unreachable here:
+            // the blocking catch-up models had the same shape without those guards (#737), so every removal site in
+            // this class stays identity-checked rather than leaning on an invariant proved only by hand.
+            catchingUp.remove(subscriptionId, state);
             delegated.waitUntilStarted().subscribe(unused -> {
             }, state.started::tryEmitError, state.started::tryEmitEmpty);
         }

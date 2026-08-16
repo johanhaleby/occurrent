@@ -257,8 +257,8 @@ class StreamCatchupSubscriptionModelTest {
         AtomicBoolean runningMarkedBeforeCatchupRuns = new AtomicBoolean(false);
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100)) {
             @Override
-            protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
-                return super.startCatchupAsync(subscriptionId, () -> {
+            protected Future<Subscription> startCatchupAsync(String subscriptionId, CatchupAttempt attempt, Callable<Subscription> catchup) {
+                return super.startCatchupAsync(subscriptionId, attempt, () -> {
                     runningMarkedBeforeCatchupRuns.set(runningCatchupSubscriptions.containsKey(subscriptionId));
                     return catchup.call();
                 });
@@ -309,6 +309,60 @@ class StreamCatchupSubscriptionModelTest {
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
 
         assertThat(subscription.isCatchingUp("never-subscribed")).isFalse();
+    }
+
+    /**
+     * Before per-attempt identity (issue #737, finding 4), the running-catch-up marker was keyed only by
+     * {@code subscriptionId}, with no way to tell a cancelled attempt's own entry from a later attempt's. A
+     * cancelled replay whose virtual thread had not yet noticed would finish after a resubscribe for the same id had
+     * already started a second replay, and blindly remove that second replay's marker instead of its own: the
+     * cancelled attempt would then hand itself over to the delegate as if it were still current, while the actually
+     * current attempt found its own marker gone and reported itself cancelled instead.
+     */
+    @Test
+    void a_cancelled_replays_late_completion_does_not_disturb_a_later_attempts_bookkeeping_for_the_same_id() throws InterruptedException {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        String subscriptionId = "subscription";
+
+        CountDownLatch firstReplayReached = new CountDownLatch(1);
+        CountDownLatch releaseFirstReplay = new CountDownLatch(1);
+        Subscription first = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            firstReplayReached.countDown();
+            awaitLatch(releaseFirstReplay);
+        });
+        assertThat(firstReplayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Cancel while the first attempt is still blocked inside its replay, then resubscribe the same id before
+        // that blocked thread has had any chance to notice the cancellation.
+        subscription.cancelSubscription(subscriptionId);
+
+        CountDownLatch secondReplayReached = new CountDownLatch(1);
+        CountDownLatch releaseSecondReplay = new CountDownLatch(1);
+        Subscription second = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            secondReplayReached.countDown();
+            awaitLatch(releaseSecondReplay);
+        });
+        assertThat(secondReplayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Release the stale first attempt while the second is still in flight, mid-replay, unresolved.
+        releaseFirstReplay.countDown();
+        assertThat(first.waitUntilStarted(Duration.ofSeconds(5)))
+                .as("a cancelled attempt must not resurrect itself as the live subscription once its stale thread "
+                        + "finally runs")
+                .isFalse();
+
+        assertThat(subscription.isCatchingUp(subscriptionId))
+                .as("the second attempt is still legitimately in flight; its own marker must have survived the "
+                        + "first attempt's stale cleanup")
+                .isTrue();
+
+        releaseSecondReplay.countDown();
+        assertThat(second.waitUntilStarted(Duration.ofSeconds(5)))
+                .as("the subscription actually in use must hand over to live delivery, not be told it was "
+                        + "cancelled by someone else's stale attempt")
+                .isTrue();
     }
 
     @Test

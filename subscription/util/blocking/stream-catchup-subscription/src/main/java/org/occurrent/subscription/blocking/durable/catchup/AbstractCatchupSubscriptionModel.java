@@ -49,7 +49,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     protected final CheckpointAwareSubscriptionModel subscriptionModel;
     protected final CatchupSubscriptionModelConfig config;
     protected final Class<?> subscriptionModelContextType;
-    protected final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
+    protected final ConcurrentMap<String, CatchupAttempt> runningCatchupSubscriptions = new ConcurrentHashMap<>();
     // Pause requested for a subscriptionId while its replay is still in-flight, before the delegate knows the id.
     // Applied via applyPendingPauseIfAny once the live delegate subscription exists.
     protected final ConcurrentMap<String, Boolean> pauseRequestedDuringCatchup = new ConcurrentHashMap<>();
@@ -132,11 +132,21 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
-     * Whether the replay loop for {@code subscriptionId} should keep going: not shutting down, not stopped, and
-     * still registered as a running catch-up (removed on cancellation).
+     * Identifies one catch-up attempt for a subscription id, so a cancelled attempt whose replay thread has not
+     * noticed yet can be told apart from a later attempt for the same id. Identity is the entire point: no fields,
+     * no {@code equals}/{@code hashCode} override, reference equality is exactly what every check here wants.
      */
-    protected boolean shouldKeepReplaying(String subscriptionId) {
-        return !shuttingDown && !stopped && runningCatchupSubscriptions.containsKey(subscriptionId);
+    protected static final class CatchupAttempt {
+    }
+
+    /**
+     * Whether {@code attempt}'s replay loop should keep going: not shutting down, not stopped, and still the
+     * current running catch-up for {@code subscriptionId}. Checks identity, not mere presence, so an attempt
+     * superseded by a later one for the same id (cancelled, then resubscribed before this attempt's thread noticed)
+     * correctly stops instead of running to completion or clobbering the later attempt's bookkeeping.
+     */
+    protected boolean shouldKeepReplaying(String subscriptionId, CatchupAttempt attempt) {
+        return !shuttingDown && !stopped && runningCatchupSubscriptions.get(subscriptionId) == attempt;
     }
 
     /**
@@ -238,8 +248,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
     }
 
-    protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
-        runningCatchupSubscriptions.put(subscriptionId, true);
+    /**
+     * Registers {@code attempt} as the running catch-up for {@code subscriptionId} and runs {@code catchup} on its
+     * own virtual thread. This is the only place that puts into {@link #runningCatchupSubscriptions}; the caller
+     * creates {@code attempt} once and passes the same instance into {@code catchup} for its own identity-checked
+     * removal, so the marker is written exactly once per attempt instead of once here and again inside the callable.
+     */
+    protected Future<Subscription> startCatchupAsync(String subscriptionId, CatchupAttempt attempt, Callable<Subscription> catchup) {
+        runningCatchupSubscriptions.put(subscriptionId, attempt);
         // catchup itself removes the running marker on normal completion, and deliberately leaves it in place when
         // shouldKeepReplaying already turned false so a cancellation can still be told apart from a completion (see
         // the comment on subscriptionsWasCancelledOrShutdown in the mode-specific classes). Neither path throws, so
@@ -249,8 +265,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
             try {
                 return catchup.call();
             } catch (Throwable failure) {
-                runningCatchupSubscriptions.remove(subscriptionId);
-                pauseRequestedDuringCatchup.remove(subscriptionId);
+                // Conditional on this attempt still being the current one: an attempt already superseded by a later
+                // resubscribe for the same id must not remove the later attempt's running marker, and by the same
+                // reasoning must not clear a pause request the later attempt's caller may have just made either.
+                if (runningCatchupSubscriptions.remove(subscriptionId, attempt)) {
+                    pauseRequestedDuringCatchup.remove(subscriptionId);
+                }
                 throw failure;
             }
         });

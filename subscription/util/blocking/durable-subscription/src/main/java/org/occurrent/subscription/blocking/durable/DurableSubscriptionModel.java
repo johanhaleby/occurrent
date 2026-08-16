@@ -178,6 +178,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 }
             }
 
+            // Clears a marker a previous subscribe left behind for this id when it opted out and this call resolved
+            // managed instead, so a stateful StartAt.dynamic that answers differently across calls cannot leave
+            // resumeSubscription skipping checkpoint repositioning for an id this call is now managing.
+            notCheckpointedSubscriptions.remove(subscriptionId);
             return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
                         action.accept(cloudEvent);
                         if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
