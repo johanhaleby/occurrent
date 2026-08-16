@@ -38,9 +38,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The composition rules {@link SagaFilters#filterFor(CloudEventConverter, Saga)} applies, independent of any
- * subscription stack. The blocking runner's subscription tests cover the same rules end to end through an actual
- * {@code Subscribable}; these pin the derivation and combination logic on its own.
+ * The composition rules {@link SagaFilters#filterFor(CloudEventConverter, Saga)} apply, independent of any
+ * subscription stack. The blocking runner's subscription tests already exercise the same rules end to end through
+ * an actual {@code Subscribable}. These tests check the derivation and combination logic directly, with no
+ * subscription stack involved.
  */
 @DisplayName("SagaFilters")
 @DisplayNameGeneration(ReplaceUnderscores.class)
