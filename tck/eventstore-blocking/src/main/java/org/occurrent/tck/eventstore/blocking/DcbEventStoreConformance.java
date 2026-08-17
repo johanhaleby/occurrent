@@ -708,7 +708,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
         }
 
         @Test
-        void every_event_of_one_append_carries_the_same_append_id_the_append_returned() {
+        void every_event_of_one_append_has_the_same_append_id_the_append_returned() {
             DcbAppendResult result = dcbEventStore().append(List.of(
                     taggedEvent(DEFINED, NAME_1),
                     taggedEvent(CHANGED, NAME_1)));
@@ -719,7 +719,7 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
             String appendId = result.appendId().get().toString();
             assertThat(dcbEventStore().read(DcbCriteria.tags(tag(NAME_1))).events())
                     .extracting(event -> extension(event, OccurrentCloudEventExtension.APPEND_ID))
-                    .as("Every event the append persisted must carry the exact id the append reported")
+                    .as("Every event the append persisted must have the exact id the append reported")
                     .containsExactly(appendId, appendId);
         }
 

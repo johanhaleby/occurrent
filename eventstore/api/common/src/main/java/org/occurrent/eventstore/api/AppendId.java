@@ -25,7 +25,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Identifies a single write or append call that persisted at least one event. Every event a call persists carries the
+ * Identifies a single write or append call that persisted at least one event. Every event a call persists has the
  * same {@code AppendId}, stamped as the {@value OccurrentCloudEventExtension#APPEND_ID} CloudEvent extension, so a
  * projection can record which appends it has applied and a caller can later ask whether that particular append has
  * been applied (read-your-writes as a membership question rather than a position). See ADR 132.
@@ -54,7 +54,7 @@ public record AppendId(UUID value) {
     }
 
     /**
-     * Reads the append id {@code metadata} carries, or returns {@link Optional#empty()} when the event has none,
+     * Reads the append id {@code metadata} has, or returns {@link Optional#empty()} when the event has none,
      * either because its append persisted nothing or because the store that wrote it does not supply one.
      */
     public static Optional<AppendId> from(EventMetadata metadata) {

@@ -192,7 +192,7 @@ public abstract class StreamConcurrencyConformance extends EventStoreConformance
 
             for (Map.Entry<String, String> expected : results) {
                 assertThat(appendIdByEventId.get(expected.getKey()))
-                        .as("Iteration %d: event '%s' must carry the append id its own write returned, not another writer's",
+                        .as("Iteration %d: event '%s' must have the append id its own write returned, not another writer's",
                                 i, expected.getKey())
                         .isEqualTo(expected.getValue());
             }

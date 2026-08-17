@@ -35,7 +35,7 @@ import java.util.List;
  * records' canonical constructor grew a fourth component, the append id, so a record pattern that still names three
  * components stops compiling, since a record pattern has to name every component of the canonical constructor.
  * Unlike the by-hand cases {@link MigrateSagaTimerName} leaves a review marker for, a record pattern's arity is a
- * compiler-enforced fact rather than a judgement call, so this rewrite is unconditional wherever it applies: any
+ * compiler-enforced fact rather than a judgement call, so this rewrite is unconditional wherever it applies. Any
  * three-binding deconstruction pattern against either type gains a fourth, {@code var appendId}, regardless of
  * whether the first three bindings are typed or {@code var}. Nothing in this repository uses either pattern (ADR
  * 132 says so directly), so this exists for a caller's own source. See doc/migration/upgrading-to-0.34.0.md.

@@ -18,7 +18,7 @@ package org.occurrent.rewrite;
 /**
  * The 0.34.0 shape of {@code WriteResult} and {@code DcbAppendResult}, four components each (ADR 132), for the
  * record-pattern migration tests. Handed to the parser as a compiled dependency, the same reason
- * {@code SagaJoinStubs} exists: the source under test is a 0.33.0 caller's record pattern, unchanged, meeting the
+ * {@code SagaJoinStubs} exists. The source under test is a 0.33.0 caller's record pattern, unchanged, meeting the
  * 0.34.0 classpath whose canonical arity it no longer matches.
  */
 final class AppendResultStubs {

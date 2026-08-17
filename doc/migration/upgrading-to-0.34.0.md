@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Four things are worth reading, one of them a compile-time break. At compile time, if you use the flow saga's
+Five things are worth reading, two of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, which most callers need to do nothing about. Read
@@ -14,6 +14,9 @@ refusal 0.33.0 already shipped for a saga and an annotation-based subscription. 
 startup, if you set a MongoDB collection name, a MongoDB time representation, or whether a subscription restarts
 after losing change-stream history, through `OccurrentProperties`, four configuration keys are deprecated and have
 a recipe that rewrites them for you. Read [section 4](#4-four-mongodb-only-keys-move-under-mongodb).
+`WriteResult` and `DcbAppendResult` both gain a fourth component. Deconstructing either with a record pattern is
+a second compile-time break, and comparing either whole for equality fails silently at runtime instead. Read
+[section 5](#5-writeresult-and-dcbappendresult-gain-a-fourth-component-the-append-id).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -308,3 +311,64 @@ Two cases, both of which it steps around on purpose rather than guessing:
   can also drop the old key from a profile that never set the new key at all, and remove that profile's document
   entirely if the dropped key was its only content. Review the diff before you commit it, and see
   [#828](https://github.com/johanhaleby/occurrent/issues/828) for the fix.
+
+## 5. `WriteResult` and `DcbAppendResult` gain a fourth component, the append id
+
+Both records gain a fourth component, `Optional<AppendId> appendId()`, the identifier every store now
+stamps on every event a single write or DCB append call persists. A write that persists no events reports
+`Optional.empty()`, and so does a result built through the three-argument constructor both records keep.
+See [ADR 132](../architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md)
+for the full design, including what a later release does with the identifier once it ships.
+
+Two things break, and only one of them is a compile error.
+
+### A whole-record equality assertion starts failing silently
+
+`assertThat(result).isEqualTo(new WriteResult(streamId, 0, 1))` compares the append id too, and a fresh one
+is minted for every write that persists something. The assertion still compiles. It runs and fails, with
+nothing at build time pointing at what needs attention.
+
+Compare the components you actually mean to assert on instead:
+
+```java
+// Before
+assertThat(result).isEqualTo(new WriteResult(streamId, 0, 1));
+
+// After
+assertThat(result.streamId()).isEqualTo(streamId);
+assertThat(result.oldStreamVersion()).isEqualTo(0);
+assertThat(result.newStreamVersion()).isEqualTo(1);
+```
+
+An assertion against an empty write is unaffected, since `Optional.empty()` compares equal on both sides
+regardless of this change.
+
+#### Why there is no recipe for this one
+
+A recipe would need to know the append id an assertion should expect, and nothing in the source states
+that value anywhere a rewrite could read it. `UpgradeToOccurrent_0_34` leaves every `isEqualTo(...)` call
+against a `WriteResult` or `DcbAppendResult` alone. A test that exercises the affected code path finds it
+for you, the first time it runs against 0.34.0.
+
+### A record pattern naming the original three components stops compiling
+
+A record pattern has to name every component of the canonical constructor, and that constructor now has
+four:
+
+```java
+// Before, stops compiling
+case WriteResult(var streamId, var oldStreamVersion, var newStreamVersion) -> ...
+
+// After
+case WriteResult(var streamId, var oldStreamVersion, var newStreamVersion, var appendId) -> ...
+```
+
+The same applies to `DcbAppendResult`, and to an `instanceof` pattern as much as a `switch` case.
+
+#### Run the recipe
+
+Unlike the equality case above, the record-pattern break is mechanical. A record pattern's arity is a fact
+the compiler enforces, not a judgement call, so `UpgradeToOccurrent_0_34` appends the fourth binding,
+`var appendId`, to any three-component deconstruction pattern against either type, whatever the first
+three bindings were named or typed. Run it the same way [section 4](#4-four-mongodb-only-keys-move-under-mongodb)
+does.

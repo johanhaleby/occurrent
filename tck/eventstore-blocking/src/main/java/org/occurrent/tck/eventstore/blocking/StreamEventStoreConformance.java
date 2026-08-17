@@ -334,7 +334,7 @@ public abstract class StreamEventStoreConformance extends EventStoreConformance 
         }
 
         @Test
-        void every_event_of_one_write_carries_the_same_append_id_the_write_returned() {
+        void every_event_of_one_write_has_the_same_append_id_the_write_returned() {
             WriteResult result = eventStore().write(STREAM_ID, List.of(event("event-1", DEFINED), event("event-2", CHANGED)));
 
             assertThat(result.appendId()).isPresent();

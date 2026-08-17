@@ -27,13 +27,12 @@ import static org.occurrent.rewrite.AppendResultStubs.WRITE_RESULT;
 import static org.openrewrite.java.Assertions.java;
 
 /**
- * Every case here is a real upgrade: the "before" source is a 0.33.0 record pattern naming the original three
- * components, unchanged, meeting the 0.34.0 {@link AppendResultStubs} classpath whose canonical arity it no longer
- * matches.
+ * Every case here is an actual 0.33.0 caller's record pattern, unchanged, meeting the 0.34.0
+ * {@link AppendResultStubs} classpath whose canonical arity it no longer matches.
  * <p>
- * Identifier type validation is off: this version's parser leaves a binding pattern's own identifier unattributed
- * inside a {@code switch} case label specifically (not an {@code instanceof} pattern, and not anything this
- * recipe's own output causes), reproducible with a plain, unmodified {@code record Point(int x, int y, int z)}
+ * Identifier type validation is off. This version's parser leaves a binding pattern's own identifier unattributed
+ * inside a {@code switch} case label specifically, not an {@code instanceof} pattern, and not anything this
+ * recipe's own output causes. It is reproducible with a plain, unmodified {@code record Point(int x, int y, int z)}
  * switch pattern under no recipe at all. The type this recipe stamps on its own synthesized binding is still
  * asserted structurally, through the expected "after" source each rewriting test compares against.
  */

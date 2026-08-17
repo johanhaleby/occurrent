@@ -328,7 +328,7 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
 
             for (Map.Entry<String, String> expected : results) {
                 assertThat(appendIdByEventId.get(expected.getKey()))
-                        .as("Iteration %d: event '%s' must carry the append id its own append returned, not another writer's",
+                        .as("Iteration %d: event '%s' must have the append id its own append returned, not another writer's",
                                 iteration, expected.getKey())
                         .isEqualTo(expected.getValue());
             }

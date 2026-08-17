@@ -42,7 +42,7 @@ public class OccurrentCloudEventExtension implements CloudEventExtension {
     public static final String POSITION = "position";
     /**
      * CloudEvent extension name that contains the identifier of the write or append call that persisted this event.
-     * Every event persisted by the same call carries the same value. See ADR 132.
+     * Every event persisted by the same call has the same value. See ADR 132.
      */
     public static final String APPEND_ID = "appendid";
 
