@@ -61,15 +61,18 @@ import static java.util.Objects.requireNonNull;
  * is registered, instead of waiting until it starts. That way, starting a subscription late still delivers the events
  * written since registration instead of skipping them. Only a registration that asks for the default start position is
  * written, since that is the one a wrapped model reads a stored checkpoint for, so a registration naming a position of
- * its own still starts where it asked to. Two nodes registering the same subscription for the first time are the
- * exception, since only one of their two positions can be stored and neither node can tell which of them is earlier.
- * A registration that cannot show the stored checkpoint holds the position it read is refused with
- * {@link StartPositionAlreadyPinnedException}, rather than starting from one it never read. That covers a stored
- * position that differs, and one this class cannot read back to compare, whether reading it failed or found
- * nothing. A single node reaches those last two on its own when its storage answers from somewhere that has not
+ * its own still starts where it asked to. Two nodes registering the same subscription for the first time can still
+ * race for the position that gets stored. A storage able to compare the two, such as the MongoDB storages this
+ * library ships, resolves that race by which position is earlier rather than by which write reached storage first,
+ * so both nodes end up agreeing on the earlier of the two and nothing is lost between them. A storage unable to
+ * compare falls back to the older, narrower rule: a stored position already there when a registration checked for
+ * one is taken without comparison, and one that only appeared afterwards is refused with
+ * {@link StartPositionAlreadyPinnedException} unless it turns out to be the very position that registration read.
+ * That refusal also covers a stored position this class cannot read back to compare, whether reading it failed or
+ * found nothing. A single node reaches those last two on its own when its storage answers from somewhere that has not
  * seen the write. A position source that answers nothing refuses the registration too, with an
  * {@link IllegalStateException}, since there is then no position to hold it to. Without a position source and a
- * checkpoint storage, a first run starts from the moment it is started.
+ * checkpoint storage, a first run starts from the moment it is started. See ADR 130.
  *
  * @see #stoppedByDefault(SubscriptionModel)
  */
@@ -128,18 +131,25 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      * (see ADR 116).
      * <p>
      * Two nodes registering the same subscription id, minutes apart during a rolling deploy or close enough together
-     * to overlap, both attempt this write, and only the first to reach storage succeeds. A node that already finds a
-     * checkpoint stored when it registers accepts it, which costs it nothing as long as {@code positionSource} hands
-     * out positions in the order it is asked for them, as the MongoDB subscription models do. A node whose write is
+     * to overlap, both attempt this write, and only the first to reach storage succeeds. The node that loses asks
+     * {@link CheckpointStorage#resolveFirstCheckpointRace(String, Checkpoint) checkpointStorage.resolveFirstCheckpointRace}
+     * to settle the race by position instead, which a storage able to compare the two, such as the MongoDB storages
+     * this library ships, does atomically with any write it calls for. Both nodes end up agreeing on whichever
+     * position is earlier, so nothing between them is skipped and neither node sees an exception. A storage unable
+     * to make that comparison, or a candidate {@code resolveFirstCheckpointRace} cannot make sense of, answers
+     * empty, and this factory falls back to the narrower rule 0.33.0 shipped. A node that already finds a checkpoint
+     * stored when it registers accepts it there, which costs it nothing as long as {@code positionSource} hands out
+     * positions in the order it is asked for them, as the MongoDB subscription models do. A node whose write is
      * refused by a checkpoint that arrived only after it read whether one existed is refused in turn, with
      * {@link StartPositionAlreadyPinnedException}, unless reading that checkpoint back shows it holds the very
-     * position this node read. Two positions read on different nodes cannot be ordered, since {@link Checkpoint}
-     * gives this class no way to tell which is earlier, so accepting one would risk starting the subscription past
-     * the events written between them and saying nothing about it. A checkpoint this class cannot read back to
-     * compare, because reading it failed or found nothing, is refused for the weaker reason that nothing here can
-     * show the two agree. One node reaches those two on its own, when its storage answers from somewhere that has
-     * not seen the write, or retries a write whose answer it never heard. A refusal costs a registration that
-     * fails and can be made again, and a node that registers again once a position is stored takes it and starts.
+     * position this node read. Two positions read on different nodes cannot be ordered by this fallback, since
+     * {@link Checkpoint} gives it no way to tell which is earlier, so accepting one would risk starting the
+     * subscription past the events written between them and saying nothing about it. A checkpoint this fallback
+     * cannot read back to compare, because reading it failed or found nothing, is refused for the weaker reason that
+     * nothing here can show the two agree. One node reaches those two on its own, when its storage answers from
+     * somewhere that has not seen the write, or retries a write whose answer it never heard. A refusal costs a
+     * registration that fails and can be made again, and a node that registers again once a position is stored
+     * takes it and starts. See ADR 130.
      * <p>
      * The same refusal applies to a registration this model hands straight to the wrapped model because it is
      * already running, so such a registration is dropped rather than started. That is the same answer as for a
@@ -491,6 +501,13 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
     // Written with ifAbsent() rather than an exists() check followed by a save(), because those are two calls with
     // nothing holding them together, so two nodes registering the same subscription id at the same moment would
     // both see nothing stored and both write.
+    //
+    // checkpointAlreadyExisted answers a presence question, not an identity one, and the checkpoint it read can be
+    // gone by the time the write below runs, replaced by an unrelated one a cancelSubscription-then-register
+    // elsewhere raced in. resolveFirstCheckpointRace is asked first specifically because it settles this by
+    // comparing positions atomically with any write it makes, so it is never fooled by that replacement the way
+    // trusting checkpointAlreadyExisted alone would be. checkpointAlreadyExisted stays as the fallback's own
+    // signal, for a storage that answered resolveFirstCheckpointRace empty. See ADR 130.
     private void pinStartPosition(String subscriptionId, StartAt startAt) {
         if (positionSource == null || checkpointStorage == null) {
             return;
@@ -522,6 +539,12 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         try {
             checkpointStorage.save(subscriptionId, positionToPin, CheckpointWriteCondition.ifAbsent());
         } catch (CheckpointWriteConditionNotFulfilledException e) {
+            if (checkpointStorage.resolveFirstCheckpointRace(subscriptionId, positionToPin).isPresent()) {
+                // Settled by position: either this node's own position was durably written in place of a stored one
+                // it proved later, or the stored one was confirmed earlier than or equal to this node's own. Neither
+                // outcome can have skipped anything this node's position would have covered.
+                return;
+            }
             if (checkpointAlreadyExisted) {
                 return;
             }

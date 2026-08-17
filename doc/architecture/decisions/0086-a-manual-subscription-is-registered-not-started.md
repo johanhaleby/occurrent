@@ -7,6 +7,10 @@ Date: 2026-08-02
 Accepted. This is the second slice of #481, after ADR 85. The OpenRewrite recipe for the renamed property
 and the reactive stack follow separately.
 
+The fourth amendment's refusal is superseded on MongoDB by
+[ADR 130](0130-a-subscriptions-first-position-race-resolves-by-order-not-by-write-order.md), which resolves
+the race by position order instead of refusing it.
+
 ## Context
 
 ADR 82 shipped deny-by-default subscription testing, and ADR 85 gave the last four models a life cycle so

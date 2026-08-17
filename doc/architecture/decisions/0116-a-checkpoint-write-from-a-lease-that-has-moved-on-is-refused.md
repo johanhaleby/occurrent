@@ -16,6 +16,10 @@ promised this and deferred the design here. Builds on
 a refusal gets and [ADR 93](0093-a-missing-capability-is-refused-and-a-reactive-publisher-is-cold.md)'s
 rule for a store that cannot do what it is asked.
 
+The fourth amendment's `ManualStartSubscriptionModel` refusal is superseded on MongoDB by
+[ADR 130](0130-a-subscriptions-first-position-race-resolves-by-order-not-by-write-order.md), which resolves
+the race by position order instead of refusing it.
+
 ## Context
 
 `MongoListenerLockService.acquireOrRefreshFor` computes a `version` that increments whenever the lease

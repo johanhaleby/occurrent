@@ -28,8 +28,10 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 
 import java.time.Duration;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.function.Supplier;
 
@@ -149,6 +151,34 @@ public class NativeMongoCheckpointStorage implements CheckpointStorage {
     public boolean exists(String subscriptionId) {
         Supplier<Boolean> exists = () -> checkpointCollection.find(eq(ID, subscriptionId)).first() != null;
         return requireNonNull(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
+    }
+
+    /**
+     * Compares by {@link MongoOperationTimeCheckpoint#operationTime}, the one shape both a stored and an offered
+     * checkpoint carry when neither has ever been advanced by real delivery, and answers empty for any other stored
+     * shape or for a {@code candidate} that is not a {@link MongoOperationTimeCheckpoint} to begin with. See ADR 130.
+     */
+    @Override
+    public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+        if (!(candidate instanceof MongoOperationTimeCheckpoint)) {
+            return Optional.empty();
+        }
+        Document candidateDocument = generateCheckpointDocument(subscriptionId, candidate);
+        Supplier<Document> resolve = () -> persistFirstCheckpointRaceResolution(subscriptionId, candidateDocument);
+        Document afterDocument = requireNonNull(executeWithRetry(resolve, __ -> !shutdown, retryStrategy).get());
+        return interpretFirstCheckpointRaceResolution(afterDocument);
+    }
+
+    /**
+     * The single {@code findOneAndUpdate} round trip {@link #resolveFirstCheckpointRace} is, see
+     * {@link org.occurrent.subscription.mongodb.internal.MongoCommons#buildFirstCheckpointRaceResolution}. Package
+     * private for the same reason {@link #persistConditionalCheckpointDocument} is.
+     */
+    Document persistFirstCheckpointRaceResolution(String subscriptionId, Document candidateDocument) {
+        return requireNonNull(checkpointCollection.findOneAndUpdate(
+                eq(ID, subscriptionId),
+                singletonList(buildFirstCheckpointRaceResolution(candidateDocument)),
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
     }
 
     /**
