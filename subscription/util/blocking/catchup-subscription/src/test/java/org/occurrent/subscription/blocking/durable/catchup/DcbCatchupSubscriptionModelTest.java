@@ -40,10 +40,12 @@ import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import java.net.URI;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -225,6 +227,67 @@ class DcbCatchupSubscriptionModelTest {
                 .isInstanceOf(ExecutionException.class)
                 .hasCauseInstanceOf(IllegalStateException.class)
                 .cause().hasMessageContaining("no resume token");
+    }
+
+    /**
+     * Before per-attempt identity (issue #737, finding 4), the running-catch-up marker was keyed only by
+     * {@code subscriptionId}, with no way to tell a cancelled attempt's own entry from a later attempt's. A
+     * cancelled replay whose virtual thread had not yet noticed would finish after a resubscribe for the same id had
+     * already started a second replay, and blindly remove that second replay's marker instead of its own. See the
+     * identical test on {@code StreamCatchupSubscriptionModelTest} for the blocking stream side of the same fix.
+     */
+    @Test
+    void a_cancelled_replays_late_completion_does_not_disturb_a_later_attempts_bookkeeping_for_the_same_id() throws InterruptedException {
+        appendTagged("name:1", nameDefined("event1"));
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
+        String subscriptionId = "subscription";
+
+        CountDownLatch firstReplayReached = new CountDownLatch(1);
+        CountDownLatch releaseFirstReplay = new CountDownLatch(1);
+        Subscription first = subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            firstReplayReached.countDown();
+            awaitLatch(releaseFirstReplay);
+        });
+        assertThat(firstReplayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Cancel while the first attempt is still blocked inside its replay, then resubscribe the same id before
+        // that blocked thread has had any chance to notice the cancellation.
+        subscription.cancelSubscription(subscriptionId);
+
+        CountDownLatch secondReplayReached = new CountDownLatch(1);
+        CountDownLatch releaseSecondReplay = new CountDownLatch(1);
+        Subscription second = subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            secondReplayReached.countDown();
+            awaitLatch(releaseSecondReplay);
+        });
+        assertThat(secondReplayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Release the stale first attempt while the second is still in flight, mid-replay, unresolved.
+        releaseFirstReplay.countDown();
+        assertThat(first.waitUntilStarted(Duration.ofSeconds(5)))
+                .as("a cancelled attempt must not resurrect itself as the live subscription once its stale thread "
+                        + "finally runs")
+                .isFalse();
+
+        assertThat(subscription.isCatchingUp(subscriptionId))
+                .as("the second attempt is still legitimately in flight; its own marker must have survived the "
+                        + "first attempt's stale cleanup")
+                .isTrue();
+
+        releaseSecondReplay.countDown();
+        assertThat(second.waitUntilStarted(Duration.ofSeconds(5)))
+                .as("the subscription actually in use must hand over to live delivery, not be told it was "
+                        + "cancelled by someone else's stale attempt")
+                .isTrue();
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
     }
 
     private NameDefined nameDefined(String name) {

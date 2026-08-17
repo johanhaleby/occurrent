@@ -126,7 +126,6 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     }
 
     private Subscription startDcbCatchupSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
-        runningCatchupSubscriptions.put(subscriptionId, true);
         long windowSize = config.dcbCatchupPositionWindowSize;
 
         StartAt nextStartAt = firstStartAt.get(generateSubscriptionModelContext());
@@ -160,19 +159,20 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId),
                 (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache), catchupPhaseCache);
 
-        if (delegatedStartAt == null) {
+        // endReplayIfStillCurrent gates on stopped/shuttingDown as well as identity, so a stop() that lands before
+        // this point still leaves this attempt's marker in place instead of removing it, and it is the atomic
+        // decision itself: a later attempt can still have taken over in the narrow window right before this call,
+        // and only actually ending this attempt's ownership here may count as a normal completion rather than
+        // being superseded. Mirrors the blocking stream catch-up's identical reasoning.
+        final boolean subscriptionsWasCancelledOrShutdown = !endReplayIfStillCurrent(subscriptionId);
+
+        // Gated on the atomic decision above, not just checked ahead of it: a superseded attempt reaching this
+        // late must not delete a later attempt's own temporary position.
+        if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
             returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
                 cfg.storage().delete(subscriptionId);
                 return null;
             });
-        }
-
-        final boolean subscriptionsWasCancelledOrShutdown;
-        if (shouldKeepReplaying(subscriptionId)) {
-            subscriptionsWasCancelledOrShutdown = false;
-            runningCatchupSubscriptions.remove(subscriptionId);
-        } else {
-            subscriptionsWasCancelledOrShutdown = true;
         }
 
         StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
@@ -197,11 +197,16 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
         final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
-            doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                if (!cfg.storage().exists(subscriptionId)) {
-                    startAtToUse.get(generateSubscriptionModelContext());
-                }
-            });
+            // Same fix as the blocking stream side. Priming startAtToUse is skipped for an explicit cancellation of
+            // this exact id, since its get() call saves globalCheckpoint as a side effect, which would recreate the
+            // position cancelSubscription's own deletePositionFromStorage call just deleted.
+            if (!wasCancelled()) {
+                doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+                    if (!cfg.storage().exists(subscriptionId)) {
+                        startAtToUse.get(generateSubscriptionModelContext());
+                    }
+                });
+            }
             subscription = new CancelledSubscription(subscriptionId);
         } else {
             subscription = startLiveDcbSubscription(subscriptionId, filter, startAtToUse, action, catchupPhaseCache);
@@ -227,6 +232,11 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             }
             takeWhile
                     .peek(action)
+                    // Rechecked here, not just by takeWhile before action ran: see the blocking stream catch-up's
+                    // identical reasoning, action can outlast this attempt's ownership. Identity only, not
+                    // shouldKeepReplaying, for the same reason: a stop or shutdown this event's own action
+                    // triggered must not suppress persisting the position it just reached.
+                    .filter(e -> isSafeToPersistFor(subscriptionId))
                     .filter(returnIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class, CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase::persistCloudEventPositionPredicate).orElse(__ -> false))
                     .forEach(e -> doIfCheckpointStorageConfigIs(CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase.class,
                             cfg -> cfg.storage().save(subscriptionId, GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e)), writeConditionFor(cfg, subscriptionId))));

@@ -21,6 +21,7 @@ import com.mongodb.ConnectionString;
 import com.mongodb.reactivestreams.client.MongoClient;
 import com.mongodb.reactivestreams.client.MongoClients;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -54,6 +55,7 @@ import reactor.test.StepVerifier;
 import java.net.URI;
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static java.util.Objects.requireNonNull;
@@ -410,5 +412,91 @@ class DomainEventQueriesTest {
         StepVerifier.create(domainEventQueriesWithoutPosition.currentPosition())
                 .expectError(UnsupportedOperationException.class)
                 .verify();
+    }
+
+    // ADR 126: a query by type expands a sealed type into the concrete types it permits, matches a null or empty
+    // collection to nothing rather than everything, and refuses a type reopened below a sealed level.
+
+    @Test
+    void query_by_the_sealed_domain_event_supertype_expands_to_every_concrete_event_type_it_permits() {
+        // Given
+        LocalDateTime time = LocalDateTime.now();
+        applicationService.execute("stream",
+                composeCommands(
+                        partial(Name::defineName, "eventId1", time, "name", "Some Doe"),
+                        partial(Name::changeName, "eventId2", time, "name", "Jane Doe")
+                )
+        ).block();
+
+        // When
+        List<DomainEvent> events = domainEventQueries.query(DomainEvent.class).collectList().block();
+
+        // Then
+        assertAll(
+                () -> assertThat(events).hasSize(2),
+                () -> assertThat(events).extracting(DomainEvent::eventId).containsExactlyInAnyOrder("eventId1", "eventId2")
+        );
+    }
+
+    @Test
+    void an_empty_collection_of_types_still_matches_nothing_not_everything() {
+        // Given
+        LocalDateTime time = LocalDateTime.now();
+        applicationService.execute("stream", partial(Name::defineName, "eventId1", time, "name", "Some Doe")).block();
+
+        // When
+        List<DomainEvent> events = domainEventQueries.query(Collections.<Class<? extends DomainEvent>>emptyList()).collectList().block();
+
+        // Then
+        assertThat(events).isEmpty();
+    }
+
+    @Test
+    void a_null_collection_of_types_also_matches_nothing_not_everything() {
+        // Given
+        LocalDateTime time = LocalDateTime.now();
+        applicationService.execute("stream", partial(Name::defineName, "eventId1", time, "name", "Some Doe")).block();
+
+        // When
+        List<DomainEvent> events = domainEventQueries.query((List<Class<? extends DomainEvent>>) null).collectList().block();
+
+        // Then
+        assertThat(events).isEmpty();
+    }
+
+    sealed interface ReopenedEvent permits ReopenedBase {
+    }
+
+    // Sealed above, plain abstract here, so nothing below this class can be found.
+    abstract static non-sealed class ReopenedBase implements ReopenedEvent {
+    }
+
+    @Test
+    void a_declared_type_reopened_below_a_sealed_level_is_refused() {
+        CloudEventConverter<ReopenedEvent> converter = new SimpleNameConverter<>();
+        DomainEventQueries<ReopenedEvent> queries = new DomainEventQueries<>(domainEventQueries.eventStoreQueries(), converter);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> queries.query(ReopenedEvent.class))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(ReopenedEvent.class.getName());
+    }
+
+    /** Maps every type to its simple name, only used to reach the refused-type path above, never round-tripped. */
+    private static final class SimpleNameConverter<E> implements CloudEventConverter<E> {
+
+        @Override
+        public CloudEvent toCloudEvent(E domainEvent) {
+            return CloudEventBuilder.v1().withId("id").withSource(URI.create("urn:test")).withType(domainEvent.getClass().getSimpleName()).build();
+        }
+
+        @Override
+        public E toDomainEvent(CloudEvent cloudEvent) {
+            throw new UnsupportedOperationException("not needed for these tests");
+        }
+
+        @Override
+        public String getCloudEventType(Class<? extends E> type) {
+            return type.getSimpleName();
+        }
     }
 }

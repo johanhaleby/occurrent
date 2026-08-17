@@ -605,6 +605,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     @Override
     public EventStream<CloudEvent> read(String streamId, @Nullable StreamReadFilter filter, int skip, int limit) {
+        if (skip < 0) {
+            throw new IllegalArgumentException("skip cannot be negative");
+        }
         List<CloudEvent> events = state.get(streamId);
         if (events == null) {
             return new EventStreamImpl(streamId, 0, Collections.emptyList());

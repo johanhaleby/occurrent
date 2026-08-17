@@ -155,7 +155,11 @@ final class NamedCatchupSupport {
                         // A failed replay is a dead subscription, reported to whoever waits AND logged: a caller
                         // that never blocks on waitUntilStarted() would otherwise get a dead subscription with no trace.
                         log.error("The catch-up replay for subscription {} failed; the subscription is dead until it is subscribed again.", subscriptionId, throwable);
-                        catchingUp.remove(subscriptionId);
+                        // Identity-checked: unlike handOver and cancelSubscription, this callback runs outside the
+                        // state monitor, so a concurrent cancel-then-resubscribe for the same id can already have
+                        // installed a new state by the time a stale failure reaches here. A plain remove(id) would
+                        // delete that new attempt's entry instead of this dead one's.
+                        catchingUp.remove(subscriptionId, state);
                         state.started.tryEmitError(throwable);
                     });
             state.replaying.set(replaying);
@@ -211,7 +215,11 @@ final class NamedCatchupSupport {
             if (state.pendingPause.get() && delegate.isRunning(subscriptionId)) {
                 delegate.pauseSubscription(subscriptionId);
             }
-            catchingUp.remove(subscriptionId);
+            // Identity-checked so this removal can never race a later attempt's entry for the same id, even though
+            // the putIfAbsent/isRunning guards at subscribeWithCatchup already make that provably unreachable here:
+            // the blocking catch-up models had the same shape without those guards (#737), so every removal site in
+            // this class stays identity-checked rather than leaning on an invariant proved only by hand.
+            catchingUp.remove(subscriptionId, state);
             delegated.waitUntilStarted().subscribe(unused -> {
             }, state.started::tryEmitError, state.started::tryEmitEmpty);
         }

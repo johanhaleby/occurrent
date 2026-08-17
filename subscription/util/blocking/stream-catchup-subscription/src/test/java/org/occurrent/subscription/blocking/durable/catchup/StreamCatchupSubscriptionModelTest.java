@@ -34,13 +34,17 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -56,6 +60,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.useCheckpointStorage;
 
 /**
  * In-memory unit tests for {@link StreamCatchupSubscriptionModel}, used directly rather than through the
@@ -309,6 +314,131 @@ class StreamCatchupSubscriptionModelTest {
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
 
         assertThat(subscription.isCatchingUp("never-subscribed")).isFalse();
+    }
+
+    /**
+     * Before per-attempt identity (issue #737, finding 4), the running-catch-up marker was keyed only by
+     * {@code subscriptionId}, with no way to tell a cancelled attempt's own entry from a later attempt's. A
+     * cancelled replay whose virtual thread had not yet noticed would finish after a resubscribe for the same id had
+     * already started a second replay, and blindly remove that second replay's marker instead of its own: the
+     * cancelled attempt would then hand itself over to the delegate as if it were still current, while the actually
+     * current attempt found its own marker gone and reported itself cancelled instead.
+     */
+    @Test
+    void a_cancelled_replays_late_completion_does_not_disturb_a_later_attempts_bookkeeping_for_the_same_id() throws InterruptedException {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        String subscriptionId = "subscription";
+
+        CountDownLatch firstReplayReached = new CountDownLatch(1);
+        CountDownLatch releaseFirstReplay = new CountDownLatch(1);
+        Subscription first = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            firstReplayReached.countDown();
+            awaitLatch(releaseFirstReplay);
+        });
+        assertThat(firstReplayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Cancel while the first attempt is still blocked inside its replay, then resubscribe the same id before
+        // that blocked thread has had any chance to notice the cancellation.
+        subscription.cancelSubscription(subscriptionId);
+
+        CountDownLatch secondReplayReached = new CountDownLatch(1);
+        CountDownLatch releaseSecondReplay = new CountDownLatch(1);
+        Subscription second = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            secondReplayReached.countDown();
+            awaitLatch(releaseSecondReplay);
+        });
+        assertThat(secondReplayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Release the stale first attempt while the second is still in flight, mid-replay, unresolved.
+        releaseFirstReplay.countDown();
+        assertThat(first.waitUntilStarted(Duration.ofSeconds(5)))
+                .as("a cancelled attempt must not resurrect itself as the live subscription once its stale thread "
+                        + "finally runs")
+                .isFalse();
+
+        assertThat(subscription.isCatchingUp(subscriptionId))
+                .as("the second attempt is still legitimately in flight; its own marker must have survived the "
+                        + "first attempt's stale cleanup")
+                .isTrue();
+
+        releaseSecondReplay.countDown();
+        assertThat(second.waitUntilStarted(Duration.ofSeconds(5)))
+                .as("the subscription actually in use must hand over to live delivery, not be told it was "
+                        + "cancelled by someone else's stale attempt")
+                .isTrue();
+    }
+
+    /**
+     * Copilot review on PR #823 (issue #737). A stale in-flight event's checkpoint save survived being cancelled,
+     * since the identity check treated "nobody registered" as always safe to persist, not distinguishing a
+     * cancellation (which also deletes the stored checkpoint, expecting it gone) from a graceful shutdown (which
+     * deletes nothing and does want the last position kept).
+     */
+    @Test
+    void a_stale_events_checkpoint_save_does_not_recreate_a_position_cancelSubscription_just_deleted() throws InterruptedException {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage).andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1));
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, config);
+        String subscriptionId = "subscription";
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+
+        subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Cancels while the event's action is still blocked, deleting the (so far nonexistent) stored checkpoint.
+        subscription.cancelSubscription(subscriptionId);
+        releaseReplay.countDown();
+
+        // The stale attempt's action already returned and tried to persist by now if it was going to; give it a
+        // moment, then assert the cancellation's deletion is what stands, not a resurrected position.
+        Thread.sleep(200);
+        assertThat(storage.read(subscriptionId))
+                .as("cancelSubscription deleted this id's position and expects it to stay gone, not be recreated "
+                        + "by the stale attempt's own in-flight event")
+                .isNull();
+    }
+
+    /**
+     * Copilot review on PR #823 (issue #737). Replacing a cancelled attempt's map entry with a shared sentinel,
+     * instead of flagging the attempt object itself, meant nothing ever removed that entry for an id nobody
+     * resubscribed, growing the map without bound over the model's lifetime.
+     */
+    @Test
+    void cancelling_a_never_reused_subscription_id_does_not_leave_its_entry_registered_forever() throws Exception {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        String subscriptionId = "a-subscription-id-never-reused-again";
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+
+        subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        subscription.cancelSubscription(subscriptionId);
+        releaseReplay.countDown();
+
+        Field currentAttemptField = AbstractCatchupSubscriptionModel.class.getDeclaredField("currentAttempt");
+        currentAttemptField.setAccessible(true);
+        await().untilAsserted(() -> {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> currentAttempt = (Map<String, Object>) currentAttemptField.get(subscription);
+            assertThat(currentAttempt)
+                    .as("the cancelled attempt's own cleanup removes its entry once its replay thread notices, "
+                            + "instead of leaving a tombstone behind for an id that is never resubscribed")
+                    .doesNotContainKey(subscriptionId);
+        });
     }
 
     @Test

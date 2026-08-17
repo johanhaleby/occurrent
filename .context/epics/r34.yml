@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 42
-updated_at: 2026-08-17T07:10:00Z
+revision: 56
+updated_at: 2026-08-17T14:00:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -73,6 +73,28 @@ pending_actions:
     safe_to_repeat: true
     issued_at: 2026-08-16T21:00:00Z
 units:
+  U17:
+    issue: 828
+    goal: "Document-scoped DropRedundant recipe preconditions: fix the released 0_32 recipe and 826's four replicas, multi-document YAML recipe tests, then 826 merges under the ratification"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: "chip task_dfd979e8, awaiting click"
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "828", met: false, evidence: null}
+  U18:
+    issue: 827
+    goal: "Blocking catch-up cancellation race plus the id-scoped side-effect gaps deferred from 823, plan-first, one structural answer preferred, reactor parity checked"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: "chip task_c5e67c4d, awaiting click"
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "827", met: false, evidence: null}
   H1:
     issue: null
     goal: "Docs closeout verification: reconstruct closed docs PRs 49/52/55/61/62/63/64/65 diffs via API, verify content reached docs main or is legitimately dead, verdict table plus recommendation on closing docs issue 57"
@@ -131,14 +153,14 @@ units:
   U3:
     issue: 802
     goal: "Observation hook on PushSubscriptionModel, design gate on the hook's home (push models vs RegisteringSubscribable)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_a33f0879, delivered PR 824, DONE flag with the changelog conflict standing at the original head. No task-end notification, so the session may resume per the DONE-flag lesson. If unmoved by 04:15Z orchestrator merges main into the branch remotely (the 816 route, never entering the worker worktree)"
+    session: "chip task_a33f0879 COMPLETE. RESIDUAL: its final review round raced the squash, reopened as doc-and-test-only PR 832, merged 43654eadf. FINAL residual 833 merged 9d687d3c6 at 12:2xZ under the hold-until-settled protocol, after four more review rounds each catching something real (exception chaining, suppression ordering, an illegal Noop holder, subclasser recursion). The worker also corrected the held docs PR 69 docs-only. U3 closed for good, worker signed off"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "802", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "824", met: true, evidence: "merged d5cd0237b 2026-08-17T10:0xZ, CAS pin 518831f0b, 26/26 green, zero threads, changelog verified before merge"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "802", met: true, evidence: "closed by the squash, verified"}
   U4:
     issue: 775
     goal: "Docs-corrections bundle: #775 javadoc and docs-site check, #761 cursor warnings on six Sequence extensions, #760 ADR 54 read-side amendment (issue close is Johan's)"
@@ -176,11 +198,11 @@ units:
   U7:
     issue: 771
     goal: "Manual/reactor registration ordering residual plus checkpoint delete-recreate race, one decision across both stacks, plan-first, likely ADR"
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U1]
-    session: null
+    session: "chip task_14b3d358, claimed 771, design done, at its plan gate with Johan. ADR RESERVATION: 130=U7 (audited across all remote branches 14:0xZ, 129 highest claimed, next free 131). Finding: the residual race and the delete-recreate hole are one gap needing position-order pinning, proposed as an additive opt-in CheckpointStorage method, gate decides ship-in-unit vs ADR-only split"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "771", met: false, evidence: null}
@@ -224,31 +246,31 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: [U10A]
-    session: "background subagent COMPLETE, full report received 06:3xZ: all four call sites routed through deriveFilter, empty-set semantics preserved with tests, every new test mutation-tested, migration and changelog sections in place, claims and comments verified by links. Orchestrator owns 829 from here (thread pass and merge). NOTE: 753 stays OPEN per ADR 126 overriding the brief, Johan re-defers or closes it at the release gate"
+    session: "background subagent COMPLETE, full report received 06:3xZ: all four call sites routed through deriveFilter, empty-set semantics preserved with tests, every new test mutation-tested, migration and changelog sections in place, claims and comments verified by links. Orchestrator fixed all four Copilot findings on 829 (primitive literals in both affected lists, corrected ordering claims in two test comments), threads resolved, head e124404, merge on green. NOTE: 753 stays OPEN per ADR 126 overriding the brief, Johan re-defers or closes it at the release gate"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "750", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "829", met: true, evidence: "merged e5cc0c0bd 2026-08-17T09:0xZ, CAS pin 25cf3746, 26/26 green, orchestrator did the review pass and the section-3 renumber"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "750", met: true, evidence: "closed by the squash, verified"}
       - {check: manual_approval, repo: johanhaleby/occurrent, ref: "753", met: false, evidence: "ADR 126 instructs leaving 753 open as the tracker for the non-sealed-concrete residual, so its disposition is a Johan release-gate ruling, not a squash close"}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "758", met: false, evidence: null}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "758", met: true, evidence: "closed by the squash, verified"}
   U11:
     issue: 737
     goal: "Four lifecycle-leak findings, items 1-3 small fixes, item 4 per-attempt identity coordinated across both catch-up models, plan-first"
+    phase: DONE
+    health: PROGRESSING
+    swept: true
+    depends_on: []
+    session: "chip task_bb9a30d1 COMPLETE after four review rounds: two findings fixed, two reasoned-deferred to the broadened 827, the tombstone leak fixed in the final head, orchestrator finished the thread bookkeeping"
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "823", met: true, evidence: "merged 02fda6ef1 2026-08-17T11:0xZ, CAS pin 1c0f33f04, 26/26 green, five threads resolved with outcomes, changelog verified"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "737", met: true, evidence: "closed by the squash, verified"}
+  U12:
+    issue: 746
+    goal: "Stretch: re-check whether the post-#739 wrapper surface makes the cheap replay-aware fix sufficient (forwarding adapter plus contract test), ship if so; drops first if the release runs long"
     phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_bb9a30d1 ended DONE with the conflict standing and two substantive concurrency threads unanswered (opt-out marker cleared before delegate acceptance, unconditional catchingUp.remove racing newer replays). Remediation subagent dispatched 02:5xZ, then the original session resumed and pushed the thread fixes, subagent stood down untouched. 26/26 green at 07:1xZ with 5 threads (Copilot re-review added three), worker may resume, orchestrator takes the threads at 08:15Z if untouched"
-    deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "737", met: false, evidence: null}
-  U12:
-    issue: 746
-    goal: "Stretch: re-check whether the post-#739 wrapper surface makes the cheap replay-aware fix sufficient (forwarding adapter plus contract test), ship if so; drops first if the release runs long"
-    phase: READY
-    health: PROGRESSING
-    swept: false
-    depends_on: []
-    session: null
+    session: "chip task_ea3b7863 spawned 13:2xZ, the stretch runs since the release is gated on Johan anyway, recorded-no-change is an accepted outcome"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "746", met: false, evidence: null}
@@ -288,10 +310,10 @@ units:
   U15:
     issue: 725
     goal: "Subscription-as-data-structure design round with the #721 name-clash answer inside it, plan-first Opus ADR; implementation registers as its own epic if the plan sizes it epic-scale"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_4f39a24b, started by Johan 21:0xZ before going unattended"
+    session: "chip task_4f39a24b COMPLETE, the Opus design round that became ADR 127"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
