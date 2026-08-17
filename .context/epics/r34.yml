@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 67
-updated_at: 2026-08-17T21:10:00Z
+revision: 68
+updated_at: 2026-08-17T22:20:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates flow through the orchestrator in BOTH modes per Johan's 2026-08-17 ruling: workers hand decision content to the orchestrator, who answers what precedent settles, presents the rest to Johan with a recommendation (promptly in Attended, queued in Unattended), and relays answers back. Session venue only on Johan's explicit per-unit request. Release execution is Johan's manual act; r34 stops at release readiness."
@@ -98,14 +98,14 @@ units:
   U18:
     issue: 827
     goal: "Blocking catch-up cancellation race plus the id-scoped side-effect gaps deferred from 823, plan-first, one structural answer preferred, reactor parity checked"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: "chip task_c5e67c4d, plan gate PASSED with Johan in its session: per-subscriptionId ReentrantLock spanning registration, finishing tails, and cancel in AbstractCatchupSubscriptionModel, blocking-only since the reactor models already close this via synchronized state. ADR RESERVATION: 131=U18 (130=U7 in flight, next free 132)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "827", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "839", met: true, evidence: "merged 039b292ce 2026-08-17T22:1xZ on the worker settled signal, verified green with zero threads"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "827", met: true, evidence: "closed and verified"}
   H1:
     issue: null
     goal: "Docs closeout verification: reconstruct closed docs PRs 49/52/55/61/62/63/64/65 diffs via API, verify content reached docs main or is legitimately dead, verdict table plus recommendation on closing docs issue 57"
@@ -277,14 +277,14 @@ units:
   U12:
     issue: 746
     goal: "Stretch: re-check whether the post-#739 wrapper surface makes the cheap replay-aware fix sufficient (forwarding adapter plus contract test), ship if so; drops first if the release runs long"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: "chip task_ea3b7863 spawned 13:2xZ, the stretch runs since the release is gated on Johan anyway, recorded-no-change is an accepted outcome"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "746", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "840", met: true, evidence: "merged a5de17697 2026-08-17T22:1xZ on the worker settled signal, verified green with zero threads"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "746", met: true, evidence: "closed and verified"}
   U13:
     issue: 439
     goal: "Store-neutral config keys: names AND mechanism (alias vs rename+recipe, RenameMappedSubscriptionEnabledKey is the precedent #439 predates) settled at one Johan gate, #410 requirements as input"
