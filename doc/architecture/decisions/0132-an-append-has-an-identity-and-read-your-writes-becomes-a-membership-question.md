@@ -52,9 +52,10 @@ The first is volume. A full replay over a large store inserts one membership rec
 benefit, since a replay is exactly the period when the projection has nothing useful to answer.
 
 The second is that a replayed update returning does not mean the read model changed.
-`CoalescingMaterializedView` buffers updates in memory while a replay runs and writes them out at the end
-(`CoalescingMaterializedView.java:90-95`), and discards the buffer when the replay is abandoned (`:113-117`). An
-identifier recorded when the delegate's update returned would describe state that a discarded buffer never wrote.
+`CoalescingMaterializedView` buffers updates in memory while a replay runs, writing a batch out whenever the buffer
+reaches its batch size and again when the replay completes (`CoalescingMaterializedView.java:90-95`, `:107-110`).
+An abandoned replay discards whatever has not been written yet (`:113-117`). So an identifier recorded when the
+delegate's update returned would, for every event still in that buffer, describe state nothing ever wrote.
 
 The third is rebuilds. `CancellableSubscriptions` discards the checkpoint by contract, and
 `ProjectionAnnotationRegistrar` backfills a new or rebuilt projection from the event store. Membership records
@@ -64,9 +65,14 @@ was wiped and is being built again from scratch.
 ### What each stack can be asked about its own replay
 
 `ReplayAwareSubscriptions.isCatchingUp(subscriptionId)` already answers whether a subscription is still replaying,
-and `SagaAnnotationRegistrar.java:235` already asks it once per delivery to hold a saga's timers back until the
-handover (`isRunning(id) && !isCatchingUp(id)`). So a per-delivery check needs no new catch-up machinery. What it
-needs is a way to reach the model that can answer.
+and `SagaAnnotationRegistrar.java:235` already builds `isRunning(id) && !isCatchingUp(id)` to hold a saga's timers
+back until the handover. So the question this design needs is one the library already asks in production, and no
+new catch-up machinery is required. What it needs is a way to reach the model that can answer.
+
+The saga asks it on its timer poll rather than per delivery, since `SagaRunner` evaluates that supplier inside the
+task it hands to `scheduleWithFixedDelay`. This design asks per delivery instead, which is a higher frequency than
+the existing precedent, and that is affordable because the answer is a lookup in a map the catch-up model keeps in
+memory (`AbstractCatchupSubscriptionModel.java:144-148`) rather than a read from any store.
 
 The two stacks differ there, and the difference decides part of this design. Blocking
 `SubscriptionModelCapability.capability(Class)` unwraps a `SubscriptionModelWrapper` chain until it finds the
@@ -116,9 +122,9 @@ with no new dependency edge.
 The extension key stays on `OccurrentCloudEventExtension` regardless of where the type lives, next to
 `STREAM_ID`, `STREAM_VERSION` and `POSITION`.
 
-Two readers exist rather than one. `EventMetadata` gains `getAppendId()` returning a nullable `String`, matching
-the shape of `getPosition()` on the same class, so a caller holding metadata asks it directly instead of routing
-through another type. `AppendId.from(EventMetadata)` returns an `Optional<AppendId>` and lives with `AppendId`, so
+Two readers exist rather than one. `EventMetadata` gains `getAppendId()` returning a nullable `String`, nullable
+for the same reason `getPosition()` on that class is, so a caller holding metadata asks it directly instead of
+routing through another type. `AppendId.from(EventMetadata)` returns an `Optional<AppendId>` and lives with `AppendId`, so
 both stacks' recorders share one decision about what a missing extension means instead of writing that null check
 twice.
 
@@ -133,7 +139,8 @@ Stamping happens in each store's own per-append loop, and not in
 call it belongs to. Each of the four stores therefore stamps in its own code, on both the stream path and the DCB
 path, and the two in-memory stamping methods already run under `synchronized(state)`.
 
-Stamping is unconditional. `streamPositionEnabled` (`EventStoreConfig.java:157`) governs whether the stream path
+Stamping is unconditional. `streamPositionEnabled`
+(`eventstore/mongodb/native/.../nativedriver/EventStoreConfig.java:62`) governs whether the stream path
 stamps a position, and an append identifier is not a position, so an application that turned position stamping off
 still gets read-your-writes. Making the identifier depend on that setting would disable the feature through a
 setting that names something else.
@@ -171,10 +178,21 @@ breaking where compatibility preserves nothing wrong. A three-argument construct
 `Optional.empty()` states a true fact about a result built without an identifier, so it preserves no mistake. The
 hard break, a four-argument canonical constructor only, was considered and rejected on that reasoning.
 
-The break that does happen is behavioral and no constructor arity can hide it. Equality on both records now
-includes a value that is fresh per call, so an external test asserting `isEqualTo(new WriteResult(a, b, c))` starts
-failing against a result that has an identifier. That gets a `#### Breaking changes` changelog entry and a
-migration-guide section covering the move to per-component assertions.
+Two things break anyway, and the secondary constructor hides neither.
+
+The first is equality. Both records now compare an identifier that is freshly minted per call whenever the append
+persisted an event, so an external test asserting `isEqualTo(new WriteResult(a, b, c))` starts failing against any
+result that has one. An append that persisted nothing compares `Optional.empty()` on both sides under decision 4,
+so those assertions keep passing, which makes this a break that shows up only on the paths that wrote something.
+
+The second is record deconstruction. A canonical constructor with four components means an external
+`case WriteResult(var streamId, var oldVersion, var newVersion)` pattern stops compiling, whatever secondary
+constructors exist, because a record pattern has to name every component. Nothing in this repository uses those
+patterns on either record, and external callers are not observable from here, so this is stated as a second shape
+the break takes rather than as a measured impact.
+
+Both go in a `#### Breaking changes` changelog entry and a migration-guide section, the equality one with the move
+to per-component assertions and the pattern one with the added component.
 
 There is no OpenRewrite recipe, and the guide says why rather than staying silent about it. No arity changed, so
 there is nothing for a recipe to rewrite, and a recipe cannot derive the identifier a rewritten assertion would
@@ -344,14 +362,15 @@ untrue answer in the meantime expires with the retention time in decision 11.
 ### 10. The identifier is recorded after each handled event
 
 The recorder writes the membership record after the wrapped view's live update returns, once per handled event that
-has the identifier. It does not wait for the last event of a multi-event append.
+has the identifier. It does not wait until it has handled all of the append's events.
 
-So a waiter can see the read model between the first and last event of one append, and this is intended semantics
-rather than an accident, with a test asserting it. The window has three different sizes and all three are stated in
-the documentation, because two of them are not what a reader would assume. In the happy path it is local processing
-time for the remaining events of that append. If the node dies mid-append, another node takes over when the lease
-expires, 20 seconds by default (`MongoLeaseCompetingConsumerStrategySupport.java:53`). While the subscription is
-paused or stopped, it does not end until someone starts it again.
+So a waiter can be told `true` when the projection has applied some but not all of the events it handles from that
+append, and this is intended semantics rather than an accident, with a test asserting it. The delay before the rest
+are applied has three different sizes, and the documentation states all three, because two of them are not what a
+reader would assume. In the ordinary case it is the time the same node needs to work through the rest of that
+append. If the node dies partway through, another node takes over when the lease expires, 20 seconds by default
+(`MongoLeaseCompetingConsumerStrategySupport.java:53`). While the subscription is paused or stopped, it does not
+end until someone starts it again.
 
 Recording on the last event instead was considered and fails structurally. Occurrent pushes subscription filters
 server-side, so a projection that does not handle the last event type of an append never sees that event, and the
@@ -415,8 +434,10 @@ separately.
 
 - Read-your-writes answers for appends a projection applied since its last reset. A restart with an intact
   checkpoint is not a reset, so ordinary restarts, failovers and scale-outs cost nothing.
-- After a reset, waits for appends applied before it time out permanently, because cleared records are never
-  written again and replay deliveries record nothing. Any replay is a reset, including a deliberate `startAt`
+- After a reset, waits for appends applied before it time out, because no replay writes a cleared record again and
+  replay deliveries record nothing. The exception is a live redelivery of a pre-reset event, which records its
+  identifier again like any other live event, so a broker that redelivers can bring one back. Any replay is a
+  reset, including a deliberate `startAt`
   replay into a read model that would have tolerated one, because nothing observable tells that apart from a
   rebuild. This is a property of the design and the documentation states it beside the guarantee, not in a footnote.
 - On a path where the projection can say whether it is replaying, a `true` answer means the projection applied at
@@ -429,8 +450,10 @@ separately.
   restart and no replay anywhere.
 - The scheduled poll has a residual that decision 7 states. A replay shorter than the poll interval that
   delivers no event the projection handles is not observed, so its records survive.
-- Widening the two result records changes their equality, and no compile error announces it to an external test
-  asserting on a whole record. The changelog entry and the migration-guide section are what tell that reader.
+- Widening the two result records breaks external code two ways, and only one of them announces itself. An
+  equality assertion against a whole record starts failing with no compile error, while a record deconstruction
+  pattern stops compiling. The changelog entry and the migration-guide section are what tell the reader about the
+  first.
 - One membership write per handled live event per recording projection, reduced to one per append per projection by
   skipping a repeated identifier. This ADR orders no benchmark, and review reopens the question if it looks wrong
   in practice.
