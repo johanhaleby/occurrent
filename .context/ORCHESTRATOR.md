@@ -14,7 +14,8 @@
 - H2 DONE: PR 807 merged as `4f52632` 2026-08-16T17:1xZ (CAS pin `55455c7`). Copilot's one inline finding (migration-guide intro phrased as construction process) fixed on the branch and replied to before merge. The shared docs checkout at `occurrent-org.github.io` carries U4's live branch, so orchestrator docs fixes go through the GitHub contents API on fresh branches, never that checkout (docs PR 67 was built that way; note gh api needs `-F content=@file`, `-f` sends the literal string).
 - Verification: none run this session (no code changed); the release tag implies green main, re-verified at the first merge gate.
 - Tracker: github (block below)
-- Mode: Attended (set by Johan 2026-08-17T~15:4xZ, superseding the 2026-08-16T21:0xZ Unattended stretch)
+- Mode: Unattended (switch msw-20260817T1819Z, global scope, typed relay from the ayi orchestrator 2026-08-17T18:19Z per the fan-out rule, Johan's wording carried as provenance, superseding Attended 2026-08-17T~15:4xZ)
+- Unattended terms: may act alone on everything already granted, which currently means the 841 merge on U19's settled signal (act-012), infra-failure CI reruns, thread bookkeeping, epic-state checkpoints, and fleet hygiene messages. Return condition: Johan's explicit word only. Decision queue: empty at switch time. The release-gate rulings (#753 disposition, #781 disposition, held docs PRs 68-71, release-notes branch approval, and the docs-surface check for U19's breaking change) queue here once 841 merges, as one structured return ask
 - Hygiene 2026-08-17T~21:4xZ: 27 completed fleet and pre-r34 sessions archived on Johan's cleanup order, eight stale apirev branches deleted, merged unit worktrees removed. Live: this orchestrator plus the four resume workers (U7, U18, U12, U19)
 
 ## Tracker
