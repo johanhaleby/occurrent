@@ -1,50 +1,157 @@
 schema_version: 1
 epic: ayi
-revision: 2
-updated_at: 2026-08-17T14:35:00Z
+revision: 3
+updated_at: 2026-08-17T14:37:26Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
-authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push); no session-scoped deviations"
+authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
 milestone: 3
 registered_at: 2026-08-17T12:19:31Z
 definition_of_done:
   - "#740 implemented and merged to main: one identifier minted per append, stamped through the cloud-event extension on all four stores' write paths, returned from WriteResult and DcbAppendResult, readable from EventMetadata, with a recording projection and membership wait on both stacks, starter wiring, and TCK conformance"
-  - "The WriteResult/DcbAppendResult widening ships with its OpenRewrite recipe entry and migration-guide section (released public records, AGENTS.md rule)"
-  - "The three open design points from #740 (replay membership rule, record-widening migration story, multi-event partial visibility) each settled explicitly by the approved plan or an ADR, none left implicit"
-  - "#740's acceptance test exists and passes: two concurrent appends committing in reverse position order, the stalled writer's wait answers true only after its event is actually applied"
-  - "Fresh-context adversarial review of the epic's complete increment converges under the stopping rule Johan sets at plan approval"
+  - "The record widening ships with its migration-guide section and changelog Breaking entry (soft shape: no recipe, reasoned absence per the guide's convention)"
+  - "The three open design points from #740 settled explicitly by the approved plan and ADR 0132, none left implicit"
+  - "#740's acceptance criterion proven by U5's falsifier suite (membership-level inversion, post-reset non-lie, abandoned-replay non-lie, partial-visibility pin, empty-append contract, cross-instance wait, write-to-delivery fidelity)"
+  - "U7 fresh-context review of the complete increment converges under the blocker-only cap-3 stopping rule"
   - "Main green on the last ayi merge"
-  - "Docs paired as a held docs/<feature> branch in occurrent-org.github.io, review-clean, held for the 0.34.0 release; news-post mention coordinated with r34's docs/0.34.0-release-notes branch"
+  - "Docs paired as a held docs/append-identity branch in occurrent-org.github.io, review-clean, held for the 0.34.0 release; news-post mention coordinated with r34's docs/0.34.0-release-notes branch"
   - "#740 closed at ship; #361 closed as duplicate of #740, never resolved separately"
   - "Memory checkpointed, sessions archived, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
-pending_actions: []
+pending_actions:
+  - id: act-001
+    type: dispatch-chip
+    target: "U1 chip, title ⌁[ayi/U1#740] Write the append-identity ADR · Opus/high"
+    expected: "spawn_task returns a task id and the chip appears for Johan"
+    status: PENDING
+    attempts: 0
+    safe_to_repeat: false
+    issued_at: 2026-08-17T14:37:26Z
 units:
   PLAN:
     issue: 740
-    goal: "Epic meta-plan via /johan-plan settling the three open design points, unit decomposition with vehicles and models, presented to Johan for approval at a structured ask"
-    phase: RUNNING
+    goal: "Epic meta-plan via /johan-plan settling the three open design points, approved by Johan"
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
     deliverables:
-      - {check: manual_approval, ref: "Johan approves the ayi meta-plan at the structured ask, including the review stopping rule", met: false, evidence: null}
-    blocking_on:
-      - {what: "Johan's approval of the meta-plan at the structured ask (D1 D2 D3 rulings plus the review stopping rule)", since: 2026-08-17T14:35:00Z, recheck_after: null}
-    next_action: "Present the approval gate; on approval, register U1-U7 in this file, reserve the ADR number, arm the work-item monitor, dispatch U1"
-    last_meaningful_progress_at: 2026-08-17T14:35:00Z
+      - {check: manual_approval, ref: "Johan approved meta-plan revision 6 at the structured ask, with the stopping rule and the D2 delegation", met: true, evidence: "AskUserQuestion answers 2026-08-17T~14:36Z in the orchestrator session"}
+    blocking_on: []
+    next_action: "none"
+    last_meaningful_progress_at: 2026-08-17T14:37:26Z
     observed:
-      issue_740: {state: OPEN, milestone: "0.34.0", assignees: 0, routing_comment: present, via: "gh issue view", at: 2026-08-17T12:17:00Z}
-      issue_361: {state: OPEN, milestone: "0.34.0", via: "gh issue view", at: 2026-08-17T12:17:00Z}
-      plan: {path: "/Users/johan/.claude/plans/ayi-append-identity-740.md", revision: 6, review_rounds: 5, last_verdict: "REVISE findings folded, self-loop stopped by declared cap, residual routed to the gate and U1", at: 2026-08-17T14:35:00Z}
+      plan: {path: "/Users/johan/.claude/plans/ayi-append-identity-740.md", revision: 6, review_rounds: 5, at: 2026-08-17T14:35:00Z}
     assessment: >
-      Design direction is fixed by #740 and ADR 122: membership by append identity, never
-      completed-prefix or ordering reasoning (ADR 122 refutes that premise for every delivery
-      source Occurrent ships; server-side filter pushdown makes contiguity watermarks
-      unbuildable). ADR 111 is WITHDRAWN; its naming, Backoff pacing and per-store retry
-      choices were sound and reusable. Docs PR occurrent-org.github.io#52 is already closed
-      unmerged, so the docs unit writes fresh documentation. The r34 orchestrator runs in
-      parallel and owns 0.34.0 release readiness; its units, sessions, branches and monitors
-      are off-limits to ayi sweeps, and coordination happens only through
-      .context/ORCHESTRATOR.md. Work-item monitor deliberately not armed yet: trigger is the
-      first implementation-unit dispatch (journaled in ORCHESTRATOR.md, ayi section).
+      Approved as recommended on the plan and stopping rule. D2 delegated and decided by the
+      orchestrator: soft widening, because Optional<AppendId> is the correct long-term component
+      type regardless of migration (an empty append has no id, permanently), so a hard break
+      would add migration pain while converging on the identical API, and AGENTS.md's
+      break-preference applies only when compatibility preserves a wrong design.
+  U1:
+    issue: 740
+    goal: "ADR 0132: append identity and the membership wait, recording the approved plan's D1-D3 and settling AppendId ownership, absence idiom wording, reset-rule mechanics, and scope statement"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: manual_approval, ref: "design gate closed by Johan's explicit word, via the orchestrator", met: false, evidence: null}
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch as Opus/high chip (act-001)"
+    last_meaningful_progress_at: 2026-08-17T14:37:26Z
+    observed: {}
+    assessment: "ADR number 0132 reserved at dispatch (cross-branch scan showed max 0131, ledger empty above it). Prose-only diff, so the [ci skip] marker rule applies and the merge verdict carries by compare."
+  U2:
+    issue: 740
+    goal: "Mint, stamp, return: AppendId type, appendid extension, unconditional stamping on all four stores' stream and DCB paths, updateEvent preservation, records widened per D2, equality tests migrated, TCK additions, changelog and migration-guide section"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U1]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U1's design gate closes"
+    last_meaningful_progress_at: 2026-08-17T14:37:26Z
+    observed: {}
+    assessment: "Sonnet/high chip. Verification modules: DCB touched-module set plus tck, eventstore/inmemory, dsl/decider, application/service/blocking."
+  U3:
+    issue: 740
+    goal: "Membership store and wait: interface, in-memory, wait loop, Mongo and reactive Mongo stores with TTL, delete-by-projection-id, properties"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U2]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U2 merges"
+    last_meaningful_progress_at: 2026-08-17T14:37:26Z
+    observed: {}
+    assessment: "Sonnet/high chip. Wait contract: non-null AppendId, absent-id case is type-guided by the Optional component."
+  U4:
+    issue: 740
+    goal: "Recording projections: wrappers both stacks, owner-supplied phase gates, reset-rule clear with completion precondition, shared-scheduler poll with registrar-retained lifecycle, skip-and-log, @Projection attribute and registrar wiring"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U3]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U3 merges"
+    last_meaningful_progress_at: 2026-08-17T14:37:26Z
+    observed: {}
+    assessment: "Sonnet/high chip. Includes the failing-clear and context-close-stops-the-poll tests."
+  U5:
+    issue: 740
+    goal: "Acceptance and falsifier proofs: the seven-test suite from the plan (inversion, Mongo e2e cross-instance, abandoned-replay, post-reset in two variants, partial-visibility pin, empty-append, write-to-delivery fidelity)"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U4]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U4 merges"
+    last_meaningful_progress_at: 2026-08-17T14:37:26Z
+    observed: {}
+    assessment: "Sonnet/high chip. A contract finding here re-triggers a U6 pass."
+  U6:
+    issue: 740
+    goal: "Held docs branch docs/append-identity in occurrent-org.github.io, news-post mention coordinated with r34's release-notes branch, addedTags entry, the honest window bound"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U4]
+    session: null
+    deliverables:
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/append-identity, met: false, evidence: null}
+      - {check: manual_approval, ref: "held docs PR review-clean, frozen only after U5 merges", met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U4 merges, parallel to U5 under the freeze rule"
+    last_meaningful_progress_at: 2026-08-17T14:37:26Z
+    observed: {}
+    assessment: "Sonnet/medium chip. Held for release day; docs-repo merges are Johan's."
+  U7:
+    issue: 740
+    goal: "Epic-end fresh-context review fixpoint over the complete ayi increment, blocker-only reopens, cap 3 rounds"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U5, U6]
+    session: null
+    deliverables:
+      - {check: manual_approval, ref: "fixpoint clean under the stopping rule, or the cap reached and remainders routed to Johan as one structured ask", met: false, evidence: null}
+    blocking_on: []
+    next_action: "Run as orchestrator-integrated subagent rounds after U5 and U6"
+    last_meaningful_progress_at: 2026-08-17T14:37:26Z
+    observed: {}
+    assessment: "Not a chip; fresh-context subagents per round, findings above the line become addendum units reviewed against the complete current state."
