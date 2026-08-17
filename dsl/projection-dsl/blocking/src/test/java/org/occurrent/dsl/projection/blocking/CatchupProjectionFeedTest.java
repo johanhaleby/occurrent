@@ -26,6 +26,7 @@ import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.MaterializedView;
+import org.occurrent.dsl.view.ReplayAware;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
@@ -67,6 +68,25 @@ class CatchupProjectionFeedTest {
         // A live domain event is folded directly, no CloudEvent involved.
         feed.accept(new Counted("3"));
         assertThat(repo.get("counter")).isEqualTo(3);
+    }
+
+    @Test
+    void a_stopped_catch_up_forwards_replay_abandoned_to_a_replay_aware_view_instead_of_replay_completed() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+
+        List<String> calls = new CopyOnWriteArrayList<>();
+        ReplayAwareView view = new ReplayAwareView(calls);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", view, Filter.all(), store, converter, Counted::eventId, null);
+        // Stops from inside the first fold, so the stop is in place before the replay considers delivering "2" and
+        // the abandon runs on a replay genuinely still in flight.
+        view.onUpdate = feed::stopCatchUp;
+
+        feed.catchUp();
+
+        assertThat(calls).containsExactly("replayStarted", "update:1", "replayAbandoned");
     }
 
     @Test
@@ -517,5 +537,41 @@ class CatchupProjectionFeedTest {
                 callsReceived.add("metadata:" + event.eventId());
             }
         };
+    }
+
+    private static final class ReplayAwareView implements MaterializedView<Counted>, ReplayAware {
+        private final List<String> calls;
+        private Runnable onUpdate = () -> {
+        };
+
+        private ReplayAwareView(List<String> calls) {
+            this.calls = calls;
+        }
+
+        @Override
+        public void update(Counted event) {
+            calls.add("update:" + event.eventId());
+            onUpdate.run();
+        }
+
+        @Override
+        public void update(EventMetadata metadata, Counted event) {
+            update(event);
+        }
+
+        @Override
+        public void replayStarted() {
+            calls.add("replayStarted");
+        }
+
+        @Override
+        public void replayCompleted() {
+            calls.add("replayCompleted");
+        }
+
+        @Override
+        public void replayAbandoned() {
+            calls.add("replayAbandoned");
+        }
     }
 }
