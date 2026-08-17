@@ -1,0 +1,48 @@
+schema_version: 1
+epic: ayi
+revision: 1
+updated_at: 2026-08-17T12:19:31Z
+updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
+baseline: {repo: johanhaleby/occurrent, branch: main}
+authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push); no session-scoped deviations"
+milestone: 3
+registered_at: 2026-08-17T12:19:31Z
+definition_of_done:
+  - "#740 implemented and merged to main: one identifier minted per append, stamped through the cloud-event extension on all four stores' write paths, returned from WriteResult and DcbAppendResult, readable from EventMetadata, with a recording projection and membership wait on both stacks, starter wiring, and TCK conformance"
+  - "The WriteResult/DcbAppendResult widening ships with its OpenRewrite recipe entry and migration-guide section (released public records, AGENTS.md rule)"
+  - "The three open design points from #740 (replay membership rule, record-widening migration story, multi-event partial visibility) each settled explicitly by the approved plan or an ADR, none left implicit"
+  - "#740's acceptance test exists and passes: two concurrent appends committing in reverse position order, the stalled writer's wait answers true only after its event is actually applied"
+  - "Fresh-context adversarial review of the epic's complete increment converges under the stopping rule Johan sets at plan approval"
+  - "Main green on the last ayi merge"
+  - "Docs paired as a held docs/<feature> branch in occurrent-org.github.io, review-clean, held for the 0.34.0 release; news-post mention coordinated with r34's docs/0.34.0-release-notes branch"
+  - "#740 closed at ship; #361 closed as duplicate of #740, never resolved separately"
+  - "Memory checkpointed, sessions archived, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
+pending_actions: []
+units:
+  PLAN:
+    issue: 740
+    goal: "Epic meta-plan via /johan-plan settling the three open design points, unit decomposition with vehicles and models, presented to Johan for approval at a structured ask"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
+    deliverables:
+      - {check: manual_approval, ref: "Johan approves the ayi meta-plan at the structured ask, including the review stopping rule", met: false, evidence: null}
+    blocking_on: []
+    next_action: "Run the /johan-plan planning round: delegated exploration, plan draft, adversarial self-review, fresh-context review, then present"
+    last_meaningful_progress_at: 2026-08-17T12:19:31Z
+    observed:
+      issue_740: {state: OPEN, milestone: "0.34.0", assignees: 0, routing_comment: present, via: "gh issue view", at: 2026-08-17T12:17:00Z}
+      issue_361: {state: OPEN, milestone: "0.34.0", via: "gh issue view", at: 2026-08-17T12:17:00Z}
+    assessment: >
+      Design direction is fixed by #740 and ADR 122: membership by append identity, never
+      completed-prefix or ordering reasoning (ADR 122 refutes that premise for every delivery
+      source Occurrent ships; server-side filter pushdown makes contiguity watermarks
+      unbuildable). ADR 111 is WITHDRAWN; its naming, Backoff pacing and per-store retry
+      choices were sound and reusable. Docs PR occurrent-org.github.io#52 is already closed
+      unmerged, so the docs unit writes fresh documentation. The r34 orchestrator runs in
+      parallel and owns 0.34.0 release readiness; its units, sessions, branches and monitors
+      are off-limits to ayi sweeps, and coordination happens only through
+      .context/ORCHESTRATOR.md. Work-item monitor deliberately not armed yet: trigger is the
+      first implementation-unit dispatch (journaled in ORCHESTRATOR.md, ayi section).
