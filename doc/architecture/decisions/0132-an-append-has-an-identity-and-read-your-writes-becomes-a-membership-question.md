@@ -214,6 +214,14 @@ wait without being opened first.
 Mongo implementations on both stacks live in the starters and take a `RetryStrategy` in the shape
 `NativeMongoCheckpointStorage` established, so a transient outage of the store does not turn into a failed wait.
 
+Each poll's read is limited to the time the wait has left, and that is part of this decision rather than an
+implementation detail. A default `RetryStrategy` retries without a limit, since `RetryImpl`'s no-argument
+constructor builds itself with `infinite()` attempts, so a poll that inherits it can go on retrying straight
+through the caller's timeout and then throw instead of answering `false`. The withdrawn machinery shipped that
+defect and fixed it in [#730](https://github.com/johanhaleby/occurrent/issues/730) by limiting each poll's read to
+the wait's remaining time. Both stacks apply that limit here, so the timeout the caller asked for is the one they
+get.
+
 ### 6. Nothing is recorded while a projection is replaying
 
 A recorder records an identifier only when its projection is delivering live events. During a replay it records
@@ -411,10 +419,11 @@ separately.
   written again and replay deliveries record nothing. Any replay is a reset, including a deliberate `startAt`
   replay into a read model that would have tolerated one, because nothing observable tells that apart from a
   rebuild. This is a property of the design and the documentation states it beside the guarantee, not in a footnote.
-- On a path where the projection can say whether it is replaying, a `true` answer means the projection applied that
-  append after its last reset. An identifier that was never recorded, or was cleared, or has been evicted, all
-  produce a timeout instead. A store that cannot be read is retried until the timeout expires rather than
-  answering.
+- On a path where the projection can say whether it is replaying, a `true` answer means the projection applied at
+  least one event of that append after its last reset. That is weaker than having applied all of it, and decision
+  10 states the window and why it is intended. An identifier that was never recorded, or was cleared, or has been
+  evicted, all produce a timeout instead. A store that cannot be read keeps the wait polling until its timeout
+  expires, which is true only because decision 5 limits each read to the time the wait has left.
 - Two cases fall outside that, both from decision 9, and both expire with the retention time. A read model wiped by
   hand on a composition that never replays, and a read model wiped while the application keeps running with no
   restart and no replay anywhere.
