@@ -31,9 +31,13 @@ particular projection has already applied this particular append, which is a que
 rather than about a position on a line.
 
 Membership is answerable where the position question is not, for two reasons. It assumes nothing about the order
-events arrive in, so a writer that commits before a writer with a lower position cannot defeat it. And a
-subscription whose filter is pushed server-side into the change stream can still answer it, because a projection
-does not need to have seen the events it filtered out to know which appends it applied.
+events arrive in. The case that broke the position design, where a writer reserves position 471 and stalls while a
+writer holding 500 commits ahead of it, does nothing to a membership answer, because the wait asks about the
+stalled writer's own append rather than about anything that overtook it.
+
+The second reason is filtering. A subscription whose filter is pushed server-side into the change stream can still
+answer the membership question, because a projection does not need to have seen the events it filtered out to know
+which appends it applied.
 
 The same design ports unchanged to a future PostgreSQL or MySQL store, where `BIGSERIAL` and `AUTO_INCREMENT` are
 non-transactional for the same reason MongoDB's counter is and produce the identical mismatch between position and
@@ -102,8 +106,8 @@ argues for it. Both event store API modules already depend on that module, so an
 from a typed `EventMetadata` accessor directly. Against that, `cloudevents-extension` describes how Occurrent
 stamps a CloudEvent and contains `EventMetadata`, `OccurrentCloudEventExtension` and two helpers, and no value type
 at all. Putting `AppendId` there would make the module that defines the wire format also define what an append is,
-which is the wrong way round. ADR 122's review named reachability standing in for ownership as the failure shape
-that produced the fencing token, so the placement is decided on ownership.
+which is the wrong way round. Deciding placement by which module can already reach a type is how a concept ends up
+owned by whatever happened to import it first, so the placement is decided on ownership instead.
 
 `eventstore/api/dcb` depends on `eventstore/api/common`, so `DcbAppendResult` reaches the type, and
 `dsl/projection-dsl/common` already depends on `occurrent-eventstore-api-dcb`, so the projection layer reaches it
@@ -126,8 +130,8 @@ with it.
 
 Stamping happens in each store's own per-append loop, and not in
 `OccurrentCloudEventMongoDocumentMapper.convertToDocument`, which is called per event and knows nothing about the
-call it belongs to. There are four stores and both write paths, so eight places, plus the two in-memory stamping
-methods that already run under `synchronized(state)`.
+call it belongs to. Each of the four stores therefore stamps in its own code, on both the stream path and the DCB
+path, and the two in-memory stamping methods already run under `synchronized(state)`.
 
 Stamping is unconditional. `streamPositionEnabled` (`EventStoreConfig.java:157`) governs whether the stream path
 stamps a position, and an append identifier is not a position, so an application that turned position stamping off
@@ -140,9 +144,10 @@ that was persisted by some earlier append. Restamping it would move an event out
 into an append that never happened, so the stored value is preserved.
 
 An `appendid` supplied by a caller on the way in is overwritten by the store. This follows `position`, which the
-store also assigns rather than accepts. It differs from `dcbtags`, where a caller-supplied value is refused rather
-than overwritten, because refusing there protects an invariant the store cannot restore, and here the store simply
-assigns the correct value.
+store also assigns rather than accepts. It differs from `dcbtags`, which the stream write path refuses outright
+(`InMemoryEventStore.rejectDcbTaggedEvents`), and the difference is what the store can do about the value. A
+DCB-tagged event written through the stream path would be invisible to DCB reads afterwards, which the store cannot
+put right, so it refuses. An append identifier the store overwrites is simply replaced by the correct one.
 
 ### 3. `WriteResult` and `DcbAppendResult` gain an `Optional<AppendId>` component
 
@@ -214,10 +219,10 @@ Mongo implementations on both stacks live in the starters and take a `RetryStrat
 A recorder records an identifier only when its projection is delivering live events. During a replay it records
 nothing at all.
 
-This is one mechanism for the three problems in the context above. A full replay inserts nothing, so the volume
-problem disappears. An identifier is never recorded for an update that a coalescing view buffered rather than
-wrote, because the recorder does not run during the replay when buffering happens. And an abandoned replay has
-nothing recorded to become untrue when the buffer is discarded.
+One rule closes all three problems from the context above. A full replay inserts nothing, so the volume problem
+disappears. An identifier is never recorded for an update that a coalescing view buffered rather than wrote,
+because the recorder does not run during the replay when buffering happens. And an abandoned replay has nothing
+recorded to become untrue when the buffer is discarded.
 
 The check is asked per delivery. On subscription-fed paths it is the same question the saga timer already asks, so
 the recorder takes a `BooleanSupplier` built from `isCatchingUp(subscriptionId)`. On the pull paths, where
@@ -253,8 +258,8 @@ reaches the recorder to be checked.
 
 The poll asks `isCatchingUp` for each registered recording projection on an exponential schedule, starting at
 200 ms and settling at 5 seconds, and a projection goes back to the fast end whenever a replay is seen. So a
-projection that has just registered, or has just been seen replaying, is asked often, and a long-running live
-projection is asked twice a minute.
+projection that has just registered, or has just been seen replaying, is asked several times a second, and one that
+has been live for hours is asked every 5 seconds.
 
 That schedule has a residual and the documentation states it rather than implying the rule is complete. A replay
 that both starts and finishes inside one interval and delivers no event the projection handles is not observed, so
@@ -341,9 +346,10 @@ expires, 20 seconds by default (`MongoLeaseCompetingConsumerStrategySupport.java
 paused or stopped, it does not end until someone starts it again.
 
 Recording on the last event instead was considered and fails structurally. Occurrent pushes subscription filters
-server-side, so a projection that does not handle the last event type of an append never sees it, and would wait
-forever for an append it had already applied everything it cares about from. Counting events towards a total fails
-the same way, since the count a filtered subscriber sees is not the count the append wrote.
+server-side, so a projection that does not handle the last event type of an append never sees that event, and the
+wait would never finish even though the projection had already applied every event of the append it cares about.
+Counting events towards a total fails the same way, since the count a filtered subscriber sees is not the count the
+append wrote.
 
 Skipping a repeated identifier inside the recorder is a free optimization, since one append usually delivers
 several events and only the first needs a write.
@@ -425,5 +431,8 @@ separately.
   [#746](https://github.com/johanhaleby/occurrent/issues/746) is the nearest relative and is not the same problem.
   It asked whether `ReplayAware` forwarding on materialized-view wrappers needed a typed replacement, and closed on
   2026-08-17 with a recorded no-change once the re-check found one forwarding wrapper left.
-- SQL and broker stores are not built here. The design ports to them unchanged, and the
-  [#397](https://github.com/johanhaleby/occurrent/issues/397) family owns building it there.
+- SQL and broker stores are not built here, and the design ports to them unchanged.
+  [#392](https://github.com/johanhaleby/occurrent/issues/392) owns building the JDBC store, and
+  [#397](https://github.com/johanhaleby/occurrent/issues/397), which asks how a SQL event store assigns global
+  positions and what a live subscription resumes from, is the one this ADR touches, since an append identifier
+  works the same way whichever answer that question gets.
