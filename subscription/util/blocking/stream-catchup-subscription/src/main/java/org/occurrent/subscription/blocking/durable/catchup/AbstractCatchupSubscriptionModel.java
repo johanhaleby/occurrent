@@ -34,6 +34,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.*;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -49,7 +50,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     protected final CheckpointAwareSubscriptionModel subscriptionModel;
     protected final CatchupSubscriptionModelConfig config;
     protected final Class<?> subscriptionModelContextType;
-    protected final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
+    protected final ConcurrentMap<String, Boolean> runningCatchupSubscriptions;
     // Pause requested for a subscriptionId while its replay is still in-flight, before the delegate knows the id.
     // Applied via applyPendingPauseIfAny once the live delegate subscription exists.
     protected final ConcurrentMap<String, Boolean> pauseRequestedDuringCatchup = new ConcurrentHashMap<>();
@@ -63,13 +64,53 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // later attempt's bookkeeping. CURRENT_ATTEMPT carries the calling attempt's identity across this same call
     // without threading it through every method signature; safe because startCatchupAsync gives each attempt its
     // own dedicated virtual thread, never reused, and clears the value in a finally block.
-    private final ConcurrentMap<String, CatchupAttempt> currentAttempt = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, CatchupAttempt> currentAttempt;
     private static final ThreadLocal<@Nullable CatchupAttempt> CURRENT_ATTEMPT = new ThreadLocal<>();
+    // One lock per subscriptionId, guarding a fresh attempt's registration (startCatchupAsync), a finishing
+    // attempt's checkpoint cleanup and delegate subscribe (or its cancelled-cleanup branch), and
+    // cancelRunningCatchup. The identity check above only made the ownership decision itself atomic, not what
+    // followed it, so a cancellation or a fresh registration could land in the gap after an attempt decided it was
+    // still current but before it finished acting on that. Held only across those short transitions, never across
+    // an in-flight replay, so a long catch-up is never serialized by this lock. Entries are never removed for an id
+    // this instance has actually run a catch-up for, since a subscriptionId is application-defined and
+    // low-cardinality here, unlike a per-event or per-request key; cancelRunningCatchup never creates one for an id
+    // it has not seen, so an arbitrary or unknown id passed to cancelSubscription costs nothing.
+    private final ConcurrentMap<String, ReentrantLock> handoverLocks;
 
     protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
+        this(subscriptionModel, config, subscriptionModelContextType, new SharedCatchupState());
+    }
+
+    /**
+     * @param sharedState The per-id registries ({@link #lockHandover}'s locks, {@link #currentAttempt},
+     *                     {@link #runningCatchupSubscriptions}) this instance draws from. A dispatcher over several
+     *                     children that route the same id to a different one of them on different calls passes the
+     *                     same state to every child, so a handover on one child and a fresh registration on another
+     *                     still serialize and still see the same current owner for that id, both of which a
+     *                     registry private to each child cannot give. Every other caller passes a fresh one,
+     *                     private to this instance.
+     */
+    protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, SharedCatchupState sharedState) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.config = Objects.requireNonNull(config, "config cannot be null");
         this.subscriptionModelContextType = Objects.requireNonNull(subscriptionModelContextType, "subscriptionModelContextType cannot be null");
+        Objects.requireNonNull(sharedState, "sharedState cannot be null");
+        this.handoverLocks = sharedState.handoverLocks;
+        this.currentAttempt = sharedState.currentAttempt;
+        this.runningCatchupSubscriptions = sharedState.runningCatchupSubscriptions;
+    }
+
+    /**
+     * The per-id registries {@link #handoverLocks}, {@link #currentAttempt}, and {@link #runningCatchupSubscriptions}
+     * bundled into one unit, so a dispatcher sharing them across its children shares all three together rather than
+     * risking one shared and another forgotten. All three need to move together: the lock alone only keeps two
+     * children's handovers from running at the same instant, it does not stop a stale one, once it finally runs,
+     * from still finding itself "current" in a registry only it can see.
+     */
+    static final class SharedCatchupState {
+        private final ConcurrentMap<String, ReentrantLock> handoverLocks = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, CatchupAttempt> currentAttempt = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
     }
 
     // Reports subscriptionModelContextType (the dispatcher's type when wrapped) so a caller's StartAt.dynamic
@@ -209,6 +250,49 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
+     * A held {@link #lockHandover} lock. {@code close()} declares no checked exception (unlike plain
+     * {@link AutoCloseable}), so a try-with-resources releasing one needs no catch clause; {@link ReentrantLock#unlock()}
+     * never throws one.
+     */
+    protected interface HandoverLock extends AutoCloseable {
+        @Override
+        void close();
+    }
+
+    /**
+     * Acquires {@code subscriptionId}'s handover lock for the duration of a try-with-resources block, held by
+     * {@link #startCatchupAsync}'s registration, a subclass's replay-completion code from
+     * {@link #endReplayIfStillCurrent} through its checkpoint cleanup and delegate {@code subscribe} call (or the
+     * cancelled-cleanup branch), and {@link #cancelRunningCatchup}. A {@link ReentrantLock}, not
+     * {@code synchronized}, because every caller here runs on a {@link #startCatchupAsync virtual thread} and a
+     * handover span can block on storage or delegate I/O. Blocking inside a {@code synchronized} block would pin
+     * the carrier thread for that whole span, a plain lock does not.
+     */
+    protected HandoverLock lockHandover(String subscriptionId) {
+        ReentrantLock lock = handoverLocks.computeIfAbsent(subscriptionId, id -> new ReentrantLock());
+        lock.lock();
+        return lock::unlock;
+    }
+
+    /**
+     * Acquires {@code subscriptionId}'s handover lock only if one already exists, {@code null} otherwise, without
+     * creating one. Registration ({@link #startCatchupAsync}) is the only place a lock is created for an id, and it
+     * creates the lock before it creates that id's {@link #currentAttempt} entry, so a missing lock here means no
+     * attempt has ever been registered for this id and there is nothing for {@link #cancelRunningCatchup} to
+     * coordinate with. Lets a cancellation for an id this instance has never run a catch-up for, including an
+     * arbitrary or unknown one a caller passes to {@code cancelSubscription} defensively, stay free of the registry
+     * instead of permanently reserving a lock for it.
+     */
+    protected @Nullable HandoverLock tryLockHandover(String subscriptionId) {
+        ReentrantLock lock = handoverLocks.get(subscriptionId);
+        if (lock == null) {
+            return null;
+        }
+        lock.lock();
+        return lock::unlock;
+    }
+
+    /**
      * Captures the live resume checkpoint handed over to live delivery. Callers choose when: the position path in
      * {@link StreamCatchupSubscriptionModel} captures it before the bulk replay so no in-flight event is missed;
      * the time-based path captures it after, to keep the token fresh (avoids oplog ageing).
@@ -233,17 +317,31 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * delegate or position storage; the dispatcher owns those since both paths share the same delegate.
      */
     public void cancelRunningCatchup(String subscriptionId) {
-        runningCatchupSubscriptions.remove(subscriptionId);
-        // Flags whichever attempt is currently registered, atomically with respect to a concurrent resubscribe for
-        // the same id, instead of removing or replacing the entry: a dual-mode dispatcher calls this on both inner
-        // models for every cancellation, and the one with nothing running for this id must stay a no-op rather than
-        // start tracking an id that is not its concern. The entry itself is left for the flagged attempt's own
-        // endReplayIfStillCurrent to remove, so this call can never race a newer attempt's map removal.
-        currentAttempt.computeIfPresent(subscriptionId, (id, attempt) -> {
-            attempt.cancelled = true;
-            return attempt;
-        });
-        pauseRequestedDuringCatchup.remove(subscriptionId);
+        // Locked, when a lock already exists for this id, so this call lands either strictly before or strictly
+        // after a handover attempt's own lockHandover span for the same id, never inside it. Unlocked, it could run
+        // in the gap after that attempt decided it was still current but before it acted on that, finding nothing
+        // left to flag and losing the cancellation. tryLockHandover deliberately does not create a lock for an id
+        // that has none yet, since that means no attempt has ever been registered for it and the operations below
+        // are then no-ops with or without a lock, including for an arbitrary or unknown id a caller passes here.
+        HandoverLock lock = tryLockHandover(subscriptionId);
+        try {
+            runningCatchupSubscriptions.remove(subscriptionId);
+            // Flags whichever attempt is currently registered, atomically with respect to a concurrent resubscribe
+            // for the same id, instead of removing or replacing the entry: a dual-mode dispatcher calls this on both
+            // inner models for every cancellation, and the one with nothing running for this id must stay a no-op
+            // rather than start tracking an id that is not its concern. The entry itself is left for the flagged
+            // attempt's own endReplayIfStillCurrent to remove, so this call can never race a newer attempt's map
+            // removal.
+            currentAttempt.computeIfPresent(subscriptionId, (id, attempt) -> {
+                attempt.cancelled = true;
+                return attempt;
+            });
+            pauseRequestedDuringCatchup.remove(subscriptionId);
+        } finally {
+            if (lock != null) {
+                lock.close();
+            }
+        }
     }
 
     /**
@@ -336,8 +434,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      */
     protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
         CatchupAttempt attempt = new CatchupAttempt();
-        runningCatchupSubscriptions.put(subscriptionId, true);
-        currentAttempt.put(subscriptionId, attempt);
+        // Locked so this registration cannot land inside a still-finishing earlier attempt's own lockHandover span
+        // for the same id. Unlocked, this attempt could start, and its replay could reach a checkpoint save, before
+        // the earlier attempt's late checkpoint delete runs, wiping out what this attempt just wrote instead of
+        // its own.
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            runningCatchupSubscriptions.put(subscriptionId, true);
+            currentAttempt.put(subscriptionId, attempt);
+        }
         // catchup itself ends its attempt's ownership on normal completion (via endReplayIfStillCurrent), and
         // deliberately leaves it in place when shouldKeepReplaying already turned false so a cancellation can
         // still be told apart from a completion (see the comment on subscriptionsWasCancelledOrShutdown in the

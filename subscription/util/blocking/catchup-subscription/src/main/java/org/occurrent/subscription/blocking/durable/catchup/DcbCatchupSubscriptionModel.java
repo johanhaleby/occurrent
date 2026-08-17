@@ -71,7 +71,18 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
      *                                      keeps working regardless of which mode-specific class runs the catch-up.
      */
     public DcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbCriteria dcbQuery, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
-        super(subscriptionModel, config, subscriptionModelContextType);
+        this(subscriptionModel, dcbEventStore, dcbQuery, config, subscriptionModelContextType, new AbstractCatchupSubscriptionModel.SharedCatchupState());
+    }
+
+    /**
+     * @param sharedState Passed straight to {@link AbstractCatchupSubscriptionModel}. The {@code CatchupSubscriptionModel}
+     *                     dispatcher passes the same state to every child it constructs, so a same-id attempt
+     *                     routed to a different child on a later call still serializes with this one and still sees
+     *                     the same current owner for that id; every other caller gets a fresh, private state
+     *                     through the other constructors.
+     */
+    DcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbCriteria dcbQuery, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, AbstractCatchupSubscriptionModel.SharedCatchupState sharedState) {
+        super(subscriptionModel, config, subscriptionModelContextType, sharedState);
         this.dcbEventStore = Objects.requireNonNull(dcbEventStore, "dcbEventStore cannot be null");
         this.dcbQuery = Objects.requireNonNull(dcbQuery, "dcbQuery cannot be null");
     }
@@ -84,14 +95,14 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             // Resume from the stored position if there is one, otherwise subscribe live (with the DCB query post-filter).
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
             if (checkpoint == null) {
-                return startLiveDcbSubscription(subscriptionId, filter, startAt, action, null);
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action);
             } else {
                 firstStartAt = StartAt.checkpoint(checkpoint);
             }
         } else if (startAt.isDynamic()) {
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
-                return startLiveDcbSubscription(subscriptionId, filter, startAt, action, null);
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action);
             } else {
                 firstStartAt = startAtGeneratedByDynamic;
             }
@@ -102,7 +113,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // A non-DCB position means the catch-up already handed over and the live subscription stored a change-stream
         // token (or the caller asked to start live directly). Subscribe live, still applying the DCB query post-filter.
         if (!isDcbCatchupPosition(firstStartAt)) {
-            return startLiveDcbSubscription(subscriptionId, filter, firstStartAt, action, null);
+            return subscribeLiveWithoutCatchup(subscriptionId, filter, firstStartAt, action);
         }
 
         Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId, () -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
@@ -111,6 +122,18 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
     private Subscription startLiveDcbSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAtToUse, Consumer<CloudEvent> action, @Nullable BoundedIdCache cache) {
         return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, dcbLiveConsumer(action, cache));
+    }
+
+    /**
+     * Hands {@code subscriptionId} straight to the live delegate, without a catch-up phase. Cancels any catch-up
+     * already running for this id first, under the same per-id lock as a finishing attempt's own handover, so that
+     * attempt is told it has been superseded instead of also subscribing the delegate for the id this call just
+     * claimed. Distinct from {@link #startLiveDcbSubscription}'s own use inside a finishing attempt's handover,
+     * which has already gone through that lock and that decision and must not cancel itself.
+     */
+    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        cancelRunningCatchup(subscriptionId);
+        return startLiveDcbSubscription(subscriptionId, filter, startAt, action, null);
     }
 
     private Consumer<CloudEvent> dcbLiveConsumer(Consumer<CloudEvent> action, @Nullable BoundedIdCache cache) {
@@ -159,60 +182,67 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId),
                 (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache), catchupPhaseCache);
 
-        // endReplayIfStillCurrent gates on stopped/shuttingDown as well as identity, so a stop() that lands before
-        // this point still leaves this attempt's marker in place instead of removing it, and it is the atomic
-        // decision itself: a later attempt can still have taken over in the narrow window right before this call,
-        // and only actually ending this attempt's ownership here may count as a normal completion rather than
-        // being superseded. Mirrors the blocking stream catch-up's identical reasoning.
-        final boolean subscriptionsWasCancelledOrShutdown = !endReplayIfStillCurrent(subscriptionId);
+        // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
+        // blocking stream catch-up. Unlocked, a cancelSubscription or a fresh subscribe for this id could land in
+        // the gap after this attempt decided it was still current but before it finished acting on that, either
+        // losing the cancellation or having a fresh attempt's checkpoint save wiped out by this attempt's late
+        // delete a few lines down.
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            // endReplayIfStillCurrent gates on stopped/shuttingDown as well as identity, so a stop() that lands
+            // before this point still leaves this attempt's marker in place instead of removing it, and it is the
+            // atomic decision itself: a later attempt can still have taken over in the narrow window right before
+            // this call, and only actually ending this attempt's ownership here may count as a normal completion
+            // rather than being superseded.
+            final boolean subscriptionsWasCancelledOrShutdown = !endReplayIfStillCurrent(subscriptionId);
 
-        // Gated on the atomic decision above, not just checked ahead of it: a superseded attempt reaching this
-        // late must not delete a later attempt's own temporary position.
-        if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
-            returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                cfg.storage().delete(subscriptionId);
-                return null;
-            });
-        }
-
-        StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
-                        cfg -> () -> {
-                            Checkpoint position = cfg.storage().read(subscriptionId);
-                            // If nothing is stored, or the stored position is a DCB position (written by this catch-up),
-                            // save the live change-stream position so the wrapped subscription resumes from there.
-                            if ((position == null || GlobalCheckpoint.isGlobalCheckpoint(position)) && globalCheckpoint != null) {
-                                position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
-                            } else if (position == null) {
-                                return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
-                            }
-                            return StartAt.checkpoint(position);
-                        })
-                .orElse(() -> {
-                    if (globalCheckpoint == null) {
-                        return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
-                    } else {
-                        return StartAt.checkpoint(globalCheckpoint);
-                    }
-                }));
-
-        final Subscription subscription;
-        if (subscriptionsWasCancelledOrShutdown) {
-            // Same fix as the blocking stream side. Priming startAtToUse is skipped for an explicit cancellation of
-            // this exact id, since its get() call saves globalCheckpoint as a side effect, which would recreate the
-            // position cancelSubscription's own deletePositionFromStorage call just deleted.
-            if (!wasCancelled()) {
-                doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                    if (!cfg.storage().exists(subscriptionId)) {
-                        startAtToUse.get(generateSubscriptionModelContext());
-                    }
+            // Gated on the atomic decision above, not just checked ahead of it: a superseded attempt reaching this
+            // late must not delete a later attempt's own temporary position.
+            if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
+                returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+                    cfg.storage().delete(subscriptionId);
+                    return null;
                 });
             }
-            subscription = new CancelledSubscription(subscriptionId);
-        } else {
-            subscription = startLiveDcbSubscription(subscriptionId, filter, startAtToUse, action, catchupPhaseCache);
-            applyPendingPauseIfAny(subscriptionId);
+
+            StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
+                            cfg -> () -> {
+                                Checkpoint position = cfg.storage().read(subscriptionId);
+                                // If nothing is stored, or the stored position is a DCB position (written by this catch-up),
+                                // save the live change-stream position so the wrapped subscription resumes from there.
+                                if ((position == null || GlobalCheckpoint.isGlobalCheckpoint(position)) && globalCheckpoint != null) {
+                                    position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
+                                } else if (position == null) {
+                                    return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
+                                }
+                                return StartAt.checkpoint(position);
+                            })
+                    .orElse(() -> {
+                        if (globalCheckpoint == null) {
+                            return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
+                        } else {
+                            return StartAt.checkpoint(globalCheckpoint);
+                        }
+                    }));
+
+            final Subscription subscription;
+            if (subscriptionsWasCancelledOrShutdown) {
+                // Same fix as the blocking stream side. Priming startAtToUse is skipped for an explicit cancellation of
+                // this exact id, since its get() call saves globalCheckpoint as a side effect, which would recreate the
+                // position cancelSubscription's own deletePositionFromStorage call just deleted.
+                if (!wasCancelled()) {
+                    doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+                        if (!cfg.storage().exists(subscriptionId)) {
+                            startAtToUse.get(generateSubscriptionModelContext());
+                        }
+                    });
+                }
+                subscription = new CancelledSubscription(subscriptionId);
+            } else {
+                subscription = startLiveDcbSubscription(subscriptionId, filter, startAtToUse, action, catchupPhaseCache);
+                applyPendingPauseIfAny(subscriptionId);
+            }
+            return subscription;
         }
-        return subscription;
     }
 
     /**

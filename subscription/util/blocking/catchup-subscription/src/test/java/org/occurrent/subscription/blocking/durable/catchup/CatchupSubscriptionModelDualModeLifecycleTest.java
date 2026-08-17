@@ -31,6 +31,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 
+import java.lang.reflect.Field;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -87,6 +88,48 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
         dualMode.start(true);
 
         assertThat(delegate.startCount()).isEqualTo(1);
+    }
+
+    /**
+     * Copilot review on PR #839 (issue #827). The three children a dual-mode dispatcher constructs share a live
+     * delegate and checkpoint storage, but each is its own {@code AbstractCatchupSubscriptionModel} instance, so
+     * without deliberately sharing state between them, an id routed to the stream child on one call and the DCB
+     * child on the next would serialize against neither. A first pass shared only the handover lock and missed a
+     * follow-up finding: the lock alone stops two children's finishing tails from running at the same instant, but
+     * a stale one, once it finally runs after the other has already finished, still finds itself "current" in a
+     * {@code currentAttempt} registry only it can see, and its cleanup can then delete the other child's already-
+     * saved checkpoint. {@code SharedCatchupState} bundles the lock with {@code currentAttempt} and
+     * {@code runningCatchupSubscriptions} so a dispatcher shares all three together. Reflection is the only way to
+     * observe this without running a full race, since all three are private implementation details.
+     */
+    @Test
+    void the_three_children_of_a_dual_mode_dispatcher_share_one_handover_state() throws Exception {
+        CatchupSubscriptionModel dualMode = dualMode(new CountingCheckpointAwareSubscriptionModel());
+
+        Field streamField = CatchupSubscriptionModel.class.getDeclaredField("streamCatchupSubscriptionModel");
+        streamField.setAccessible(true);
+        Field dcbField = CatchupSubscriptionModel.class.getDeclaredField("dcbCatchupSubscriptionModel");
+        dcbField.setAccessible(true);
+        Field agnosticField = CatchupSubscriptionModel.class.getDeclaredField("agnosticCatchupSubscriptionModel");
+        agnosticField.setAccessible(true);
+        Object stream = streamField.get(dualMode);
+        Object dcb = dcbField.get(dualMode);
+        Object agnostic = agnosticField.get(dualMode);
+
+        for (String fieldName : List.of("handoverLocks", "currentAttempt", "runningCatchupSubscriptions")) {
+            Field field = AbstractCatchupSubscriptionModel.class.getDeclaredField(fieldName);
+            field.setAccessible(true);
+            Object streamValue = field.get(stream);
+            Object dcbValue = field.get(dcb);
+            Object agnosticValue = field.get(agnostic);
+
+            assertThat(streamValue)
+                    .as("the stream and DCB children must share the exact same %s instance, not merely an equal "
+                            + "one, since only reference identity keeps a same-id attempt routed to different "
+                            + "children on different calls coordinated", fieldName)
+                    .isSameAs(dcbValue);
+            assertThat(streamValue).isSameAs(agnosticValue);
+        }
     }
 
     private static CatchupSubscriptionModel dualMode(CheckpointAwareSubscriptionModel delegate) {

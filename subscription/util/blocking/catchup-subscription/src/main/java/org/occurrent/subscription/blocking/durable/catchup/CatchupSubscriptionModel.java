@@ -137,9 +137,14 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      */
     public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
-        this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class);
+        // Shared so a same id routed to the stream child on one call and the agnostic child on another (an
+        // AgnosticSubscriptionFilter versus a StreamSubscriptionFilter) still serializes through one handover, and
+        // both still see the same current owner for that id, even though both children share this same delegate
+        // and checkpoint storage.
+        AbstractCatchupSubscriptionModel.SharedCatchupState sharedState = new AbstractCatchupSubscriptionModel.SharedCatchupState();
+        this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, sharedState);
         this.dcbCatchupSubscriptionModel = null;
-        this.agnosticCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, null);
+        this.agnosticCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, null, sharedState);
     }
 
     /**
@@ -170,6 +175,8 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbCriteria dcbQuery, CatchupSubscriptionModelConfig config) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.streamCatchupSubscriptionModel = null;
+        // No sharing needed here. This configuration constructs exactly one child, so there is no other route the
+        // same id could take.
         this.dcbCatchupSubscriptionModel = new DcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, dcbQuery, config, CatchupSubscriptionModel.class);
         this.agnosticCatchupSubscriptionModel = null;
     }
@@ -187,9 +194,13 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      */
     public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, DcbEventStore dcbEventStore, DcbCriteria dcbQuery, CatchupSubscriptionModelConfig config) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
-        this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class);
-        this.dcbCatchupSubscriptionModel = new DcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, dcbQuery, config, CatchupSubscriptionModel.class);
-        this.agnosticCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, null);
+        // Shared across all three children. A subscriptionId can route to any one of them on a given call
+        // (routesToDcb, or an AgnosticSubscriptionFilter), and a later call for the same id can route to a
+        // different one, so one handover and one current-owner record has to cover all three, not one each.
+        AbstractCatchupSubscriptionModel.SharedCatchupState sharedState = new AbstractCatchupSubscriptionModel.SharedCatchupState();
+        this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, sharedState);
+        this.dcbCatchupSubscriptionModel = new DcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, dcbQuery, config, CatchupSubscriptionModel.class, sharedState);
+        this.agnosticCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, null, sharedState);
     }
 
     /**

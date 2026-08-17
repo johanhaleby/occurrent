@@ -281,6 +281,176 @@ class DcbCatchupSubscriptionModelTest {
                 .isTrue();
     }
 
+    /**
+     * Issue #827 (deferred from PR 823's per-attempt identity fix, #737), the DCB side of the same gap the blocking
+     * stream catch-up has. The identity check made the ownership decision itself atomic, but not what followed it.
+     * A cancellation landing after this attempt decided it was still current, but before the delegate subscribe
+     * below actually ran, found nothing left in the map to flag, and the delegate did not know the id yet either,
+     * so the cancellation was silently lost and the delegate went live anyway. Closing the gap needs a lock
+     * spanning the whole handover, not just the decision.
+     */
+    @Test
+    void a_cancellation_racing_the_final_delegate_subscribe_is_not_lost() throws InterruptedException {
+        appendTagged("name:1", nameDefined("event1"));
+        String subscriptionId = "subscription";
+        CountDownLatch reachedFinishing = new CountDownLatch(1);
+        CountDownLatch releaseFinishing = new CountDownLatch(1);
+        DcbCatchupSubscriptionModel subscription = new DcbCatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")), new CatchupSubscriptionModelConfig(100)) {
+            @Override
+            protected boolean endReplayIfStillCurrent(String subscriptionId) {
+                boolean stillCurrent = super.endReplayIfStillCurrent(subscriptionId);
+                reachedFinishing.countDown();
+                awaitLatch(releaseFinishing);
+                return stillCurrent;
+            }
+        };
+
+        subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+        });
+        assertThat(reachedFinishing.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Races the cancellation against the still-in-flight delegate subscribe, on its own thread since it must
+        // not deadlock this test on locked (post-fix) code, where it blocks until the handover below completes.
+        Thread cancel = new Thread(() -> subscription.cancelSubscription(subscriptionId));
+        cancel.start();
+
+        // Unlocked (pre-fix) code lets this cancellation run its fast no-op path (nothing is left to flag, the
+        // delegate does not know the id yet) well within this window; locked (post-fix) code blocks it here until
+        // releaseFinishing below, so this reliably times out there instead.
+        cancel.join(500);
+
+        releaseFinishing.countDown();
+        cancel.join(Duration.ofSeconds(5).toMillis());
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(subscription.isRunning(subscriptionId))
+                        .as("a cancellation racing the handover must still end the subscription, not be silently "
+                                + "lost to a delegate subscribe that had already committed to going live")
+                        .isFalse());
+    }
+
+    /**
+     * Issue #827, the checkpoint-delete manifestation of the same gap on the DCB side. A finishing attempt's
+     * temporary checkpoint delete runs after it already relinquished ownership of the id. Unguarded, a fresh
+     * attempt for the same id can register and save its own position in that gap, and the stale delete then
+     * removes the fresh attempt's position instead of its own. Closing the gap needs holding the same lock across
+     * the delete and gating a fresh attempt's registration on it too.
+     */
+    @Test
+    void a_finishing_attempts_late_checkpoint_delete_does_not_clobber_a_fresh_attempts_saved_position() throws InterruptedException {
+        appendTagged("name:1", nameDefined("event1"));
+        String subscriptionId = "subscription";
+
+        CountDownLatch freshSaved = new CountDownLatch(1);
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String id, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                Checkpoint saved = super.save(id, checkpoint, condition);
+                freshSaved.countDown();
+                return saved;
+            }
+        };
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage));
+
+        CountDownLatch reachedFinishing = new CountDownLatch(1);
+        CountDownLatch releaseFinishing = new CountDownLatch(1);
+        // Only the FIRST call (the stale attempt's) pauses here; the fresh attempt started below reaches this same
+        // overridden method too, for its own identity decision, and must not be blocked by it as well.
+        AtomicBoolean firstCallToEndReplayIfStillCurrent = new AtomicBoolean(true);
+        DcbCatchupSubscriptionModel subscription = new DcbCatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")), config) {
+            @Override
+            protected boolean endReplayIfStillCurrent(String subscriptionId) {
+                boolean stillCurrent = super.endReplayIfStillCurrent(subscriptionId);
+                if (firstCallToEndReplayIfStillCurrent.compareAndSet(true, false)) {
+                    reachedFinishing.countDown();
+                    awaitLatch(releaseFinishing);
+                }
+                return stillCurrent;
+            }
+        };
+
+        // Resolves to a real DCB position for the catch-up's own replay, but to null for the delegate, so the
+        // finishing tail's "delegate must not run" branch deletes the temporary catch-up position once done.
+        StartAt neverDelegates = StartAt.dynamic(context ->
+                context.hasSubscriptionModelType(CheckpointAwareInMemorySubscriptionModel.class) ? null : StartAt.checkpoint(GlobalCheckpoint.of(0)));
+
+        subscription.subscribe(subscriptionId, neverDelegates, cloudEvent -> {
+        });
+        assertThat(reachedFinishing.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // A fresh, normally-delegating attempt for the same id, started on its own thread while the first is
+        // blocked right after deciding it is still current but before its own delete runs.
+        Thread freshAttempt = new Thread(() -> {
+            try {
+                subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+                }).waitUntilStarted();
+            } catch (RuntimeException ignored) {
+                // The stale attempt above also subscribes the delegate unconditionally once its own handover
+                // decides it is still current, even though its own StartAt resolved to null for the delegate, so
+                // the two attempts' delegate subscribe calls can then collide on the in-memory model's duplicate-id
+                // check. Immaterial here, this test only cares whether the fresh attempt's own checkpoint save
+                // (asserted below) survives, and that save runs before this call, not after it.
+            }
+        });
+        freshAttempt.start();
+
+        // Unlocked (pre-fix) code lets this fresh attempt register and save well within this window; locked
+        // (post-fix) code cannot even register until releaseFinishing below, so this reliably times out there
+        // instead, which is exactly why the real assertion is the one after both attempts have finished, not this
+        // wait.
+        freshSaved.await(500, TimeUnit.MILLISECONDS);
+
+        releaseFinishing.countDown();
+        freshAttempt.join(Duration.ofSeconds(5).toMillis());
+
+        assertThat(freshSaved.await(5, TimeUnit.SECONDS))
+                .as("the fresh attempt must have saved its own position by the time both attempts have finished")
+                .isTrue();
+        assertThat(storage.read(subscriptionId))
+                .as("a finishing attempt's late, now-stale checkpoint delete must not remove a fresh attempt's own "
+                        + "saved position for the same id")
+                .isNotNull();
+    }
+
+    /**
+     * Copilot review on PR #839 (issue #827), a fourth finding on top of the two already fixed above, the DCB side
+     * of the same gap. Serializing only calls that go through {@code startCatchupAsync} missed {@code subscribe}'s
+     * own direct-to-live branches, which hand the id straight to the live delegate without ever starting a
+     * catch-up. A same-id catch-up still replaying, unaware a live subscribe has already claimed its id, would
+     * still subscribe the delegate itself once its replay finishes, racing the delegate subscribe the direct live
+     * subscribe already made.
+     */
+    @Test
+    void a_live_subscribe_for_the_same_id_supersedes_a_still_replaying_catchups_own_delegate_subscribe() throws Exception {
+        appendTagged("name:1", nameDefined("event1"));
+        String subscriptionId = "subscription";
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+
+        DcbCatchupSubscriptionModel subscription = new DcbCatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")), new CatchupSubscriptionModelConfig(100));
+
+        Subscription staleAttempt = subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // A live subscribe for the same id, bypassing catch-up entirely since StartAt.now() is not a DCB catch-up
+        // position, while the catch-up above is still blocked mid-replay, well before it reaches its own handover
+        // lock.
+        subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+        }).waitUntilStarted();
+
+        releaseReplay.countDown();
+
+        Future<Subscription> staleDelegatedSubscription = ((CatchupSubscription) staleAttempt).delegatedSubscription();
+        assertThat(staleDelegatedSubscription.get(5, TimeUnit.SECONDS))
+                .as("a live subscribe claiming an id while a same-id catch-up is still replaying must cancel that "
+                        + "catch-up's finishing tail instead of leaving it to also subscribe the delegate once its "
+                        + "replay catches up, colliding with the live subscribe that already claimed the same id")
+                .isInstanceOf(CancelledSubscription.class);
+    }
+
     private static void awaitLatch(CountDownLatch latch) {
         try {
             latch.await();
