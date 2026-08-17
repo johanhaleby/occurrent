@@ -252,7 +252,11 @@ class OccurrentPropertiesTest {
 
         private static boolean resolveRestartOnChangeStreamHistoryLost(@Nullable Boolean deprecated, @Nullable Boolean mongodb) {
             SubscriptionProperties properties = new SubscriptionProperties();
-            properties.setRestartOnChangeStreamHistoryLost(deprecated);
+            // setRestartOnChangeStreamHistoryLost(boolean) is primitive, matching the released signature, so "unset"
+            // is represented by not calling it at all rather than by passing it null.
+            if (deprecated != null) {
+                properties.setRestartOnChangeStreamHistoryLost(deprecated);
+            }
             properties.getMongodb().setRestartOnChangeStreamHistoryLost(mongodb);
             return properties.resolveRestartOnChangeStreamHistoryLost();
         }

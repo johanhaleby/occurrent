@@ -407,14 +407,16 @@ public class OccurrentProperties {
         // The released getter/setter shape (isX(): boolean / setX(boolean)) is kept, unlike the two getters above,
         // because this field's original type was already the primitive boolean rather than a String or an enum, and
         // isX() delegating to the resolver preserves both the method name and the non-null primitive return a
-        // pre-existing caller compiled against.
+        // pre-existing caller compiled against. setX(boolean) is safe to keep primitive too: Spring's relaxed binder
+        // only ever calls a setter for a key that is actually present, so "unset" is represented by never calling
+        // it, leaving the field at its unset null default, rather than by passing it a null argument.
         @DeprecatedConfigurationProperty(replacement = "occurrent.subscription.mongodb.restart-on-change-stream-history-lost", reason = "A change stream is a MongoDB concept, and the key now says so.")
         @Deprecated(forRemoval = true)
         public boolean isRestartOnChangeStreamHistoryLost() {
             return resolveRestartOnChangeStreamHistoryLost();
         }
 
-        public void setRestartOnChangeStreamHistoryLost(@Nullable Boolean restartOnChangeStreamHistoryLost) {
+        public void setRestartOnChangeStreamHistoryLost(boolean restartOnChangeStreamHistoryLost) {
             this.restartOnChangeStreamHistoryLost = restartOnChangeStreamHistoryLost;
         }
 
