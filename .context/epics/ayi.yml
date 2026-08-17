@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 6
-updated_at: 2026-08-17T16:38:11Z
+revision: 7
+updated_at: 2026-08-17T16:58:06Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -18,6 +18,14 @@ definition_of_done:
   - "#740 closed at ship; #361 closed as duplicate of #740, never resolved separately"
   - "Memory checkpointed, sessions archived, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
 pending_actions:
+  - id: act-002
+    type: merge
+    target: "PR 843, CAS-pinned to the head U1's final triage push produces (round-2 suppressed findings: 4 fix, 1 reasoned decline per D3 ruling); no further bot round gates it"
+    expected: "PR 843 merged, merged head equals the verified pin, ADR 0132 on main"
+    status: PENDING
+    attempts: 0
+    safe_to_repeat: false
+    issued_at: 2026-08-17T16:58:06Z
   - id: act-001
     type: dispatch-chip
     target: "U1 chip, title ⌁[ayi/U1#740] Write the append-identity ADR · Opus/high"
@@ -57,11 +65,11 @@ units:
     depends_on: []
     session: "uds:/tmp/cc-socks/49695.sock"
     deliverables:
-      - {check: manual_approval, ref: "design gate closed by Johan's explicit word, via the orchestrator", met: false, evidence: null}
+      - {check: manual_approval, ref: "design gate closed by Johan's explicit word, via the orchestrator", met: true, evidence: "AskUserQuestion answer close-merge-on-clean-round, 2026-08-17T16:58:06Z"}
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
     session_note: "chip task_3d94cd63 started; send address uds:/tmp/cc-socks/49695.sock, identity confirmed by the fleet marker in its own message"
-    next_action: "PR 843 delivered; worker owes the Copilot round, thread outcomes, gate-ready message and DELIVERY_RESULT. Expected-progress deadline 2026-08-17T17:23:11Z; past it, read the session tail"
+    next_action: "Design gate CLOSED. U1 running its single final triage pass (4 fixes, 1 decline); on its new head, act-002 merges. Old deadline superseded; new expected-progress deadline 2026-08-17T17:23:11Z; past it, read the session tail"
     last_meaningful_progress_at: 2026-08-17T16:32:31Z
     observed:
       branch: {name: "ayi/u1-adr-append-identity", base: "fa3513939", via: "worker message, marker-confirmed", at: 2026-08-17T16:32:31Z}
