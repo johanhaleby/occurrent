@@ -33,9 +33,6 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.util.Objects;
 import java.util.StringJoiner;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -141,12 +138,13 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     public CatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         // Shared so a same id routed to the stream child on one call and the agnostic child on another (an
-        // AgnosticSubscriptionFilter versus a StreamSubscriptionFilter) still serializes through one handover lock
-        // registry instead of two, even though both children share this same delegate and checkpoint storage.
-        ConcurrentMap<String, ReentrantLock> handoverLocks = new ConcurrentHashMap<>();
-        this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, handoverLocks);
+        // AgnosticSubscriptionFilter versus a StreamSubscriptionFilter) still serializes through one handover, and
+        // both still see the same current owner for that id, even though both children share this same delegate
+        // and checkpoint storage.
+        AbstractCatchupSubscriptionModel.SharedCatchupState sharedState = new AbstractCatchupSubscriptionModel.SharedCatchupState();
+        this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, sharedState);
         this.dcbCatchupSubscriptionModel = null;
-        this.agnosticCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, null, handoverLocks);
+        this.agnosticCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, null, sharedState);
     }
 
     /**
@@ -198,11 +196,11 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         // Shared across all three children. A subscriptionId can route to any one of them on a given call
         // (routesToDcb, or an AgnosticSubscriptionFilter), and a later call for the same id can route to a
-        // different one, so one handover lock registry has to cover all three, not one each.
-        ConcurrentMap<String, ReentrantLock> handoverLocks = new ConcurrentHashMap<>();
-        this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, handoverLocks);
-        this.dcbCatchupSubscriptionModel = new DcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, dcbQuery, config, CatchupSubscriptionModel.class, handoverLocks);
-        this.agnosticCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, null, handoverLocks);
+        // different one, so one handover and one current-owner record has to cover all three, not one each.
+        AbstractCatchupSubscriptionModel.SharedCatchupState sharedState = new AbstractCatchupSubscriptionModel.SharedCatchupState();
+        this.streamCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, sharedState);
+        this.dcbCatchupSubscriptionModel = new DcbCatchupSubscriptionModel(subscriptionModel, dcbEventStore, dcbQuery, config, CatchupSubscriptionModel.class, sharedState);
+        this.agnosticCatchupSubscriptionModel = new StreamCatchupSubscriptionModel(subscriptionModel, eventStoreQueries, config, CatchupSubscriptionModel.class, null, sharedState);
     }
 
     /**

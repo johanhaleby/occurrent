@@ -50,7 +50,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     protected final CheckpointAwareSubscriptionModel subscriptionModel;
     protected final CatchupSubscriptionModelConfig config;
     protected final Class<?> subscriptionModelContextType;
-    protected final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
+    protected final ConcurrentMap<String, Boolean> runningCatchupSubscriptions;
     // Pause requested for a subscriptionId while its replay is still in-flight, before the delegate knows the id.
     // Applied via applyPendingPauseIfAny once the live delegate subscription exists.
     protected final ConcurrentMap<String, Boolean> pauseRequestedDuringCatchup = new ConcurrentHashMap<>();
@@ -64,7 +64,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // later attempt's bookkeeping. CURRENT_ATTEMPT carries the calling attempt's identity across this same call
     // without threading it through every method signature; safe because startCatchupAsync gives each attempt its
     // own dedicated virtual thread, never reused, and clears the value in a finally block.
-    private final ConcurrentMap<String, CatchupAttempt> currentAttempt = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, CatchupAttempt> currentAttempt;
     private static final ThreadLocal<@Nullable CatchupAttempt> CURRENT_ATTEMPT = new ThreadLocal<>();
     // One lock per subscriptionId, guarding a fresh attempt's registration (startCatchupAsync), a finishing
     // attempt's checkpoint cleanup and delegate subscribe (or its cancelled-cleanup branch), and
@@ -74,25 +74,43 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // an in-flight replay, so a long catch-up is never serialized by this lock. Entries are never removed for an id
     // this instance has actually run a catch-up for, since a subscriptionId is application-defined and
     // low-cardinality here, unlike a per-event or per-request key; cancelRunningCatchup never creates one for an id
-    // it has not seen, so an arbitrary or unknown id passed to cancelSubscription costs nothing. Shared across every
-    // child a dual-mode dispatcher constructs, since they route the same id to different children on different
-    // calls but serialize the same delegate and checkpoint storage; a standalone model gets its own, private one.
+    // it has not seen, so an arbitrary or unknown id passed to cancelSubscription costs nothing.
     private final ConcurrentMap<String, ReentrantLock> handoverLocks;
 
     protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
-        this(subscriptionModel, config, subscriptionModelContextType, new ConcurrentHashMap<>());
+        this(subscriptionModel, config, subscriptionModelContextType, new SharedCatchupState());
     }
 
     /**
-     * @param handoverLocks The registry {@link #lockHandover} draws from. A dispatcher over several children that
-     *                      route the same id differently on different calls passes the same registry to each of
-     *                      them; every other caller passes a fresh one, private to this instance.
+     * @param sharedState The per-id registries ({@link #lockHandover}'s locks, {@link #currentAttempt},
+     *                     {@link #runningCatchupSubscriptions}) this instance draws from. A dispatcher over several
+     *                     children that route the same id to a different one of them on different calls passes the
+     *                     same state to every child, so a handover on one child and a fresh registration on another
+     *                     still serialize and still see the same current owner for that id, both of which a
+     *                     registry private to each child cannot give. Every other caller passes a fresh one,
+     *                     private to this instance.
      */
-    protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, ConcurrentMap<String, ReentrantLock> handoverLocks) {
+    protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, SharedCatchupState sharedState) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.config = Objects.requireNonNull(config, "config cannot be null");
         this.subscriptionModelContextType = Objects.requireNonNull(subscriptionModelContextType, "subscriptionModelContextType cannot be null");
-        this.handoverLocks = Objects.requireNonNull(handoverLocks, "handoverLocks cannot be null");
+        Objects.requireNonNull(sharedState, "sharedState cannot be null");
+        this.handoverLocks = sharedState.handoverLocks;
+        this.currentAttempt = sharedState.currentAttempt;
+        this.runningCatchupSubscriptions = sharedState.runningCatchupSubscriptions;
+    }
+
+    /**
+     * The per-id registries {@link #handoverLocks}, {@link #currentAttempt}, and {@link #runningCatchupSubscriptions}
+     * bundled into one unit, so a dispatcher sharing them across its children shares all three together rather than
+     * risking one shared and another forgotten. All three need to move together: the lock alone only keeps two
+     * children's handovers from running at the same instant, it does not stop a stale one, once it finally runs,
+     * from still finding itself "current" in a registry only it can see.
+     */
+    static final class SharedCatchupState {
+        private final ConcurrentMap<String, ReentrantLock> handoverLocks = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, CatchupAttempt> currentAttempt = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
     }
 
     // Reports subscriptionModelContextType (the dispatcher's type when wrapped) so a caller's StartAt.dynamic
