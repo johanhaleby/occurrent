@@ -32,6 +32,19 @@ recipeList:
       propertyKey: occurrent.subscription.enabled
 ---
 type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.DropRedundantSubscriptionEnabled_0_32
+displayName: Drop occurrent.subscription.enabled where occurrent.subscription.mode is already set
+description: >-
+  Composes the .properties and .yaml halves of the guard under the recipe ID this shipped under in 0.32.0, so
+  a file or a user selecting org.occurrent.DropRedundantSubscriptionEnabled_0_32 directly still gets both
+  halves. See org.occurrent.DropRedundantSubscriptionEnabledInProperties_0_32 and
+  org.occurrent.rewrite.DropRedundantSubscriptionEnabledInYaml_0_32 for what each half actually does and why
+  they are no longer one declarative recipe.
+recipeList:
+  - org.occurrent.DropRedundantSubscriptionEnabledInProperties_0_32
+  - org.occurrent.rewrite.DropRedundantSubscriptionEnabledInYaml_0_32
+---
+type: specs.openrewrite.org/v1beta/recipe
 name: org.occurrent.MigrateSubscriptionEnabledFalseInYaml_0_32
 displayName: Migrate occurrent.subscription.enabled=false in yaml
 description: >-
@@ -80,8 +93,7 @@ description: >-
   bind rather than the new key holding one. A value that is neither true nor false, an unresolved placeholder for
   example, is left under the deprecated key, which still works for one more release.
 recipeList:
-  - org.occurrent.DropRedundantSubscriptionEnabledInProperties_0_32
-  - org.occurrent.rewrite.DropRedundantSubscriptionEnabledInYaml_0_32
+  - org.occurrent.DropRedundantSubscriptionEnabled_0_32
   - org.openrewrite.properties.ChangePropertyValue:
       propertyKey: occurrent.subscription.enabled
       oldValue: 'false'
