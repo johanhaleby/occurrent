@@ -17,6 +17,10 @@
 package org.occurrent.eventstore.api.dcb;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.eventstore.api.AppendId;
+
+import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Sequence-position result from a successful DCB append.
@@ -29,9 +33,13 @@ import org.jspecify.annotations.NullMarked;
  * @param firstSequencePosition the first global DCB sequence position assigned to the appended events
  * @param lastSequencePosition the last global DCB sequence position assigned to the appended events
  * @param eventCount the number of events appended
+ * @param appendId the identifier stamped on every appended event. A successful DCB append always persists at least
+ *                 one event, so this is present for any result built through the four-argument constructor; a
+ *                 result built through the three-argument constructor is empty, following {@link AppendId}'s two
+ *                 causes of absence.
  */
 @NullMarked
-public record DcbAppendResult(long firstSequencePosition, long lastSequencePosition, int eventCount) {
+public record DcbAppendResult(long firstSequencePosition, long lastSequencePosition, int eventCount, Optional<AppendId> appendId) {
 
     public DcbAppendResult {
         if (firstSequencePosition <= 0) {
@@ -43,5 +51,13 @@ public record DcbAppendResult(long firstSequencePosition, long lastSequencePosit
         if (eventCount <= 0) {
             throw new IllegalArgumentException("Event count must be greater than zero");
         }
+        Objects.requireNonNull(appendId, "Append id cannot be null");
+    }
+
+    /**
+     * Builds a result with no append id. Use {@link #DcbAppendResult(long, long, int, Optional)} to report one.
+     */
+    public DcbAppendResult(long firstSequencePosition, long lastSequencePosition, int eventCount) {
+        this(firstSequencePosition, lastSequencePosition, eventCount, Optional.empty());
     }
 }

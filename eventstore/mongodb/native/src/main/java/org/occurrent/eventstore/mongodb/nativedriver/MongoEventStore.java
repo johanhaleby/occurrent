@@ -274,34 +274,37 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         } else {
             firstReservedPosition = 0;
         }
+        // Minted once, outside the retry, and reused across attempts like the reserved position block. Absent when
+        // there is nothing to stamp it on, so a call that persists no events reports no append id (ADR 132, decision 4).
+        final Optional<AppendId> appendId = events.isEmpty() ? Optional.empty() : Optional.of(AppendId.mint());
 
         ClientSession ambientSession = ClientSessionHolder.get();
         if (ambientSession != null) {
             // Join the transaction an external executor opened on this thread. The executor owns the session and its
             // commit/abort, so run the write body once directly on the ambient session, without opening a session,
             // starting a transaction, or retrying here.
-            StreamVersionDiff streamVersionDiff = writeInSession(ambientSession, streamId, writeCondition, events, firstReservedPosition);
-            return new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion);
+            StreamVersionDiff streamVersionDiff = writeInSession(ambientSession, streamId, writeCondition, events, firstReservedPosition, appendId);
+            return new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion, appendId);
         }
 
         Supplier<WriteResult> writeEvents = () -> {
             try (ClientSession clientSession = mongoClient.startSession()) {
-                StreamVersionDiff streamVersionDiff = clientSession.withTransaction(() -> writeInSession(clientSession, streamId, writeCondition, events, firstReservedPosition), transactionOptions);
-                return new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion);
+                StreamVersionDiff streamVersionDiff = clientSession.withTransaction(() -> writeInSession(clientSession, streamId, writeCondition, events, firstReservedPosition, appendId), transactionOptions);
+                return new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion, appendId);
             }
         };
 
         return RetryStrategy.retry().retryIf(e -> e instanceof WriteConditionNotFulfilledException && writeCondition.isAnyStreamVersion()).execute(writeEvents);
     }
 
-    private StreamVersionDiff writeInSession(ClientSession clientSession, String streamId, WriteCondition writeCondition, List<CloudEvent> events, long firstReservedPosition) {
+    private StreamVersionDiff writeInSession(ClientSession clientSession, String streamId, WriteCondition writeCondition, List<CloudEvent> events, long firstReservedPosition, Optional<AppendId> appendId) {
         long currentStreamVersion = currentStreamVersion(streamId, clientSession);
 
         if (!isFulfilled(currentStreamVersion, writeCondition)) {
             throw new WriteConditionNotFulfilledException(streamId, currentStreamVersion, writeCondition);
         }
 
-        List<Document> cloudEventDocuments = convertCloudEventsToDocuments(streamId, events.stream(), currentStreamVersion, firstReservedPosition);
+        List<Document> cloudEventDocuments = convertCloudEventsToDocuments(streamId, events.stream(), currentStreamVersion, firstReservedPosition, appendId);
 
         if (cloudEventDocuments.isEmpty()) {
             return StreamVersionDiff.of(currentStreamVersion, currentStreamVersion);
@@ -316,7 +319,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         }
     }
 
-    private List<Document> convertCloudEventsToDocuments(String streamId, Stream<CloudEvent> cloudEvents, long currentStreamVersion, long firstReservedPosition) {
+    private List<Document> convertCloudEventsToDocuments(String streamId, Stream<CloudEvent> cloudEvents, long currentStreamVersion, long firstReservedPosition, Optional<AppendId> appendId) {
         List<Document> documents = mapWithIndex(cloudEvents, currentStreamVersion, pair -> convertToDocument(timeRepresentation, streamId, pair.t1, pair.t2)).toList();
         if (streamPositionEnabled && !documents.isEmpty()) {
             // Stamp the positions reserved outside the transaction (see write(...)). They may have gaps, like the DCB
@@ -325,6 +328,12 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             for (Document document : documents) {
                 PositionDocumentMapper.addPosition(document, position);
                 position++;
+            }
+        }
+        if (appendId.isPresent()) {
+            String appendIdValue = appendId.get().toString();
+            for (Document document : documents) {
+                document.put(OccurrentCloudEventExtension.APPEND_ID, appendIdValue);
             }
         }
         return documents;
@@ -443,23 +452,26 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         // may have gaps (DCB permits this, see ADR 0021).
         long firstPosition = reservePositions(eventsToAppend.size());
         long lastPosition = firstPosition + eventsToAppend.size() - 1;
+        // A DCB append always persists at least one event (validateDcbEvents above refuses an empty list), so this
+        // is minted unconditionally, unlike the stream write path.
+        AppendId appendId = AppendId.mint();
 
         ClientSession ambientSession = ClientSessionHolder.get();
         if (ambientSession != null) {
             // Join the transaction an external executor opened on this thread. The executor owns the session and its
             // commit/abort, so run the append body once directly on the ambient session, without opening a session,
             // starting a transaction, or retrying here.
-            return appendInSession(ambientSession, streamId, eventsToAppend, condition, firstPosition, lastPosition);
+            return appendInSession(ambientSession, streamId, eventsToAppend, condition, firstPosition, lastPosition, appendId);
         }
 
         return executeWithTransientRetry(() -> {
             try (ClientSession clientSession = mongoClient.startSession()) {
-                return clientSession.withTransaction(() -> appendInSession(clientSession, streamId, eventsToAppend, condition, firstPosition, lastPosition), transactionOptions);
+                return clientSession.withTransaction(() -> appendInSession(clientSession, streamId, eventsToAppend, condition, firstPosition, lastPosition, appendId), transactionOptions);
             }
         });
     }
 
-    private DcbAppendResult appendInSession(ClientSession clientSession, String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition) {
+    private DcbAppendResult appendInSession(ClientSession clientSession, String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition, AppendId appendId) {
         long currentStreamVersion = currentStreamVersion(streamId, clientSession);
         if (condition != null) {
             enforceAppendCondition(clientSession, condition, eventsToAppend, lastPosition);
@@ -471,18 +483,21 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             incrementConflictMarkers(clientSession, DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
         }
 
-        List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition);
+        List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition, appendId);
         insertAllDcb(clientSession, streamId, currentStreamVersion, documents);
-        return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size());
+        return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size(), Optional.of(appendId));
     }
 
-    private List<Document> convertDcbCloudEventsToDocuments(String streamId, List<CloudEvent> cloudEvents, long currentStreamVersion, long firstPosition) {
+    private List<Document> convertDcbCloudEventsToDocuments(String streamId, List<CloudEvent> cloudEvents, long currentStreamVersion, long firstPosition, AppendId appendId) {
         List<Document> documents = new ArrayList<>(cloudEvents.size());
         long streamVersion = currentStreamVersion + 1;
         long position = firstPosition;
+        String appendIdValue = appendId.toString();
         for (CloudEvent cloudEvent : cloudEvents) {
             CloudEvent dcbCloudEvent = OccurrentCloudEventExtension.withPosition(cloudEvent, position);
-            documents.add(DcbDocumentMapper.toDocument(timeRepresentation, streamId, streamVersion++, dcbCloudEvent, position));
+            Document document = DcbDocumentMapper.toDocument(timeRepresentation, streamId, streamVersion++, dcbCloudEvent, position);
+            document.put(OccurrentCloudEventExtension.APPEND_ID, appendIdValue);
+            documents.add(document);
             position++;
         }
         return documents;

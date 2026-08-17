@@ -92,6 +92,18 @@ public final class EventMetadata {
     }
 
     /**
+     * The identifier of the write or append call that persisted this event, or {@code null} when the event has none.
+     * Absence has two causes: the event predates this feature, or it arrived through a push feed whose producer
+     * supplied no {@value OccurrentCloudEventExtension#APPEND_ID} extension. Either way, it does not mean the event
+     * was not persisted. A caller in {@code eventstore-api-common} reads this as a typed {@code AppendId} via
+     * {@code AppendId.from(EventMetadata)}.
+     */
+    public @Nullable String getAppendId() {
+        Object value = data.get(OccurrentCloudEventExtension.APPEND_ID);
+        return value == null ? null : value.toString();
+    }
+
+    /**
      * Reads an arbitrary extension {@code key} from the metadata and casts it to {@code T}. The cast is unchecked, so an
      * extension whose stored value is not a {@code T} throws a {@link ClassCastException} at the use site. Prefer the
      * typed accessors ({@link #getStreamId()}, {@link #getStreamVersion()}, {@link #getPosition()}) where they exist.

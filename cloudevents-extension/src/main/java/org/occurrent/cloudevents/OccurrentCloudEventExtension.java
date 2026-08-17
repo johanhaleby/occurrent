@@ -40,6 +40,11 @@ public class OccurrentCloudEventExtension implements CloudEventExtension {
      * CloudEvent extension name that contains an event's global, monotonic, comparable sequence position.
      */
     public static final String POSITION = "position";
+    /**
+     * CloudEvent extension name that contains the identifier of the write or append call that persisted this event.
+     * Every event persisted by the same call carries the same value. See ADR 132.
+     */
+    public static final String APPEND_ID = "appendid";
 
     static final Set<String> KEYS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(STREAM_ID, STREAM_VERSION)));
     private String streamId;
@@ -113,5 +118,23 @@ public class OccurrentCloudEventExtension implements CloudEventExtension {
             return Long.parseLong(string);
         }
         throw new IllegalArgumentException("Position extension must be a Number or String");
+    }
+
+    /**
+     * Returns a copy of {@code cloudEvent} with {@code appendId} in the {@value #APPEND_ID} extension.
+     */
+    public static CloudEvent withAppendId(CloudEvent cloudEvent, String appendId) {
+        requireNonNull(cloudEvent, "CloudEvent cannot be null");
+        requireNonNull(appendId, "Append id cannot be null");
+        return CloudEventBuilder.v1(cloudEvent).withExtension(APPEND_ID, appendId).build();
+    }
+
+    /**
+     * Reads the append id from a CloudEvent, or {@code null} when the event has none.
+     */
+    public static String getAppendId(CloudEvent cloudEvent) {
+        requireNonNull(cloudEvent, "CloudEvent cannot be null");
+        Object appendId = cloudEvent.getExtension(APPEND_ID);
+        return appendId == null ? null : appendId.toString();
     }
 }

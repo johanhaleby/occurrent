@@ -185,13 +185,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             Mono<Long> firstReservedPosition = writesPosition() && !cachedEvents.isEmpty()
                     ? reservePositions(cachedEvents.size())
                     : Mono.just(0L);
+            // A pure local computation, not a store round trip like the position reservation above, so it is minted
+            // directly rather than wrapped in a Mono. Absent when there is nothing to stamp it on, so a call that
+            // persists no events reports no append id (ADR 132, decision 4).
+            Optional<AppendId> appendId = cachedEvents.isEmpty() ? Optional.empty() : Optional.of(AppendId.mint());
             return firstReservedPosition.flatMap(reservedPosition -> {
                 Mono<StreamVersionDiff> operation = currentStreamVersion(streamId)
                         .flatMap(currentStreamVersion -> validateWriteCondition(streamId, writeCondition, currentStreamVersion))
                         .flatMap(currentStreamVersion -> {
                             Flux<Document> documentFlux = convertEventsToMongoDocuments(streamId, Flux.fromIterable(cachedEvents), currentStreamVersion);
                             Mono<StreamVersionDiff> streamVersionDiffFlux = documentFlux.collectList().flatMap(documents -> {
-                                List<Document> stampedDocuments = stampStreamPositions(documents, reservedPosition);
+                                List<Document> stampedDocuments = stampAppendId(stampStreamPositions(documents, reservedPosition), appendId);
                                 final long newStreamVersion;
                                 if (stampedDocuments.isEmpty()) {
                                     newStreamVersion = currentStreamVersion;
@@ -209,7 +213,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                     transaction = retryOnlyWhenThisStoreOwnsTheTransaction(transaction, ANY_STREAM_VERSION_CONFLICT_RETRY);
                 }
                 return transaction
-                        .map(streamVersionDiff -> new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion));
+                        .map(streamVersionDiff -> new WriteResult(streamId, streamVersionDiff.oldStreamVersion, streamVersionDiff.newStreamVersion, appendId));
             });
         });
     }
@@ -340,6 +344,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // outer transaction is already active the operator joins it, so the counter update joins it too and the counter
         // document becomes a conflict point shared by every concurrent append in that transaction. Either way a doomed
         // or condition-failed append abandons its block, so position may have gaps (DCB permits this, see ADR 0021).
+        // A DCB append always persists at least one event (validateDcbEvents above refuses an empty list), so this
+        // is minted unconditionally, unlike the stream write path.
+        AppendId appendId = AppendId.mint();
+
         return reservePositions(eventCount).flatMap(firstPosition -> {
             long lastPosition = firstPosition + eventCount - 1;
             Mono<DcbAppendResult> transaction = transactionalOperator.transactional(
@@ -355,8 +363,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                             conditionAndMarkers = incrementConflictMarkers(DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
                         }
                         return conditionAndMarkers.then(Mono.defer(() -> {
-                            List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition);
-                            return insertAllDcb(streamId, currentStreamVersion, documents).thenReturn(new DcbAppendResult(firstPosition, lastPosition, eventCount));
+                            List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition, appendId);
+                            return insertAllDcb(streamId, currentStreamVersion, documents).thenReturn(new DcbAppendResult(firstPosition, lastPosition, eventCount, Optional.of(appendId)));
                         }));
                     }));
             // The driver does not auto-retry a transient transaction conflict reactively, so retry it here, plus a
@@ -462,13 +470,16 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 .defaultIfEmpty(0L);
     }
 
-    private List<Document> convertDcbCloudEventsToDocuments(String streamId, List<CloudEvent> cloudEvents, long currentStreamVersion, long firstPosition) {
+    private List<Document> convertDcbCloudEventsToDocuments(String streamId, List<CloudEvent> cloudEvents, long currentStreamVersion, long firstPosition, AppendId appendId) {
         List<Document> documents = new ArrayList<>(cloudEvents.size());
         long streamVersion = currentStreamVersion + 1;
         long position = firstPosition;
+        String appendIdValue = appendId.toString();
         for (CloudEvent cloudEvent : cloudEvents) {
             CloudEvent dcbCloudEvent = OccurrentCloudEventExtension.withPosition(cloudEvent, position);
-            documents.add(DcbDocumentMapper.toDocument(timeRepresentation, streamId, streamVersion++, dcbCloudEvent, position));
+            Document document = DcbDocumentMapper.toDocument(timeRepresentation, streamId, streamVersion++, dcbCloudEvent, position);
+            document.put(OccurrentCloudEventExtension.APPEND_ID, appendIdValue);
+            documents.add(document);
             position++;
         }
         return documents;
@@ -1007,6 +1018,19 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         long position = firstReservedPosition;
         for (Document document : documents) {
             PositionDocumentMapper.addPosition(document, position++);
+        }
+        return documents;
+    }
+
+    // Stamps the append id minted for this call (see write(...)) onto every document it persists. A no-op when the
+    // call persisted nothing, since an empty append reports no append id (ADR 132, decision 4).
+    private static List<Document> stampAppendId(List<Document> documents, Optional<AppendId> appendId) {
+        if (documents.isEmpty() || appendId.isEmpty()) {
+            return documents;
+        }
+        String appendIdValue = appendId.get().toString();
+        for (Document document : documents) {
+            document.put(OccurrentCloudEventExtension.APPEND_ID, appendIdValue);
         }
         return documents;
     }

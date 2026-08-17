@@ -186,6 +186,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         requireTrue(writeCondition != null, WriteCondition.class.getSimpleName() + " cannot be null");
         rejectDcbTaggedEvents(events);
         Stream<CloudEvent> cloudEventStream = events.stream().peek(e -> requireTrue(e.getSpecVersion() == SpecVersion.V1, "Spec version needs to be " + SpecVersion.V1));
+        // Minted once for the whole call, and only when there is something to stamp it on, so a call that persists
+        // no events reports no append id (ADR 132, decision 4).
+        final Optional<AppendId> appendId = events.isEmpty() ? Optional.empty() : Optional.of(AppendId.mint());
 
         final AtomicReference<@Nullable List<CloudEvent>> newCloudEvents = new AtomicReference<>();
         final AtomicLong currentStreamVersionContainer = new AtomicLong();
@@ -195,14 +198,14 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                 currentStreamVersionContainer.set(currentStreamVersion);
 
                 if (currentEvents == null && isConditionFulfilledBy(writeCondition, 0)) {
-                    List<CloudEvent> cloudEvents = applyStreamWriteExtensions(cloudEventStream, streamId, 0);
+                    List<CloudEvent> cloudEvents = applyStreamWriteExtensions(cloudEventStream, streamId, 0, appendId);
                     newCloudEvents.set(cloudEvents);
                     validateNoDuplicateEventExists(cloudEvents);
                     assignInsertionOrder(cloudEvents);
                     return new CopyOnWriteArrayList<>(cloudEvents);
                 } else if (currentEvents != null && isConditionFulfilledBy(writeCondition, currentStreamVersion)) {
                     List<CloudEvent> eventList = new ArrayList<>(currentEvents);
-                    List<CloudEvent> newEvents = applyStreamWriteExtensions(cloudEventStream, streamId, currentStreamVersion);
+                    List<CloudEvent> newEvents = applyStreamWriteExtensions(cloudEventStream, streamId, currentStreamVersion, appendId);
                     eventList.addAll(newEvents);
                     validateNoDuplicateEventExists(eventList);
                     newCloudEvents.set(newEvents);
@@ -221,9 +224,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             listener.accept(addedEvents);
             CloudEvent cloudEvent = addedEvents.getLast();
             long newStreamVersion = OccurrentExtensionGetter.getStreamVersion(cloudEvent);
-            writeResult = new WriteResult(streamId, oldStreamVersion, newStreamVersion);
+            writeResult = new WriteResult(streamId, oldStreamVersion, newStreamVersion, appendId);
         } else {
-            writeResult = new WriteResult(streamId, oldStreamVersion, oldStreamVersion);
+            writeResult = new WriteResult(streamId, oldStreamVersion, oldStreamVersion, Optional.empty());
         }
 
         return writeResult;
@@ -241,9 +244,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
     // Call from inside the "state.compute" critical section so positions come from the same nextPosition
     // counter, under the same lock, that DCB uses, keeping stream and DCB writes on one shared sequence.
-    private List<CloudEvent> applyStreamWriteExtensions(Stream<CloudEvent> events, String streamId, long streamVersion) {
+    private List<CloudEvent> applyStreamWriteExtensions(Stream<CloudEvent> events, String streamId, long streamVersion, Optional<AppendId> appendId) {
         List<CloudEvent> withStreamMetadata = zip(LongStream.iterate(streamVersion + 1, i -> i + 1).boxed(), events, Pair::new)
                 .map(pair -> modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId, pair.t1))).apply(pair.t2))
+                .map(event -> stampAppendId(event, appendId))
                 .collect(Collectors.toList());
         if (!streamPositionEnabled || withStreamMetadata.isEmpty()) {
             return withStreamMetadata;
@@ -253,6 +257,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             withPosition.add(OccurrentCloudEventExtension.withPosition(event, nextPosition.getAndIncrement()));
         }
         return withPosition;
+    }
+
+    private static CloudEvent stampAppendId(CloudEvent event, Optional<AppendId> appendId) {
+        return appendId.isEmpty() ? event : OccurrentCloudEventExtension.withAppendId(event, appendId.get().toString());
     }
 
     // Must run inside the "state.compute" critical section so sequence numbers reflect the serialized
@@ -271,12 +279,13 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         return cloudEventId + cloudEventSource;
     }
 
-    private static List<CloudEvent> applyPositionAndOccurrentMetadata(Stream<CloudEvent> events, String streamId, long streamVersion, long startPosition) {
+    private static List<CloudEvent> applyPositionAndOccurrentMetadata(Stream<CloudEvent> events, String streamId, long streamVersion, long startPosition, AppendId appendId) {
         AtomicLong streamVersionCounter = new AtomicLong(streamVersion + 1);
         AtomicLong positionCounter = new AtomicLong(startPosition);
         return events
                 .map(event -> OccurrentCloudEventExtension.withPosition(event, positionCounter.getAndIncrement()))
                 .map(event -> modifyCloudEvent(e -> e.withExtension(new OccurrentCloudEventExtension(streamId, streamVersionCounter.getAndIncrement()))).apply(event))
+                .map(event -> OccurrentCloudEventExtension.withAppendId(event, appendId.toString()))
                 .collect(Collectors.toList());
     }
 
@@ -375,6 +384,9 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
         Set<Tag> placementTags = conditionTags.isEmpty() ? tagsOf(eventsToAppend) : conditionTags;
         String streamId = requireNonNull(dcbStreamIdGenerator.generateStreamId(placementTags), "DcbStreamIdGenerator returned a null stream id");
 
+        // A DCB append always persists at least one event (validateDcbEvents refuses an empty list above), so
+        // this is minted unconditionally, unlike the stream write path.
+        AppendId appendId = AppendId.mint();
         List<CloudEvent> addedEvents;
         DcbAppendResult result;
         synchronized (state) {
@@ -393,7 +405,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
 
             CopyOnWriteArrayList<CloudEvent> currentEvents = state.get(streamId);
             long currentStreamVersion = calculateStreamVersion(currentEvents);
-            addedEvents = applyPositionAndOccurrentMetadata(eventsToAppend.stream(), streamId, currentStreamVersion, nextPosition.get());
+            addedEvents = applyPositionAndOccurrentMetadata(eventsToAppend.stream(), streamId, currentStreamVersion, nextPosition.get(), appendId);
 
             List<CloudEvent> eventList = currentEvents == null ? new ArrayList<>() : new ArrayList<>(currentEvents);
             eventList.addAll(addedEvents);
@@ -405,7 +417,7 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
             nextPosition.addAndGet(addedEvents.size());
             long firstPosition = position(addedEvents.getFirst());
             long lastPosition = position(addedEvents.getLast());
-            result = new DcbAppendResult(firstPosition, lastPosition, addedEvents.size());
+            result = new DcbAppendResult(firstPosition, lastPosition, addedEvents.size(), Optional.of(appendId));
         }
 
         listener.accept(addedEvents);

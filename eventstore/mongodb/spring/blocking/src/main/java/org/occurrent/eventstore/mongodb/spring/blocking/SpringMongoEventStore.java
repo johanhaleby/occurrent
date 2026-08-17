@@ -169,6 +169,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         } else {
             firstReservedPosition = 0;
         }
+        // Minted once, outside the retry, and reused across attempts like the reserved position block. Absent when
+        // there is nothing to stamp it on, so a call that persists no events reports no append id (ADR 132, decision 4).
+        final Optional<AppendId> appendId = events.isEmpty() ? Optional.empty() : Optional.of(AppendId.mint());
 
         TransactionCallback<StreamVersionDiff> writeLogic = transactionStatus -> {
             long currentStreamVersion = currentStreamVersion(streamId);
@@ -190,6 +193,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                         position++;
                     }
                 }
+                appendId.ifPresent(id -> {
+                    String appendIdValue = id.toString();
+                    for (Document document : cloudEventDocuments) {
+                        document.put(OccurrentCloudEventExtension.APPEND_ID, appendIdValue);
+                    }
+                });
                 insertAll(streamId, currentStreamVersion, writeCondition, cloudEventDocuments);
                 newStreamVersion = cloudEventDocuments.getLast().getLong(STREAM_VERSION);
             } else {
@@ -204,7 +213,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         StreamVersionDiff streamVersion = retryOnlyWhenThisStoreOwnsTheTransaction(
                 RetryStrategy.retry().retryIf(e -> e instanceof WriteConditionNotFulfilledException && writeCondition.isAnyStreamVersion()),
                 () -> transactionTemplate.execute(writeLogic));
-        return new WriteResult(streamId, streamVersion.oldStreamVersion, streamVersion.newStreamVersion);
+        return new WriteResult(streamId, streamVersion.oldStreamVersion, streamVersion.newStreamVersion, appendId);
     }
 
     @Override
@@ -396,9 +405,12 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         // ADR 0021).
         long firstPosition = reservePositions(eventsToAppend.size());
         long lastPosition = firstPosition + eventsToAppend.size() - 1;
+        // A DCB append always persists at least one event (validateDcbEvents above refuses an empty list), so this
+        // is minted unconditionally, unlike the stream write path.
+        AppendId appendId = AppendId.mint();
 
         return retryOnlyWhenThisStoreOwnsTheTransaction(TRANSIENT_CONFLICT_RETRY,
-                () -> appendDcbInTransaction(streamId, eventsToAppend, condition, firstPosition, lastPosition));
+                () -> appendDcbInTransaction(streamId, eventsToAppend, condition, firstPosition, lastPosition, appendId));
     }
 
     /**
@@ -412,7 +424,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return TransactionSynchronizationManager.isActualTransactionActive() ? action.get() : retry.execute(action);
     }
 
-    private DcbAppendResult appendDcbInTransaction(String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition) {
+    private DcbAppendResult appendDcbInTransaction(String streamId, List<CloudEvent> eventsToAppend, @Nullable DcbAppendCondition condition, long firstPosition, long lastPosition, AppendId appendId) {
         return requireNonNull(transactionTemplate.execute(transactionStatus -> {
             long currentStreamVersion = currentStreamVersion(streamId);
             if (condition != null) {
@@ -425,9 +437,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 incrementConflictMarkers(DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
             }
 
-            List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition);
+            List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition, appendId);
             insertAllDcb(streamId, currentStreamVersion, documents);
-            return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size());
+            return new DcbAppendResult(firstPosition, lastPosition, eventsToAppend.size(), Optional.of(appendId));
         }));
     }
 
@@ -479,13 +491,16 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         return false;
     }
 
-    private List<Document> convertDcbCloudEventsToDocuments(String streamId, List<CloudEvent> cloudEvents, long currentStreamVersion, long firstPosition) {
+    private List<Document> convertDcbCloudEventsToDocuments(String streamId, List<CloudEvent> cloudEvents, long currentStreamVersion, long firstPosition, AppendId appendId) {
         List<Document> documents = new ArrayList<>(cloudEvents.size());
         long streamVersion = currentStreamVersion + 1;
         long position = firstPosition;
+        String appendIdValue = appendId.toString();
         for (CloudEvent cloudEvent : cloudEvents) {
             CloudEvent dcbCloudEvent = OccurrentCloudEventExtension.withPosition(cloudEvent, position);
-            documents.add(DcbDocumentMapper.toDocument(timeRepresentation, streamId, streamVersion++, dcbCloudEvent, position));
+            Document document = DcbDocumentMapper.toDocument(timeRepresentation, streamId, streamVersion++, dcbCloudEvent, position);
+            document.put(OccurrentCloudEventExtension.APPEND_ID, appendIdValue);
+            documents.add(document);
             position++;
         }
         return documents;
