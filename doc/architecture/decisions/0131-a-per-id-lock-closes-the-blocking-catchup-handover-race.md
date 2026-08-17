@@ -30,6 +30,13 @@ branch). Nothing held ownership across that tail, so two different things could 
 Both come from the same structural gap. The identity check covers the map entry, not every id-scoped side effect
 after it.
 
+A third manifestation surfaced in a later round of PR 839's Copilot review. `subscribe` has several
+direct-to-live branches, a resolved start that needs no replay, a `StartAt.dynamic` telling this model not to run, a
+position this model does not own. Every one of them hands `subscriptionId` straight to the delegate without ever
+calling `startCatchupAsync`, so none of them ever touch the lock at all. A same-id catch-up still replaying when
+one of these branches ran would, once its own replay finished, still find itself the registered owner and go ahead
+with its own delegate `subscribe` call, racing the direct live subscribe's.
+
 The reactor catch-up models (`ReactorStreamCatchupSubscriptionModel`, `ReactorDcbCatchupSubscriptionModel`, both via
 shared `NamedCatchupSupport`) do not have this gap. `NamedCatchupSupport.handOver` holds `synchronized (state)`
 across the whole span, from the ownership check through the delegate `subscribe` call, and `cancelSubscription`
@@ -68,6 +75,15 @@ impossible together instead of independently patched:
   completed, and then the outer `cancelSubscription`'s call to the delegate genuinely cancels what just went live.
 - A fresh attempt's registration cannot begin until a still-finishing attempt for the same id has fully released
   the lock, checkpoint cleanup included, so a fresh attempt can never write anything for a stale delete to race.
+- Every direct-to-live branch of `subscribe`, in both mode-specific classes, now calls `cancelRunningCatchup`
+  immediately before handing off to the delegate, through a small `subscribeLiveWithoutCatchup` helper in each
+  class. A live subscribe racing a still-replaying catch-up for the same id now either cancels that catch-up before
+  its finishing tail runs, so the catch-up never reaches its own delegate `subscribe` call, or, when the catch-up's
+  finishing tail has already fully released the lock by the time the live subscribe's own cancel call acquires it,
+  the live subscribe's delegate `subscribe` call fails with the delegate's own duplicate-id error instead of the two
+  subscriptions silently corrupting shared checkpoint storage between them. A live subscribe has no delegate-level
+  cancel step of its own to fall back on the way `cancelSubscription` does, so that second case fails loudly rather
+  than resolving the collision.
 
 A `ReentrantLock`, not `synchronized`, because a handover span can call into storage or the delegate, and every
 caller here runs on the dedicated virtual thread `startCatchupAsync` starts for each attempt. Blocking inside a

@@ -646,6 +646,44 @@ class StreamCatchupSubscriptionModelTest {
     }
 
     /**
+     * Copilot review on PR #839 (issue #827), a fourth finding on top of the two already fixed above. Both of those
+     * only serialize a call that goes through {@code startCatchupAsync}, but several branches of {@code subscribe}
+     * hand the id straight to the live delegate without ever starting a catch-up, bypassing the handover lock
+     * entirely. A same-id catch-up still replaying, unaware a live subscribe has already claimed its id, would
+     * still subscribe the delegate itself once its replay finishes, racing the delegate subscribe the direct live
+     * subscribe already made.
+     */
+    @Test
+    void a_live_subscribe_for_the_same_id_supersedes_a_still_replaying_catchups_own_delegate_subscribe() throws Exception {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        String subscriptionId = "subscription";
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+
+        CatchupSubscription staleAttempt = (CatchupSubscription) subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // A live subscribe for the same id, classified LIVE by StartAt.now() so it bypasses catch-up entirely,
+        // while the catch-up above is still blocked mid-replay, well before it reaches its own handover lock.
+        subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+        }).waitUntilStarted();
+
+        releaseReplay.countDown();
+
+        assertThat(staleAttempt.delegatedSubscription().get(5, TimeUnit.SECONDS))
+                .as("a live subscribe claiming an id while a same-id catch-up is still replaying must cancel that "
+                        + "catch-up's finishing tail instead of leaving it to also subscribe the delegate once its "
+                        + "replay catches up, colliding with the live subscribe that already claimed the same id")
+                .isInstanceOf(CancelledSubscription.class);
+    }
+
+    /**
      * Copilot review on PR #839 (issue #827). cancelSubscription's own path used to always acquire the handover
      * lock, creating one for any id passed to it, including one this model never ran a catch-up for. A dual-mode
      * dispatcher calls cancelSubscription on every child for every cancellation regardless of which one, if any,

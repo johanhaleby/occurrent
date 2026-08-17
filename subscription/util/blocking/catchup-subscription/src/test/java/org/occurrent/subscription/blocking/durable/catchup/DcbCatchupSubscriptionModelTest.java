@@ -412,6 +412,45 @@ class DcbCatchupSubscriptionModelTest {
                 .isNotNull();
     }
 
+    /**
+     * Copilot review on PR #839 (issue #827), a fourth finding on top of the two already fixed above, the DCB side
+     * of the same gap. Serializing only calls that go through {@code startCatchupAsync} missed {@code subscribe}'s
+     * own direct-to-live branches, which hand the id straight to the live delegate without ever starting a
+     * catch-up. A same-id catch-up still replaying, unaware a live subscribe has already claimed its id, would
+     * still subscribe the delegate itself once its replay finishes, racing the delegate subscribe the direct live
+     * subscribe already made.
+     */
+    @Test
+    void a_live_subscribe_for_the_same_id_supersedes_a_still_replaying_catchups_own_delegate_subscribe() throws Exception {
+        appendTagged("name:1", nameDefined("event1"));
+        String subscriptionId = "subscription";
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+
+        DcbCatchupSubscriptionModel subscription = new DcbCatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")), new CatchupSubscriptionModelConfig(100));
+
+        Subscription staleAttempt = subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayReached.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // A live subscribe for the same id, bypassing catch-up entirely since StartAt.now() is not a DCB catch-up
+        // position, while the catch-up above is still blocked mid-replay, well before it reaches its own handover
+        // lock.
+        subscription.subscribe(subscriptionId, StartAt.now(), cloudEvent -> {
+        }).waitUntilStarted();
+
+        releaseReplay.countDown();
+
+        Future<Subscription> staleDelegatedSubscription = ((CatchupSubscription) staleAttempt).delegatedSubscription();
+        assertThat(staleDelegatedSubscription.get(5, TimeUnit.SECONDS))
+                .as("a live subscribe claiming an id while a same-id catch-up is still replaying must cancel that "
+                        + "catch-up's finishing tail instead of leaving it to also subscribe the delegate once its "
+                        + "replay catches up, colliding with the live subscribe that already claimed the same id")
+                .isInstanceOf(CancelledSubscription.class);
+    }
+
     private static void awaitLatch(CountDownLatch latch) {
         try {
             latch.await();

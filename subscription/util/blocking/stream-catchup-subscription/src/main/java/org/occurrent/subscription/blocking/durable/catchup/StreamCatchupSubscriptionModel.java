@@ -164,12 +164,12 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             if (checkpoint == null) {
                 // Resumed straight to live without a catch-up phase, so scope the delegated subscription the same way
                 // the handover would, keeping DCB events out.
-                return getWrappedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAt, action);
+                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), startAt, action);
             } else if (positionMode && isTimeBasedCheckpoint(checkpoint)) {
                 // The store now writes position, but this stored token predates that and is time-based. Reading it as a
                 // position would misinterpret a timestamp or replay from an unrelated cursor, so re-resolve to the
                 // model default instead.
-                return getWrappedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), StartAt.subscriptionModelDefault(), action);
+                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), StartAt.subscriptionModelDefault(), action);
             } else {
                 firstStartAt = StartAt.checkpoint(checkpoint);
             }
@@ -177,7 +177,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
                 // Not allowed to start this subscription model, defer to parent
-                return getWrappedSubscriptionModel().subscribe(subscriptionId, withCapabilityScope(filter), startAt, action);
+                return subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), startAt, action);
             } else {
                 firstStartAt = startAtGeneratedByDynamic;
             }
@@ -194,13 +194,25 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 // A specific wall-clock time has no position to map to, so replay it through the legacy time-based
                 // catch-up even on a position store.
                 case SPECIFIC_TIME -> streamTimeCatchup(subscriptionId, filter, startAt, action, firstStartAt);
-                case LIVE -> subscriptionModel.subscribe(subscriptionId, withCapabilityScope(filter), firstStartAt, action);
+                case LIVE -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), firstStartAt, action);
             };
         }
         return switch (streamStart) {
             case BEGINNING_OF_TIME, SPECIFIC_TIME -> streamTimeCatchup(subscriptionId, filter, startAt, action, firstStartAt);
-            case GLOBAL_POSITION, LIVE -> subscriptionModel.subscribe(subscriptionId, withCapabilityScope(filter), firstStartAt, action);
+            case GLOBAL_POSITION, LIVE -> subscribeLiveWithoutCatchup(subscriptionId, withCapabilityScope(filter), firstStartAt, action);
         };
+    }
+
+    /**
+     * Hands {@code subscriptionId} straight to the live delegate, without a catch-up phase. Cancels any catch-up
+     * already running for this id first, under the same per-id lock as a finishing attempt's own handover, so that
+     * attempt is told it has been superseded instead of also subscribing the delegate for the id this call just
+     * claimed. Distinct from the delegate subscribe call inside a finishing attempt's own handover, which has
+     * already gone through that lock and that decision and must not cancel itself.
+     */
+    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, StreamSubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        cancelRunningCatchup(subscriptionId);
+        return getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
     }
 
     // Resolved start kinds for a stream subscription. Classifying once keeps the routing above an exhaustive switch,

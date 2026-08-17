@@ -95,14 +95,14 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             // Resume from the stored position if there is one, otherwise subscribe live (with the DCB query post-filter).
             Checkpoint checkpoint = returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> cfg.storage().read(subscriptionId)).orElse(null);
             if (checkpoint == null) {
-                return startLiveDcbSubscription(subscriptionId, filter, startAt, action, null);
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action);
             } else {
                 firstStartAt = StartAt.checkpoint(checkpoint);
             }
         } else if (startAt.isDynamic()) {
             StartAt startAtGeneratedByDynamic = startAt.get(generateSubscriptionModelContext());
             if (startAtGeneratedByDynamic == null) {
-                return startLiveDcbSubscription(subscriptionId, filter, startAt, action, null);
+                return subscribeLiveWithoutCatchup(subscriptionId, filter, startAt, action);
             } else {
                 firstStartAt = startAtGeneratedByDynamic;
             }
@@ -113,7 +113,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         // A non-DCB position means the catch-up already handed over and the live subscription stored a change-stream
         // token (or the caller asked to start live directly). Subscribe live, still applying the DCB query post-filter.
         if (!isDcbCatchupPosition(firstStartAt)) {
-            return startLiveDcbSubscription(subscriptionId, filter, firstStartAt, action, null);
+            return subscribeLiveWithoutCatchup(subscriptionId, filter, firstStartAt, action);
         }
 
         Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId, () -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
@@ -122,6 +122,18 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
 
     private Subscription startLiveDcbSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAtToUse, Consumer<CloudEvent> action, @Nullable BoundedIdCache cache) {
         return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, dcbLiveConsumer(action, cache));
+    }
+
+    /**
+     * Hands {@code subscriptionId} straight to the live delegate, without a catch-up phase. Cancels any catch-up
+     * already running for this id first, under the same per-id lock as a finishing attempt's own handover, so that
+     * attempt is told it has been superseded instead of also subscribing the delegate for the id this call just
+     * claimed. Distinct from {@link #startLiveDcbSubscription}'s own use inside a finishing attempt's handover,
+     * which has already gone through that lock and that decision and must not cancel itself.
+     */
+    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        cancelRunningCatchup(subscriptionId);
+        return startLiveDcbSubscription(subscriptionId, filter, startAt, action, null);
     }
 
     private Consumer<CloudEvent> dcbLiveConsumer(Consumer<CloudEvent> action, @Nullable BoundedIdCache cache) {
