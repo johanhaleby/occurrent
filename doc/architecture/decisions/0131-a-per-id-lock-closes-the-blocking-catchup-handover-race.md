@@ -74,10 +74,27 @@ caller here runs on the dedicated virtual thread `startCatchupAsync` starts for 
 `synchronized` block pins the underlying platform thread for as long as the virtual thread is blocked, so no other
 virtual thread can use that platform thread meanwhile. A plain lock does not have this effect.
 
-The lock registry never evicts entries. A `subscriptionId` is application-defined and low-cardinality in every
-documented usage of this model, unlike a per-event or per-request key, so the registry's own slow, unbounded growth
-over a model's lifetime is the cheaper trade against a reference-counted eviction scheme built for a key space that
-does not need it here.
+The registry is a constructor parameter, not a field this class always creates for itself, so a dispatcher over
+several children can pass the same one to each of them. `CatchupSubscriptionModel`'s dual-mode dispatcher does
+exactly that. It constructs a separate `StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel` instance
+that share the same delegate and checkpoint storage, and routes a `subscriptionId` to whichever of them fits a
+given call's filter and start position. A same id can route to a different child on a later call (a
+`DcbSubscriptionFilter` on one call, a `StreamSubscriptionFilter` on the next), so a lock registry private to each
+child would not serialize a handover on one against a fresh registration on the other, reopening the same race
+across the dispatcher's own routing. Every other constructor, including a standalone `StreamCatchupSubscriptionModel`
+or `DcbCatchupSubscriptionModel` used directly, still gets its own private registry by default.
+
+The registry never evicts entries for an id this instance has actually run a catch-up for. A `subscriptionId` is
+application-defined and low-cardinality in every documented usage of this model, unlike a per-event or per-request
+key, so the registry's own slow growth over a model's lifetime is the cheaper trade against a reference-counted
+eviction scheme built for a key space that does not need it here. `cancelRunningCatchup` does not reserve an entry
+for an id it has never seen, though. It looks up the registry without creating one, and only acquires a lock when it
+finds one already there. Registration is the only place that ever creates an entry, and it always creates the lock
+before the matching `currentAttempt` entry, so a missing lock proves nothing has ever been registered for that id
+and there is nothing for cancellation to coordinate with. Without this, a caller passing an arbitrary or
+tenant-scoped id straight to `cancelSubscription`, a pattern the public API does not forbid, would grow the registry
+for ids that were never real subscriptions at all, and a dual-mode dispatcher calls this cancel path on every child
+for every cancellation regardless of which one, if any, actually owns the id.
 
 ## Consequences
 
@@ -85,9 +102,14 @@ Both manifestations are closed by one mechanism instead of three independent poi
 what `NamedCatchupSupport` already proves works for the reactor side, a per-attempt critical section spanning the
 decision and its delegate handoff, adapted to a lock a virtual thread can safely block on.
 
-The lock registry grows for the life of a model instance, one entry per distinct `subscriptionId` it has ever run a
-catch-up for, never reclaimed. Acceptable for the documented cardinality, but it would need revisiting if a caller
-ever minted `subscriptionId` values per request or per event rather than per named subscription.
+The lock registry grows for the life of a model instance, one entry per distinct `subscriptionId` it has ever
+actually run a catch-up for, never reclaimed. A dual-mode dispatcher's three children now share one registry
+instead of three, so the total entry count tracks the number of distinct ids the dispatcher has actually routed a
+catch-up for, not that count multiplied by how many of its children have separately handled the same id over time.
+Acceptable for the documented cardinality, but it would need revisiting if a caller ever minted `subscriptionId`
+values per request or per event rather than per named subscription.
+`cancelSubscription` on an id nobody ever subscribed costs nothing toward this growth, however many children a
+dispatcher calls it on, since none of them create an entry for an id they have not seen.
 
 A `cancelSubscription` call for an id whose finishing tail is in flight now blocks for that tail's duration
 (identity decision, optional checkpoint delete, delegate `subscribe`) instead of returning immediately with a

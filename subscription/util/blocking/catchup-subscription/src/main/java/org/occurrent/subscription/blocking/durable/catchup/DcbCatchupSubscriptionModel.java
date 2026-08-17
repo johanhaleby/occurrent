@@ -38,7 +38,10 @@ import org.occurrent.subscription.internal.BoundedIdCache;
 
 import java.util.Objects;
 import java.util.StringJoiner;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Future;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -71,7 +74,17 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
      *                                      keeps working regardless of which mode-specific class runs the catch-up.
      */
     public DcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbCriteria dcbQuery, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
-        super(subscriptionModel, config, subscriptionModelContextType);
+        this(subscriptionModel, dcbEventStore, dcbQuery, config, subscriptionModelContextType, new ConcurrentHashMap<>());
+    }
+
+    /**
+     * @param handoverLocks Passed straight to {@link AbstractCatchupSubscriptionModel}. The {@code CatchupSubscriptionModel}
+     *                       dispatcher passes the same registry to every child it constructs, so a same-id attempt
+     *                       routed to a different child on a later call still serializes with this one; every other
+     *                       caller gets a fresh, private registry through the other constructors.
+     */
+    DcbCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, DcbEventStore dcbEventStore, DcbCriteria dcbQuery, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, ConcurrentMap<String, ReentrantLock> handoverLocks) {
+        super(subscriptionModel, config, subscriptionModelContextType, handoverLocks);
         this.dcbEventStore = Objects.requireNonNull(dcbEventStore, "dcbEventStore cannot be null");
         this.dcbQuery = Objects.requireNonNull(dcbQuery, "dcbQuery cannot be null");
     }

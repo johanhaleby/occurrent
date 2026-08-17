@@ -551,9 +551,9 @@ class StreamCatchupSubscriptionModelTest {
                 }).waitUntilStarted();
             } catch (RuntimeException ignored) {
                 // The stale attempt above also subscribes the delegate unconditionally once its own handover
-                // decides it is still current, even though its own StartAt resolved to null for the delegate; the
-                // two attempts' delegate subscribe calls can then collide on the in-memory model's duplicate-id
-                // check. Immaterial here: this test only cares whether the fresh attempt's own checkpoint save
+                // decides it is still current, even though its own StartAt resolved to null for the delegate, so
+                // the two attempts' delegate subscribe calls can then collide on the in-memory model's duplicate-id
+                // check. Immaterial here, this test only cares whether the fresh attempt's own checkpoint save
                 // (asserted below) survives, and that save runs before this call, not after it.
             }
         });
@@ -579,8 +579,8 @@ class StreamCatchupSubscriptionModelTest {
 
     /**
      * Same race as {@link #a_finishing_attempts_late_checkpoint_delete_does_not_clobber_a_fresh_attempts_saved_position()},
-     * for the position-ordered catch-up path instead of the time-ordered one: a separate finishing tail in
-     * {@code StreamCatchupSubscriptionModel} with its own checkpoint-delete call, deferred from PR 823 alongside the
+     * for the position-ordered catch-up path instead of the time-ordered one. A separate finishing tail in
+     * {@code StreamCatchupSubscriptionModel} has its own checkpoint-delete call, deferred from PR 823 alongside the
      * time-based one at what was then line 409 of the same file.
      */
     @Test
@@ -643,6 +643,30 @@ class StreamCatchupSubscriptionModelTest {
                 .as("a finishing attempt's late, now-stale checkpoint delete must not remove a fresh attempt's own "
                         + "saved position for the same id")
                 .isNotNull();
+    }
+
+    /**
+     * Copilot review on PR #839 (issue #827). cancelSubscription's own path used to always acquire the handover
+     * lock, creating one for any id passed to it, including one this model never ran a catch-up for. A dual-mode
+     * dispatcher calls cancelSubscription on every child for every cancellation regardless of which one, if any,
+     * actually owns the id, so a caller passing arbitrary or tenant-scoped ids would grow this registry without
+     * bound even faster than a real subscribe() ever would.
+     */
+    @Test
+    void cancelling_an_id_this_model_never_ran_a_catch_up_for_does_not_create_a_handover_lock_for_it() throws Exception {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+        String neverSubscribedId = "an-id-this-model-never-saw";
+
+        subscription.cancelSubscription(neverSubscribedId);
+
+        Field handoverLocksField = AbstractCatchupSubscriptionModel.class.getDeclaredField("handoverLocks");
+        handoverLocksField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> handoverLocks = (Map<String, Object>) handoverLocksField.get(subscription);
+        assertThat(handoverLocks)
+                .as("cancelling an id this model never ran a catch-up for must not reserve a lock for it")
+                .doesNotContainKey(neverSubscribedId);
     }
 
     @Test

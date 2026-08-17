@@ -38,7 +38,10 @@ import org.occurrent.subscription.internal.BoundedIdCache;
 
 import java.time.OffsetDateTime;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Future;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -93,13 +96,32 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     }
 
     /**
+     * @param handoverLocks Passed straight to {@link AbstractCatchupSubscriptionModel}, with the stream capability
+     *                       scope. Lets {@code CatchupSubscriptionModel} share one registry with this instance
+     *                       without reaching {@link #STREAM_CAPABILITY_FILTER}, which is private to this class.
+     */
+    StreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, ConcurrentMap<String, ReentrantLock> handoverLocks) {
+        this(subscriptionModel, eventStoreQueries, config, subscriptionModelContextType, STREAM_CAPABILITY_FILTER, handoverLocks);
+    }
+
+    /**
      * @param capabilityScope The capability {@link Filter} ANDed into every catch-up read and every live handover.
      *                        Pass {@link #STREAM_CAPABILITY_FILTER} for a stream subscription, or {@code null} for a
      *                        capability-agnostic subscription that delivers events of every capability, filtered only by
      *                        the caller's plain {@link Filter}.
      */
     StreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, @Nullable Filter capabilityScope) {
-        super(subscriptionModel, config, subscriptionModelContextType);
+        this(subscriptionModel, eventStoreQueries, config, subscriptionModelContextType, capabilityScope, new ConcurrentHashMap<>());
+    }
+
+    /**
+     * @param handoverLocks Passed straight to {@link AbstractCatchupSubscriptionModel}. The {@code CatchupSubscriptionModel}
+     *                       dispatcher passes the same registry to every child it constructs, so a same-id attempt
+     *                       routed to a different child on a later call still serializes with this one; every other
+     *                       caller gets a fresh, private registry through the other constructors.
+     */
+    StreamCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, EventStoreQueries eventStoreQueries, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, @Nullable Filter capabilityScope, ConcurrentMap<String, ReentrantLock> handoverLocks) {
+        super(subscriptionModel, config, subscriptionModelContextType, handoverLocks);
         this.eventStoreQueries = Objects.requireNonNull(eventStoreQueries, "eventStoreQueries cannot be null");
         this.capabilityScope = capabilityScope;
     }

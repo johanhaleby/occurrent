@@ -31,6 +31,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.Subscription;
 
+import java.lang.reflect.Field;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -87,6 +88,38 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
         dualMode.start(true);
 
         assertThat(delegate.startCount()).isEqualTo(1);
+    }
+
+    /**
+     * Copilot review on PR #839 (issue #827). The three children a dual-mode dispatcher constructs share a live
+     * delegate and checkpoint storage, but each is its own {@code AbstractCatchupSubscriptionModel} instance, so
+     * without deliberately sharing the handover lock registry between them, an id routed to the stream child on one
+     * call and the DCB child on the next would serialize against neither. Reflection is the only way to observe
+     * this without running a full race, since the registry is a private implementation detail.
+     */
+    @Test
+    void the_three_children_of_a_dual_mode_dispatcher_share_one_handover_lock_registry() throws Exception {
+        CatchupSubscriptionModel dualMode = dualMode(new CountingCheckpointAwareSubscriptionModel());
+
+        Field streamField = CatchupSubscriptionModel.class.getDeclaredField("streamCatchupSubscriptionModel");
+        streamField.setAccessible(true);
+        Field dcbField = CatchupSubscriptionModel.class.getDeclaredField("dcbCatchupSubscriptionModel");
+        dcbField.setAccessible(true);
+        Field agnosticField = CatchupSubscriptionModel.class.getDeclaredField("agnosticCatchupSubscriptionModel");
+        agnosticField.setAccessible(true);
+        Field handoverLocksField = AbstractCatchupSubscriptionModel.class.getDeclaredField("handoverLocks");
+        handoverLocksField.setAccessible(true);
+
+        Object streamLocks = handoverLocksField.get(streamField.get(dualMode));
+        Object dcbLocks = handoverLocksField.get(dcbField.get(dualMode));
+        Object agnosticLocks = handoverLocksField.get(agnosticField.get(dualMode));
+
+        assertThat(streamLocks)
+                .as("the stream and DCB children must share the exact same handover lock registry instance, not "
+                        + "merely an equal one, since only reference identity serializes a same-id attempt routed "
+                        + "to different children on different calls")
+                .isSameAs(dcbLocks);
+        assertThat(streamLocks).isSameAs(agnosticLocks);
     }
 
     private static CatchupSubscriptionModel dualMode(CheckpointAwareSubscriptionModel delegate) {

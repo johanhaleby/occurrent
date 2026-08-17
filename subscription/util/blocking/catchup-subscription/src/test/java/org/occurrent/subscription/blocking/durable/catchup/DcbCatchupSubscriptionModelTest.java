@@ -386,9 +386,9 @@ class DcbCatchupSubscriptionModelTest {
                 }).waitUntilStarted();
             } catch (RuntimeException ignored) {
                 // The stale attempt above also subscribes the delegate unconditionally once its own handover
-                // decides it is still current, even though its own StartAt resolved to null for the delegate; the
-                // two attempts' delegate subscribe calls can then collide on the in-memory model's duplicate-id
-                // check. Immaterial here: this test only cares whether the fresh attempt's own checkpoint save
+                // decides it is still current, even though its own StartAt resolved to null for the delegate, so
+                // the two attempts' delegate subscribe calls can then collide on the in-memory model's duplicate-id
+                // check. Immaterial here, this test only cares whether the fresh attempt's own checkpoint save
                 // (asserted below) survives, and that save runs before this call, not after it.
             }
         });

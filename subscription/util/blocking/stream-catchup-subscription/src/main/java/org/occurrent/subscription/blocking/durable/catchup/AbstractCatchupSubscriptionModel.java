@@ -71,14 +71,28 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // cancelRunningCatchup. The identity check above only made the ownership decision itself atomic, not what
     // followed it, so a cancellation or a fresh registration could land in the gap after an attempt decided it was
     // still current but before it finished acting on that. Held only across those short transitions, never across
-    // an in-flight replay, so a long catch-up is never serialized by this lock. Entries are never removed, since a
-    // subscriptionId is application-defined and low-cardinality here, unlike a per-event or per-request key.
-    private final ConcurrentMap<String, ReentrantLock> handoverLocks = new ConcurrentHashMap<>();
+    // an in-flight replay, so a long catch-up is never serialized by this lock. Entries are never removed for an id
+    // this instance has actually run a catch-up for, since a subscriptionId is application-defined and
+    // low-cardinality here, unlike a per-event or per-request key; cancelRunningCatchup never creates one for an id
+    // it has not seen, so an arbitrary or unknown id passed to cancelSubscription costs nothing. Shared across every
+    // child a dual-mode dispatcher constructs, since they route the same id to different children on different
+    // calls but serialize the same delegate and checkpoint storage; a standalone model gets its own, private one.
+    private final ConcurrentMap<String, ReentrantLock> handoverLocks;
 
     protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType) {
+        this(subscriptionModel, config, subscriptionModelContextType, new ConcurrentHashMap<>());
+    }
+
+    /**
+     * @param handoverLocks The registry {@link #lockHandover} draws from. A dispatcher over several children that
+     *                      route the same id differently on different calls passes the same registry to each of
+     *                      them; every other caller passes a fresh one, private to this instance.
+     */
+    protected AbstractCatchupSubscriptionModel(CheckpointAwareSubscriptionModel subscriptionModel, CatchupSubscriptionModelConfig config, Class<?> subscriptionModelContextType, ConcurrentMap<String, ReentrantLock> handoverLocks) {
         this.subscriptionModel = Objects.requireNonNull(subscriptionModel, "subscriptionModel cannot be null");
         this.config = Objects.requireNonNull(config, "config cannot be null");
         this.subscriptionModelContextType = Objects.requireNonNull(subscriptionModelContextType, "subscriptionModelContextType cannot be null");
+        this.handoverLocks = Objects.requireNonNull(handoverLocks, "handoverLocks cannot be null");
     }
 
     // Reports subscriptionModelContextType (the dispatcher's type when wrapped) so a caller's StartAt.dynamic
@@ -243,6 +257,24 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     /**
+     * Acquires {@code subscriptionId}'s handover lock only if one already exists, {@code null} otherwise, without
+     * creating one. Registration ({@link #startCatchupAsync}) is the only place a lock is created for an id, and it
+     * creates the lock before it creates that id's {@link #currentAttempt} entry, so a missing lock here means no
+     * attempt has ever been registered for this id and there is nothing for {@link #cancelRunningCatchup} to
+     * coordinate with. Lets a cancellation for an id this instance has never run a catch-up for, including an
+     * arbitrary or unknown one a caller passes to {@code cancelSubscription} defensively, stay free of the registry
+     * instead of permanently reserving a lock for it.
+     */
+    protected @Nullable HandoverLock tryLockHandover(String subscriptionId) {
+        ReentrantLock lock = handoverLocks.get(subscriptionId);
+        if (lock == null) {
+            return null;
+        }
+        lock.lock();
+        return lock::unlock;
+    }
+
+    /**
      * Captures the live resume checkpoint handed over to live delivery. Callers choose when: the position path in
      * {@link StreamCatchupSubscriptionModel} captures it before the bulk replay so no in-flight event is missed;
      * the time-based path captures it after, to keep the token fresh (avoids oplog ageing).
@@ -267,10 +299,14 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * delegate or position storage; the dispatcher owns those since both paths share the same delegate.
      */
     public void cancelRunningCatchup(String subscriptionId) {
-        // Locked so this call lands either strictly before or strictly after a handover attempt's own lockHandover
-        // span for the same id, never inside it. Unlocked, it could run in the gap after that attempt decided it
-        // was still current but before it acted on that, finding nothing left to flag and losing the cancellation.
-        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+        // Locked, when a lock already exists for this id, so this call lands either strictly before or strictly
+        // after a handover attempt's own lockHandover span for the same id, never inside it. Unlocked, it could run
+        // in the gap after that attempt decided it was still current but before it acted on that, finding nothing
+        // left to flag and losing the cancellation. tryLockHandover deliberately does not create a lock for an id
+        // that has none yet, since that means no attempt has ever been registered for it and the operations below
+        // are then no-ops with or without a lock, including for an arbitrary or unknown id a caller passes here.
+        HandoverLock lock = tryLockHandover(subscriptionId);
+        try {
             runningCatchupSubscriptions.remove(subscriptionId);
             // Flags whichever attempt is currently registered, atomically with respect to a concurrent resubscribe
             // for the same id, instead of removing or replacing the entry: a dual-mode dispatcher calls this on both
@@ -283,6 +319,10 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 return attempt;
             });
             pauseRequestedDuringCatchup.remove(subscriptionId);
+        } finally {
+            if (lock != null) {
+                lock.close();
+            }
         }
     }
 
