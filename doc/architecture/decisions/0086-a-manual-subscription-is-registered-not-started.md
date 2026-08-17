@@ -7,6 +7,10 @@ Date: 2026-08-02
 Accepted. This is the second slice of #481, after ADR 85. The OpenRewrite recipe for the renamed property
 and the reactive stack follow separately.
 
+The fourth amendment's refusal is superseded on MongoDB by
+[ADR 130](0130-a-subscriptions-first-position-race-resolves-by-order-not-by-write-order.md), which resolves
+the race by position order instead of refusing it.
+
 ## Context
 
 ADR 82 shipped deny-by-default subscription testing, and ADR 85 gave the last four models a life cycle so
@@ -268,14 +272,6 @@ neither, the wrapper still works and a first run starts from the moment it is st
 >
 > *(#738 is done, in [ADR 89](0089-manual-subscription-mode-on-the-reactive-stack.md)'s last amendment. The reactor
 > stack refuses the same way, off the same exception, and that amendment has the two places it comes out differently.)*
-
-> **Amended a fifth time, 2026-08-17, for #771.** #771 is done too, in
-> [ADR 130](0130-a-subscriptions-first-position-race-resolves-by-order-not-by-write-order.md). A storage able to
-> order two positions it minted itself, which both MongoDB storages now are for `operationTime`, resolves the race
-> this amendment refuses instead of refusing it. The earlier position governs regardless of which write reached
-> storage first, and a checkpoint that raced in after the existence read this class makes is compared on its own
-> merits rather than accepted on presence alone. A storage with no ordering to compare by keeps the refusal this
-> amendment describes, unchanged.
 
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same

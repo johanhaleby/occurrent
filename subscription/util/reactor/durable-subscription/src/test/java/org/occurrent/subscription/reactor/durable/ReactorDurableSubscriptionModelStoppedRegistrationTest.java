@@ -145,6 +145,32 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
     }
 
     @Test
+    void a_resolver_failure_refuses_the_subscription_rather_than_trusting_the_later_checkpoint() {
+        // A resolver outage must not read the same way as a storage saying it cannot compare the two positions.
+        // The first is silence, the second is an answer, and only the second is safe to fall back to the stored
+        // checkpoint from.
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
+        delegate.globalCheckpoint = new OrderedCheckpoint(10);
+        FailingResolveCheckpointStorage storage = new FailingResolveCheckpointStorage();
+        ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
+        model.stop();
+        model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        // Simulates another node rewriting the checkpoint to a later position while this one waited to be started.
+        storage.writeWithoutScripting(new OrderedCheckpoint(50));
+
+        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+
+        assertThatThrownBy(() -> resumed.waitUntilStarted().block(TIMEOUT))
+                .as("the resolver's own failure reaches the caller instead of being read as the later checkpoint being safe")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("resolver unavailable");
+        assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT).asString())
+                .as("the stored checkpoint is untouched by a resolution that never completed")
+                .isEqualTo("order-50");
+    }
+
+    @Test
     void a_position_that_cannot_be_read_at_registration_refuses_the_subscription_rather_than_reading_it_again() {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
         delegate.failGlobalCheckpoint = true;
@@ -692,6 +718,26 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
                                 ? super.save(subscriptionId, candidate, org.occurrent.subscription.CheckpointWriteCondition.any())
                                 : Mono.just(stored);
                     });
+        }
+
+        /**
+         * Writes the way another node would, bypassing this class's own {@code resolveFirstCheckpointRace}.
+         */
+        void writeWithoutScripting(org.occurrent.subscription.Checkpoint checkpoint) {
+            super.save(SUBSCRIPTION_ID, checkpoint, org.occurrent.subscription.CheckpointWriteCondition.any()).block(TIMEOUT);
+        }
+    }
+
+    /**
+     * A {@code resolveFirstCheckpointRace} that always errors, standing in for a resolver outage rather than a
+     * storage that cannot compare the two positions. The two must not be handled the same way: the latter answers
+     * empty and is safe to fall back to the stored checkpoint from, the former answered nothing at all.
+     */
+    private static final class FailingResolveCheckpointStorage extends InMemoryCheckpointStorage {
+
+        @Override
+        public Mono<org.occurrent.subscription.Checkpoint> resolveFirstCheckpointRace(String subscriptionId, org.occurrent.subscription.Checkpoint candidate) {
+            return Mono.error(new IllegalStateException("resolver unavailable"));
         }
 
         /**

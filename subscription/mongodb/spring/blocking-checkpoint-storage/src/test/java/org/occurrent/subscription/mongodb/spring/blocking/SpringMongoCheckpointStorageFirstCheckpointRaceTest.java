@@ -17,6 +17,8 @@
 package org.occurrent.subscription.mongodb.spring.blocking;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
 import org.bson.BsonTimestamp;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,7 +33,6 @@ import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
@@ -39,6 +40,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.util.Optional;
 import java.util.UUID;
 
+import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -60,6 +62,7 @@ class SpringMongoCheckpointStorageFirstCheckpointRaceTest {
     @RegisterExtension
     OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
+    private MongoClient mongoClient;
     private MongoTemplate mongoTemplate;
     private SpringMongoCheckpointStorage storage;
     private String subscriptionId;
@@ -67,14 +70,15 @@ class SpringMongoCheckpointStorageFirstCheckpointRaceTest {
     @BeforeEach
     void connect() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".checkpoints");
-        mongoTemplate = new MongoTemplate(new SimpleMongoClientDatabaseFactory(connectionString));
+        mongoClient = MongoClients.create(connectionString);
+        mongoTemplate = new MongoTemplate(mongoClient, requireNonNull(connectionString.getDatabase()));
         storage = new SpringMongoCheckpointStorage(mongoTemplate, COLLECTION);
         subscriptionId = UUID.randomUUID().toString();
     }
 
     @AfterEach
     void disconnect() {
-        mongoTemplate.getMongoDatabaseFactory().getMongoDatabase().drop();
+        mongoClient.close();
     }
 
     @Test

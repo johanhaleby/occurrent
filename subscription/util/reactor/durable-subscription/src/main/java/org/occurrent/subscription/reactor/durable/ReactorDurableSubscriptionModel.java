@@ -427,8 +427,8 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             if (positionAtRegistration != null) {
                 return storage.read(subscriptionId)
                         .flatMap(stored -> positionAtRegistration
-                                .flatMap(checkpoint -> storage.resolveFirstCheckpointRace(subscriptionId, checkpoint))
                                 .onErrorResume(__ -> Mono.empty())
+                                .flatMap(checkpoint -> storage.resolveFirstCheckpointRace(subscriptionId, checkpoint))
                                 .defaultIfEmpty(stored))
                         .switchIfEmpty(Mono.defer(() -> positionAtRegistration.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint))))
                         .map(StartAt::checkpoint);
