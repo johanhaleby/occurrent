@@ -34,6 +34,7 @@ import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -104,6 +105,25 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
                     assertThat(refusal.getCause()).isNull();
                 })
                 .hasMessageContaining("in a second call");
+    }
+
+    @Test
+    void a_registration_that_loses_the_write_adopts_the_earlier_position_instead_of_being_refused_when_the_storage_can_order_them() {
+        // Same shape as a_registration_that_loses_the_write_to_a_position_it_did_not_read_is_refused, but the storage
+        // can compare the two positions, so the loss no longer refuses the registration: this node's earlier position
+        // is durably written in place of the later one that landed during registration.
+        OrderAwareCheckpointStorage storage = new OrderAwareCheckpointStorage();
+        storage.whenTheFirstReadFindsNothing = () -> storage.writeWithoutScripting(new OrderedCheckpoint(50));
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("this-nodes-own-position");
+        delegate.globalCheckpoint = new OrderedCheckpoint(10);
+        ReactorDurableSubscriptionModel model = coldModel(delegate, storage);
+
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        assertThat(subscription.waitUntilStarted().block(TIMEOUT)).isNull();
+        assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT).asString())
+                .as("the earlier position replaces the later one that landed during registration, so nothing between them is skipped")
+                .isEqualTo("order-10");
     }
 
     @Test
@@ -484,6 +504,66 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         @Override
         public boolean evaluatesWriteConditions() {
             return evaluatesWriteConditions;
+        }
+    }
+
+    /**
+     * Same scripting hook as {@link RaceSimulatingCheckpointStorage}, plus a real {@code resolveFirstCheckpointRace}
+     * that compares by {@link OrderedCheckpoint#order()}, standing in for what the MongoDB storages do by comparing
+     * operation time. Answers empty for a candidate or a stored checkpoint that is not an {@link OrderedCheckpoint},
+     * which only real delivery, never this fixture's own writes, produces.
+     */
+    private static class OrderAwareCheckpointStorage extends InMemoryCheckpointStorage {
+
+        private final AtomicInteger reads = new AtomicInteger();
+
+        @Nullable Runnable whenTheFirstReadFindsNothing;
+
+        @Override
+        public Mono<Checkpoint> read(String subscriptionId) {
+            return Mono.defer(() -> {
+                boolean isTheFirstRead = reads.getAndIncrement() == 0;
+                Mono<Checkpoint> read = super.read(subscriptionId);
+                return isTheFirstRead && whenTheFirstReadFindsNothing != null
+                        ? read.switchIfEmpty(Mono.fromRunnable(whenTheFirstReadFindsNothing))
+                        : read;
+            });
+        }
+
+        @Override
+        public Mono<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+            if (!(candidate instanceof OrderedCheckpoint candidateOrdered)) {
+                return Mono.empty();
+            }
+            return super.read(subscriptionId)
+                    .map(Optional::of)
+                    .defaultIfEmpty(Optional.empty())
+                    .flatMap(storedOptional -> {
+                        if (storedOptional.isEmpty()) {
+                            return super.save(subscriptionId, candidate, CheckpointWriteCondition.any());
+                        }
+                        Checkpoint stored = storedOptional.get();
+                        if (!(stored instanceof OrderedCheckpoint storedOrdered)) {
+                            return Mono.empty();
+                        }
+                        return storedOrdered.order() > candidateOrdered.order()
+                                ? super.save(subscriptionId, candidate, CheckpointWriteCondition.any())
+                                : Mono.just(stored);
+                    });
+        }
+
+        /**
+         * Writes the way another node would, without going through the read scripting above.
+         */
+        void writeWithoutScripting(Checkpoint checkpoint) {
+            super.save(SUBSCRIPTION_ID, checkpoint, CheckpointWriteCondition.any()).block(TIMEOUT);
+        }
+    }
+
+    private record OrderedCheckpoint(int order) implements Checkpoint {
+        @Override
+        public String asString() {
+            return "order-" + order;
         }
     }
 }

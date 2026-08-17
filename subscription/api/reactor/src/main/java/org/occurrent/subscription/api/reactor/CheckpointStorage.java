@@ -21,6 +21,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import reactor.core.publisher.Mono;
 
 import static java.util.Objects.requireNonNull;
@@ -150,4 +151,41 @@ public interface CheckpointStorage {
      * @param subscriptionId The id of the subscription to delete the {@link Checkpoint} for.
      */
     Mono<Void> delete(String subscriptionId);
+
+    /**
+     * Resolves who a subscription's very first checkpoint should be, between {@code candidate} and whatever
+     * {@code subscriptionId} holds now, by which position is earlier rather than by which write reaches storage
+     * first or which read happens to run first. A caller reaches for this once a plain
+     * {@link #save(String, Checkpoint, CheckpointWriteCondition) save(id, checkpoint, ifAbsent())} is not enough to
+     * settle a first position on its own, whether because that write already lost to whatever is stored now, or
+     * because {@code candidate} was captured earlier and needs reconciling against whatever governs by the time it
+     * is asked about again.
+     * <p>
+     * A storage that can compare {@code candidate} against whatever it holds now, atomically with any write that
+     * comparison calls for, answers with the checkpoint that governs the subscription's first position once this
+     * call completes: {@code candidate} once this call has durably written it, whether nothing was stored yet or
+     * what was stored proved later, or the stored one, untouched, once this call has confirmed it is earlier than or
+     * equal to {@code candidate}. Either way the caller's own race is over, with no
+     * {@link StartPositionAlreadyPinnedException} to raise, because a position established this way cannot skip
+     * anything {@code candidate} would have covered.
+     * <p>
+     * The default signals an empty {@code Mono}, unconditionally, which is the honest answer for a storage with
+     * nothing to compare positions by. That leaves the caller to its own fallback, the write-order-based rule this
+     * capability exists to narrow: a stored position already there when the caller checked for one is taken without
+     * comparison, and one that only appeared afterwards is refused unless reading it back shows the same position
+     * {@code candidate} names. A storage overrides this only when it can make that comparison for real; see
+     * {@code ReactorCheckpointStorage}, which compares the operation time both a stored and an offered
+     * {@code org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint} carry, and signals empty for a stored
+     * checkpoint of any other shape, because only a real checkpoint from actual delivery is not one of those. See
+     * ADR 130.
+     *
+     * @param subscriptionId The id of the subscription whose first position is being contested
+     * @param candidate      The position competing to be the subscription's first, whether a losing
+     *                       {@code save(id, checkpoint, ifAbsent())} offered it or a caller holds it from earlier
+     * @return A Mono with the checkpoint that now governs {@code subscriptionId}'s first position, or an empty Mono
+     * when this storage cannot compare the two
+     */
+    default Mono<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+        return Mono.empty();
+    }
 }

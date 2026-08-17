@@ -27,10 +27,12 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.springframework.data.mongodb.core.MongoOperations;
 
 import java.time.Duration;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.function.Supplier;
 
@@ -131,6 +133,35 @@ public class SpringMongoCheckpointStorage implements CheckpointStorage {
     public boolean exists(String subscriptionId) {
         Supplier<Boolean> exists = () -> mongoOperations.exists(query(where(ID).is(subscriptionId)), checkpointCollection);
         return Boolean.TRUE.equals(executeWithRetry(exists, __ -> !shutdown, retryStrategy).get());
+    }
+
+    /**
+     * Compares by {@link MongoOperationTimeCheckpoint#operationTime}, the one shape both a stored and an offered
+     * checkpoint carry when neither has ever been advanced by real delivery, and answers empty for any other stored
+     * shape or for a {@code candidate} that is not a {@link MongoOperationTimeCheckpoint} to begin with. See ADR 130.
+     */
+    @Override
+    public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+        if (!(candidate instanceof MongoOperationTimeCheckpoint)) {
+            return Optional.empty();
+        }
+        Document candidateDocument = MongoCommons.generateCheckpointDocument(subscriptionId, candidate);
+        Supplier<Document> resolve = () -> persistFirstCheckpointRaceResolution(subscriptionId, candidateDocument);
+        Document afterDocument = requireNonNull(executeWithRetry(resolve, __ -> !shutdown, retryStrategy).get());
+        return MongoCommons.interpretFirstCheckpointRaceResolution(afterDocument);
+    }
+
+    /**
+     * The single {@code findOneAndUpdate} round trip {@link #resolveFirstCheckpointRace} is, reached the same way
+     * {@link #persistConditionalCheckpointDocument} is. See
+     * {@link MongoCommons#buildFirstCheckpointRaceResolution}.
+     */
+    Document persistFirstCheckpointRaceResolution(String subscriptionId, Document candidateDocument) {
+        MongoCollection<Document> collection = mongoOperations.getCollection(checkpointCollection);
+        return requireNonNull(collection.findOneAndUpdate(
+                eq(ID, subscriptionId),
+                singletonList(MongoCommons.buildFirstCheckpointRaceResolution(candidateDocument)),
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true)));
     }
 
     /**

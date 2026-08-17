@@ -915,6 +915,155 @@ class ManualStartSubscriptionModelTest {
     }
 
     @Test
+    void two_nodes_registering_at_the_same_time_at_different_positions_both_complete_when_the_storage_can_order_them() {
+        // Same shape as two_nodes_registering_at_the_same_time_at_different_positions_refuses_the_one_whose_position_was_not_stored,
+        // but the storage can compare the two positions, so the second node is no longer refused: the race is
+        // settled by which position is earlier, and both nodes end up agreeing on it.
+        OrderAwareCheckpointStorage storage = new OrderAwareCheckpointStorage();
+        ManualStartSubscriptionModel firstNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(),
+                () -> new OrderedCheckpoint(5), storage);
+        ManualStartSubscriptionModel secondNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(),
+                () -> new OrderedCheckpoint(2), storage);
+        firstNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        });
+
+        assertThatCode(() -> secondNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }))
+                .as("the storage resolves the race by position, so the second node's earlier position is adopted instead of being refused")
+                .doesNotThrowAnyException();
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString())
+                .as("the earlier of the two positions governs, whichever node wrote first")
+                .isEqualTo("order-2");
+        assertThat(secondNode.subscriptionIds()).contains(SUBSCRIPTION_ID);
+    }
+
+    @Test
+    void a_registration_whose_write_is_delayed_past_a_later_ones_adopts_the_earlier_position_when_the_storage_can_order_them() throws Exception {
+        // Same shape as a_registration_whose_write_is_delayed_past_a_later_ones_is_refused_rather_than_started_from_that_later_position,
+        // but the storage can compare the two positions, so the delay no longer decides the outcome: the earlier
+        // position wins over the later one that reached storage first, instead of being refused for having lost the
+        // write.
+        OrderAwareCheckpointStorage storage = new OrderAwareCheckpointStorage();
+        CountDownLatch earlierNodeReachedItsWrite = new CountDownLatch(1);
+        CountDownLatch laterNodeWrote = new CountDownLatch(1);
+        CheckpointStorage sharedStorage = new CheckpointStorage() {
+            @Override
+            public boolean evaluatesWriteConditions() {
+                return true;
+            }
+
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                if (checkpoint.asString().equals("order-2")) {
+                    earlierNodeReachedItsWrite.countDown();
+                    awaitOrFail(laterNodeWrote);
+                }
+                return storage.save(subscriptionId, checkpoint, condition);
+            }
+
+            @Override
+            public Checkpoint read(String subscriptionId) {
+                return storage.read(subscriptionId);
+            }
+
+            @Override
+            public boolean exists(String subscriptionId) {
+                return storage.exists(subscriptionId);
+            }
+
+            @Override
+            public OptionalLong writeVersion(String subscriptionId) {
+                return storage.writeVersion(subscriptionId);
+            }
+
+            @Override
+            public void delete(String subscriptionId) {
+                storage.delete(subscriptionId);
+            }
+
+            @Override
+            public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+                return storage.resolveFirstCheckpointRace(subscriptionId, candidate);
+            }
+        };
+        ManualStartSubscriptionModel earlierNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(),
+                () -> new OrderedCheckpoint(2), sharedStorage);
+        ManualStartSubscriptionModel laterNode = ManualStartSubscriptionModel.stoppedByDefault(new RecordingSubscriptionModel(),
+                () -> new OrderedCheckpoint(9), sharedStorage);
+
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> earlierRegistration = pool.submit(() -> earlierNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+            }));
+            awaitOrFail(earlierNodeReachedItsWrite);
+            laterNode.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+            });
+            laterNodeWrote.countDown();
+            assertThatCode(() -> earlierRegistration.get(10, TimeUnit.SECONDS))
+                    .as("ordering settles this without skipping anything, so both registrations complete")
+                    .doesNotThrowAnyException();
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString())
+                .as("the earlier position governs regardless of which write reached storage first")
+                .isEqualTo("order-2");
+        assertThat(earlierNode.subscriptionIds()).contains(SUBSCRIPTION_ID);
+    }
+
+    @Test
+    void a_checkpoint_deleted_and_rewritten_to_a_later_position_during_registration_is_resolved_by_order_not_taken_on_presence_alone() {
+        // #771's second hole: checkpointAlreadyExisted only tells this class that something was stored before the
+        // position was captured, not that it is still the same something by the time the write runs.
+        // cancelSubscription deletes a checkpoint, so a delete followed by another node's registration is reachable
+        // here, and a storage able to order the two positions is what tells apart "safe to leave alone" from "this
+        // one raced in and is later than what this node captured", instead of trusting presence alone.
+        OrderAwareCheckpointStorage storage = new OrderAwareCheckpointStorage();
+        storage.checkpoints.put(SUBSCRIPTION_ID, new OrderedCheckpoint(3));
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        // Simulates another node cancelling and re-registering the same subscription, with a later position, while
+        // this registration is between its own existence check and its own position capture.
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> {
+            storage.checkpoints.put(SUBSCRIPTION_ID, new OrderedCheckpoint(50));
+            return new OrderedCheckpoint(10);
+        };
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
+
+        assertThatCode(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        }))
+                .as("a storage able to order the two positions resolves this instead of accepting whatever is present")
+                .doesNotThrowAnyException();
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString())
+                .as("this node's earlier position replaces the later one that appeared during registration, so nothing between them is skipped")
+                .isEqualTo("order-10");
+    }
+
+    @Test
+    void a_checkpoint_deleted_and_rewritten_to_an_earlier_position_during_registration_is_left_alone_when_the_storage_can_order_them() {
+        // The mirror image of the test above: the checkpoint that appears during registration is earlier than this
+        // node's own position, which is the ordinary "another node is already ahead" case, so it is left alone
+        // exactly as presence-based acceptance already would have left it, only now confirmed rather than assumed.
+        OrderAwareCheckpointStorage storage = new OrderAwareCheckpointStorage();
+        storage.checkpoints.put(SUBSCRIPTION_ID, new OrderedCheckpoint(3));
+        RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
+        GlobalCheckpointSource<@Nullable Checkpoint> positionSource = () -> {
+            storage.checkpoints.put(SUBSCRIPTION_ID, new OrderedCheckpoint(7));
+            return new OrderedCheckpoint(40);
+        };
+        ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate, positionSource, storage);
+
+        assertThatCode(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+        })).doesNotThrowAnyException();
+
+        assertThat(storage.checkpoints.get(SUBSCRIPTION_ID).asString())
+                .as("the stored position is already earlier than this node's own, so it stays exactly as it was")
+                .isEqualTo("order-7");
+    }
+
+    @Test
     void a_registration_is_refused_when_the_position_that_was_stored_cannot_be_read_back() {
         // Nothing here can show that the stored position is the one this registration read, so it is refused for
         // the same reason a differing position is. The failure that stopped it from being read is the cause.
@@ -1755,6 +1904,78 @@ class ManualStartSubscriptionModelTest {
         @Override
         public boolean exists(String subscriptionId) {
             return false;
+        }
+    }
+
+    // Compares by an integer order instead of a real position, standing in for what NativeMongoCheckpointStorage
+    // does by comparing MongoOperationTimeCheckpoint's operationTime. exists() and save() behave exactly like
+    // RecordingCheckpointStorage, so every test that reaches resolveFirstCheckpointRace does so the same way the
+    // production code does, through a real ifAbsent() refusal. resolveFirstCheckpointRace answers empty for a
+    // checkpoint that is not an OrderedCheckpoint, mirroring the real storage's answer for one that is not a
+    // MongoOperationTimeCheckpoint, which is what tells apart a race this fixture can resolve from a stored
+    // checkpoint from real delivery that it cannot.
+    private static final class OrderAwareCheckpointStorage implements CheckpointStorage {
+        final Map<String, Checkpoint> checkpoints = new HashMap<>();
+
+        @Override
+        public boolean evaluatesWriteConditions() {
+            return true;
+        }
+
+        @Override
+        public Checkpoint read(String subscriptionId) {
+            return checkpoints.get(subscriptionId);
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            if (condition instanceof CheckpointWriteCondition.IfAbsent && checkpoints.containsKey(subscriptionId)) {
+                throw new CheckpointWriteConditionNotFulfilledException(subscriptionId, OptionalLong.empty(), condition);
+            }
+            checkpoints.put(subscriptionId, checkpoint);
+            return checkpoint;
+        }
+
+        @Override
+        public OptionalLong writeVersion(String subscriptionId) {
+            return OptionalLong.empty();
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+            checkpoints.remove(subscriptionId);
+        }
+
+        @Override
+        public boolean exists(String subscriptionId) {
+            return checkpoints.containsKey(subscriptionId);
+        }
+
+        @Override
+        public Optional<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+            if (!(candidate instanceof OrderedCheckpoint candidateOrdered)) {
+                return Optional.empty();
+            }
+            Checkpoint stored = checkpoints.get(subscriptionId);
+            if (stored == null) {
+                checkpoints.put(subscriptionId, candidate);
+                return Optional.of(candidate);
+            }
+            if (!(stored instanceof OrderedCheckpoint storedOrdered)) {
+                return Optional.empty();
+            }
+            if (storedOrdered.order() > candidateOrdered.order()) {
+                checkpoints.put(subscriptionId, candidate);
+                return Optional.of(candidate);
+            }
+            return Optional.of(stored);
+        }
+    }
+
+    private record OrderedCheckpoint(int order) implements Checkpoint {
+        @Override
+        public String asString() {
+            return "order-" + order;
         }
     }
 }

@@ -269,6 +269,14 @@ neither, the wrapper still works and a first run starts from the moment it is st
 > *(#738 is done, in [ADR 89](0089-manual-subscription-mode-on-the-reactive-stack.md)'s last amendment. The reactor
 > stack refuses the same way, off the same exception, and that amendment has the two places it comes out differently.)*
 
+> **Amended a fifth time, 2026-08-17, for #771.** #771 is done too, in
+> [ADR 130](0130-a-subscriptions-first-position-race-resolves-by-order-not-by-write-order.md). A storage able to
+> order two positions it minted itself, which both MongoDB storages now are for `operationTime`, resolves the race
+> this amendment refuses instead of refusing it. The earlier position governs regardless of which write reached
+> storage first, and a checkpoint that raced in after the existence read this class makes is compared on its own
+> merits rather than accepted on presence alone. A storage with no ordering to compare by keeps the refusal this
+> amendment describes, unchanged.
+
 **`isPaused(id)` is true for a subscription that is registered and not started.** It is the question a
 caller is really asking, and `OccurrentSubscriptionsExtension.startAll()` filters on it. For the same
 reason the wrapper reports its own ids from `subscriptionIds()`, merged with the delegate's, since

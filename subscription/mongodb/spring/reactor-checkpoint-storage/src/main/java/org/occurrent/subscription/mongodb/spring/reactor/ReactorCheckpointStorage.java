@@ -24,6 +24,7 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCommons;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import reactor.core.publisher.Mono;
@@ -128,6 +129,37 @@ public class ReactorCheckpointStorage implements CheckpointStorage {
         return mongo.findOne(query(where(ID).is(subscriptionId)), Document.class, checkpointCollection)
                 .retryWhen(retry)
                 .map(MongoCommons::calculateCheckpointFromMongoStreamPositionDocument);
+    }
+
+    /**
+     * Compares by {@link MongoOperationTimeCheckpoint#operationTime}, the one shape both a stored and an offered
+     * checkpoint carry when neither has ever been advanced by real delivery, and signals empty for any other stored
+     * shape or for a {@code candidate} that is not a {@link MongoOperationTimeCheckpoint} to begin with. See ADR 130.
+     */
+    @Override
+    public Mono<Checkpoint> resolveFirstCheckpointRace(String subscriptionId, Checkpoint candidate) {
+        if (!(candidate instanceof MongoOperationTimeCheckpoint)) {
+            return Mono.empty();
+        }
+        Document candidateDocument = MongoCommons.generateCheckpointDocument(subscriptionId, candidate);
+        return persistFirstCheckpointRaceResolution(subscriptionId, candidateDocument)
+                .retryWhen(retry)
+                .flatMap(afterDocument -> MongoCommons.interpretFirstCheckpointRaceResolution(afterDocument)
+                        .map(Mono::just)
+                        .orElseGet(Mono::empty));
+    }
+
+    /**
+     * The single {@code findOneAndUpdate} round trip {@link #resolveFirstCheckpointRace} is, reached the same way
+     * {@link #persistConditionalCheckpointDocument} is. See
+     * {@link MongoCommons#buildFirstCheckpointRaceResolution}.
+     */
+    private Mono<Document> persistFirstCheckpointRaceResolution(String subscriptionId, Document candidateDocument) {
+        return mongo.getCollection(checkpointCollection)
+                .flatMap(collection -> Mono.from(collection.findOneAndUpdate(
+                        Filters.eq(ID, subscriptionId),
+                        singletonList(MongoCommons.buildFirstCheckpointRaceResolution(candidateDocument)),
+                        new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER).upsert(true))));
     }
 
     private static Retry defaultRetry() {

@@ -410,14 +410,30 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // subscription registered on a stopped model brings the position it read then, which is earlier than now,
             // and nothing falls back to a fresh read behind it. That read either answered with a position or answered
             // with the reason it could not, and taking a second one here is the substitution that would skip whatever
-            // was written while the subscription waited. Every other registration reads here instead, and a read that
-            // answers nothing refuses the same way one that failed already did. There is no position to record then,
-            // and the wrapped model applies a start position when it opens its feed rather than when it is handed
-            // one, so falling back to now would begin wherever the feed had reached by then. Recording the position
-            // can be refused too, see pinStartPosition below.
-            Mono<Checkpoint> seed = positionAtRegistration == null
-                    ? subscription.globalCheckpoint().switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)))
-                    : positionAtRegistration;
+            // was written while the subscription waited. There is no position to record then, and the wrapped model
+            // applies a start position when it opens its feed rather than when it is handed one, so falling back to
+            // now would begin wherever the feed had reached by then. Recording the position can be refused too, see
+            // pinStartPosition below.
+            //
+            // A registration with no position of its own reads storage directly, and pinStartPosition only ever runs
+            // when that read found nothing, so there is no gap here between a read and a capture for anything to slip
+            // into. A registration carrying positionAtRegistration is different: the capture already happened, at
+            // registration, possibly long before this call, so whatever storage now holds may have been written
+            // since, including by a checkpoint deleted and rewritten while this subscription waited to be started.
+            // resolveFirstCheckpointRace reconciles the two by position instead of trusting storage.read() blindly,
+            // when the storage can. Reading storage comes first and on its own, so a stored checkpoint still governs
+            // exactly as it always has even when positionAtRegistration cannot be read or the storage cannot compare,
+            // which the onErrorResume and defaultIfEmpty below both fall back to. See ADR 130 and #771.
+            if (positionAtRegistration != null) {
+                return storage.read(subscriptionId)
+                        .flatMap(stored -> positionAtRegistration
+                                .flatMap(checkpoint -> storage.resolveFirstCheckpointRace(subscriptionId, checkpoint))
+                                .onErrorResume(__ -> Mono.empty())
+                                .defaultIfEmpty(stored))
+                        .switchIfEmpty(Mono.defer(() -> positionAtRegistration.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint))))
+                        .map(StartAt::checkpoint);
+            }
+            Mono<Checkpoint> seed = subscription.globalCheckpoint().switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)));
             return storage.read(subscriptionId)
                     .switchIfEmpty(Mono.defer(() -> seed.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint))))
                     .map(StartAt::checkpoint);
@@ -433,9 +449,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
 
     // The read above found nothing, so this is the first position recorded for this subscription id, and the write
     // is conditional on that still being true when it reaches storage. A refused write therefore means a checkpoint
-    // arrived between the read and the write, written where this model cannot order it against the position it read.
-    // That position is read after the storage read on every path but one. A subscription registered while the model
-    // was stopped read it at registration instead, so its window is the wider one ADR 89 records and #771 owns.
+    // arrived between the read and the write, written where this model cannot order it against the position it read,
+    // unless storage.resolveFirstCheckpointRace can order it after all. That position is read after the storage read
+    // on every path but one. A subscription registered while the model was stopped read it at registration instead;
+    // resolveStartAt reconciles that one separately, against whatever storage.read() finds, since this method is
+    // never reached for it when something is already stored. See ADR 130 and #771.
     private Mono<Checkpoint> pinStartPosition(String subscriptionId, Checkpoint positionRead) {
         return recordFirstPosition(subscriptionId, positionRead)
                 .switchIfEmpty(Mono.error(() -> storageAnsweredNothingAboutItsOwnWrite(subscriptionId, positionRead)));
@@ -457,7 +475,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
         return storage.save(subscriptionId, positionRead, CheckpointWriteCondition.ifAbsent())
                 .onErrorResume(CheckpointWriteConditionNotFulfilledException.class,
-                        __ -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, positionRead));
+                        // Asked first, because a storage able to compare the two settles this by position instead of
+                        // by write order, with no exception either way. Falls through to the older, narrower rule
+                        // only when the storage answers empty, meaning it cannot make that comparison.
+                        __ -> storage.resolveFirstCheckpointRace(subscriptionId, positionRead)
+                                .switchIfEmpty(Mono.defer(() -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, positionRead))));
     }
 
     // save is documented to hand the checkpoint back for chaining, so a storage that answers nothing has told this

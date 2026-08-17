@@ -556,6 +556,17 @@ and is unaffected by which family it runs against.
 > one asks `evaluatesWriteConditionsFor(String)` first and writes unconditionally when the answer is `false`, which
 > the blocking model does not, since it refuses such a storage when it is built instead.)*
 
+> **Amended a fifth time, 2026-08-17, for #771.** The amendment above closes with the question left open. An
+> ordering on the positions, ruled out on `Checkpoint` itself, or agreement between the nodes before either captures
+> one, unreachable because this runs before a competing consumer is registered. [ADR 130](0130-a-subscriptions-first-position-race-resolves-by-order-not-by-write-order.md)
+> answers it with a third option neither paragraph considered, an ordering some storages can make good on for
+> positions they minted themselves, offered through a new, additive `CheckpointStorage.resolveFirstCheckpointRace`
+> rather than a change to `Checkpoint`. Both Mongo storages implement it by comparing the `operationTime` field
+> already described above, so on MongoDB the residual race this amendment named, and the delete-recreate hole the
+> second amendment found, both close. A storage with no ordering to compare by keeps exactly the rule this record
+> describes. See ADR 130 for the reasoning and `ManualStartSubscriptionModelTest`, `ReactorDurableSubscriptionModelPinRefusalTest`
+> and `ReactorDurableSubscriptionModelStoppedRegistrationTest` for the proof.
+
 The blocking in-memory storage implements the capability too, which is a few lines and gives the new
 conformance suite something to run without a container.
 

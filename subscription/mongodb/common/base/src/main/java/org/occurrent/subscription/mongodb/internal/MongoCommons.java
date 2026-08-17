@@ -32,6 +32,7 @@ import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.function.BiFunction;
 
@@ -172,6 +173,63 @@ public class MongoCommons {
      */
     private static Document versionCarriedForwardExpr() {
         return new Document("$ifNull", asList("$" + WRITE_VERSION, "$$REMOVE"));
+    }
+
+    /**
+     * The {@code $replaceWith} pipeline stage for a checkpoint storage's {@code resolveFirstCheckpointRace}, one
+     * round trip like {@link #buildConditionalCheckpointWrite(Document, CheckpointWriteCondition)}.
+     * {@code candidateDocument} must carry {@link #OPERATION_TIME}, which is the caller's job to have checked, since
+     * only that shape is comparable at all.
+     * <p>
+     * Writes {@code candidateDocument} when nothing is stored yet, the same presence check
+     * {@link #ifAbsentIsAllowedExpr()} makes, or when what is stored carries an {@link #OPERATION_TIME} later than
+     * the one {@code candidateDocument} carries. Leaves the document untouched otherwise, whether because the stored
+     * position is earlier than or equal to the candidate's, or because it carries {@link #RESUME_TOKEN},
+     * {@link #GENERIC_CHECKPOINT} or {@link #LEGACY_GENERIC_CHECKPOINT} instead, which
+     * {@link #interpretFirstCheckpointRaceResolution(Document)} is what tells apart.
+     *
+     * @param candidateDocument The document {@link #generateCheckpointDocument(String, Checkpoint)} built for the
+     *                          candidate position, which must carry {@link #OPERATION_TIME}
+     * @return The {@code $replaceWith} pipeline stage to run through {@code findOneAndUpdate}
+     */
+    public static Document buildFirstCheckpointRaceResolution(Document candidateDocument) {
+        Document allow = new Document("$or", asList(
+                ifAbsentIsAllowedExpr(),
+                new Document("$and", asList(
+                        fieldExistsExpr(OPERATION_TIME),
+                        new Document("$gt", asList("$" + OPERATION_TIME, candidateDocument.get(OPERATION_TIME)))))));
+
+        Document newDocumentWithVersion = new Document("$mergeObjects", asList(
+                new Document("$literal", candidateDocument),
+                new Document(WRITE_VERSION, versionCarriedForwardExpr())));
+
+        Document cond = new Document("$cond", new Document(Map.of(
+                "if", allow,
+                "then", newDocumentWithVersion,
+                "else", "$$ROOT")));
+
+        return new Document("$replaceWith", cond);
+    }
+
+    /**
+     * What {@code findOneAndUpdate} returned for {@link #buildFirstCheckpointRaceResolution(Document)} means, for a
+     * checkpoint storage's {@code resolveFirstCheckpointRace} to answer with.
+     * <p>
+     * {@code afterDocument} carries {@link #OPERATION_TIME} whenever the pipeline could compare, whether it wrote
+     * the candidate or left a stored position that proved earlier or equal in place, and {@code afterDocument} is
+     * the checkpoint that governs either way. It carries {@link #RESUME_TOKEN}, {@link #GENERIC_CHECKPOINT} or
+     * {@link #LEGACY_GENERIC_CHECKPOINT} instead only when the pipeline left a stored position of one of those
+     * shapes untouched, which is the one outcome nothing here settled.
+     *
+     * @param afterDocument The document {@code findOneAndUpdate} returned
+     * @return The checkpoint that now governs the subscription's first position, or empty when {@code afterDocument}
+     * shows a stored position this could not compare {@code candidateDocument} against
+     */
+    public static Optional<Checkpoint> interpretFirstCheckpointRaceResolution(Document afterDocument) {
+        if (!afterDocument.containsKey(OPERATION_TIME)) {
+            return Optional.empty();
+        }
+        return Optional.of(calculateCheckpointFromMongoStreamPositionDocument(afterDocument));
     }
 
     /**
