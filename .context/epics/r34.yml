@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 65
-updated_at: 2026-08-17T20:30:00Z
+revision: 66
+updated_at: 2026-08-17T20:40:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session ONLY in Attended mode; Unattended briefs carry plan_approval_venue orchestrator per the skill, a correction after four post-switch briefs wrongly said session. Release execution is Johan's manual act; r34 stops at release readiness."
@@ -109,13 +109,13 @@ units:
   H1:
     issue: null
     goal: "Docs closeout verification: reconstruct closed docs PRs 49/52/55/61/62/63/64/65 diffs via API, verify content reached docs main or is legitimately dead, verdict table plus recommendation on closing docs issue 57"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: "subagent a83e224630286a3dd, completed 2026-08-16T17:0xZ"
     deliverables:
-      - {check: manual_approval, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: "verdict 2026-08-16: all eight closed docs PRs clean, 52/63 confirmed deliberate non-merges, historyWindow paragraph appears once. Sole gap saga-step-conditions missing from addedTags, fixed as docs PR 67, orchestrator re-verified the gap and anchor on docs main itself. Awaiting Johan: merge 67, then close docs issue 57"}
+      - {check: manual_approval, repo: occurrent-org/occurrent-org.github.io, ref: null, met: true, evidence: "verdict clean on all eight closed docs PRs, the one gap fixed as docs PR 67 which Johan merged 2026-08-16T18:38Z, docs issue 57 closed by the orchestrator on his standing ruling. Approval executed in full"}
   H2:
     issue: null
     goal: "Changelog next-version skeleton plus 0.33.0 date fix to 2026-08-16, and the doc/migration/upgrading-to-0.34.0.md shell"
