@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 70
-updated_at: 2026-08-17T12:40:00Z
+revision: 71
+updated_at: 2026-08-17T19:00:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates flow through the orchestrator in BOTH modes per Johan's 2026-08-17 ruling: workers hand decision content to the orchestrator, who answers what precedent settles, presents the rest to Johan with a recommendation (promptly in Attended, queued in Unattended), and relays answers back. Session venue only on Johan's explicit per-unit request. Release execution is Johan's manual act; r34 stops at release readiness."
@@ -76,7 +76,8 @@ pending_actions:
     type: merge
     target: "Standing instruction from Johan 2026-08-17: merge each remaining unit PR on its worker's settled signal without further asks, gates unchanged (green, threads resolved, changelog verified pre-merge, CAS pin). NOTE: revision 69's checkpoint claimed this entry was journaled but only bumped the counter; entry actually written at revision 70. First application: 838 merged 7f4b105d6 on U7's settled signal. Remaining scope: U19's future PR"
     expected: "U19's PR merges on its settled signal, closing 836; entry flips VERIFIED then"
-    status: PENDING
+    status: VERIFIED
+    verified: "838 merged 7f4b105d6 and 841 merged 79a344e06, both on explicit settled signals, both issues closed, no further unit PRs exist. Monitors b3ae1qein and bs9p96l3j retired in the same sweep per the lifetime rule (U10B's manual_approval on 753 is the only unmet deliverable left and no PR event can advance it)"
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-17T12:20:00Z
@@ -84,14 +85,14 @@ units:
   U19:
     issue: 836
     goal: "Unwrap proxied beans before descriptor factory invocation across the projection, saga, and snapshot registrars, fixing the JDK-proxy startup failure ADR 127 section 4 found. Sibling 837 deferred to the ADR 127 epic by Johan's ruling"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_1b18da73, awaiting click, venue session (Mode Attended read 17:30Z)"
+    session: "chip task_1b18da73, resumed post-reboot as session local_5acaed93. Copilot errored server-side 4x (GitHub GraphQL outage, monitor confirmed 5x503), substitute fresh-context review ran instead: 4 required findings and 3 nits, all addressed, worker refuted the reviewer's push-path NPE claim with a git trace and the claim was withdrawn. Session archive queued for Johan's return (archive prompts, Unattended forbids issuing it)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "836", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "841", met: true, evidence: "merged 79a344e06 2026-08-17T~18:5xZ, CAS pin aca66207b, 26/26 green, 0 unresolved threads, changelog split verified pre-merge (fix under Changes, CGLIB-advice and reactor-exception-type entries under Breaking changes, migration section 5 present), branch deleted"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "836", met: true, evidence: "closed by the squash merge, verified via gh issue view"}
   U17:
     issue: 828
     goal: "Document-scoped DropRedundant recipe preconditions: fix the released 0_32 recipe and 826's four replicas, multi-document YAML recipe tests, then 826 merges under the ratification"

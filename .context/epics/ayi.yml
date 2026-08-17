@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 9
-updated_at: 2026-08-17T17:04:35Z
+revision: 11
+updated_at: 2026-08-17T18:29:20Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -87,17 +87,20 @@ units:
   U2:
     issue: 740
     goal: "Mint, stamp, return: AppendId type, appendid extension, unconditional stamping on all four stores' stream and DCB paths, updateEvent preservation, records widened per D2, equality tests migrated, TCK additions, changelog and migration-guide section"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U1]
-    session: null
+    session: local_0adf4d40-dfb7-4321-9d59-26638a9b0939
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "Chip task_17de7750 awaiting the start click"
-    last_meaningful_progress_at: 2026-08-17T14:37:26Z
-    observed: {}
+    session_note: "chip task_17de7750 started; worktree vigilant-wilson-c6862c, ListAgents send name vigilant-wilson-c6862c-7e, identity confirmed by the fleet marker in its opening prompt via transcript search"
+    next_action: "PR 844 open, checks running (ci-wait). On green plus review-clean: adversarial verify pass, then CAS merge under the standing grant"
+    last_meaningful_progress_at: 2026-08-17T18:29:20Z
+    observed:
+      session: {id: local_0adf4d40-dfb7-4321-9d59-26638a9b0939, via: "transcript marker search, opening prompt carries the U2 marker", at: 2026-08-17T18:19:10Z}
+      pr_844: {head: 762ebafef0f55288ab3ed7d7fd39d91ffcc77dda, branch: "ayi/u2-append-id-stamping", rollup: "0fail running", review: "not yet arrived", via: "monitor PR-OPENED", at: 2026-08-17T18:29:20Z}
     assessment: "Sonnet/high chip. Verification modules: DCB touched-module set plus tck, eventstore/inmemory, dsl/decider, application/service/blocking."
   U3:
     issue: 740

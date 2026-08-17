@@ -225,7 +225,7 @@ class ProjectionAnnotationRegistrar {
                 annotation.startupMode() != StartupMode.DEFAULT);
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
-        Object descriptor = invokeFactory(method, bean);
+        Object descriptor = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", bean, method);
 
         if (annotation.source() == org.occurrent.annotation.Source.PUSH) {
             // The feed bean's type decides the flavor: a PushSubscriptionModel feeds CloudEvents, a DomainEventFeed
@@ -293,7 +293,7 @@ class ProjectionAnnotationRegistrar {
                 subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, waitUntilStarted, consumer);
             }
         } else {
-            throw new IllegalArgumentException("@Projection '%s' method %s#%s must return a Projection or DcbProjection, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor == null ? "null" : descriptor.getClass().getName()));
+            throw new IllegalArgumentException("@Projection '%s' method %s#%s must return a Projection or DcbProjection, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor.getClass().getName()));
         }
     }
 
@@ -555,19 +555,6 @@ class ProjectionAnnotationRegistrar {
         }
         throw new IllegalArgumentException(("@Projection '%s' needs a read-model store: either name one with store=\"beanName\" (a MaterializedView, ViewStateRepository, or CrudRepository), " +
                 "or declare the factory return type with a concrete state type (for example Projection<MyView, MyEvent, String>) so the read model can use the store's zero-config default.").formatted(id));
-    }
-
-    private static Object invokeFactory(Method method, Object bean) {
-        try {
-            method.setAccessible(true);
-            Object result = method.invoke(bean);
-            if (result == null) {
-                throw new IllegalStateException("@Projection factory %s#%s returned null.".formatted(bean.getClass().getName(), method.getName()));
-            }
-            return result;
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Failed to invoke @Projection factory %s#%s.".formatted(bean.getClass().getName(), method.getName()), e);
-        }
     }
 
     // Unset knobs keep their own default, so setting one does not reset the other.

@@ -17,21 +17,109 @@
 
 package org.occurrent.springboot.common;
 
+import org.aopalliance.intercept.MethodInterceptor;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.StreamId;
 import org.occurrent.annotation.StreamVersion;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameter;
 import org.occurrent.springboot.common.SubscriptionAnnotations.HandlerParameterKind;
+import org.springframework.aop.TargetSource;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.context.support.GenericApplicationContext;
 
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.*;
 
 class SubscriptionAnnotationsTest {
+
+    // ------------------------------------------------------------------------------------------------------
+    // invokeDescriptorFactory (ADR 127 section 4: unwrapping a descriptor factory's bean before invoking it)
+    // ------------------------------------------------------------------------------------------------------
+
+    static class CglibFactoryHolder {
+        String factory() {
+            return "built";
+        }
+    }
+
+    @Test
+    void invokeDescriptorFactory_on_a_cglib_proxied_singleton_bean_runs_the_factory_directly_without_the_proxys_advice() throws Exception {
+        AtomicInteger adviceInvocations = new AtomicInteger();
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setTarget(new CglibFactoryHolder());
+        proxyFactory.setProxyTargetClass(true);
+        proxyFactory.addAdvice((MethodInterceptor) invocation -> {
+            adviceInvocations.incrementAndGet();
+            return invocation.proceed();
+        });
+        CglibFactoryHolder proxy = (CglibFactoryHolder) proxyFactory.getProxy();
+
+        Object result = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", proxy, CglibFactoryHolder.class.getDeclaredMethod("factory"));
+
+        assertThat(result).isEqualTo("built");
+        assertThat(adviceInvocations).hasValue(0);
+    }
+
+    // A TargetSource that is not a SingletonTargetSource, the one case ultimateTarget leaves proxied rather than
+    // unwrapping. isStatic() = false is what AopProxyUtils.getSingletonTarget checks to skip it.
+    static final class AlwaysFreshTargetSource implements TargetSource {
+        private final Class<?> targetClass;
+
+        AlwaysFreshTargetSource(Class<?> targetClass) {
+            this.targetClass = targetClass;
+        }
+
+        @Override
+        public Class<?> getTargetClass() {
+            return targetClass;
+        }
+
+        @Override
+        public boolean isStatic() {
+            return false;
+        }
+
+        @Override
+        public Object getTarget() throws Exception {
+            return targetClass.getDeclaredConstructor().newInstance();
+        }
+
+        @Override
+        public void releaseTarget(Object target) {
+        }
+    }
+
+    interface NonSingletonMarker {
+    }
+
+    static class NonSingletonFactoryHolder implements NonSingletonMarker {
+        String factory() {
+            return "built";
+        }
+    }
+
+    @Test
+    void invokeDescriptorFactory_on_a_jdk_proxy_backed_by_a_non_singleton_target_source_fails_naming_the_annotation_and_both_remedies() throws Exception {
+        ProxyFactory proxyFactory = new ProxyFactory();
+        proxyFactory.setTargetSource(new AlwaysFreshTargetSource(NonSingletonFactoryHolder.class));
+        proxyFactory.setInterfaces(NonSingletonMarker.class);
+        proxyFactory.setProxyTargetClass(false);
+        NonSingletonMarker proxy = (NonSingletonMarker) proxyFactory.getProxy();
+
+        Method method = NonSingletonFactoryHolder.class.getDeclaredMethod("factory");
+
+        assertThatThrownBy(() -> SubscriptionAnnotations.invokeDescriptorFactory("@Snapshot", proxy, method))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("@Snapshot")
+                .hasMessageContaining("factory")
+                .hasMessageContaining("spring.aop.proxy-target-class=true")
+                .hasMessageContaining("move the factory method off the advised bean");
+    }
 
     @Test
     void synchronous_with_startAt_is_rejected() {

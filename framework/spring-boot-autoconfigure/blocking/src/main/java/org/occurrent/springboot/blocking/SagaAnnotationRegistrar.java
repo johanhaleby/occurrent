@@ -115,7 +115,7 @@ class SagaAnnotationRegistrar {
             throw new IllegalArgumentException("Specify either startAt or startAtGlobalPosition for @Saga '%s', not both.".formatted(id));
         }
 
-        Object descriptor = invokeSagaFactory(method, bean);
+        Object descriptor = SubscriptionAnnotations.invokeDescriptorFactory("@Saga", bean, method);
         if (!(descriptor instanceof Saga<?, ?, ?>)) {
             throw new IllegalArgumentException("@Saga '%s' method %s#%s must return a Saga, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor.getClass().getName()));
         }
@@ -415,19 +415,6 @@ class SagaAnnotationRegistrar {
         // model that owns it can stop it.
         pushModels.forEach(CatchupThenPushSubscriptionModel::shutdown);
         pushModels.clear();
-    }
-
-    private static Object invokeSagaFactory(Method method, Object bean) {
-        try {
-            method.setAccessible(true);
-            Object result = method.invoke(bean);
-            if (result == null) {
-                throw new IllegalStateException("@Saga factory %s#%s returned null.".formatted(bean.getClass().getName(), method.getName()));
-            }
-            return result;
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Failed to invoke @Saga factory %s#%s.".formatted(bean.getClass().getName(), method.getName()), e);
-        }
     }
 
     // Resolve the SagaStateStore: by store()/storeName() reference, else the unique SagaStateStore bean, else the
