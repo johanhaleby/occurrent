@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 63
-updated_at: 2026-08-17T19:30:00Z
+revision: 64
+updated_at: 2026-08-17T20:20:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session ONLY in Attended mode; Unattended briefs carry plan_approval_venue orchestrator per the skill, a correction after four post-switch briefs wrongly said session. Release execution is Johan's manual act; r34 stops at release readiness."
@@ -288,14 +288,14 @@ units:
   U13:
     issue: 439
     goal: "Store-neutral config keys: names AND mechanism (alias vs rename+recipe, RenameMappedSubscriptionEnabledKey is the precedent #439 predates) settled at one Johan gate, #410 requirements as input"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_fbfcd1be, delivered PR 826, 26/26 green, recipe and migration and changelog verified present, 5 threads with the worker. HELD: the names-and-mechanism gate was Johan-owned and cannot have run (he went unattended minutes after the chip started), so 826 merges only after Johan ratifies occurrent.event-store.mongodb.* and occurrent.subscription.mongodb.* plus rename-with-recipe over alias. Queued for his return beside 819"
+    session: "chip task_fbfcd1be COMPLETE. The gate that never ran was ratified by Johan post-hoc, the precondition defect U17 found was fixed on this branch before merge"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "439", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "826", met: true, evidence: "merged 09ed48c95 2026-08-17T20:1xZ, CAS pin 431476d0c, 26/26 green, ratified names and mechanism, document-scoped preconditions applied by U17 before merge, held docs PR 70 pairs it"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "439", met: true, evidence: "closed by the squash, verified"}
   U14:
     issue: 806
     goal: "Join removal plan-first: recipe reachability map (two Java overloads, Kotlin trailing lambdas), UpgradeToOccurrent_0_34 recipe, prose migration for unreachable shapes, remove join/expect/Expectation, docs sweep"
