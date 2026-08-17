@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 4
-updated_at: 2026-08-17T14:41:10Z
+revision: 5
+updated_at: 2026-08-17T16:32:31Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -51,18 +51,21 @@ units:
   U1:
     issue: 740
     goal: "ADR 0132: append identity and the membership wait, recording the approved plan's D1-D3 and settling AppendId ownership, absence idiom wording, reset-rule mechanics, and scope statement"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "uds:/tmp/cc-socks/49695.sock"
     deliverables:
       - {check: manual_approval, ref: "design gate closed by Johan's explicit word, via the orchestrator", met: false, evidence: null}
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "Chip task_3d94cd63 awaiting the start click; on start, resolve the session id and record it here"
-    last_meaningful_progress_at: 2026-08-17T14:37:26Z
-    observed: {}
+    session_note: "chip task_3d94cd63 started; send address uds:/tmp/cc-socks/49695.sock, identity confirmed by the fleet marker in its own message"
+    next_action: "Worker writing the ADR; next inbound is the gate-ready message plus DELIVERY_RESULT, then the design gate goes to Johan"
+    last_meaningful_progress_at: 2026-08-17T16:32:31Z
+    observed:
+      branch: {name: "ayi/u1-adr-append-identity", base: "fa3513939", via: "worker message, marker-confirmed", at: 2026-08-17T16:32:31Z}
+      issue_842: {state: OPEN, marker: present, routing_comment: 5317719550, via: "gh issue view and comment read-back", at: 2026-08-17T16:32:31Z}
     assessment: "ADR number 0132 reserved at dispatch (cross-branch scan showed max 0131, ledger empty above it). Prose-only diff, so the [ci skip] marker rule applies and the merge verdict carries by compare."
   U2:
     issue: 740
