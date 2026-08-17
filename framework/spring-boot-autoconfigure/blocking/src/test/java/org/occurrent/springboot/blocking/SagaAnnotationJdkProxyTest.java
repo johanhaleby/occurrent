@@ -33,6 +33,7 @@ import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -62,6 +63,9 @@ class SagaAnnotationJdkProxyTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).hasBean(SagaAnnotationRegistrar.sagaInstancesBeanName("jdk-proxy-saga"));
+                    // Confirms the fixture still exercises a real JDK interface proxy rather than degrading into
+                    // an ordinary bean that would pass this test for the wrong reason.
+                    assertThat(AopUtils.isJdkDynamicProxy(context.getBean("sagaHolder"))).isTrue();
                 });
     }
 

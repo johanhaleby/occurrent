@@ -32,6 +32,7 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -73,6 +74,9 @@ class ProjectionAnnotationJdkProxyTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(FACTORY_INVOCATIONS).hasValue(1);
+                    // Confirms the fixture still exercises a real JDK interface proxy rather than degrading into
+                    // an ordinary bean that would pass this test for the wrong reason.
+                    assertThat(AopUtils.isJdkDynamicProxy(context.getBean("projectionHolder"))).isTrue();
                 });
     }
 

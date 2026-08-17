@@ -104,7 +104,7 @@ class SnapshotAnnotationRegistrar {
             return;
         }
         if (!(descriptor instanceof SnapshotView<?, ?>)) {
-            throw new IllegalArgumentException("@Snapshot '%s' method %s#%s must return a SnapshotView or DcbSnapshotView, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor == null ? "null" : descriptor.getClass().getName()));
+            throw new IllegalArgumentException("@Snapshot '%s' method %s#%s must return a SnapshotView or DcbSnapshotView, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor.getClass().getName()));
         }
         SnapshotView<S, E> snapshotView = (SnapshotView<S, E>) descriptor;
         ReactiveSnapshotStore<S> store = resolveReactiveSnapshotStore(annotation, method, id);

@@ -308,3 +308,34 @@ Two cases, both of which it steps around on purpose rather than guessing:
   can also drop the old key from a profile that never set the new key at all, and remove that profile's document
   entirely if the dropped key was its only content. Review the diff before you commit it, and see
   [#828](https://github.com/johanhaleby/occurrent/issues/828) for the fix.
+
+## 5. A descriptor factory's class-level advice no longer runs at startup
+
+`@Projection`, `@Saga` and `@Snapshot` factory methods now always run directly on the bean's own class, never through
+a proxy.
+
+Before this release, a bean advised under CGLIB, the default (`spring.aop.proxy-target-class=true`), had its factory
+invoked through the proxy. Any class-level advice matching the bean, `@Transactional` or a custom aspect for example,
+ran once as a side effect of building the descriptor at startup.
+
+That was never a documented or supported behavior. [ADR 127 section 4](../architecture/decisions/0127-a-subscription-is-a-descriptor-and-the-annotation-stops-naming-the-concept.md#4-a-descriptor-annotation-is-read-after-the-singletons-are-instantiated)
+calls it "surprising but survivable", the accidental result of a JDK interface proxy and a CGLIB proxy handling the
+same invocation differently. The fix for the JDK interface proxy crash in [#836](https://github.com/johanhaleby/occurrent/issues/836)
+makes both proxy kinds behave the same way, skipping the proxy entirely, since a descriptor factory runs exactly once
+at startup with no request for its advice to usefully observe.
+
+If your application relied on that advice running, deliberately or not, move whatever it did into the factory method
+itself, or into a separate lifecycle hook such as `@PostConstruct` on the same bean, since this shortcut never
+reached it in the first place.
+
+There is no recipe for this change. Nothing in your source code declares a requirement on advice running through a
+startup-only reflective invocation, so there is nothing a rewrite could search for.
+
+### A null-returning factory now fails differently on reactor
+
+A reactor `@Projection`, `@Saga` or `@Snapshot` factory method that returns `null` instead of its declared descriptor
+now fails with `IllegalStateException`. It previously failed with `IllegalArgumentException`.
+
+The blocking stack already used `IllegalStateException` for the same mistake, so this only changes the reactor side,
+and only for a factory that is already broken. A catch block scoped to `IllegalArgumentException` around that
+specific failure no longer catches it.

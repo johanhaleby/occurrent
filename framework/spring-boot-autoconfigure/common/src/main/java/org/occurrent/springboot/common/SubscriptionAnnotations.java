@@ -296,7 +296,10 @@ public final class SubscriptionAnnotations {
      * bean declares before that bean is ever proxied, and the proxy created afterwards implements only its interfaces,
      * not that class, so invoking a method declared on it throws {@link IllegalArgumentException}. Unwrapping to the
      * target and re-resolving {@code method} against the target's own class first makes both proxy kinds behave the
-     * same way: the factory runs once, directly, with no advice and no exception.
+     * same way when the proxy has a fixed singleton target: the factory runs once, directly, with no advice and no
+     * exception. A proxy backed by a prototype- or pool-scoped target source is left proxied by {@link #ultimateTarget},
+     * so a JDK interface proxy of that kind still cannot run the factory, and fails with a clear message instead of a
+     * bare reflection error.
      *
      * @param annotationName the annotation name for error messages, for example {@code "@Projection"}
      * @param bean           the (possibly proxied) bean the factory method was found on
@@ -311,16 +314,22 @@ public final class SubscriptionAnnotations {
             if (targetMethod == null) {
                 throw new IllegalStateException("%s factory %s#%s could not be resolved on the unwrapped proxy target %s.".formatted(annotationName, bean.getClass().getName(), method.getName(), target.getClass().getName()));
             }
+        } else if (!targetMethod.getDeclaringClass().isInstance(target)) {
+            // ultimateTarget leaves a proxy alone when its TargetSource is not a fixed singleton (prototype- or
+            // pool-scoped), so a JDK interface proxy backed by one still cannot run a factory declared on the
+            // concrete class. Without this check, Method.invoke fails with a bare "object is not an instance of
+            // declaring class", naming neither the annotation nor a way out.
+            throw new IllegalStateException("%s factory %s#%s cannot run: %s does not implement %s, and its target is not a fixed singleton, so it cannot be unwrapped safely. Set spring.aop.proxy-target-class=true so this bean is proxied by subclassing instead of by interface, or move the factory method off the advised bean.".formatted(annotationName, bean.getClass().getName(), method.getName(), bean.getClass().getName(), targetMethod.getDeclaringClass().getName()));
         }
         try {
             targetMethod.setAccessible(true);
             Object result = targetMethod.invoke(target);
             if (result == null) {
-                throw new IllegalStateException("%s factory %s#%s returned null.".formatted(annotationName, bean.getClass().getName(), method.getName()));
+                throw new IllegalStateException("%s factory %s#%s returned null.".formatted(annotationName, target.getClass().getName(), method.getName()));
             }
             return result;
         } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Failed to invoke %s factory %s#%s.".formatted(annotationName, bean.getClass().getName(), method.getName()), e);
+            throw new IllegalStateException("Failed to invoke %s factory %s#%s.".formatted(annotationName, target.getClass().getName(), method.getName()), e);
         }
     }
 
