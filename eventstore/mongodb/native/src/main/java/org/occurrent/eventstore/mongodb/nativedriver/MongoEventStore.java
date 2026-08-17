@@ -748,7 +748,9 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
             if (updatedCloudEvent == null) {
                 throw UpdateEventFunctionValidator.updateFunctionReturnedNull();
-            } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
+            }
+            updatedCloudEvent = OccurrentCloudEventExtension.preserveAppendId(currentCloudEvent, updatedCloudEvent);
+            if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
                 String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                 long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
                 Document updatedDocument = convertToDocument(timeRepresentation, streamId, streamVersion, updatedCloudEvent);

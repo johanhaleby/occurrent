@@ -179,6 +179,84 @@ class MigrateAppendResultRecordPatternTest implements RewriteTest {
     }
 
     @Test
+    void generatesACollisionSafeNameWhenAnExistingBindingIsAlreadyCalledAppendId() {
+        rewriteRun(
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.eventstore.api.WriteResult;
+
+                        class Reader {
+                            String describe(Object result) {
+                                return switch (result) {
+                                    case WriteResult(var appendId, var oldStreamVersion, var newStreamVersion) ->
+                                            appendId + ":" + oldStreamVersion + "->" + newStreamVersion;
+                                    default -> "unknown";
+                                };
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.eventstore.api.WriteResult;
+
+                        class Reader {
+                            String describe(Object result) {
+                                return switch (result) {
+                                    case WriteResult(var appendId, var oldStreamVersion, var newStreamVersion, var appendId1) ->
+                                            appendId + ":" + oldStreamVersion + "->" + newStreamVersion;
+                                    default -> "unknown";
+                                };
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void generatesACollisionSafeNameWhenAnEnclosingLocalIsAlreadyCalledAppendId() {
+        rewriteRun(
+                java(
+                        """
+                        package com.example;
+
+                        import org.occurrent.eventstore.api.WriteResult;
+
+                        class Reader {
+                            String describe(Object result) {
+                                String appendId = "unrelated";
+                                return switch (result) {
+                                    case WriteResult(var streamId, var oldStreamVersion, var newStreamVersion) ->
+                                            appendId + ":" + streamId;
+                                    default -> "unknown";
+                                };
+                            }
+                        }
+                        """,
+                        """
+                        package com.example;
+
+                        import org.occurrent.eventstore.api.WriteResult;
+
+                        class Reader {
+                            String describe(Object result) {
+                                String appendId = "unrelated";
+                                return switch (result) {
+                                    case WriteResult(var streamId, var oldStreamVersion, var newStreamVersion, var appendId1) ->
+                                            appendId + ":" + streamId;
+                                    default -> "unknown";
+                                };
+                            }
+                        }
+                        """
+                )
+        );
+    }
+
+    @Test
     void leavesAnUnrelatedThreeComponentRecordPatternAlone() {
         rewriteRun(
                 java(

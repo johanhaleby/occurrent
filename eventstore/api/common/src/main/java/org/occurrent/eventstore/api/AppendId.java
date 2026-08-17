@@ -54,8 +54,9 @@ public record AppendId(UUID value) {
     }
 
     /**
-     * Reads the append id {@code metadata} has, or returns {@link Optional#empty()} when the event has none,
-     * either because its append persisted nothing or because the store that wrote it does not supply one.
+     * Reads the append id {@code metadata} has, or returns {@link Optional#empty()} when its event has none,
+     * either because it predates this feature or because the store or producer that supplied it did not stamp
+     * one.
      */
     public static Optional<AppendId> from(EventMetadata metadata) {
         Objects.requireNonNull(metadata, "EventMetadata cannot be null");

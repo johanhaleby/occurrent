@@ -893,14 +893,17 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                         final Mono<CloudEvent> result;
                         if (updatedCloudEvent == null) {
                             result = Mono.error(UpdateEventFunctionValidator.updateFunctionReturnedNull());
-                        } else if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
-                            String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
-                            long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
-                            Document updatedDocument = OccurrentCloudEventMongoDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, updatedCloudEvent);
-                            updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
-                            result = mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName).thenReturn(updatedCloudEvent);
                         } else {
-                            result = Mono.just(updatedCloudEvent);
+                            CloudEvent preservedUpdatedCloudEvent = OccurrentCloudEventExtension.preserveAppendId(currentCloudEvent, updatedCloudEvent);
+                            if (!Objects.equals(preservedUpdatedCloudEvent, currentCloudEvent)) {
+                                String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
+                                long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
+                                Document updatedDocument = OccurrentCloudEventMongoDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, preservedUpdatedCloudEvent);
+                                updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
+                                result = mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName).thenReturn(preservedUpdatedCloudEvent);
+                            } else {
+                                result = Mono.just(preservedUpdatedCloudEvent);
+                            }
                         }
                         return result;
                     });

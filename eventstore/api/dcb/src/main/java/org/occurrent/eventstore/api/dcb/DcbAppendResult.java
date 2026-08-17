@@ -34,9 +34,10 @@ import java.util.Optional;
  * @param lastSequencePosition the last global DCB sequence position assigned to the appended events
  * @param eventCount the number of events appended
  * @param appendId the identifier stamped on every appended event. A successful DCB append always persists at least
- *                 one event, so this is present for any result built through the four-argument constructor; a
- *                 result built through the three-argument constructor is empty, following {@link AppendId}'s two
- *                 causes of absence.
+ *                 one event, so a store-produced result has one here. A result built through the three-argument
+ *                 constructor is always empty, and nothing stops a caller from passing {@link Optional#empty()} to
+ *                 the four-argument one directly, so this component's presence is a property of where the result
+ *                 came from, not one this record enforces on its own.
  */
 @NullMarked
 public record DcbAppendResult(long firstSequencePosition, long lastSequencePosition, int eventCount, Optional<AppendId> appendId) {

@@ -24,6 +24,7 @@ public class OccurrentExtensionRemover {
         CloudEventBuilder builder = CloudEventBuilder.v1(cloudEvent);
         OccurrentCloudEventExtension.KEYS.forEach(builder::withoutExtension);
         builder.withoutExtension(OccurrentCloudEventExtension.POSITION);
+        builder.withoutExtension(OccurrentCloudEventExtension.APPEND_ID);
         return builder.build();
     }
 }

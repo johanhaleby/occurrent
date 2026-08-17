@@ -20,6 +20,8 @@ import org.openrewrite.Recipe;
 import org.openrewrite.Tree;
 import org.openrewrite.TreeVisitor;
 import org.openrewrite.java.JavaIsoVisitor;
+import org.openrewrite.java.VariableNameUtils;
+import org.openrewrite.java.VariableNameUtils.GenerationStrategy;
 import org.openrewrite.java.tree.J;
 import org.openrewrite.java.tree.JavaType;
 import org.openrewrite.java.tree.Space;
@@ -36,7 +38,8 @@ import java.util.List;
  * components stops compiling, since a record pattern has to name every component of the canonical constructor.
  * Unlike the by-hand cases {@link MigrateSagaTimerName} leaves a review marker for, a record pattern's arity is a
  * compiler-enforced fact rather than a judgement call, so this rewrite is unconditional wherever it applies. Any
- * three-binding deconstruction pattern against either type gains a fourth, {@code var appendId}, regardless of
+ * three-binding deconstruction pattern against either type gains a fourth, {@code var appendId} by default, or a
+ * scope-checked variant of that name ({@code appendId2} and so on) when {@code appendId} is already bound in scope,
  * whether the first three bindings are typed or {@code var}. Nothing in this repository uses either pattern (ADR
  * 132 says so directly), so this exists for a caller's own source. See doc/migration/upgrading-to-0.34.0.md.
  */
@@ -95,17 +98,22 @@ public class MigrateAppendResultRecordPattern extends Recipe {
                 J.Identifier varKeyword = new J.Identifier(Tree.randomId(), Space.EMPTY, Markers.EMPTY,
                         Collections.emptyList(), "var", appendIdType, null);
 
+                // Scope-checked rather than a bare "appendId" literal, so a pattern whose own first component is
+                // already named "appendId" (or an enclosing local of that name) gets a non-colliding binding
+                // instead of a rewrite that still fails to compile.
+                String bindingName = VariableNameUtils.generateVariableName(APPEND_ID_BINDING_NAME, getCursor(), GenerationStrategy.INCREMENT_NUMBER);
+
                 JavaType.Variable lastFieldType = lastVar.getName().getFieldType();
                 JavaType.Variable appendIdFieldType = lastFieldType == null ? null :
-                        lastFieldType.withName(APPEND_ID_BINDING_NAME).withType(appendIdType);
+                        lastFieldType.withName(bindingName).withType(appendIdType);
                 J.Identifier newName = lastVar.getName().withId(Tree.randomId())
-                        .withSimpleName(APPEND_ID_BINDING_NAME)
+                        .withSimpleName(bindingName)
                         .withType(appendIdType)
                         .withFieldType(appendIdFieldType);
 
                 JavaType.Variable lastVariableType = lastVar.getVariableType();
                 JavaType.Variable appendIdVariableType = lastVariableType == null ? null :
-                        lastVariableType.withName(APPEND_ID_BINDING_NAME).withType(appendIdType);
+                        lastVariableType.withName(bindingName).withType(appendIdType);
                 J.VariableDeclarations.NamedVariable newVar = lastVar.withId(Tree.randomId())
                         .withName(newName)
                         .withInitializer(null)

@@ -24,7 +24,9 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.EventStoreCapability;
+import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.filter.Filter;
 
@@ -307,6 +309,20 @@ public abstract class EventStoreOperationsConformance extends EventStoreConforma
                     () -> assertThat(idsOf(eventStore().read(STREAM_ID))).containsExactly("a", "b"),
                     () -> assertThat(eventStore().read(STREAM_ID).version()).isEqualTo(2)
             );
+        }
+
+        @Test
+        void keeps_the_events_own_append_id_even_when_the_update_function_returns_a_fresh_event() {
+            WriteResult result = eventStore().write(STREAM_ID, List.of(event("a", DEFINED), event("b", CHANGED)));
+            String appendId = result.appendId().orElseThrow().toString();
+
+            // A fresh event built from scratch, not derived from "original", has none of its extensions. The
+            // store owns the append id the same way it owns streamId and streamVersion, so it must reapply it
+            // rather than let a replacement event drop it.
+            operations().updateEvent("b", SOURCE, original -> event("b", "NameRewritten"));
+
+            CloudEvent updated = queries().query(Filter.id("b")).findFirst().orElseThrow();
+            assertThat(extension(updated, OccurrentCloudEventExtension.APPEND_ID)).isEqualTo(appendId);
         }
     }
 }

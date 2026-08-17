@@ -137,4 +137,18 @@ public class OccurrentCloudEventExtension implements CloudEventExtension {
         Object appendId = cloudEvent.getExtension(APPEND_ID);
         return appendId == null ? null : appendId.toString();
     }
+
+    /**
+     * Returns a copy of {@code updated} with {@code original}'s append id, or {@code updated} unchanged when
+     * {@code original} has none. A store's {@code updateEvent} calls this so a replacement event an updater builds
+     * from scratch cannot silently drop the append id an earlier write stamped, which would move the event out of
+     * the append it belongs to. The store owns this value the same way it owns {@value #STREAM_ID},
+     * {@value #STREAM_VERSION} and {@value #POSITION}, so it is reapplied rather than left to the updater.
+     */
+    public static CloudEvent preserveAppendId(CloudEvent original, CloudEvent updated) {
+        requireNonNull(original, "Original CloudEvent cannot be null");
+        requireNonNull(updated, "Updated CloudEvent cannot be null");
+        String appendId = getAppendId(original);
+        return appendId == null ? updated : withAppendId(updated, appendId);
+    }
 }
