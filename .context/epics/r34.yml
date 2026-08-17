@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 69
-updated_at: 2026-08-17T22:40:00Z
+revision: 70
+updated_at: 2026-08-17T12:40:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates flow through the orchestrator in BOTH modes per Johan's 2026-08-17 ruling: workers hand decision content to the orchestrator, who answers what precedent settles, presents the rest to Johan with a recommendation (promptly in Attended, queued in Unattended), and relays answers back. Session venue only on Johan's explicit per-unit request. Release execution is Johan's manual act; r34 stops at release readiness."
@@ -72,6 +72,14 @@ pending_actions:
     attempts: 1
     safe_to_repeat: true
     issued_at: 2026-08-16T21:00:00Z
+  - id: act-012
+    type: merge
+    target: "Standing instruction from Johan 2026-08-17: merge each remaining unit PR on its worker's settled signal without further asks, gates unchanged (green, threads resolved, changelog verified pre-merge, CAS pin). NOTE: revision 69's checkpoint claimed this entry was journaled but only bumped the counter; entry actually written at revision 70. First application: 838 merged 7f4b105d6 on U7's settled signal. Remaining scope: U19's future PR"
+    expected: "U19's PR merges on its settled signal, closing 836; entry flips VERIFIED then"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-17T12:20:00Z
 units:
   U19:
     issue: 836
@@ -209,26 +217,26 @@ units:
   U7:
     issue: 771
     goal: "Manual/reactor registration ordering residual plus checkpoint delete-recreate race, one decision across both stacks, plan-first, likely ADR"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: [U1]
-    session: "chip task_14b3d358, claimed 771, design done, at its plan gate with Johan. ADR RESERVATION: 130=U7 (audited across all remote branches 14:0xZ, 129 highest claimed, next free 131). Resumed post-reboot as PR 838, green but four threads unanswered, two of them released-ADR immutability violations (in-place amendments to ADRs 86 and 116 against the AGENTS.md rule from PR 820) that MUST move into ADR 130 with Status-pointer-only touches before merge. Worker live and owns the round"
+    session: "chip task_14b3d358 settled 2026-08-17T12:2xZ after fixing all four Copilot threads on 838, the two released-ADR violations resolved as additive Status pointers into ADR 130 (orchestrator verified the 86/116 diffs are 4-line additions each, the ADR 111 model). ADR RESERVATION ledger final: 130=MERGED/838, 131=MERGED/839, next free 132. Merged under act-012 on the worker's explicit settled signal"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "771", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "838", met: true, evidence: "merged 7f4b105d6 2026-08-17T12:27Z, CAS pin 9784b5e40, 27/27 green, 4/4 threads resolved, changelog entry and ADR 130 verified pre-merge, branch deleted"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "771", met: true, evidence: "closed by the squash merge, verified via gh issue view"}
   U8:
     issue: 773
     goal: "Retained-history counting vs stepWindow eviction (#773) and the explicit-retention-choice question (#764) as one ADR-backed decision; a no-forced-choice outcome is recorded, not dropped"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
-    session: "chip task_ffc08735, delivered PR 822 at 01:1xZ (stepWindow foreign-type eviction fix plus ADR). ADR COLLISION again, claims 127 which 819 holds. Orchestrator directed renumber to 129 via PR comment 5309149686, worker active, expected renumbered and rebased by 02:00Z else orchestrator does both. ADR RESERVATIONS: 127=U15/819, 128=MERGED/816, 129=U8/822, next free 130. 27/27 green with 3 threads unanswered at 07:00Z, worker may resume per the DONE-flag lesson, orchestrator takes the threads at 08:00Z if untouched"
+    session: "chip task_ffc08735 delivered PR 822, renumbered its ADR to 129 on direction after the 127 collision, threads resolved. Facts backfilled at revision 70 after a sweep found this entry stale (merge itself happened earlier under the settled protocol)"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "773", met: false, evidence: null}
-      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "764", met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "822", met: true, evidence: "merged 95786b4fc, verified via gh pr view 2026-08-17T12:3xZ, ADR 129 included"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "773", met: true, evidence: "CLOSED, verified via gh issue view 2026-08-17T12:3xZ"}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "764", met: true, evidence: "CLOSED, verified via gh issue view 2026-08-17T12:3xZ"}
   U9:
     issue: 748
     goal: "Parked-instance behavior on renamed or removed step, lifecycle ADR plus fix, includes the IndexOutOfBoundsException sibling"
@@ -325,6 +333,6 @@ units:
     health: PROGRESSING
     swept: true
     depends_on: []
-    session: "chip task_4f39a24b COMPLETE, the Opus design round that became ADR 127"
+    session: "chip task_4f39a24b COMPLETE, the Opus design round that became ADR 127. Implementation breakdown posted on 725, which stays open as the future epic's tracker. Fact backfilled at revision 70, a sweep found the deliverable ref never filled in"
     deliverables:
-      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: "819", met: true, evidence: "ADR 127 merged d7043715f, approved by Johan at the structured ask, verified via gh pr view 2026-08-17T12:4xZ"}
