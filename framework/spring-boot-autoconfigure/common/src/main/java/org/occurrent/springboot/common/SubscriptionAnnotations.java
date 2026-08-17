@@ -28,8 +28,10 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
+import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
+import org.springframework.util.ReflectionUtils;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -279,6 +281,61 @@ public final class SubscriptionAnnotations {
         if (startAtSet && startAtGlobalPositionSet) {
             throw new IllegalArgumentException("%s '%s' sets both startAt and startAtGlobalPosition, which are two ways to express the same start point, so set only one.".formatted(annotationName, id));
         }
+    }
+
+    /**
+     * Invoke a descriptor factory method ({@code @Projection}, {@code @Snapshot} or {@code @Saga}), unwrapping
+     * {@code bean} to its ultimate AOP target first. Shared by every registrar that invokes one of these factories, on
+     * both stacks, so the unwrap only has to be right in one place.
+     * <p>
+     * A descriptor factory runs exactly once at startup to build a value; there is no request for advice to usefully
+     * observe, so invoking it through a proxy is a hazard rather than a feature. A CGLIB proxy happens to survive it,
+     * since the proxy subclasses the target and {@code method} (found by scanning the bean's declared or predicted
+     * type) is inherited on it either way. A JDK interface proxy does not survive it: for a bean not yet a singleton
+     * when its type was scanned (a {@code @Lazy} bean, most commonly), the scan can predict the concrete class the
+     * bean declares before that bean is ever proxied, and the proxy created afterwards implements only its interfaces,
+     * not that class, so invoking a method declared on it throws {@link IllegalArgumentException}. Unwrapping to the
+     * target and re-resolving {@code method} against the target's own class first makes both proxy kinds behave the
+     * same way: the factory runs once, directly, with no advice and no exception.
+     *
+     * @param annotationName the annotation name for error messages, for example {@code "@Projection"}
+     * @param bean           the (possibly proxied) bean the factory method was found on
+     * @param method         the no-argument factory method found by scanning {@code bean}'s declared or predicted type
+     * @return the descriptor the factory method returned, never {@code null}
+     */
+    public static Object invokeDescriptorFactory(String annotationName, Object bean, Method method) {
+        Object target = ultimateTarget(bean);
+        Method targetMethod = method;
+        if (target != bean) {
+            targetMethod = ReflectionUtils.findMethod(target.getClass(), method.getName());
+            if (targetMethod == null) {
+                throw new IllegalStateException("%s factory %s#%s could not be resolved on the unwrapped proxy target %s.".formatted(annotationName, bean.getClass().getName(), method.getName(), target.getClass().getName()));
+            }
+        }
+        try {
+            targetMethod.setAccessible(true);
+            Object result = targetMethod.invoke(target);
+            if (result == null) {
+                throw new IllegalStateException("%s factory %s#%s returned null.".formatted(annotationName, bean.getClass().getName(), method.getName()));
+            }
+            return result;
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Failed to invoke %s factory %s#%s.".formatted(annotationName, bean.getClass().getName(), method.getName()), e);
+        }
+    }
+
+    // Unwraps through any number of nested AOP proxies to the innermost fixed target (AopProxyUtils.getSingletonTarget
+    // stops at one layer, hence the loop). Returns bean itself when it is not a proxy, or when a proxy's TargetSource
+    // is not a fixed singleton (a prototype- or pool-backed source is left proxied rather than risking a
+    // side-effecting getTarget() call, or invoking a different target instance than the one the descriptor id was
+    // registered against).
+    private static Object ultimateTarget(Object bean) {
+        Object current = bean;
+        Object next;
+        while ((next = AopProxyUtils.getSingletonTarget(current)) != null) {
+            current = next;
+        }
+        return current;
     }
 
     /**

@@ -94,7 +94,7 @@ class SnapshotAnnotationRegistrar {
                 annotation.startupMode() != StartupMode.DEFAULT);
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
-        Object descriptor = invokeSnapshotFactory(method, bean);
+        Object descriptor = SubscriptionAnnotations.invokeDescriptorFactory("@Snapshot", bean, method);
         int everyNEvents = annotation.everyNEvents();
         if (everyNEvents < 1) {
             throw new IllegalArgumentException("@Snapshot '%s' everyNEvents must be at least 1, but was %d.".formatted(id, everyNEvents));
@@ -335,18 +335,6 @@ class SnapshotAnnotationRegistrar {
                 + "way out when a CloudEventTypeMapper of your own maps the whole hierarchy onto a single CloudEvent type string.");
     }
 
-    private static Object invokeSnapshotFactory(Method method, Object bean) {
-        try {
-            method.setAccessible(true);
-            Object result = method.invoke(bean);
-            if (result == null) {
-                throw new IllegalStateException("@Snapshot factory method %s#%s returned null.".formatted(bean.getClass().getName(), method.getName()));
-            }
-            return result;
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Failed to invoke @Snapshot factory method %s#%s".formatted(bean.getClass().getName(), method.getName()), e);
-        }
-    }
 
     private static Class<?> reflectSnapshotStateType(Method factoryMethod, String id) {
         Type returnType = factoryMethod.getGenericReturnType();
