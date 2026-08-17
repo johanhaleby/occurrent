@@ -14,8 +14,7 @@
 - H2 DONE: PR 807 merged as `4f52632` 2026-08-16T17:1xZ (CAS pin `55455c7`). Copilot's one inline finding (migration-guide intro phrased as construction process) fixed on the branch and replied to before merge. The shared docs checkout at `occurrent-org.github.io` carries U4's live branch, so orchestrator docs fixes go through the GitHub contents API on fresh branches, never that checkout (docs PR 67 was built that way; note gh api needs `-F content=@file`, `-f` sends the literal string).
 - Verification: none run this session (no code changed); the release tag implies green main, re-verified at the first merge gate.
 - Tracker: github (block below)
-- Mode: Unattended (set by Johan 2026-08-16T21:0xZ, "for now", after starting every pending chip himself)
-- Unattended terms: may decide alone: everything the policy file's standing grants cover (merge green thread-resolved library PRs with CAS pins, rerun infra failures, issue comments and routing, memory checkpoints), plus worker plan approvals that AGENTS.md, an ADR, or recorded precedent already settles, with the derivation written down. Return condition: any new message from Johan in this session. Decision queue: (1) docs PRs 66 and 67 merges, then orchestrator closes docs issue 57 per the standing ruling, (2) issue 760 close after the ADR 54 amendment, (3) issue 781 close or re-defer with the lost-redelivery evidence, (4) any worker plan gate that is not principle-settled, noting workers with in-session gates park until Johan answers in their session, (5) the unmarked reactor-store chip, superseded by the 810 scope comment, dismiss or ignore. Push notification only on a true epic-wide stall.
+- Mode: Attended (set by Johan 2026-08-17T~15:4xZ, "And now switch to attended mode", superseding the 2026-08-16T21:0xZ Unattended stretch)
 
 ## Tracker
 
