@@ -292,55 +292,61 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
             matchingEventCount = eventStoreQueries.count(catchupFilter);
         }
 
-        // endReplayIfStillCurrent gates on stopped/shuttingDown as well as identity, so a stop() that lands before
-        // this point still leaves this attempt's marker in place instead of removing it (mirrors the pre-#737
-        // behavior for that case), and it is the atomic decision itself: a later attempt can still have taken over
-        // in the narrow window right before this call, and only actually ending this attempt's ownership here may
-        // count as a normal completion rather than being superseded.
-        final boolean subscriptionsWasCancelledOrShutdown = !endReplayIfStillCurrent(subscriptionId);
+        // Locked from the identity decision through the delegate subscribe call below. Unlocked, a
+        // cancelSubscription or a fresh subscribe for this id could land in the gap after this attempt decided it
+        // was still current but before it finished acting on that, either losing the cancellation or, for a fresh
+        // attempt, having its own checkpoint save wiped out by this attempt's late delete a few lines down.
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            // endReplayIfStillCurrent gates on stopped/shuttingDown as well as identity, so a stop() that lands
+            // before this point still leaves this attempt's marker in place instead of removing it (mirrors the
+            // pre-#737 behavior for that case), and it is the atomic decision itself: a later attempt can still
+            // have taken over in the narrow window right before this call, and only actually ending this attempt's
+            // ownership here may count as a normal completion rather than being superseded.
+            final boolean subscriptionsWasCancelledOrShutdown = !endReplayIfStillCurrent(subscriptionId);
 
-        // If the delegate is not allowed to subscribe, remove the temporary position written during catch-up now
-        // that it's done. Gated on the same atomic decision above (not just checked ahead of it), so a superseded
-        // attempt reaching this late cannot delete a later attempt's own temporary position.
-        if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
-            returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                cfg.storage().delete(subscriptionId);
-                return null;
-            });
-        }
-
-        // Store the global position once catch-up is ready so a subscription that got no new events during replay
-        // still resumes from it after a restart, instead of replaying history again. Uses UseCheckpointInStorage
-        // rather than PersistCheckpointDuringCatchupPhase because using storage at all implies the wrapped
-        // subscription should continue from where this left off.
-        StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
-                        cfg -> () -> {
-                            // Read inside the supplier so a retry picks up the latest checkpoint
-                            Checkpoint position = cfg.storage().read(subscriptionId);
-                            // Nothing stored, or a time-based position from catch-up: save globalCheckpoint, since
-                            // the wrapped subscription may not support time-based positions.
-                            if ((position == null || isTimeBasedCheckpoint(position)) && globalCheckpoint != null) {
-                                position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
-                            } else if (position == null) {
-                                // globalCheckpoint is also null: start at subscriptionModelDefault if the delegate may subscribe
-                                return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
-                            }
-                            return StartAt.checkpoint(position);
-                        })
-                .orElse(() -> {
-                    if (globalCheckpoint == null) {
-                        return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
-                    } else {
-                        return StartAt.checkpoint(globalCheckpoint);
-                    }
-                }));
-
-        Consumer<CloudEvent> liveConsumer = cloudEvent -> {
-            if (!catchupPhaseCache.contains(cloudEvent.getId())) {
-                action.accept(cloudEvent);
+            // If the delegate is not allowed to subscribe, remove the temporary position written during catch-up now
+            // that it's done. Gated on the same atomic decision above (not just checked ahead of it), so a superseded
+            // attempt reaching this late cannot delete a later attempt's own temporary position.
+            if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
+                returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+                    cfg.storage().delete(subscriptionId);
+                    return null;
+                });
             }
-        };
-        return startDelegatedSubscription(subscriptionId, filter, subscriptionsWasCancelledOrShutdown, startAtToUse, liveConsumer);
+
+            // Store the global position once catch-up is ready so a subscription that got no new events during
+            // replay still resumes from it after a restart, instead of replaying history again. Uses
+            // UseCheckpointInStorage rather than PersistCheckpointDuringCatchupPhase because using storage at all
+            // implies the wrapped subscription should continue from where this left off.
+            StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
+                            cfg -> () -> {
+                                // Read inside the supplier so a retry picks up the latest checkpoint
+                                Checkpoint position = cfg.storage().read(subscriptionId);
+                                // Nothing stored, or a time-based position from catch-up: save globalCheckpoint, since
+                                // the wrapped subscription may not support time-based positions.
+                                if ((position == null || isTimeBasedCheckpoint(position)) && globalCheckpoint != null) {
+                                    position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
+                                } else if (position == null) {
+                                    // globalCheckpoint is also null: start at subscriptionModelDefault if the delegate may subscribe
+                                    return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
+                                }
+                                return StartAt.checkpoint(position);
+                            })
+                    .orElse(() -> {
+                        if (globalCheckpoint == null) {
+                            return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
+                        } else {
+                            return StartAt.checkpoint(globalCheckpoint);
+                        }
+                    }));
+
+            Consumer<CloudEvent> liveConsumer = cloudEvent -> {
+                if (!catchupPhaseCache.contains(cloudEvent.getId())) {
+                    action.accept(cloudEvent);
+                }
+            };
+            return startDelegatedSubscription(subscriptionId, filter, subscriptionsWasCancelledOrShutdown, startAtToUse, liveConsumer);
+        }
     }
 
     private Subscription startDelegatedSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, boolean subscriptionsWasCancelledOrShutdown, StartAt startAtToUse, Consumer<CloudEvent> liveConsumer) {
@@ -408,45 +414,50 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, e -> GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e))),
                 catchupPhaseCache);
 
-        // See the time-based path's identical reasoning for why this is the atomic decision itself.
-        final boolean subscriptionsWasCancelledOrShutdown = !endReplayIfStillCurrent(subscriptionId);
+        // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
+        // time-based path above. An unlocked gap here is observable two ways, a lost cancellation, or a fresh
+        // attempt's checkpoint save wiped out by this attempt's late delete.
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            // See the time-based path's identical reasoning for why this is the atomic decision itself.
+            final boolean subscriptionsWasCancelledOrShutdown = !endReplayIfStillCurrent(subscriptionId);
 
-        // Gated on the atomic decision above, not just checked ahead of it, for the same reason as the time-based
-        // path: a superseded attempt reaching this late must not delete a later attempt's own temporary position.
-        if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
-            returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                cfg.storage().delete(subscriptionId);
-                return null;
-            });
-        }
-
-        StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
-                        cfg -> () -> {
-                            Checkpoint position = cfg.storage().read(subscriptionId);
-                            // If nothing is stored, or the stored position is a global position (written by this
-                            // catch-up), save the live change-stream position so the wrapped subscription resumes
-                            // from there.
-                            if ((position == null || GlobalCheckpoint.isGlobalCheckpoint(position)) && globalCheckpoint != null) {
-                                position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
-                            } else if (position == null) {
-                                return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
-                            }
-                            return StartAt.checkpoint(position);
-                        })
-                .orElse(() -> {
-                    if (globalCheckpoint == null) {
-                        return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
-                    } else {
-                        return StartAt.checkpoint(globalCheckpoint);
-                    }
-                }));
-
-        Consumer<CloudEvent> liveConsumer = cloudEvent -> {
-            if (!catchupPhaseCache.contains(cloudEvent.getId())) {
-                action.accept(cloudEvent);
+            // Gated on the atomic decision above, not just checked ahead of it, for the same reason as the time-based
+            // path: a superseded attempt reaching this late must not delete a later attempt's own temporary position.
+            if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
+                returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+                    cfg.storage().delete(subscriptionId);
+                    return null;
+                });
             }
-        };
-        return startDelegatedSubscription(subscriptionId, filter, subscriptionsWasCancelledOrShutdown, startAtToUse, liveConsumer);
+
+            StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
+                            cfg -> () -> {
+                                Checkpoint position = cfg.storage().read(subscriptionId);
+                                // If nothing is stored, or the stored position is a global position (written by this
+                                // catch-up), save the live change-stream position so the wrapped subscription resumes
+                                // from there.
+                                if ((position == null || GlobalCheckpoint.isGlobalCheckpoint(position)) && globalCheckpoint != null) {
+                                    position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
+                                } else if (position == null) {
+                                    return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
+                                }
+                                return StartAt.checkpoint(position);
+                            })
+                    .orElse(() -> {
+                        if (globalCheckpoint == null) {
+                            return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
+                        } else {
+                            return StartAt.checkpoint(globalCheckpoint);
+                        }
+                    }));
+
+            Consumer<CloudEvent> liveConsumer = cloudEvent -> {
+                if (!catchupPhaseCache.contains(cloudEvent.getId())) {
+                    action.accept(cloudEvent);
+                }
+            };
+            return startDelegatedSubscription(subscriptionId, filter, subscriptionsWasCancelledOrShutdown, startAtToUse, liveConsumer);
+        }
     }
 
     private Filter deriveFilterToUseDuringCatchupPhase(@Nullable SubscriptionFilter filter, Checkpoint checkpoint) {

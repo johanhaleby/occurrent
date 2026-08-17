@@ -441,6 +441,210 @@ class StreamCatchupSubscriptionModelTest {
         });
     }
 
+    /**
+     * Issue #827 (deferred from PR 823's per-attempt identity fix, #737). That fix made the ownership decision
+     * itself atomic (endReplayIfStillCurrent), but nothing held ownership across what follows it. A cancellation
+     * landing after this attempt decided it was still current, but before the delegate subscribe below actually
+     * ran, found nothing left in the map to flag, and the delegate did not know the id yet either, so the
+     * cancellation was silently lost and the delegate went live anyway. Closing that gap needs a lock spanning the
+     * whole handover, not just the decision.
+     */
+    @Test
+    void a_cancellation_racing_the_final_delegate_subscribe_is_not_lost() throws InterruptedException {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        String subscriptionId = "subscription";
+        CountDownLatch reachedFinishing = new CountDownLatch(1);
+        CountDownLatch releaseFinishing = new CountDownLatch(1);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100)) {
+            @Override
+            protected boolean endReplayIfStillCurrent(String subscriptionId) {
+                boolean stillCurrent = super.endReplayIfStillCurrent(subscriptionId);
+                reachedFinishing.countDown();
+                awaitLatch(releaseFinishing);
+                return stillCurrent;
+            }
+        };
+
+        subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+        });
+        assertThat(reachedFinishing.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Races the cancellation against the still-in-flight delegate subscribe, on its own thread since it must
+        // not deadlock this test on locked (post-fix) code, where it blocks until the handover below completes.
+        Thread cancel = new Thread(() -> subscription.cancelSubscription(subscriptionId));
+        cancel.start();
+
+        // Unlocked (pre-fix) code lets this cancellation run its fast no-op path (nothing is left to flag, the
+        // delegate does not know the id yet) well within this window; locked (post-fix) code blocks it here until
+        // releaseFinishing below, so this reliably times out there instead.
+        cancel.join(500);
+
+        releaseFinishing.countDown();
+        cancel.join(Duration.ofSeconds(5).toMillis());
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(subscription.isRunning(subscriptionId))
+                        .as("a cancellation racing the handover must still end the subscription, not be silently "
+                                + "lost to a delegate subscribe that had already committed to going live")
+                        .isFalse());
+    }
+
+    /**
+     * Issue #827, the checkpoint-delete manifestation of the same gap (deferred from PR 823, the time-based path's
+     * "delegate must not run" cleanup at what was then line 307). A finishing attempt's temporary checkpoint delete
+     * runs after it already relinquished ownership of the id. Unguarded, a fresh attempt for the same id can
+     * register and save its own position in that gap, and the stale delete then removes the fresh attempt's
+     * position instead of its own. Closing the gap needs holding the same lock across the delete and gating a
+     * fresh attempt's registration on it too, so the fresh attempt cannot even start until the stale delete (if
+     * any) is already done.
+     */
+    @Test
+    void a_finishing_attempts_late_checkpoint_delete_does_not_clobber_a_fresh_attempts_saved_position() throws InterruptedException {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        write(eventStore, nameDefined("event1"));
+        String subscriptionId = "subscription";
+
+        CountDownLatch freshSaved = new CountDownLatch(1);
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String id, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                Checkpoint saved = super.save(id, checkpoint, condition);
+                freshSaved.countDown();
+                return saved;
+            }
+        };
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage));
+
+        CountDownLatch reachedFinishing = new CountDownLatch(1);
+        CountDownLatch releaseFinishing = new CountDownLatch(1);
+        // Only the FIRST call (the stale attempt's) pauses here; the fresh attempt started below reaches this same
+        // overridden method too, for its own identity decision, and must not be blocked by it as well, or nothing
+        // would ever distinguish "the fresh attempt got ahead" from "both attempts are simply parked together".
+        AtomicBoolean firstCallToEndReplayIfStillCurrent = new AtomicBoolean(true);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, config) {
+            @Override
+            protected boolean endReplayIfStillCurrent(String subscriptionId) {
+                boolean stillCurrent = super.endReplayIfStillCurrent(subscriptionId);
+                if (firstCallToEndReplayIfStillCurrent.compareAndSet(true, false)) {
+                    reachedFinishing.countDown();
+                    awaitLatch(releaseFinishing);
+                }
+                return stillCurrent;
+            }
+        };
+
+        // Resolves to real history for the catch-up's own replay, but to null for the delegate, so the finishing
+        // tail's "delegate must not run" branch deletes the temporary catch-up position once replay is done.
+        StartAt neverDelegates = StartAt.dynamic(context ->
+                context.hasSubscriptionModelType(CheckpointAwareInMemorySubscriptionModel.class) ? null : StartAtTime.beginningOfTime());
+
+        subscription.subscribe(subscriptionId, neverDelegates, cloudEvent -> {
+        });
+        assertThat(reachedFinishing.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // A fresh, normally-delegating attempt for the same id, started on its own thread while the first is
+        // blocked right after deciding it is still current but before its own delete runs.
+        Thread freshAttempt = new Thread(() -> {
+            try {
+                subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+                }).waitUntilStarted();
+            } catch (RuntimeException ignored) {
+                // The stale attempt above also subscribes the delegate unconditionally once its own handover
+                // decides it is still current, even though its own StartAt resolved to null for the delegate; the
+                // two attempts' delegate subscribe calls can then collide on the in-memory model's duplicate-id
+                // check. Immaterial here: this test only cares whether the fresh attempt's own checkpoint save
+                // (asserted below) survives, and that save runs before this call, not after it.
+            }
+        });
+        freshAttempt.start();
+
+        // Unlocked (pre-fix) code lets this fresh attempt register and save well within this window; locked
+        // (post-fix) code cannot even register until releaseFinishing below, so this reliably times out there
+        // instead, which is exactly why the real assertion is the one after both attempts have finished, not this
+        // wait.
+        freshSaved.await(500, TimeUnit.MILLISECONDS);
+
+        releaseFinishing.countDown();
+        freshAttempt.join(Duration.ofSeconds(5).toMillis());
+
+        assertThat(freshSaved.await(5, TimeUnit.SECONDS))
+                .as("the fresh attempt must have saved its own position by the time both attempts have finished")
+                .isTrue();
+        assertThat(storage.read(subscriptionId))
+                .as("a finishing attempt's late, now-stale checkpoint delete must not remove a fresh attempt's own "
+                        + "saved position for the same id")
+                .isNotNull();
+    }
+
+    /**
+     * Same race as {@link #a_finishing_attempts_late_checkpoint_delete_does_not_clobber_a_fresh_attempts_saved_position()},
+     * for the position-ordered catch-up path instead of the time-ordered one: a separate finishing tail in
+     * {@code StreamCatchupSubscriptionModel} with its own checkpoint-delete call, deferred from PR 823 alongside the
+     * time-based one at what was then line 409 of the same file.
+     */
+    @Test
+    void a_finishing_attempts_late_checkpoint_delete_does_not_clobber_a_fresh_attempts_saved_position_in_position_mode() throws InterruptedException {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        assertThat(eventStore.writesPosition()).isTrue();
+        write(eventStore, nameDefined("event1"));
+        String subscriptionId = "subscription";
+
+        CountDownLatch freshSaved = new CountDownLatch(1);
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage() {
+            @Override
+            public Checkpoint save(String id, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                Checkpoint saved = super.save(id, checkpoint, condition);
+                freshSaved.countDown();
+                return saved;
+            }
+        };
+        CatchupSubscriptionModelConfig config = new CatchupSubscriptionModelConfig(100, useCheckpointStorage(storage));
+
+        CountDownLatch reachedFinishing = new CountDownLatch(1);
+        CountDownLatch releaseFinishing = new CountDownLatch(1);
+        AtomicBoolean firstCallToEndReplayIfStillCurrent = new AtomicBoolean(true);
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, config) {
+            @Override
+            protected boolean endReplayIfStillCurrent(String subscriptionId) {
+                boolean stillCurrent = super.endReplayIfStillCurrent(subscriptionId);
+                if (firstCallToEndReplayIfStillCurrent.compareAndSet(true, false)) {
+                    reachedFinishing.countDown();
+                    awaitLatch(releaseFinishing);
+                }
+                return stillCurrent;
+            }
+        };
+
+        // Beginning-of-time maps to position 0 on a position-writing store (streamPositionCatchup), still resolving
+        // to null for the delegate so the finishing tail's "delegate must not run" branch deletes the temporary
+        // catch-up position once replay is done.
+        StartAt neverDelegates = StartAt.dynamic(context ->
+                context.hasSubscriptionModelType(CheckpointAwareInMemorySubscriptionModel.class) ? null : StartAtTime.beginningOfTime());
+
+        subscription.subscribe(subscriptionId, neverDelegates, cloudEvent -> {
+        });
+        assertThat(reachedFinishing.await(5, TimeUnit.SECONDS)).isTrue();
+
+        Thread freshAttempt = new Thread(() ->
+                subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+                }).waitUntilStarted());
+        freshAttempt.start();
+
+        freshSaved.await(500, TimeUnit.MILLISECONDS);
+
+        releaseFinishing.countDown();
+        freshAttempt.join(Duration.ofSeconds(5).toMillis());
+
+        assertThat(freshSaved.await(5, TimeUnit.SECONDS))
+                .as("the fresh attempt must have saved its own position by the time both attempts have finished")
+                .isTrue();
+        assertThat(storage.read(subscriptionId))
+                .as("a finishing attempt's late, now-stale checkpoint delete must not remove a fresh attempt's own "
+                        + "saved position for the same id")
+                .isNotNull();
+    }
+
     @Test
     void is_catching_up_rejects_a_null_subscription_id() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);

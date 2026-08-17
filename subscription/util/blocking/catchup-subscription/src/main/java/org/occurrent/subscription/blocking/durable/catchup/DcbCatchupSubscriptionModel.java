@@ -159,60 +159,67 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId),
                 (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache), catchupPhaseCache);
 
-        // endReplayIfStillCurrent gates on stopped/shuttingDown as well as identity, so a stop() that lands before
-        // this point still leaves this attempt's marker in place instead of removing it, and it is the atomic
-        // decision itself: a later attempt can still have taken over in the narrow window right before this call,
-        // and only actually ending this attempt's ownership here may count as a normal completion rather than
-        // being superseded. Mirrors the blocking stream catch-up's identical reasoning.
-        final boolean subscriptionsWasCancelledOrShutdown = !endReplayIfStillCurrent(subscriptionId);
+        // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
+        // blocking stream catch-up. Unlocked, a cancelSubscription or a fresh subscribe for this id could land in
+        // the gap after this attempt decided it was still current but before it finished acting on that, either
+        // losing the cancellation or having a fresh attempt's checkpoint save wiped out by this attempt's late
+        // delete a few lines down.
+        try (HandoverLock ignored = lockHandover(subscriptionId)) {
+            // endReplayIfStillCurrent gates on stopped/shuttingDown as well as identity, so a stop() that lands
+            // before this point still leaves this attempt's marker in place instead of removing it, and it is the
+            // atomic decision itself: a later attempt can still have taken over in the narrow window right before
+            // this call, and only actually ending this attempt's ownership here may count as a normal completion
+            // rather than being superseded.
+            final boolean subscriptionsWasCancelledOrShutdown = !endReplayIfStillCurrent(subscriptionId);
 
-        // Gated on the atomic decision above, not just checked ahead of it: a superseded attempt reaching this
-        // late must not delete a later attempt's own temporary position.
-        if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
-            returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                cfg.storage().delete(subscriptionId);
-                return null;
-            });
-        }
-
-        StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
-                        cfg -> () -> {
-                            Checkpoint position = cfg.storage().read(subscriptionId);
-                            // If nothing is stored, or the stored position is a DCB position (written by this catch-up),
-                            // save the live change-stream position so the wrapped subscription resumes from there.
-                            if ((position == null || GlobalCheckpoint.isGlobalCheckpoint(position)) && globalCheckpoint != null) {
-                                position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
-                            } else if (position == null) {
-                                return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
-                            }
-                            return StartAt.checkpoint(position);
-                        })
-                .orElse(() -> {
-                    if (globalCheckpoint == null) {
-                        return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
-                    } else {
-                        return StartAt.checkpoint(globalCheckpoint);
-                    }
-                }));
-
-        final Subscription subscription;
-        if (subscriptionsWasCancelledOrShutdown) {
-            // Same fix as the blocking stream side. Priming startAtToUse is skipped for an explicit cancellation of
-            // this exact id, since its get() call saves globalCheckpoint as a side effect, which would recreate the
-            // position cancelSubscription's own deletePositionFromStorage call just deleted.
-            if (!wasCancelled()) {
-                doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
-                    if (!cfg.storage().exists(subscriptionId)) {
-                        startAtToUse.get(generateSubscriptionModelContext());
-                    }
+            // Gated on the atomic decision above, not just checked ahead of it: a superseded attempt reaching this
+            // late must not delete a later attempt's own temporary position.
+            if (delegatedStartAt == null && !subscriptionsWasCancelledOrShutdown) {
+                returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+                    cfg.storage().delete(subscriptionId);
+                    return null;
                 });
             }
-            subscription = new CancelledSubscription(subscriptionId);
-        } else {
-            subscription = startLiveDcbSubscription(subscriptionId, filter, startAtToUse, action, catchupPhaseCache);
-            applyPendingPauseIfAny(subscriptionId);
+
+            StartAt startAtToUse = StartAt.dynamic(this.<Supplier<StartAt>, UseCheckpointInStorage>returnIfCheckpointStorageConfigIs(UseCheckpointInStorage.class,
+                            cfg -> () -> {
+                                Checkpoint position = cfg.storage().read(subscriptionId);
+                                // If nothing is stored, or the stored position is a DCB position (written by this catch-up),
+                                // save the live change-stream position so the wrapped subscription resumes from there.
+                                if ((position == null || GlobalCheckpoint.isGlobalCheckpoint(position)) && globalCheckpoint != null) {
+                                    position = cfg.storage().save(subscriptionId, globalCheckpoint, writeConditionFor(cfg, subscriptionId));
+                                } else if (position == null) {
+                                    return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
+                                }
+                                return StartAt.checkpoint(position);
+                            })
+                    .orElse(() -> {
+                        if (globalCheckpoint == null) {
+                            return delegatedStartAt == null ? startAt : StartAt.subscriptionModelDefault();
+                        } else {
+                            return StartAt.checkpoint(globalCheckpoint);
+                        }
+                    }));
+
+            final Subscription subscription;
+            if (subscriptionsWasCancelledOrShutdown) {
+                // Same fix as the blocking stream side. Priming startAtToUse is skipped for an explicit cancellation of
+                // this exact id, since its get() call saves globalCheckpoint as a side effect, which would recreate the
+                // position cancelSubscription's own deletePositionFromStorage call just deleted.
+                if (!wasCancelled()) {
+                    doIfCheckpointStorageConfigIs(UseCheckpointInStorage.class, cfg -> {
+                        if (!cfg.storage().exists(subscriptionId)) {
+                            startAtToUse.get(generateSubscriptionModelContext());
+                        }
+                    });
+                }
+                subscription = new CancelledSubscription(subscriptionId);
+            } else {
+                subscription = startLiveDcbSubscription(subscriptionId, filter, startAtToUse, action, catchupPhaseCache);
+                applyPendingPauseIfAny(subscriptionId);
+            }
+            return subscription;
         }
-        return subscription;
     }
 
     /**
