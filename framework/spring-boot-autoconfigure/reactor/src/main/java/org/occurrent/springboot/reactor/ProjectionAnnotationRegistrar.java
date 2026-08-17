@@ -143,7 +143,7 @@ class ProjectionAnnotationRegistrar {
                 annotation.startupMode() != StartupMode.DEFAULT);
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
-        Object descriptor = invokeFactory(method, bean);
+        Object descriptor = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", bean, method);
 
         if (annotation.source() == org.occurrent.annotation.Source.PUSH) {
             // The feed bean's type decides the flavor: a PushSubscriptionModel feeds CloudEvents, a DomainEventFeed
@@ -207,7 +207,7 @@ class ProjectionAnnotationRegistrar {
                 }
             }
         } else {
-            throw new IllegalArgumentException("@Projection '%s' method %s#%s must return a Projection or DcbProjection, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor == null ? "null" : descriptor.getClass().getName()));
+            throw new IllegalArgumentException("@Projection '%s' method %s#%s must return a Projection or DcbProjection, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor.getClass().getName()));
         }
     }
 
@@ -469,14 +469,6 @@ class ProjectionAnnotationRegistrar {
         return runner.project(id, dcbProjection, (ViewStateRepository<S, ID>) store, startAt);
     }
 
-    private static Object invokeFactory(Method method, Object bean) {
-        try {
-            method.setAccessible(true);
-            return method.invoke(bean);
-        } catch (Exception e) {
-            throw new IllegalStateException("Failed to invoke @Projection factory %s#%s".formatted(bean.getClass().getName(), method.getName()), e);
-        }
-    }
 
     // Unset knobs keep their own default, so setting one does not reset the other.
     // Package-private for a direct unit test: resolution is easy to get subtly wrong and needs no Spring context.

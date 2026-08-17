@@ -327,8 +327,8 @@ class ReactiveAnnotationFailFastTest {
 
     static class PushSynchronousProjectionHolder {
         @org.occurrent.annotation.Projection(id = "pushSynchronous", source = Source.PUSH, mode = Mode.SYNCHRONOUS)
-        Object factory() {
-            return null;
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> factory() {
+            return countProjection();
         }
     }
 
@@ -342,8 +342,8 @@ class ReactiveAnnotationFailFastTest {
 
     static class PushWithStartKnobProjectionHolder {
         @org.occurrent.annotation.Projection(id = "pushWithStartKnob", source = Source.PUSH, startAt = org.occurrent.annotation.StartPosition.BEGINNING)
-        Object factory() {
-            return null;
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> factory() {
+            return countProjection();
         }
     }
 
@@ -544,8 +544,8 @@ class ReactiveAnnotationFailFastTest {
 
     static class PushWrongFeedTypeProjectionHolder {
         @org.occurrent.annotation.Projection(id = "pushWrongFeedType", source = Source.PUSH, subscriptionModelName = "wrongFeed")
-        Object factory() {
-            return null;
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> factory() {
+            return countProjection();
         }
     }
 
