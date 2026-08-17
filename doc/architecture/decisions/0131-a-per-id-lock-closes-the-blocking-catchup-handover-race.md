@@ -74,15 +74,20 @@ caller here runs on the dedicated virtual thread `startCatchupAsync` starts for 
 `synchronized` block pins the underlying platform thread for as long as the virtual thread is blocked, so no other
 virtual thread can use that platform thread meanwhile. A plain lock does not have this effect.
 
-The registry is a constructor parameter, not a field this class always creates for itself, so a dispatcher over
-several children can pass the same one to each of them. `CatchupSubscriptionModel`'s dual-mode dispatcher does
-exactly that. It constructs a separate `StreamCatchupSubscriptionModel` and `DcbCatchupSubscriptionModel` instance
-that share the same delegate and checkpoint storage, and routes a `subscriptionId` to whichever of them fits a
-given call's filter and start position. A same id can route to a different child on a later call (a
-`DcbSubscriptionFilter` on one call, a `StreamSubscriptionFilter` on the next), so a lock registry private to each
-child would not serialize a handover on one against a fresh registration on the other, reopening the same race
-across the dispatcher's own routing. Every other constructor, including a standalone `StreamCatchupSubscriptionModel`
-or `DcbCatchupSubscriptionModel` used directly, still gets its own private registry by default.
+The lock registry, the `currentAttempt` ownership map, and `runningCatchupSubscriptions` are bundled into one
+`SharedCatchupState` and passed as a single constructor parameter, not three fields this class always creates for
+itself, so a dispatcher over several children can pass the same bundle to each of them. `CatchupSubscriptionModel`'s
+dual-mode dispatcher does exactly that. It constructs a separate `StreamCatchupSubscriptionModel` and
+`DcbCatchupSubscriptionModel` instance that share the same delegate and checkpoint storage, and routes a
+`subscriptionId` to whichever of them fits a given call's filter and start position. A same id can route to a
+different child on a later call (a `DcbSubscriptionFilter` on one call, a `StreamSubscriptionFilter` on the next), so
+state private to each child would not serialize a handover on one against a fresh registration on the other,
+reopening the same race across the dispatcher's own routing. The lock alone is not enough for this. It keeps two
+children's finishing tails from running at the same instant, but a stale one, once it finally runs after the other
+has already finished, would still find itself "current" in a `currentAttempt` map only it can see, and its cleanup
+could then delete the other child's already-saved checkpoint. Sharing all three together is what closes that.
+Every other constructor, including a standalone `StreamCatchupSubscriptionModel` or `DcbCatchupSubscriptionModel`
+used directly, still gets its own private `SharedCatchupState` by default.
 
 The registry never evicts entries for an id this instance has actually run a catch-up for. A `subscriptionId` is
 application-defined and low-cardinality in every documented usage of this model, unlike a per-event or per-request
