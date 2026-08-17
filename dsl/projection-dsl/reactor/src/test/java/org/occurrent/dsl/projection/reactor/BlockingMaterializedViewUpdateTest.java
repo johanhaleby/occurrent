@@ -59,6 +59,20 @@ class BlockingMaterializedViewUpdateTest {
     }
 
     @Test
+    void a_stopped_catch_up_forwards_replay_abandoned_to_the_wrapped_view_instead_of_replay_completed() {
+        FakeReplayAwareView view = new FakeReplayAwareView();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", Projections.reactiveUpdateWithMetadata(view), Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, null);
+        // Stops from inside the first fold, so the stop is in place before the replay considers delivering "2" and
+        // the abandon runs on a replay genuinely still in flight.
+        view.onUpdate = feed::stopCatchUp;
+
+        feed.catchUp().block();
+
+        assertThat(view.calls).containsExactly("replayStarted", "update:1:replaying", "replayAbandoned");
+    }
+
+    @Test
     void a_blocking_view_with_no_replay_awareness_is_driven_write_through_with_no_lifecycle_calls() {
         FakeView view = new FakeView();
         CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
@@ -71,6 +85,8 @@ class BlockingMaterializedViewUpdateTest {
 
     private static final class FakeReplayAwareView implements MaterializedView<Counted>, ReplayAware {
         private final List<String> calls = new CopyOnWriteArrayList<>();
+        private volatile Runnable onUpdate = () -> {
+        };
         private boolean replaying = false;
 
         @Override
@@ -81,6 +97,7 @@ class BlockingMaterializedViewUpdateTest {
         @Override
         public void update(EventMetadata metadata, Counted event) {
             calls.add("update:" + event.eventId() + (replaying ? ":replaying" : ":live"));
+            onUpdate.run();
         }
 
         @Override
