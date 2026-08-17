@@ -173,6 +173,45 @@ class SubscriptionModePropertyRenameTest implements RewriteTest {
     }
 
     @Test
+    void a_multi_document_file_where_one_profile_sets_the_deprecated_key_and_another_sets_the_new_key() {
+        // Regression test for #828: DropRedundantSubscriptionEnabledInYaml_0_32 must check the replacement key
+        // per document, not per file. The default profile below sets only the deprecated key and has no mode of
+        // its own; the prod profile sets only the new key. A file-wide precondition would see the prod profile's
+        // mode and delete enabled from the default profile before it gets a chance to be renamed, dropping the
+        // default profile's only key and, with it, the whole document.
+        rewriteRun(
+                yaml(
+                        """
+                        occurrent:
+                          subscription:
+                            enabled: false
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: prod
+                        occurrent:
+                          subscription:
+                            mode: manual
+                        """,
+                        """
+                        occurrent:
+                          subscription:
+                            mode: disabled
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: prod
+                        occurrent:
+                          subscription:
+                            mode: manual
+                        """
+                )
+        );
+    }
+
+    @Test
     void a_file_setting_neither_key_is_untouched() {
         rewriteRun(
                 properties("occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:example"),

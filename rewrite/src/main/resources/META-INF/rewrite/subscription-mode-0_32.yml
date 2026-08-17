@@ -15,22 +15,20 @@
 #
 ---
 type: specs.openrewrite.org/v1beta/recipe
-name: org.occurrent.DropRedundantSubscriptionEnabled_0_32
-displayName: Drop occurrent.subscription.enabled where occurrent.subscription.mode is already set
+name: org.occurrent.DropRedundantSubscriptionEnabledInProperties_0_32
+displayName: Drop occurrent.subscription.enabled from a .properties file where occurrent.subscription.mode is already set
 description: >-
-  Removes the deprecated occurrent.subscription.enabled from a configuration file that already sets
+  Removes the deprecated occurrent.subscription.enabled from a .properties file that already sets
   occurrent.subscription.mode. Setting both is allowed while they agree, so such a file is valid today, but
   renaming the deprecated key in it would produce two occurrent.subscription.mode entries. The precondition is
-  evaluated per file, so a file that sets only the deprecated key is left for the rename below.
+  evaluated per file, which a .properties file has no multi-document concept to complicate: the whole file is
+  the only scope there is. The .yaml half of this guard is a separate, document-scoped recipe below, because a
+  .yaml file does not share that property; see org.occurrent.rewrite.DropRedundantSubscriptionEnabledInYaml_0_32.
 preconditions:
   - org.openrewrite.properties.search.FindProperties:
       propertyKey: occurrent.subscription.mode
-  - org.openrewrite.yaml.search.FindProperty:
-      propertyKey: occurrent.subscription.mode
 recipeList:
   - org.openrewrite.properties.DeleteProperty:
-      propertyKey: occurrent.subscription.enabled
-  - org.openrewrite.yaml.DeleteProperty:
       propertyKey: occurrent.subscription.enabled
 ---
 type: specs.openrewrite.org/v1beta/recipe
@@ -82,7 +80,8 @@ description: >-
   bind rather than the new key holding one. A value that is neither true nor false, an unresolved placeholder for
   example, is left under the deprecated key, which still works for one more release.
 recipeList:
-  - org.occurrent.DropRedundantSubscriptionEnabled_0_32
+  - org.occurrent.DropRedundantSubscriptionEnabledInProperties_0_32
+  - org.occurrent.rewrite.DropRedundantSubscriptionEnabledInYaml_0_32
   - org.openrewrite.properties.ChangePropertyValue:
       propertyKey: occurrent.subscription.enabled
       oldValue: 'false'
