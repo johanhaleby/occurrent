@@ -23,19 +23,24 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
 import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
+import org.occurrent.eventstore.api.dcb.DcbAppendResult;
 import org.occurrent.eventstore.api.dcb.DcbConsistencyToken;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.tck.ConcurrentRendezvous;
 import org.occurrent.tck.ConcurrentRendezvous.Outcome;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
+import static org.occurrent.tck.ConformanceEvents.extension;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.tag;
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEventWithId;
@@ -290,6 +295,43 @@ public abstract class DcbConcurrencyConformance extends EventStoreConformance {
             assertThat(idsOf(dcbEventStore().read(DcbCriteria.tags(tag(show))).events()))
                     .as("Iteration %d: every unconditional append must be committed exactly once", iteration)
                     .containsExactlyInAnyOrderElementsOf(outcomes.stream().map(Outcome::value).toList());
+        }
+    }
+
+    @Test
+    @Timeout(120)
+    void concurrent_unconditional_appends_to_the_same_boundary_each_get_a_distinct_append_id_with_no_cross_contamination() {
+        int threadCount = 4;
+
+        for (int iteration = 0; iteration < ITERATIONS; iteration++) {
+            String show = "show:" + iteration;
+            int currentIteration = iteration;
+
+            List<Outcome<Map.Entry<String, String>>> outcomes = ConcurrentRendezvous.collide(threadCount, index -> {
+                String eventId = "append-id-" + currentIteration + "-" + index;
+                CloudEvent event = taggedEventWithId(eventId, RESERVED, show);
+                return () -> {
+                    DcbAppendResult result = dcbEventStore().append(List.of(event));
+                    return Map.entry(eventId, result.appendId().orElseThrow().toString());
+                };
+            });
+
+            List<Map.Entry<String, String>> results = outcomes.stream().map(Outcome::value).toList();
+
+            assertThat(results.stream().map(Map.Entry::getValue).distinct().count())
+                    .as("Iteration %d: each of the %d concurrent appends to boundary '%s' must be assigned a distinct append id",
+                            iteration, threadCount, show)
+                    .isEqualTo(threadCount);
+
+            Map<String, String> appendIdByEventId = dcbEventStore().read(DcbCriteria.tags(tag(show))).events().stream()
+                    .collect(Collectors.toMap(CloudEvent::getId, event -> extension(event, OccurrentCloudEventExtension.APPEND_ID)));
+
+            for (Map.Entry<String, String> expected : results) {
+                assertThat(appendIdByEventId.get(expected.getKey()))
+                        .as("Iteration %d: event '%s' must carry the append id its own append returned, not another writer's",
+                                iteration, expected.getKey())
+                        .isEqualTo(expected.getValue());
+            }
         }
     }
 
