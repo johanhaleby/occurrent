@@ -5,11 +5,16 @@ Date: 2026-08-17
 ## Status
 
 Accepted. Builds the design [ADR 122](0122-an-applied-position-is-not-a-completed-prefix.md) recorded as the
-direction it could not build, and resolves [#740](https://github.com/johanhaleby/occurrent/issues/740).
-[#361](https://github.com/johanhaleby/occurrent/issues/361), which ADR 122 reopened, closes when the implementation
-ships. This ADR decides a design and writes no code. The implementation is epic scale and reaches the cloud event
-extension, all four event stores, both result records, `EventMetadata`, the projection DSL on both stacks, both
-Mongo starters, and the TCK.
+direction it could not build, and defines the implementation that
+[#740](https://github.com/johanhaleby/occurrent/issues/740) tracks. This ADR decides a design and writes no code.
+The implementation is epic scale and reaches the cloud event extension, all four event stores, both result records,
+`EventMetadata`, the projection DSL on both stacks, both Mongo starters, and the TCK.
+
+[#361](https://github.com/johanhaleby/occurrent/issues/361), which ADR 122 reopened, closes when that
+implementation ships, and it closes on different terms than it asked for. It requests a wait for a projection
+having applied every event up to a global position, which is the mechanism ADR 122 refuted. What ships instead
+answers whether a projection has applied a named append, and decision 10 states where that is weaker. The goal
+#361 describes is met and the mechanism it names is not built.
 
 ## Context
 
@@ -131,8 +136,8 @@ twice.
 ### 2. The key is `appendid`, and stamping does not depend on `streamPositionEnabled`
 
 The extension key is `appendid`, following the lowercase unseparated form of `streamid`, `streamversion` and
-`position`. One identifier is minted per write or append call, and every event persisted by that call is stamped
-with it.
+`position`. A write or append call that persists at least one event mints one identifier, and every event that call
+persists is stamped with it. A call that persists nothing mints none, which is what decision 4 rests on.
 
 Stamping happens in each store's own per-append loop, and not in
 `OccurrentCloudEventMongoDocumentMapper.convertToDocument`, which is called per event and knows nothing about the
@@ -194,9 +199,11 @@ the break takes rather than as a measured impact.
 Both go in a `#### Breaking changes` changelog entry and a migration-guide section, the equality one with the move
 to per-component assertions and the pattern one with the added component.
 
-There is no OpenRewrite recipe, and the guide says why rather than staying silent about it. No arity changed, so
-there is nothing for a recipe to rewrite, and a recipe cannot derive the identifier a rewritten assertion would
-have to expect.
+The equality break gets no OpenRewrite recipe, and the guide says why rather than staying silent about it, because
+a recipe cannot derive the identifier a rewritten assertion would have to expect. The record patterns are a
+different case, since the canonical arity does change from three components to four and adding the fourth binding
+is a mechanical rewrite, so whether a recipe covers them is for the implementation to decide rather than for this
+ADR to rule out.
 
 ### 4. An empty append has no identifier
 
@@ -206,8 +213,17 @@ have to expect.
 result for an append that added nothing. An append that persisted no events stamped nothing, so its result has an
 absent identifier, which is the only honest answer available.
 
-The wait documentation states the consequence, that an absent identifier means there is nothing to wait for,
-because a projection cannot change in response to events that were never written. The TCK asserts the absence.
+What the documentation must not say is that an absent identifier means nothing was written, because absence has a
+second cause. The retained three-argument constructors answer `Optional.empty()` for any result built through
+them, including a write that persisted events, so a third-party or not-yet-upgraded store returns an absent
+identifier on every write it does. Reading that as an empty append would tell a caller their events never happened.
+
+So absence is documented as no append identity being available, with two causes named. Either the append persisted
+nothing, and then there is genuinely nothing to wait for, or the store did not supply an identity, and then events
+were written but this feature cannot answer for them. A caller that needs to tell the two apart has the rest of the
+result, since a store that wrote something still reports its stream versions or its event count.
+
+The TCK asserts the absence for the empty append, which is the case Occurrent's own stores produce.
 
 ### 5. `AppliedAppendStore` answers `hasApplied`, and the wait polls it
 
