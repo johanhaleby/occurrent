@@ -14,7 +14,8 @@
 - H2 DONE: PR 807 merged as `4f52632` 2026-08-16T17:1xZ (CAS pin `55455c7`). Copilot's one inline finding (migration-guide intro phrased as construction process) fixed on the branch and replied to before merge. The shared docs checkout at `occurrent-org.github.io` carries U4's live branch, so orchestrator docs fixes go through the GitHub contents API on fresh branches, never that checkout (docs PR 67 was built that way; note gh api needs `-F content=@file`, `-f` sends the literal string).
 - Verification: none run this session (no code changed); the release tag implies green main, re-verified at the first merge gate.
 - Tracker: github (block below)
-- Mode: Attended (set by Johan 2026-08-17T~15:4xZ, "And now switch to attended mode", superseding the 2026-08-16T21:0xZ Unattended stretch)
+- Mode: Attended (set by Johan 2026-08-17T~15:4xZ, superseding the 2026-08-16T21:0xZ Unattended stretch)
+- Hygiene 2026-08-17T~21:4xZ: 27 completed fleet and pre-r34 sessions archived on Johan's cleanup order, eight stale apirev branches deleted, merged unit worktrees removed. Live: this orchestrator plus the four resume workers (U7, U18, U12, U19)
 
 ## Tracker
 
