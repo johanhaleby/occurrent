@@ -28,7 +28,9 @@ description: >-
   occurrent.subscription.collection and occurrent.subscription.restart-on-change-stream-history-lost to a
   mongodb-qualified key on their existing prefix, in both .properties and .yaml, since each never described
   anything but a MongoDB event store or subscription model. See doc/migration/upgrading-to-0.34.0.md for what
-  that rename cannot reach, such as an environment variable.
+  that rename cannot reach, such as an environment variable. Also adds the fourth binding, var appendId, to a
+  WriteResult/DcbAppendResult record pattern that still names only the original three components (ADR 132).
 recipeList:
   - org.occurrent.MigrateSagaJoinToStepCondition_0_34
   - org.occurrent.MigrateStoreNeutralMongoConfigKeys_0_34
+  - org.occurrent.MigrateAppendResultRecordPattern_0_34
