@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 55
-updated_at: 2026-08-17T13:30:00Z
+revision: 56
+updated_at: 2026-08-17T14:00:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -202,7 +202,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: [U1]
-    session: "chip task_14b3d358 spawned 13:2xZ, eight hours late, the U1 completion never triggered the depends_on recheck, lesson recorded"
+    session: "chip task_14b3d358, claimed 771, design done, at its plan gate with Johan. ADR RESERVATION: 130=U7 (audited across all remote branches 14:0xZ, 129 highest claimed, next free 131). Finding: the residual race and the delete-recreate hole are one gap needing position-order pinning, proposed as an additive opt-in CheckpointStorage method, gate decides ship-in-unit vs ADR-only split"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "771", met: false, evidence: null}
