@@ -176,6 +176,46 @@ class StoreNeutralMongoConfigKeysRenameTest implements RewriteTest {
     }
 
     @Test
+    void a_multi_document_file_where_one_profile_sets_the_deprecated_key_and_another_sets_the_mongodb_qualified_key() {
+        // Regression test for the same document-scoping defect #828 found in DropRedundantSubscriptionEnabledInYaml_0_32:
+        // each DropRedundant*InYaml_0_34 recipe must check the mongodb-qualified key per document, not per file. The
+        // default profile below sets only the deprecated key and has no mongodb-qualified key of its own; the prod
+        // profile sets only the mongodb-qualified key. A file-wide precondition would see the prod profile's key and
+        // delete the deprecated key from the default profile before it gets a chance to be renamed, dropping the
+        // default profile's only key and, with it, the whole document.
+        rewriteRun(
+                yaml(
+                        """
+                        occurrent:
+                          event-store:
+                            collection: events-v1
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: prod
+                        occurrent:
+                          event-store:
+                            mongodb.collection: events-v2
+                        """,
+                        """
+                        occurrent:
+                          event-store:
+                            mongodb.collection: events-v1
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: prod
+                        occurrent:
+                          event-store:
+                            mongodb.collection: events-v2
+                        """
+                )
+        );
+    }
+
+    @Test
     void a_file_setting_none_of_the_four_keys_is_untouched() {
         rewriteRun(
                 properties("occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:example"),
