@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 60
-updated_at: 2026-08-17T16:00:00Z
+revision: 61
+updated_at: 2026-08-17T17:40:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session ONLY in Attended mode; Unattended briefs carry plan_approval_venue orchestrator per the skill, a correction after four post-switch briefs wrongly said session. Release execution is Johan's manual act; r34 stops at release readiness."
@@ -73,6 +73,17 @@ pending_actions:
     safe_to_repeat: true
     issued_at: 2026-08-16T21:00:00Z
 units:
+  U19:
+    issue: 836
+    goal: "Unwrap proxied beans before descriptor factory invocation across the projection, saga, and snapshot registrars, fixing the JDK-proxy startup failure ADR 127 section 4 found. Sibling 837 deferred to the ADR 127 epic by Johan's ruling"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: "chip task_1b18da73, awaiting click, venue session (Mode Attended read 17:30Z)"
+    deliverables:
+      - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
+      - {check: issue_closed, repo: johanhaleby/occurrent, ref: "836", met: false, evidence: null}
   U17:
     issue: 828
     goal: "Document-scoped DropRedundant recipe preconditions: fix the released 0_32 recipe and 826's four replicas, multi-document YAML recipe tests, then 826 merges under the ratification"
