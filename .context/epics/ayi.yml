@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 1
-updated_at: 2026-08-17T12:19:31Z
+revision: 2
+updated_at: 2026-08-17T14:35:00Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push); no session-scoped deviations"
@@ -29,12 +29,14 @@ units:
     session: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
     deliverables:
       - {check: manual_approval, ref: "Johan approves the ayi meta-plan at the structured ask, including the review stopping rule", met: false, evidence: null}
-    blocking_on: []
-    next_action: "Run the /johan-plan planning round: delegated exploration, plan draft, adversarial self-review, fresh-context review, then present"
-    last_meaningful_progress_at: 2026-08-17T12:19:31Z
+    blocking_on:
+      - {what: "Johan's approval of the meta-plan at the structured ask (D1 D2 D3 rulings plus the review stopping rule)", since: 2026-08-17T14:35:00Z, recheck_after: null}
+    next_action: "Present the approval gate; on approval, register U1-U7 in this file, reserve the ADR number, arm the work-item monitor, dispatch U1"
+    last_meaningful_progress_at: 2026-08-17T14:35:00Z
     observed:
       issue_740: {state: OPEN, milestone: "0.34.0", assignees: 0, routing_comment: present, via: "gh issue view", at: 2026-08-17T12:17:00Z}
       issue_361: {state: OPEN, milestone: "0.34.0", via: "gh issue view", at: 2026-08-17T12:17:00Z}
+      plan: {path: "/Users/johan/.claude/plans/ayi-append-identity-740.md", revision: 6, review_rounds: 5, last_verdict: "REVISE findings folded, self-loop stopped by declared cap, residual routed to the gate and U1", at: 2026-08-17T14:35:00Z}
     assessment: >
       Design direction is fixed by #740 and ADR 122: membership by append identity, never
       completed-prefix or ordering reasoning (ADR 122 refutes that premise for every delivery
