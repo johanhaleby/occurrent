@@ -292,6 +292,14 @@ that both starts and finishes inside one interval and delivers no event the proj
 its membership records survive it. At the settled interval that is a replay shorter than 5 seconds delivering
 nothing matching.
 
+There is a second window, on the read side, and it is worth stating separately because the clear is what removes
+the records rather than what stops them being read. Recording stops as soon as an observation shows the projection
+replaying, but the records stay readable until the clear finishes, so a wait running in between can be told `true`
+about an append whose read model the rebuild is in the middle of discarding. On a rebuild that delivers events the
+projection handles, that window runs from the replay starting to the first such delivery. On one that delivers
+none, it runs to the next poll. So this rule makes the untrue answer a window rather than removing it, and the
+guarantee in the consequences is written to say exactly that.
+
 The poll has one owner and one lifecycle, because this repository has shipped four subscription lifecycle leaks
 already. One scheduler is shared by every recording projection, retained by the registrar the way it already
 retains what `close()` has to stop (`ProjectionAnnotationRegistrar.java:314-316`), with its thread named in the
@@ -440,11 +448,16 @@ separately.
   reset, including a deliberate `startAt`
   replay into a read model that would have tolerated one, because nothing observable tells that apart from a
   rebuild. This is a property of the design and the documentation states it beside the guarantee, not in a footnote.
-- On a path where the projection can say whether it is replaying, a `true` answer means the projection applied at
-  least one event of that append after its last reset. That is weaker than having applied all of it, and decision
-  10 states the window and why it is intended. An identifier that was never recorded, or was cleared, or has been
-  evicted, all produce a timeout instead. A store that cannot be read keeps the wait polling until its timeout
-  expires, which is true only because decision 5 limits each read to the time the wait has left.
+- On a path where the projection can say whether it is replaying, and once any pending clear has finished, a `true`
+  answer means the projection applied at least one event of that append after its last reset. That is weaker than
+  having applied all of it, and decision 10 states the delay and why it is intended. An identifier that was never
+  recorded, or was cleared, or has been evicted, all produce a timeout instead. A store that cannot be read keeps
+  the wait polling until its timeout expires, which is true only because decision 5 limits each read to the time
+  the wait has left.
+- That guarantee depends on the clear having finished, so it is not true in the window before it does. A wait
+  between a rebuild starting and its clear completing can be told `true` about an append whose read model is being
+  discarded. Decision 7 states how long that window is in each case. This design narrows the untrue answer to that
+  window instead of removing it, and the per-run key that would remove it was rejected there, with its cost.
 - Two cases fall outside that, both from decision 9, and both expire with the retention time. A read model wiped by
   hand on a composition that never replays, and a read model wiped while the application keeps running with no
   restart and no replay anywhere.
