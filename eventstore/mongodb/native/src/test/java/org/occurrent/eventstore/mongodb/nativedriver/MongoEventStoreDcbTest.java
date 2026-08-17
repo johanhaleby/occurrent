@@ -111,7 +111,9 @@ class MongoEventStoreDcbTest {
         DcbAppendCondition appendCondition = failIfEventsMatch(tags(Tag.parse("name:1")), readModel.consistencyToken());
 
         DcbAppendResult firstAppend = eventStore.append(List.of(taggedEvent("NameDefined", "name:1")), appendCondition);
-        assertThat(firstAppend).isEqualTo(new DcbAppendResult(1, 1, 1));
+        assertThat(firstAppend.firstSequencePosition()).isEqualTo(1);
+        assertThat(firstAppend.lastSequencePosition()).isEqualTo(1);
+        assertThat(firstAppend.eventCount()).isEqualTo(1);
 
         assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("NameChanged", "name:1")), appendCondition))
                 .isExactlyInstanceOf(DcbAppendConditionNotFulfilledException.class);
@@ -119,7 +121,9 @@ class MongoEventStoreDcbTest {
         // The condition-failed append abandons its reserved position block (ADR 0021), so position has a gap and the
         // next successful append lands at position 3 rather than 2.
         DcbAppendResult nextAppend = eventStore.append(List.of(taggedEvent("NameChanged", "name:2")));
-        assertThat(nextAppend).isEqualTo(new DcbAppendResult(3, 3, 1));
+        assertThat(nextAppend.firstSequencePosition()).isEqualTo(3);
+        assertThat(nextAppend.lastSequencePosition()).isEqualTo(3);
+        assertThat(nextAppend.eventCount()).isEqualTo(1);
     }
 
     private static CloudEvent taggedEvent(String type, String... tags) {
