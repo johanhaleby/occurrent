@@ -1,7 +1,7 @@
 schema_version: 1
 epic: r34
-revision: 54
-updated_at: 2026-08-17T13:00:00Z
+revision: 55
+updated_at: 2026-08-17T13:30:00Z
 updated_by: "orchestrator session 2ca6ca90 (Wave 1 dispatch; vehicle correction from Johan at the plan gate: chips for every PR-delivering unit, subagent only for bounded report-only work)"
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "standing grants per .context/orchestrator-policy.yml (library repo only; docs-repo merges are Johan's). Milestone 0.34.0 (number 3) spans r34 plus the ayi and brk epics, which register in their own sessions and are off-limits to r34 sweeps. Gate rulings 2026-08-16: broker IN with #419 committed, #740 IN as marquee (ayi), join removal IN plan-first (#806), #71 closed superseded, #725+#721 pulled in as U15. Plan gates run in-session (Attended). Release execution is Johan's manual act; r34 stops at release readiness."
@@ -198,11 +198,11 @@ units:
   U7:
     issue: 771
     goal: "Manual/reactor registration ordering residual plus checkpoint delete-recreate race, one decision across both stacks, plan-first, likely ADR"
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U1]
-    session: null
+    session: "chip task_14b3d358 spawned 13:2xZ, eight hours late, the U1 completion never triggered the depends_on recheck, lesson recorded"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "771", met: false, evidence: null}
@@ -266,11 +266,11 @@ units:
   U12:
     issue: 746
     goal: "Stretch: re-check whether the post-#739 wrapper surface makes the cheap replay-aware fix sufficient (forwarding adapter plus contract test), ship if so; drops first if the release runs long"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "chip task_ea3b7863 spawned 13:2xZ, the stretch runs since the release is gated on Johan anyway, recorded-no-change is an accepted outcome"
     deliverables:
       - {check: pr_merged, repo: johanhaleby/occurrent, ref: null, met: false, evidence: null}
       - {check: issue_closed, repo: johanhaleby/occurrent, ref: "746", met: false, evidence: null}
