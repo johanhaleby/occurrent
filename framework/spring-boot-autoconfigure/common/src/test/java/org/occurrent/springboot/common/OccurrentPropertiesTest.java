@@ -17,9 +17,14 @@
 
 package org.occurrent.springboot.common;
 
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
+import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -72,5 +77,254 @@ class OccurrentPropertiesTest {
         properties.setDedupCacheSize(null);
 
         assertThat(properties.getDedupCacheSize()).isNull();
+    }
+
+    /**
+     * Covers how {@code occurrent.event-store.mongodb.collection} and the deprecated
+     * {@code occurrent.event-store.collection} combine. The pair is allowed while they agree, because a recipe
+     * rewrites configuration files but cannot reach an environment variable, so an application mid-migration can
+     * legitimately have both set. Mirrors {@link SubscriptionModeTest}.
+     */
+    @Nested
+    class Resolving_the_event_store_collection {
+
+        @Test
+        void defaults_to_events_when_neither_is_set() {
+            assertThat(resolveEventStoreCollection(null, null)).isEqualTo("events");
+        }
+
+        @Test
+        void uses_the_new_key_when_only_it_is_set() {
+            assertThat(resolveEventStoreCollection(null, "events-v2")).isEqualTo("events-v2");
+        }
+
+        @Test
+        void uses_the_deprecated_key_when_only_it_is_set() {
+            assertThat(resolveEventStoreCollection("events-v2", null)).isEqualTo("events-v2");
+        }
+
+        @Test
+        void accepts_both_when_they_agree() {
+            assertThat(resolveEventStoreCollection("events-v2", "events-v2")).isEqualTo("events-v2");
+        }
+
+        @Test
+        void fails_when_both_are_set_and_contradict_each_other() {
+            assertThatThrownBy(() -> resolveEventStoreCollection("events-v1", "events-v2"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("occurrent.event-store.mongodb.collection is \"events-v2\"")
+                    .hasMessageContaining("occurrent.event-store.collection is \"events-v1\"")
+                    .hasMessageContaining("environment variables");
+        }
+
+        private static String resolveEventStoreCollection(@Nullable String deprecated, @Nullable String mongodb) {
+            EventStoreProperties properties = new EventStoreProperties();
+            properties.setCollection(deprecated);
+            properties.getMongodb().setCollection(mongodb);
+            return properties.resolveCollection();
+        }
+    }
+
+    /**
+     * Covers how {@code occurrent.event-store.mongodb.time-representation} and the deprecated
+     * {@code occurrent.event-store.time-representation} combine. Mirrors {@link Resolving_the_event_store_collection}.
+     */
+    @Nested
+    class Resolving_the_event_store_time_representation {
+
+        @Test
+        void defaults_to_date_when_neither_is_set() {
+            assertThat(resolveTimeRepresentation(null, null)).isEqualTo(TimeRepresentation.DATE);
+        }
+
+        @Test
+        void uses_the_new_key_when_only_it_is_set() {
+            assertThat(resolveTimeRepresentation(null, TimeRepresentation.RFC_3339_STRING)).isEqualTo(TimeRepresentation.RFC_3339_STRING);
+        }
+
+        @Test
+        void uses_the_deprecated_key_when_only_it_is_set() {
+            assertThat(resolveTimeRepresentation(TimeRepresentation.RFC_3339_STRING, null)).isEqualTo(TimeRepresentation.RFC_3339_STRING);
+        }
+
+        @Test
+        void accepts_both_when_they_agree() {
+            assertThat(resolveTimeRepresentation(TimeRepresentation.RFC_3339_STRING, TimeRepresentation.RFC_3339_STRING)).isEqualTo(TimeRepresentation.RFC_3339_STRING);
+        }
+
+        @Test
+        void fails_when_both_are_set_and_contradict_each_other() {
+            assertThatThrownBy(() -> resolveTimeRepresentation(TimeRepresentation.DATE, TimeRepresentation.RFC_3339_STRING))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("occurrent.event-store.mongodb.time-representation is RFC_3339_STRING")
+                    .hasMessageContaining("occurrent.event-store.time-representation is DATE")
+                    .hasMessageContaining("environment variables");
+        }
+
+        private static TimeRepresentation resolveTimeRepresentation(@Nullable TimeRepresentation deprecated, @Nullable TimeRepresentation mongodb) {
+            EventStoreProperties properties = new EventStoreProperties();
+            properties.setTimeRepresentation(deprecated);
+            properties.getMongodb().setTimeRepresentation(mongodb);
+            return properties.resolveTimeRepresentation();
+        }
+    }
+
+    /**
+     * Covers how {@code occurrent.subscription.mongodb.collection} and the deprecated
+     * {@code occurrent.subscription.collection} combine. Mirrors {@link Resolving_the_event_store_collection}.
+     */
+    @Nested
+    class Resolving_the_subscription_collection {
+
+        @Test
+        void defaults_to_subscriptions_when_neither_is_set() {
+            assertThat(resolveSubscriptionCollection(null, null)).isEqualTo("subscriptions");
+        }
+
+        @Test
+        void uses_the_new_key_when_only_it_is_set() {
+            assertThat(resolveSubscriptionCollection(null, "subscriptions-v2")).isEqualTo("subscriptions-v2");
+        }
+
+        @Test
+        void uses_the_deprecated_key_when_only_it_is_set() {
+            assertThat(resolveSubscriptionCollection("subscriptions-v2", null)).isEqualTo("subscriptions-v2");
+        }
+
+        @Test
+        void accepts_both_when_they_agree() {
+            assertThat(resolveSubscriptionCollection("subscriptions-v2", "subscriptions-v2")).isEqualTo("subscriptions-v2");
+        }
+
+        @Test
+        void fails_when_both_are_set_and_contradict_each_other() {
+            assertThatThrownBy(() -> resolveSubscriptionCollection("subscriptions-v1", "subscriptions-v2"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("occurrent.subscription.mongodb.collection is \"subscriptions-v2\"")
+                    .hasMessageContaining("occurrent.subscription.collection is \"subscriptions-v1\"")
+                    .hasMessageContaining("environment variables");
+        }
+
+        private static String resolveSubscriptionCollection(@Nullable String deprecated, @Nullable String mongodb) {
+            SubscriptionProperties properties = new SubscriptionProperties();
+            properties.setCollection(deprecated);
+            properties.getMongodb().setCollection(mongodb);
+            return properties.resolveCollection();
+        }
+    }
+
+    /**
+     * Covers how {@code occurrent.subscription.mongodb.restart-on-change-stream-history-lost} and the deprecated
+     * {@code occurrent.subscription.restart-on-change-stream-history-lost} combine. Mirrors
+     * {@link Resolving_the_event_store_collection}.
+     */
+    @Nested
+    class Resolving_restart_on_change_stream_history_lost {
+
+        @Test
+        void defaults_to_true_when_neither_is_set() {
+            assertThat(resolveRestartOnChangeStreamHistoryLost(null, null)).isTrue();
+        }
+
+        @Test
+        void uses_the_new_key_when_only_it_is_set() {
+            assertThat(resolveRestartOnChangeStreamHistoryLost(null, false)).isFalse();
+        }
+
+        @Test
+        void uses_the_deprecated_key_when_only_it_is_set() {
+            assertThat(resolveRestartOnChangeStreamHistoryLost(false, null)).isFalse();
+        }
+
+        @Test
+        void accepts_both_when_they_agree() {
+            assertThat(resolveRestartOnChangeStreamHistoryLost(false, false)).isFalse();
+        }
+
+        @Test
+        void fails_when_both_are_set_and_contradict_each_other() {
+            assertThatThrownBy(() -> resolveRestartOnChangeStreamHistoryLost(true, false))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("occurrent.subscription.mongodb.restart-on-change-stream-history-lost is false")
+                    .hasMessageContaining("occurrent.subscription.restart-on-change-stream-history-lost is true")
+                    .hasMessageContaining("environment variables");
+        }
+
+        private static boolean resolveRestartOnChangeStreamHistoryLost(@Nullable Boolean deprecated, @Nullable Boolean mongodb) {
+            SubscriptionProperties properties = new SubscriptionProperties();
+            // setRestartOnChangeStreamHistoryLost(boolean) is primitive, matching the released signature, so "unset"
+            // is represented by not calling it at all rather than by passing it null.
+            if (deprecated != null) {
+                properties.setRestartOnChangeStreamHistoryLost(deprecated);
+            }
+            properties.getMongodb().setRestartOnChangeStreamHistoryLost(mongodb);
+            return properties.resolveRestartOnChangeStreamHistoryLost();
+        }
+    }
+
+    /**
+     * The four deprecated getters ({@code EventStoreProperties.getCollection()}, {@code getTimeRepresentation()},
+     * {@code SubscriptionProperties.getCollection()}, {@code isRestartOnChangeStreamHistoryLost()}) returned a
+     * non-null, defaulted value before {@code occurrent.event-store.mongodb.*}/{@code occurrent.subscription.mongodb.*}
+     * existed. Each now delegates to its {@code resolve*()} counterpart instead of returning the raw, possibly-unset
+     * field, so a caller compiled against the old non-null contract keeps seeing a resolved value, including one
+     * supplied only through the new key, rather than null.
+     */
+    @Nested
+    class Deprecated_getters_delegate_to_the_resolved_value {
+
+        @Test
+        void event_store_get_collection_reflects_the_new_key_when_the_deprecated_key_is_unset() {
+            EventStoreProperties properties = new EventStoreProperties();
+            properties.getMongodb().setCollection("events-v3");
+
+            assertThat(properties.getCollection()).isEqualTo("events-v3");
+        }
+
+        @Test
+        void event_store_get_time_representation_reflects_the_new_key_when_the_deprecated_key_is_unset() {
+            EventStoreProperties properties = new EventStoreProperties();
+            properties.getMongodb().setTimeRepresentation(TimeRepresentation.RFC_3339_STRING);
+
+            assertThat(properties.getTimeRepresentation()).isEqualTo(TimeRepresentation.RFC_3339_STRING);
+        }
+
+        @Test
+        void subscription_get_collection_reflects_the_new_key_when_the_deprecated_key_is_unset() {
+            SubscriptionProperties properties = new SubscriptionProperties();
+            properties.getMongodb().setCollection("subscriptions-v3");
+
+            assertThat(properties.getCollection()).isEqualTo("subscriptions-v3");
+        }
+
+        @Test
+        void is_restart_on_change_stream_history_lost_reflects_the_new_key_set_to_false_when_the_deprecated_key_is_unset() {
+            SubscriptionProperties properties = new SubscriptionProperties();
+            properties.getMongodb().setRestartOnChangeStreamHistoryLost(false);
+
+            assertThat(properties.isRestartOnChangeStreamHistoryLost()).isFalse();
+        }
+
+        // A getter that ignores the new key entirely and just returns "the deprecated field, defaulting to false
+        // when unset" would still pass the case above, since that default coincides with what was explicitly set
+        // here. Setting the new key to true, which the same broken shortcut would return as false, closes that gap.
+        @Test
+        void is_restart_on_change_stream_history_lost_reflects_the_new_key_set_to_true_when_the_deprecated_key_is_unset() {
+            SubscriptionProperties properties = new SubscriptionProperties();
+            properties.getMongodb().setRestartOnChangeStreamHistoryLost(true);
+
+            assertThat(properties.isRestartOnChangeStreamHistoryLost()).isTrue();
+        }
+
+        @Test
+        void none_of_the_four_deprecated_getters_return_null_when_nothing_is_set() {
+            EventStoreProperties eventStore = new EventStoreProperties();
+            SubscriptionProperties subscription = new SubscriptionProperties();
+
+            assertThat(eventStore.getCollection()).isEqualTo("events");
+            assertThat(eventStore.getTimeRepresentation()).isEqualTo(TimeRepresentation.DATE);
+            assertThat(subscription.getCollection()).isEqualTo("subscriptions");
+            assertThat(subscription.isRestartOnChangeStreamHistoryLost()).isTrue();
+        }
     }
 }

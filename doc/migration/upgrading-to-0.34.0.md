@@ -3,6 +3,18 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
+Four things are worth reading, one of them a compile-time break. At compile time, if you use the flow saga's
+deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
+[section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
+counts and evicts only the events its own steps declare, which most callers need to do nothing about. Read
+[section 2](#2-a-flow-sagas-stepwindow-now-caps-only-its-own-declared-events). A projection, a subscription, a
+query, or a snapshot that declares an event type whose concrete subtypes cannot be found is now refused, the same
+refusal 0.33.0 already shipped for a saga and an annotation-based subscription. Read
+[section 3](#3-a-projection-a-subscription-a-query-or-a-snapshot-declaring-a-supertype-event-is-refused). At
+startup, if you set a MongoDB collection name, a MongoDB time representation, or whether a subscription restarts
+after losing change-stream history, through `OccurrentProperties`, four configuration keys are deprecated and have
+a recipe that rewrites them for you. Read [section 4](#4-four-mongodb-only-keys-move-under-mongodb).
+
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
 `StepBuilder.join`, Kotlin's `expect<T>`/`join`, and the `Expectation` type are gone. `join` was already deprecated
@@ -217,3 +229,82 @@ first time a runner or a query derives its filter, a `@Snapshot` throws at regis
 `DomainEventQueries` and the subscription DSL throw at the first query or subscription registration that
 needs one, so a test that exercises your projections, queries, subscriptions, and snapshots finds every
 affected declaration.
+
+## 4. Four MongoDB-only keys move under `mongodb`
+
+`occurrent.event-store.collection`, `occurrent.event-store.time-representation`, `occurrent.subscription.collection`
+and `occurrent.subscription.restart-on-change-stream-history-lost` never configured anything but a MongoDB event
+store or a MongoDB subscription model, even though the module they live in (`occurrent-spring-boot-autoconfigure`)
+dropped its `mongodb` name back in 0.30.0 because the rest of its code is store-neutral.
+
+A second store, the SQL event store, is coming, and its own starter would otherwise inherit four keys promising a
+collection and a change stream it does not have.
+
+Each key now has the `mongodb` qualifier that was always true of it:
+
+| Old | New |
+|---|---|
+| `occurrent.event-store.collection` | `occurrent.event-store.mongodb.collection` |
+| `occurrent.event-store.time-representation` | `occurrent.event-store.mongodb.time-representation` |
+| `occurrent.subscription.collection` | `occurrent.subscription.mongodb.collection` |
+| `occurrent.subscription.restart-on-change-stream-history-lost` | `occurrent.subscription.mongodb.restart-on-change-stream-history-lost` |
+
+Each old key still works and is deprecated, so nothing breaks if you upgrade without touching your configuration.
+Every one of them is removed in the release after next.
+
+Setting both the old and the new key is allowed while they agree, which is deliberate. A recipe rewrites
+configuration files but cannot reach an environment variable, so an application mid-migration can legitimately have
+both set. Setting both so they contradict each other fails at startup, naming both keys.
+
+### Run the recipe
+
+```xml
+<plugin>
+    <groupId>org.openrewrite.maven</groupId>
+    <artifactId>rewrite-maven-plugin</artifactId>
+    <configuration>
+        <activeRecipes>
+            <recipe>org.occurrent.UpgradeToOccurrent_0_34</recipe>
+        </activeRecipes>
+    </configuration>
+    <dependencies>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-rewrite</artifactId>
+            <version>0.34.0</version>
+        </dependency>
+    </dependencies>
+</plugin>
+```
+
+```bash
+mvn rewrite:run
+```
+
+It rewrites `.properties` and `.yaml` alike, and it is deliberately not restricted to `application.properties` or
+`application.yml`, so it also reaches a profile file, a `config/` directory, and anything you pull in with
+`spring.config.import`. Expect the diff to cover every configuration file that sets one of the four keys, wherever
+it lives.
+
+Unlike the `occurrent.subscription.enabled` migration in 0.32.0, no value changes here, only the key, so the recipe
+is a plain rename in `.properties`. In `.yaml` it renames the key in place rather than expanding it into a nested
+`mongodb:` block, so `event-store.collection: events` becomes `event-store.mongodb.collection: events` on one line
+rather than a new nested mapping.
+
+Spring's relaxed binding resolves either shape to the same property name, so this only changes how the file reads,
+not what it configures. Restructure it into a nested block yourself if you prefer that layout.
+
+### What the recipe leaves for you
+
+Two cases, both of which it steps around on purpose rather than guessing:
+
+- **An environment variable or anything outside your configuration files.** `OCCURRENT_EVENT_STORE_COLLECTION` is
+  invisible to a source rewrite. Search your deployment configuration for it by hand. This is exactly why setting
+  both the old and the new key is tolerated while they agree.
+- **A file that already sets both the old and the new key.** The recipe drops the old one and keeps the
+  `mongodb`-qualified key, on the assumption that the key you migrated to is the one you meant.
+- **A multi-document `.yaml` file where one profile sets the old key and a different profile sets the new one.**
+  The drop-the-old-key guard evaluates across the whole file, not the one profile that set the new key, so it
+  can also drop the old key from a profile that never set the new key at all, and remove that profile's document
+  entirely if the dropped key was its only content. Review the diff before you commit it, and see
+  [#828](https://github.com/johanhaleby/occurrent/issues/828) for the fix.

@@ -23,11 +23,14 @@ import org.openrewrite.test.RewriteTest;
 
 import static org.occurrent.rewrite.SagaJoinStubs.*;
 import static org.openrewrite.java.Assertions.java;
+import static org.openrewrite.properties.Assertions.properties;
+import static org.openrewrite.yaml.Assertions.yaml;
 
 /**
- * Verifies the umbrella {@code UpgradeToOccurrent_0_34} recipe resolves its one sub-recipe through a
- * classpath-scanning Environment, which is what proves the cross-file recipe reference actually links. What the
- * sub-recipe does is covered in {@link MigrateSagaJoinToStepConditionTest}, so one case is enough here.
+ * Verifies the umbrella {@code UpgradeToOccurrent_0_34} recipe resolves both its sub-recipes through a
+ * classpath-scanning Environment, which is what proves the cross-file recipe references actually link. What each
+ * sub-recipe does is covered in {@link MigrateSagaJoinToStepConditionTest} and
+ * {@link StoreNeutralMongoConfigKeysRenameTest}, so one case per sub-recipe is enough here.
  */
 class UpgradeToOccurrent_0_34Test implements RewriteTest {
 
@@ -91,6 +94,34 @@ class UpgradeToOccurrent_0_34Test implements RewriteTest {
                             interface Command {
                             }
                         }
+                        """
+                )
+        );
+    }
+
+    @Test
+    void migratesTheEventStoreCollectionPropertyInProperties() {
+        rewriteRun(
+                properties(
+                        "occurrent.event-store.collection=events-v2",
+                        "occurrent.event-store.mongodb.collection=events-v2"
+                )
+        );
+    }
+
+    @Test
+    void migratesTheSubscriptionRestartOnChangeStreamHistoryLostPropertyInYaml() {
+        rewriteRun(
+                yaml(
+                        """
+                        occurrent:
+                          subscription:
+                            restart-on-change-stream-history-lost: false
+                        """,
+                        """
+                        occurrent:
+                          subscription:
+                            mongodb.restart-on-change-stream-history-lost: false
                         """
                 )
         );

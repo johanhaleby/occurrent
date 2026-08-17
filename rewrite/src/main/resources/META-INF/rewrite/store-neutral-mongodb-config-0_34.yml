@@ -1,0 +1,155 @@
+#
+# Copyright 2026 Johan Haleby
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.DropRedundantEventStoreCollectionInProperties_0_34
+displayName: Drop occurrent.event-store.collection from a .properties file where occurrent.event-store.mongodb.collection is already set
+description: >-
+  Removes the deprecated occurrent.event-store.collection from a .properties file that already sets
+  occurrent.event-store.mongodb.collection. Setting both is allowed while they agree, so such a file is valid
+  today, but renaming the deprecated key in it would produce two occurrent.event-store.mongodb.collection
+  entries. The precondition is evaluated per file, which a .properties file has no multi-document concept to
+  complicate: the whole file is the only scope there is. The .yaml half of this guard is a separate,
+  document-scoped recipe below, because a .yaml file does not share that property; see
+  org.occurrent.rewrite.DropRedundantEventStoreCollectionInYaml_0_34.
+preconditions:
+  - org.openrewrite.properties.search.FindProperties:
+      propertyKey: occurrent.event-store.mongodb.collection
+recipeList:
+  - org.openrewrite.properties.DeleteProperty:
+      propertyKey: occurrent.event-store.collection
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.DropRedundantEventStoreCollection_0_34
+displayName: Drop occurrent.event-store.collection where occurrent.event-store.mongodb.collection is already set
+description: >-
+  Composes the .properties and .yaml halves of the guard under a single ID, so a recipe list or a user selecting
+  org.occurrent.DropRedundantEventStoreCollection_0_34 directly still gets both halves. See
+  org.occurrent.DropRedundantEventStoreCollectionInProperties_0_34 and
+  org.occurrent.rewrite.DropRedundantEventStoreCollectionInYaml_0_34 for what each half actually does and why
+  they are not one declarative recipe.
+recipeList:
+  - org.occurrent.DropRedundantEventStoreCollectionInProperties_0_34
+  - org.occurrent.rewrite.DropRedundantEventStoreCollectionInYaml_0_34
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.DropRedundantEventStoreTimeRepresentationInProperties_0_34
+displayName: Drop occurrent.event-store.time-representation from a .properties file where occurrent.event-store.mongodb.time-representation is already set
+description: >-
+  The occurrent.event-store.time-representation half of the same guard, see
+  DropRedundantEventStoreCollectionInProperties_0_34.
+preconditions:
+  - org.openrewrite.properties.search.FindProperties:
+      propertyKey: occurrent.event-store.mongodb.time-representation
+recipeList:
+  - org.openrewrite.properties.DeleteProperty:
+      propertyKey: occurrent.event-store.time-representation
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.DropRedundantEventStoreTimeRepresentation_0_34
+displayName: Drop occurrent.event-store.time-representation where occurrent.event-store.mongodb.time-representation is already set
+description: >-
+  The occurrent.event-store.time-representation half of the same guard, see DropRedundantEventStoreCollection_0_34.
+recipeList:
+  - org.occurrent.DropRedundantEventStoreTimeRepresentationInProperties_0_34
+  - org.occurrent.rewrite.DropRedundantEventStoreTimeRepresentationInYaml_0_34
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.DropRedundantSubscriptionCollectionInProperties_0_34
+displayName: Drop occurrent.subscription.collection from a .properties file where occurrent.subscription.mongodb.collection is already set
+description: >-
+  The occurrent.subscription.collection half of the same guard, see
+  DropRedundantEventStoreCollectionInProperties_0_34.
+preconditions:
+  - org.openrewrite.properties.search.FindProperties:
+      propertyKey: occurrent.subscription.mongodb.collection
+recipeList:
+  - org.openrewrite.properties.DeleteProperty:
+      propertyKey: occurrent.subscription.collection
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.DropRedundantSubscriptionCollection_0_34
+displayName: Drop occurrent.subscription.collection where occurrent.subscription.mongodb.collection is already set
+description: >-
+  The occurrent.subscription.collection half of the same guard, see DropRedundantEventStoreCollection_0_34.
+recipeList:
+  - org.occurrent.DropRedundantSubscriptionCollectionInProperties_0_34
+  - org.occurrent.rewrite.DropRedundantSubscriptionCollectionInYaml_0_34
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.DropRedundantRestartOnChangeStreamHistoryLostInProperties_0_34
+displayName: Drop occurrent.subscription.restart-on-change-stream-history-lost from a .properties file where the mongodb-qualified key is already set
+description: >-
+  The occurrent.subscription.restart-on-change-stream-history-lost half of the same guard, see
+  DropRedundantEventStoreCollectionInProperties_0_34.
+preconditions:
+  - org.openrewrite.properties.search.FindProperties:
+      propertyKey: occurrent.subscription.mongodb.restart-on-change-stream-history-lost
+recipeList:
+  - org.openrewrite.properties.DeleteProperty:
+      propertyKey: occurrent.subscription.restart-on-change-stream-history-lost
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.DropRedundantRestartOnChangeStreamHistoryLost_0_34
+displayName: Drop occurrent.subscription.restart-on-change-stream-history-lost where the mongodb-qualified key is already set
+description: >-
+  The occurrent.subscription.restart-on-change-stream-history-lost half of the same guard, see
+  DropRedundantEventStoreCollection_0_34.
+recipeList:
+  - org.occurrent.DropRedundantRestartOnChangeStreamHistoryLostInProperties_0_34
+  - org.occurrent.rewrite.DropRedundantRestartOnChangeStreamHistoryLostInYaml_0_34
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MigrateStoreNeutralMongoConfigKeys_0_34
+displayName: Rename the four MongoDB-only configuration keys to their mongodb-qualified names (0.33.0 -> 0.34.0)
+description: >-
+  occurrent.event-store.collection, occurrent.event-store.time-representation, occurrent.subscription.collection
+  and occurrent.subscription.restart-on-change-stream-history-lost never described a store-neutral setting, only
+  a MongoDB one, so each moves under a mongodb key on its existing prefix: occurrent.event-store.mongodb.collection,
+  occurrent.event-store.mongodb.time-representation, occurrent.subscription.mongodb.collection and
+  occurrent.subscription.mongodb.restart-on-change-stream-history-lost. Unlike the subscription.enabled rename in
+  0.32.0, no value transformation is involved, so this is a plain key rename in both .properties and .yaml. A file
+  that already sets both the deprecated and the mongodb-qualified key keeps only the mongodb-qualified one, on the
+  assumption that the key you migrated to is the one you meant.
+recipeList:
+  - org.occurrent.DropRedundantEventStoreCollection_0_34
+  - org.openrewrite.properties.ChangePropertyKey:
+      oldPropertyKey: occurrent.event-store.collection
+      newPropertyKey: occurrent.event-store.mongodb.collection
+  - org.openrewrite.yaml.ChangePropertyKey:
+      oldPropertyKey: occurrent.event-store.collection
+      newPropertyKey: occurrent.event-store.mongodb.collection
+  - org.occurrent.DropRedundantEventStoreTimeRepresentation_0_34
+  - org.openrewrite.properties.ChangePropertyKey:
+      oldPropertyKey: occurrent.event-store.time-representation
+      newPropertyKey: occurrent.event-store.mongodb.time-representation
+  - org.openrewrite.yaml.ChangePropertyKey:
+      oldPropertyKey: occurrent.event-store.time-representation
+      newPropertyKey: occurrent.event-store.mongodb.time-representation
+  - org.occurrent.DropRedundantSubscriptionCollection_0_34
+  - org.openrewrite.properties.ChangePropertyKey:
+      oldPropertyKey: occurrent.subscription.collection
+      newPropertyKey: occurrent.subscription.mongodb.collection
+  - org.openrewrite.yaml.ChangePropertyKey:
+      oldPropertyKey: occurrent.subscription.collection
+      newPropertyKey: occurrent.subscription.mongodb.collection
+  - org.occurrent.DropRedundantRestartOnChangeStreamHistoryLost_0_34
+  - org.openrewrite.properties.ChangePropertyKey:
+      oldPropertyKey: occurrent.subscription.restart-on-change-stream-history-lost
+      newPropertyKey: occurrent.subscription.mongodb.restart-on-change-stream-history-lost
+  - org.openrewrite.yaml.ChangePropertyKey:
+      oldPropertyKey: occurrent.subscription.restart-on-change-stream-history-lost
+      newPropertyKey: occurrent.subscription.mongodb.restart-on-change-stream-history-lost

@@ -129,9 +129,9 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     public EventStoreConfig occurrentEventStoreConfig(ReactiveMongoTransactionManager transactionManager, OccurrentProperties occurrentProperties) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         EventStoreConfig.Builder builder = new EventStoreConfig.Builder()
-                .eventStoreCollectionName(eventStoreProperties.getCollection())
+                .eventStoreCollectionName(eventStoreProperties.resolveCollection())
                 .transactionConfig(transactionManager)
-                .timeRepresentation(eventStoreProperties.getTimeRepresentation())
+                .timeRepresentation(eventStoreProperties.resolveTimeRepresentation())
                 .eventStoreCapabilities(eventStoreProperties.getCapabilities());
         // The property is only applied when set. true enables position explicitly (kept on even for an unpositioned
         // store), false opts a STREAM-only store out. withoutStreamPosition() is rejected with DCB, so skip it then.
@@ -155,7 +155,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @ConditionalOnMissingBean(CheckpointStorage.class)
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public CheckpointStorage occurrentCheckpointStorage(ReactiveMongoOperations mongo, OccurrentProperties occurrentProperties) {
-        return new ReactorCheckpointStorage(mongo, occurrentProperties.getSubscription().getCollection());
+        return new ReactorCheckpointStorage(mongo, occurrentProperties.getSubscription().resolveCollection());
     }
 
     /**
@@ -185,8 +185,8 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
                                                                              OccurrentProperties occurrentProperties, ObjectProvider<DcbEventStore> dcbEventStore,
                                                                              ApplicationContext applicationContext) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
-        ReactorMongoSubscriptionModel mongoSubscriptionModel = new ReactorMongoSubscriptionModel(mongo, eventStoreProperties.getCollection(), eventStoreProperties.getTimeRepresentation(),
-                ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().isRestartOnChangeStreamHistoryLost()));
+        ReactorMongoSubscriptionModel mongoSubscriptionModel = new ReactorMongoSubscriptionModel(mongo, eventStoreProperties.resolveCollection(), eventStoreProperties.resolveTimeRepresentation(),
+                ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().resolveRestartOnChangeStreamHistoryLost()));
         ReactorDurableSubscriptionModel durableSubscriptionModel = new ReactorDurableSubscriptionModel(composeCatchupLayer(mongoSubscriptionModel, eventStoreProperties, dcbEventStore, applicationContext), storage);
         if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
             // Stopped here rather than after the annotations are scanned, so every subscription is registered on a

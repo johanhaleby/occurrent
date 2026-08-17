@@ -61,6 +61,6 @@ public class Jackson3CloudEventConverterConfiguration {
         if (configured != null) {
             return Optional.of(configured);
         }
-        return occurrentProperties.getEventStore().getTimeRepresentation() == TimeRepresentation.DATE ? Optional.of(ChronoUnit.MILLIS) : Optional.empty();
+        return occurrentProperties.getEventStore().resolveTimeRepresentation() == TimeRepresentation.DATE ? Optional.of(ChronoUnit.MILLIS) : Optional.empty();
     }
 }
