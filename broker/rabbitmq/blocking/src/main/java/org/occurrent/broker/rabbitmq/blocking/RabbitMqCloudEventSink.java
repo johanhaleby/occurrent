@@ -141,10 +141,18 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
     // timeout or by interruption. The RabbitMQ client leaves that publish's delivery tag outstanding on the channel
     // forever, so a later publish on the same channel would wait on it too and could inherit its eventual nack.
     // Retiring the channel and opening a fresh one keeps that abandoned publish's outcome from ever being
-    // attributed to a later, unrelated one. The old channel is closed first, not after, so its channel number is
-    // free again for the replacement, which matters on a connection with no spare number to hand out.
+    // attributed to a later, unrelated one.
+    //
+    // The old channel's close runs on its own thread rather than this one. Channel#close() sends the close
+    // handshake and then blocks, waiting up to the RabbitMQ client's own fixed ten second RPC timeout for the
+    // reply, a wait acknowledgementTimeout does not govern, so waiting for it here would let a slow broker stall
+    // this publish call by far more than the timeout it was configured with. The replacement is opened without
+    // waiting for that close to finish, which can occasionally race a connection with no spare channel number to
+    // hand out until the old one's number is actually freed, a case openConfirmChannel already turns into a clear
+    // failure rather than a hang.
     private void retireChannel() {
-        closeQuietly(channel);
+        Channel retiring = channel;
+        Thread.ofVirtual().start(() -> closeQuietly(retiring));
         Channel replacement = openConfirmChannel(connection);
         installReturnListener(replacement);
         channel = replacement;
@@ -152,8 +160,9 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
 
     // A failure to reopen the channel here is attached to primaryFailure as suppressed rather than thrown in its
     // place, so the caller of this publish still sees the failure it actually asked about (a timeout or an
-    // interruption), not this secondary one. If reopening fails, the channel field is left pointing at the closed
-    // channel this call just retired, so every publish after this one fails fast on it instead of hanging.
+    // interruption), not this secondary one. If reopening fails, the channel field is left pointing at the channel
+    // this call just retired, whose close is still running on its own thread, so a publish after this one either
+    // fails fast on it or waits on the same outstanding confirm it already would have without this retirement.
     private void retireChannelPreserving(Throwable primaryFailure) {
         try {
             retireChannel();

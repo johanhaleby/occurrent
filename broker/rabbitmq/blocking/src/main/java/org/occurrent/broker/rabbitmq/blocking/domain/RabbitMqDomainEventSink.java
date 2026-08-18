@@ -69,10 +69,17 @@ public final class RabbitMqDomainEventSink<E> implements DomainEventSink<E> {
         return new RabbitMqDomainEventSink<>(cloudEventSink, converter);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Any extension {@code converter} sets on the converted event is stripped, not just the stream-identity ones,
+     * so a consumer genuinely sees {@link EventMetadata#empty()} as documented above, regardless of what
+     * {@code converter} happens to carry.
+     */
     @Override
     public void publish(E domainEvent) {
         requireNonNull(domainEvent, "domainEvent cannot be null");
-        cloudEventSink.publish(converter.toCloudEvent(domainEvent));
+        cloudEventSink.publish(copyCoreAttributes(converter.toCloudEvent(domainEvent)).build());
     }
 
     /**
@@ -88,15 +95,7 @@ public final class RabbitMqDomainEventSink<E> implements DomainEventSink<E> {
         requireNonNull(metadata, EventMetadata.class.getSimpleName() + " cannot be null");
         requireNonNull(domainEvent, "domainEvent cannot be null");
         CloudEvent convertedEvent = converter.toCloudEvent(domainEvent);
-        CloudEventBuilder builder = CloudEventBuilder.v1()
-                .withId(convertedEvent.getId())
-                .withSource(convertedEvent.getSource())
-                .withType(convertedEvent.getType())
-                .withSubject(convertedEvent.getSubject())
-                .withTime(convertedEvent.getTime())
-                .withDataSchema(convertedEvent.getDataSchema())
-                .withDataContentType(convertedEvent.getDataContentType())
-                .withData(convertedEvent.getData());
+        CloudEventBuilder builder = copyCoreAttributes(convertedEvent);
         for (String extensionName : convertedEvent.getExtensionNames()) {
             // metadata decides this extension's fate below, whether that is overriding it or dropping it, so it is
             // left out of this copy rather than set here and possibly overwritten a few lines down.
@@ -111,6 +110,18 @@ public final class RabbitMqDomainEventSink<E> implements DomainEventSink<E> {
             }
         }
         cloudEventSink.publish(builder.build());
+    }
+
+    private static CloudEventBuilder copyCoreAttributes(CloudEvent source) {
+        return CloudEventBuilder.v1()
+                .withId(source.getId())
+                .withSource(source.getSource())
+                .withType(source.getType())
+                .withSubject(source.getSubject())
+                .withTime(source.getTime())
+                .withDataSchema(source.getDataSchema())
+                .withDataContentType(source.getDataContentType())
+                .withData(source.getData());
     }
 
     private static void stampExtension(CloudEventBuilder builder, String key, Object value) {

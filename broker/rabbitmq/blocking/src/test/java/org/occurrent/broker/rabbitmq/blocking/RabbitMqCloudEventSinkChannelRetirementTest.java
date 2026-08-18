@@ -35,6 +35,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -63,10 +64,12 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
 
         assertThatThrownBy(() -> sink.publish(orderPlaced())).isInstanceOf(RabbitMqPublishTimeoutException.class);
 
-        verify(timedOutChannel).close();
         verify(replacementChannel).confirmSelect();
         verify(replacementChannel).addReturnListener(any(ReturnCallback.class));
         verify(replacementChannel, never()).close();
+        // The old channel's close runs on its own thread rather than blocking this call, so it is awaited here
+        // rather than asserted immediately.
+        verify(timedOutChannel, timeout(2000)).close();
     }
 
     @Test
@@ -88,8 +91,8 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
             Thread.interrupted();
         }
 
-        verify(interruptedChannel).close();
         verify(replacementChannel).confirmSelect();
+        verify(interruptedChannel, timeout(2000)).close();
     }
 
     @Test

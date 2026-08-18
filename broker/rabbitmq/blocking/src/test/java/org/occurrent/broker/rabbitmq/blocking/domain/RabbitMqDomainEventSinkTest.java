@@ -57,6 +57,23 @@ class RabbitMqDomainEventSinkTest extends RabbitMqTestSupport {
     }
 
     @Test
+    void publish_without_metadata_strips_every_extension_the_converter_set_so_the_consumer_sees_empty_metadata() throws Exception {
+        String queue = adminChannel.queueDeclare().getQueue();
+        adminChannel.queueBind(queue, exchange, TestOrderPlaced.class.getName());
+
+        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+        try (RabbitMqCloudEventSink cloudEventSink = RabbitMqCloudEventSink.builder(connection(), resolver).build()) {
+            RabbitMqDomainEventSink<TestOrderPlaced> domainEventSink = RabbitMqDomainEventSink.using(cloudEventSink, converter);
+
+            domainEventSink.publish(new TestOrderPlaced("order-4"));
+
+            GetResponse response = adminChannel.basicGet(queue, true);
+            assertThat(response).isNotNull();
+            assertThat(response.getProps().getHeaders()).doesNotContainKey("cloudEvents_streamid");
+        }
+    }
+
+    @Test
     void publish_with_metadata_stamps_the_supplied_extensions_onto_the_published_event() throws Exception {
         String queue = adminChannel.queueDeclare().getQueue();
         adminChannel.queueBind(queue, exchange, TestOrderPlaced.class.getName());
