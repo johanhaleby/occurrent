@@ -114,9 +114,13 @@ race one paragraph up, just moved after the push, so it has to be answered in th
 So the push module gains a three-valued outcome reported from that one evaluation, `DELIVERED`, `FILTERED` and
 `NOT_DELIVERABLE`, and the bridge acknowledges on `DELIVERED` once `accept(...)` returns normally, and on `FILTERED`,
 where redelivering would loop forever because the event is simply not this consumer's. It does not acknowledge on
-`NOT_DELIVERABLE` and it does not acknowledge when `accept(...)` throws. This is a breaking change to `PushObserver`,
-which pre-1.0 is preferred over keeping a design that cannot be used safely, and it is the one change outside the
-three broker modules that this design needs.
+`NOT_DELIVERABLE` and it does not acknowledge when `accept(...)` throws.
+
+This refines a shape that has not shipped rather than breaking a released one, since `PushObserver` is still in the
+unreleased section of `changelog.md`, so its existing entry absorbs the outcome contract instead of a migration note
+being needed. [#848](https://github.com/johanhaleby/occurrent/issues/848) owns the change and has to be done before
+the consume bridges in #415 and #417, which are what need the contract. It is the one change this design needs outside
+the three broker modules.
 
 **The bridge therefore holds the `PushSubscriptionModel` rather than a bare `Pushable`.** The observer is a
 constructor argument on the model, and the readiness accessors are not reachable through `Pushable` either. The bridge
@@ -226,8 +230,19 @@ The two levels are not symmetric about where the conversion happens, and the asy
 On the publish side the shipped domain sinks, `RabbitMqDomainEventSink` and `KafkaDomainEventSink`, are each built
 from a `CloudEventSink` and a `CloudEventConverter<E>`. They convert and delegate rather than talking to the broker
 client themselves. `DomainEventSink<E>` stays an interface with no such requirement, so an application is free to
-implement it directly. A domain event has to be serialized exactly once whichever way it is done, so delegating costs
-nothing and it keeps one place that writes the extension headers.
+implement it directly.
+
+**Those shipped sinks are for a caller that starts with a domain event, and pairing them with `DomainEventForwarder`
+is the one combination this design tells you not to build.** A forwarder starts from a stored CloudEvent, so decoding
+it to a domain event and handing it to a sink that converts straight back means one decode and one re-encode per
+event, which is exactly the double conversion ADR 62 added the domain feed to avoid. It is also lossy, because
+`toCloudEvent` builds a fresh event and only the extensions are recoverable from `EventMetadata`, so the id, source,
+subject and time the store recorded are regenerated rather than preserved.
+
+So forwarding stored events out of the event store uses `CloudEventForwarder` with a `CloudEventSink`, which is the
+ordinary publish path and converts nothing. `DomainEventForwarder<E>` is for a `DomainEventSink<E>` the application
+implements itself, one that genuinely publishes domain events through its own converter, and there the decode happens
+once and nothing re-encodes it.
 
 On the consume side there is no such delegation. The domain bridge reads the message body with the application's
 converter and the extension headers into an `EventMetadata`, then calls `DomainEventFeed.accept(metadata, event)`.
@@ -306,6 +321,18 @@ It evaluates that filter before decoding, on a CloudEvent rebuilt from the messa
 the rebuild possible, since binary mode puts every CloudEvent attribute in the headers, so the bridge has all of them
 plus the body without decoding anything. A filter that does not match ends there and the domain event is never
 decoded, which also means the common case costs nothing.
+
+**The bridge registers the projection on the feed, so there is one filter rather than two.** `DomainEventFeed` keeps
+the `Filter` it is given inside a `CatchupProjectionFeed` and exposes neither it nor a live match, so a bridge
+configured with its own filter alongside would be the two independently configured copies this decision just refused,
+and replay and live delivery could disagree. Instead the bridge is constructed with the feed and the filter and is
+what calls `register` on the feed, so the same filter object drives the replay, the live match and the bindings.
+
+**A filter with a payload condition needs a `DataFieldReader`, and is refused at startup without one.** The
+one-argument `SubscriptionFilterMatcher.matcherFor` builds with `DataFieldReader.refusing()` and throws while
+constructing the matcher when the filter reads a data field, so the bridge takes a reader and uses the two-argument
+overload. That refusal happening at startup rather than on the first matching event is the existing behaviour on the
+subscribe path, and inheriting it is what keeps the two consistent.
 
 That leaves the bindings derived from the same filter the consumer is configured with at both levels. A CloudEvent
 bridge that wants to see what arrived and whether it matched reads its `PushObserver`, which decision 1 already
@@ -401,6 +428,12 @@ transport enums that happen to line up, with two constants. `REDELIVER` puts the
 `PARK` routes it to a holding destination nobody consumes from, so an operator can look at what failed. Both bridges
 take it through a builder method named `onDeliveryFailure(DeliveryFailurePolicy)`, and `REDELIVER` is the default
 because it is the choice that cannot lose a message on a transient failure.
+
+`PARK` also needs somewhere to park, so choosing it requires a parking destination of that transport's own
+`EventDestination` type, a `RabbitMqDestination` or a `KafkaDestination`, given through
+`parkingDestination(D)` on the same builder. A bridge configured with `PARK` and no parking destination refuses to
+start. Without that the two modules would each invent a default, and a default holding destination is precisely the
+thing an operator has to know the name of.
 
 `REDELIVER` is where the two transports genuinely differ in mechanism, and it is written down here so the Kafka one
 does not invent a third behaviour. RabbitMQ has a per-message negative acknowledgement, so it calls `basicNack` with
