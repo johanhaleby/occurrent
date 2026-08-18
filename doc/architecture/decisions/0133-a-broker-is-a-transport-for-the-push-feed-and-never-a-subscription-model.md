@@ -244,6 +244,16 @@ ordinary publish path and converts nothing. `DomainEventForwarder<E>` is for a `
 implements itself, one that genuinely publishes domain events through its own converter, and there the decode happens
 once and nothing re-encodes it.
 
+**`DomainEventForwarder` still cannot preserve the stored event's core attributes, and that limit is stated rather
+than left to be discovered.** It hands the sink a domain event and an `EventMetadata`, and `EventMetadata` holds
+extensions, so the id, source, subject and time the store recorded do not reach the sink and whatever it publishes has
+new ones. The Occurrent extensions do survive, which is what the consuming side needs to build `EventMetadata`, so
+this path is sound for a consumer that keys on stream, version or position.
+
+It is not sound for a consumer filtering on subject, source or time, because that consumer can decide differently on
+the live path than the same filter does during a catch-up replay over the stored events. A deployment with such a
+consumer uses `CloudEventForwarder`, where nothing is regenerated because nothing is converted.
+
 On the consume side there is no such delegation. The domain bridge reads the message body with the application's
 converter and the extension headers into an `EventMetadata`, then calls `DomainEventFeed.accept(metadata, event)`.
 Routing it through the CloudEvent bridge instead would decode the body into a CloudEvent and then decode it again into
@@ -326,7 +336,14 @@ decoded, which also means the common case costs nothing.
 the `Filter` it is given inside a `CatchupProjectionFeed` and exposes neither it nor a live match, so a bridge
 configured with its own filter alongside would be the two independently configured copies this decision just refused,
 and replay and live delivery could disagree. Instead the bridge is constructed with the feed and the filter and is
-what calls `register` on the feed, so the same filter object drives the replay, the live match and the bindings.
+what calls `register` on the feed.
+
+The one thing it is configured with is a plain `Filter`, not a `SubscriptionFilter`, because those are two different
+types here and only one of them fits both places. `register` takes a `Filter`, while `matcherFor` and
+`destinationsFor` take a `SubscriptionFilter`, so the bridge passes the `Filter` straight to `register` and wraps it
+for the other two. A `DcbSubscriptionFilter` has no plain `Filter` inside it at all, it has a `DcbCriteria`, so a DCB
+filter cannot drive a domain bridge and is refused there. ADR 62 already refuses one for a catch-up replay on the same
+grounds, that a DCB boundary needs a different read, so this inherits an existing limit rather than adding one.
 
 **A filter with a payload condition needs a `DataFieldReader`, and is refused at startup without one.** The
 one-argument `SubscriptionFilterMatcher.matcherFor` builds with `DataFieldReader.refusing()` and throws while
@@ -392,6 +409,15 @@ may or may not have reached the broker and returning normally would report a suc
 hands the caller a decision it can act on, and the caller republishing after a timeout may produce a duplicate, which
 is the same at-least-once contract every consumer here already works under. The `RetryStrategy` does not cover this
 case, which is why the two are described separately below.
+
+**A publisher confirm says the broker took the message, not that it routed it, so the RabbitMQ sink publishes with
+`mandatory = true` and treats a returned message as a failure.** RabbitMQ confirms a publish to an exchange that has
+no binding matching the routing key and then discards the message, so a sink that reads the confirm alone reports
+success for an event nobody will ever receive. A typo in a routing key would look exactly like a working deployment.
+So the sink sets `mandatory`, correlates any `basic.return` with the publish it belongs to, and treats a return as a
+failed publish even though a confirm follows it. This applies to every publish the RabbitMQ side makes, the ordinary
+forwarded event and the parked one alike, and for the parked one it is what stops the original being acknowledged
+after a park that went nowhere.
 
 **Waiting is only worth anything if the producer is configured to make the broker answer, so the Kafka sink requires
 `acks=all` and refuses to start below it.** Under `acks=0` a send future completes once the record reaches the socket
