@@ -100,12 +100,12 @@ units:
     assessment: "Sonnet/high chip. No kafka-clients version here (U5 owns it); testcontainers-bom already manages testcontainers-{rabbitmq,kafka}. No changelog entry (no user-visible capability without a transport). Brief carries the merged ADR as binding text, catchAllDestination default, forwarder split, releasable-as-is."
   U3:
     issue: 414
-    goal: "RabbitMQ publish: destination, topic-exchange resolver, CloudEvent + domain sinks, publisher confirms; own aggregator/BOM/excludeArtifacts entries; writes THE single broker changelog entry (Changes + Highlights teaser)"
-    phase: PLANNED
+    goal: "RabbitMQ publish: destination, topic-exchange resolver, CloudEvent + domain sinks, publisher confirms; own aggregator/BOM/excludeArtifacts entries; EDITS the broker changelog entry in place (authorship moved to U2 at the verify-pass correction)"
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U2]
-    session: null
+    session: local_60dca6d4-7ad1-4187-acb5-c816d2738ec8
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 414, met: false, evidence: null}
