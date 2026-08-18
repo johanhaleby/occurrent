@@ -171,8 +171,24 @@ public final class BlockingHandover<T> {
      *                                during the catch-up.
      */
     public void accept(T payload) {
+        acceptReportingDelivery(payload);
+    }
+
+    /**
+     * As {@link #accept(Object)}, additionally reporting whether the payload was genuinely handled (buffered for the
+     * replay to drain, delivered live, or already delivered by an earlier attempt) rather than silently dropped
+     * because a replay that would have drained it was stopped. A caller that acknowledges an externally sourced
+     * payload (a broker message, say) needs this to tell the two apart, since {@link #accept(Object)} returns
+     * normally either way.
+     *
+     * @return {@code false} only when this handover is stopped and the payload was dropped rather than buffered or
+     *         delivered. {@code true} otherwise, including a de-duplicated repeat of an already-delivered payload.
+     * @throws IllegalStateException for the same reasons {@link #accept(Object)} does.
+     */
+    public boolean acceptReportingDelivery(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
         String deliverKey = null;
+        boolean dropped = false;
         synchronized (lock) {
             if (catchUpFailure != null) {
                 throw new IllegalStateException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
@@ -182,6 +198,7 @@ public final class BlockingHandover<T> {
             } else if (stopped) {
                 // Dropped rather than buffered: the replay that would have drained this buffer was stopped, so
                 // nothing is coming to fold it and buffering would just fill up and overflow.
+                dropped = true;
             } else if (buffer.size() >= maxBufferedEvents) {
                 throw new IllegalStateException(HandoverMessages.bufferOverflow(maxBufferedEvents));
             } else {
@@ -191,6 +208,7 @@ public final class BlockingHandover<T> {
         if (deliverKey != null) {
             deliverOutsideLock(payload, deliverKey);
         }
+        return !dropped;
     }
 
     /**

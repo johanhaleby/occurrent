@@ -502,7 +502,7 @@ class DomainEventFeedTest {
         feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
         feed.catchUpAll();
 
-        RoutingOutcome outcome = feed.accept(converter.toCloudEvent(new Counted("1")));
+        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1")));
 
         assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(repo.get("counter")).isEqualTo(1);
@@ -523,7 +523,7 @@ class DomainEventFeedTest {
                 .withType("SomethingElseHappened")
                 .build();
 
-        RoutingOutcome outcome = feed.accept(nonMatching);
+        RoutingOutcome outcome = feed.acceptCloudEvent(nonMatching);
 
         assertThat(outcome).isEqualTo(RoutingOutcome.FILTERED);
         assertThat(repo).isEmpty();
@@ -536,7 +536,7 @@ class DomainEventFeedTest {
         CloudEventConverter<Counted> converter = counterConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
 
-        Throwable thrown = catchThrowable(() -> feed.accept(converter.toCloudEvent(new Counted("1"))));
+        Throwable thrown = catchThrowable(() -> feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))));
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("has no projection registered");
     }
@@ -551,9 +551,10 @@ class DomainEventFeedTest {
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         MaterializedView<Counted> view = event -> repo.merge("counter", 1, Integer::sum);
         feed.register("counter", view, Filter.type(converter.getCloudEventType(Counted.class)));
+        feed.goLive("counter");
 
-        RoutingOutcome delivered = feed.accept(converter.toCloudEvent(new Counted("1")));
-        RoutingOutcome filtered = feed.accept(CloudEventBuilder.v1()
+        RoutingOutcome delivered = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1")));
+        RoutingOutcome filtered = feed.acceptCloudEvent(CloudEventBuilder.v1()
                 .withId("x")
                 .withSource(URI.create("urn:occurrent:test"))
                 .withType("SomethingElseHappened")
@@ -590,8 +591,9 @@ class DomainEventFeedTest {
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         MaterializedView<Counted> view = event -> repo.merge("counter", 1, Integer::sum);
         feed.register("counter", view, Filter.data("amount", eq(42)));
+        feed.goLive("counter");
 
-        RoutingOutcome outcome = feed.accept(converter.toCloudEvent(new Counted("1")));
+        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1")));
 
         assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(repo.get("counter")).isEqualTo(1);
@@ -610,9 +612,45 @@ class DomainEventFeedTest {
         };
         feed.register("counter", view, Filter.data("amount", eq(42)));
 
-        Throwable thrown = catchThrowable(() -> feed.accept(converter.toCloudEvent(new Counted("1"))));
+        Throwable thrown = catchThrowable(() -> feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))));
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage("payload unreadable");
+    }
+
+    @Test
+    void accept_cloud_event_reports_not_deliverable_rather_than_delivered_when_a_stopped_catch_up_drops_the_event() {
+        // The exact race Copilot's review of this PR caught: BlockingHandover.accept(..) returns normally for a
+        // payload dropped because stopCatchUp() interrupted a replay still in flight (see its own javadoc), so
+        // acceptCloudEvent(..) must read that signal back rather than assume delivery from a normal return.
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s", counterConverter().toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        CountDownLatch parked = new CountDownLatch(1);
+        CountDownLatch proceed = new CountDownLatch(1);
+        AtomicInteger converted = new AtomicInteger();
+        CloudEventConverter<Counted> converter = parkingConverter(converted, parked, proceed);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+
+        Thread replay = new Thread(feed::catchUpAll);
+        replay.start();
+        awaitUninterruptibly(parked);
+        feed.stopCatchUp();
+        proceed.countDown();
+        try {
+            replay.join(TimeUnit.SECONDS.toMillis(5));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
+        assertThat(replay.isAlive()).isFalse();
+
+        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live")));
+
+        assertThat(outcome).as("the event matched the filter but the stopped handover dropped it, so it was never "
+                        + "actually delivered to the projection")
+                .isEqualTo(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(repo).doesNotContainKey("counter");
     }
 
     private static CloudEventConverter<Counted> countingConverter(AtomicInteger decodes) {

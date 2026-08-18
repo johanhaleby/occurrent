@@ -21,10 +21,12 @@ package org.occurrent.subscription;
  * and everything built on it ({@code PushObserver}, and {@code DomainEventFeed}'s live match).
  * <p>
  * A caller that acknowledges an externally sourced event (a broker message, say) has to tell {@link #DELIVERED} and
- * {@link #FILTERED} apart from {@link #NOT_DELIVERABLE}. The first two describe an event a registered subscription
- * evaluated and either accepted or declined on its own terms; the third describes an event that was never offered to
- * a subscription's filter at all, because there was no running, unpaused subscription for it to reach. Acknowledging
- * on {@link #NOT_DELIVERABLE} discards an event nothing consumed.
+ * {@link #FILTERED} apart from {@link #NOT_DELIVERABLE}. The first two describe an event a filter evaluated and
+ * either accepted or declined on its own terms. The third covers every other reason the event was not actually
+ * consumed. The filter was never asked at all, because there was no running, unpaused subscription for the event to
+ * reach, or a filter was asked and threw instead of answering, or a filter accepted the event but the delivery
+ * itself was then dropped rather than handled. Acknowledging on {@link #NOT_DELIVERABLE} discards an event nothing
+ * consumed.
  * <p>
  * All three come out of one evaluation, not a check taken before or after dispatch. A check taken separately would
  * let a {@code stop()}, a {@code pauseSubscription} or a {@code cancelSubscription} land between the check and the
@@ -47,9 +49,11 @@ public enum RoutingOutcome {
     FILTERED,
 
     /**
-     * The event was never offered to a filter to decide. Nothing is registered, the model is not running, or the
-     * sole subscription is paused. Never reported as a stand-in for {@link #FILTERED}, so a caller can tell "this
-     * event is not mine" from "nothing here is currently able to receive it".
+     * The event was not delivered, for a reason that is never a filter declining it. Nothing is registered, the
+     * model is not running, or the sole subscription is paused, so the filter was never asked. A filter that was
+     * asked and threw instead of answering reports this too, since a filter that failed to answer did not decline
+     * the event. Never reported as a stand-in for {@link #FILTERED}, so a caller can tell "this event is not mine"
+     * from "nothing here is currently able to receive it".
      */
     NOT_DELIVERABLE
 }

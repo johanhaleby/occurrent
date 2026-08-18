@@ -414,7 +414,7 @@ class DomainEventFeedTest {
         feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
         feed.catchUpAll().block();
 
-        RoutingOutcome outcome = feed.accept(converter.toCloudEvent(new Counted("1"))).block();
+        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))).block();
 
         assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(repo.get("counter")).isEqualTo(1);
@@ -430,7 +430,7 @@ class DomainEventFeedTest {
         feed.catchUpAll().block();
         CloudEvent nonMatching = CloudEventBuilder.v1().withId("x").withSource(SOURCE).withType("SomethingElseHappened").build();
 
-        RoutingOutcome outcome = feed.accept(nonMatching).block();
+        RoutingOutcome outcome = feed.acceptCloudEvent(nonMatching).block();
 
         assertThat(outcome).isEqualTo(RoutingOutcome.FILTERED);
         assertThat(repo).isEmpty();
@@ -442,7 +442,7 @@ class DomainEventFeedTest {
         CloudEventConverter<Counted> converter = countedConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
 
-        StepVerifier.create(feed.accept(converter.toCloudEvent(new Counted("1"))))
+        StepVerifier.create(feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))))
                 .expectErrorSatisfies(e -> assertThat(e)
                         .isInstanceOf(IllegalStateException.class)
                         .hasMessageContaining("has no projection registered"))
@@ -458,9 +458,10 @@ class DomainEventFeedTest {
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         Function<Counted, Mono<Void>> fold = event -> Mono.fromRunnable(() -> repo.merge("counter", 1, Integer::sum));
         feed.register("counter", fold, Filter.type(converter.getCloudEventType(Counted.class)));
+        feed.goLive("counter").block();
 
-        RoutingOutcome delivered = feed.accept(converter.toCloudEvent(new Counted("1"))).block();
-        RoutingOutcome filtered = feed.accept(CloudEventBuilder.v1().withId("x").withSource(SOURCE).withType("SomethingElseHappened").build()).block();
+        RoutingOutcome delivered = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))).block();
+        RoutingOutcome filtered = feed.acceptCloudEvent(CloudEventBuilder.v1().withId("x").withSource(SOURCE).withType("SomethingElseHappened").build()).block();
 
         assertThat(delivered).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(filtered).isEqualTo(RoutingOutcome.FILTERED);
@@ -490,8 +491,9 @@ class DomainEventFeedTest {
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         Function<Counted, Mono<Void>> fold = event -> Mono.fromRunnable(() -> repo.merge("counter", 1, Integer::sum));
         feed.register("counter", fold, Filter.data("amount", eq(42)));
+        feed.goLive("counter").block();
 
-        RoutingOutcome outcome = feed.accept(converter.toCloudEvent(new Counted("1"))).block();
+        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))).block();
 
         assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(repo.get("counter")).isEqualTo(1);
@@ -508,8 +510,45 @@ class DomainEventFeedTest {
         Function<Counted, Mono<Void>> fold = event -> Mono.empty();
         feed.register("counter", fold, Filter.data("amount", eq(42)));
 
-        StepVerifier.create(feed.accept(converter.toCloudEvent(new Counted("1"))))
+        StepVerifier.create(feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))))
                 .verifyErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessage("payload unreadable"));
+    }
+
+    @Test
+    void accept_cloud_event_reports_not_deliverable_rather_than_delivered_when_a_stopped_catch_up_drops_the_event() {
+        // The exact race Copilot's review of this PR caught: ReactiveHandover.accept(..) completes successfully for
+        // a payload dropped because stopCatchUp() interrupted a replay still in flight (see its own javadoc), so
+        // acceptCloudEvent(..) must read that signal back rather than assume delivery from a normal completion.
+        CountDownLatch parked = new CountDownLatch(1);
+        CountDownLatch proceed = new CountDownLatch(1);
+        AtomicInteger converted = new AtomicInteger();
+        CloudEventConverter<Counted> converter = parkingConverter(converted, parked, proceed);
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId);
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+
+        CountDownLatch catchUpFinished = new CountDownLatch(1);
+        feed.catchUpAll().doFinally(signal -> catchUpFinished.countDown()).subscribe();
+        awaitUninterruptibly(parked);
+        feed.stopCatchUp();
+        proceed.countDown();
+        assertThat(awaitBoolean(catchUpFinished, 5, TimeUnit.SECONDS)).isTrue();
+
+        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live"))).block();
+
+        assertThat(outcome).as("the event matched the filter but the stopped handover dropped it, so it was never "
+                        + "actually delivered to the projection")
+                .isEqualTo(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(repo).doesNotContainKey("counter");
+    }
+
+    private static boolean awaitBoolean(CountDownLatch latch, long timeout, TimeUnit unit) {
+        try {
+            return latch.await(timeout, unit);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
     }
 
     private static CloudEventConverter<Counted> countingConverter(AtomicInteger decodes) {
@@ -573,7 +612,7 @@ class DomainEventFeedTest {
         };
     }
 
-    // A reader whose history is the given event ids, in position order. Used only by the stop-mid-replay test.
+    // A reader whose history is the given event ids, in position order. Used by the stop-mid-replay tests.
     private static PositionOrderedReader reader(String... eventIds) {
         List<CloudEvent> events = new ArrayList<>();
         for (String id : eventIds) {

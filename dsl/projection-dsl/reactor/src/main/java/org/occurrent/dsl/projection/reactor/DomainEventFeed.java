@@ -86,7 +86,7 @@ public final class DomainEventFeed<E> {
     /**
      * As {@link #DomainEventFeed(PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage, CatchupThenLiveOptions)},
      * additionally answering a {@code data} payload condition on a registration's replay filter by reading it
-     * through {@code dataFieldReader} instead of refusing it. Only {@link #accept(CloudEvent)} consults this, since
+     * through {@code dataFieldReader} instead of refusing it. Only {@link #acceptCloudEvent(CloudEvent)} consults this, since
      * that is the one entry point that evaluates a filter live rather than only during the replay.
      */
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
@@ -114,8 +114,13 @@ public final class DomainEventFeed<E> {
         Objects.requireNonNull(id, "id cannot be null");
         Objects.requireNonNull(projection, "projection cannot be null");
         Objects.requireNonNull(repository, "repository cannot be null");
+        // Derived once, here, and passed into the Filter-taking create(..) overload below rather than the
+        // Projection-taking one, which would derive it again from the same converter and projection. Two
+        // derivations can drift if the converter is not a pure function of its input, and even a pure one is the
+        // "two copies that nothing compares" shape this class exists to avoid.
         Filter filter = ProjectionFilters.filterFor(converter, projection);
-        claim(id, filter, CatchupProjectionFeed.create(id, projection, repository, reader, converter, eventId, catchupMarker, options));
+        BiFunction<EventMetadata, E, Mono<Void>> fold = Projections.reactiveUpdateWithMetadata(projection, repository, id);
+        claim(id, filter, CatchupProjectionFeed.create(id, fold, filter, reader, converter, eventId, catchupMarker, options));
     }
 
     /**
@@ -123,7 +128,7 @@ public final class DomainEventFeed<E> {
      * {@code Projections.reactiveUpdate(materializedView)}) replaying stored events matching {@code replayFilter}. The
      * reactor analog of the blocking {@code register(id, MaterializedView, Filter)}.
      * <p>
-     * {@code replayFilter} is also what {@link #accept(CloudEvent)} matches live events against, wrapped as an
+     * {@code replayFilter} is also what {@link #acceptCloudEvent(CloudEvent)} matches live events against, wrapped as an
      * {@link AgnosticSubscriptionFilter}. The one filter given here is the only one this feed ever holds, so the
      * replay and the live path can never disagree about which events are this projection's. Building that matcher
      * happens here, eagerly, so a {@code data} payload condition this feed has no {@link DataFieldReader} for is
@@ -141,7 +146,7 @@ public final class DomainEventFeed<E> {
      * fold on the event's {@link EventMetadata}. The replay always supplies the metadata it decoded from the
      * CloudEvent, and the live path supplies whatever the source passed to {@link #accept(EventMetadata, Object)}.
      * <p>
-     * {@code replayFilter} is also what {@link #accept(CloudEvent)} matches live events against, for the reason
+     * {@code replayFilter} is also what {@link #acceptCloudEvent(CloudEvent)} matches live events against, for the reason
      * {@link #register(String, Function, Filter)} gives.
      *
      * @throws IllegalArgumentException if a projection is already registered on this feed
@@ -207,7 +212,9 @@ public final class DomainEventFeed<E> {
      * this from a broker listener that has a CloudEvent to rebuild rather than a domain event and an
      * {@link EventMetadata} already in hand, and acknowledge on {@link RoutingOutcome#DELIVERED} once the returned
      * {@link Mono} completes, and on {@link RoutingOutcome#FILTERED}, where redelivering would loop forever since
-     * the event is simply not this projection's.
+     * the event is simply not this projection's. Named distinctly from {@link #accept(Object)} rather than
+     * overloaded onto it, since a {@code DomainEventFeed<CloudEvent>} would otherwise let the compiler silently pick
+     * between two overloads with different behavior for the same argument.
      * <p>
      * A non-matching event is never decoded, so a converter that only knows how to decode this projection's own
      * event types never sees one it was not built for. {@link EventMetadata} for a matched event comes from
@@ -218,19 +225,25 @@ public final class DomainEventFeed<E> {
      * events are this projection's. A filter with a {@code data} payload condition this feed has no
      * {@link DataFieldReader} for was already refused at {@link #register}, so it cannot fail here.
      * <p>
+     * Completes with {@link RoutingOutcome#NOT_DELIVERABLE} rather than {@link RoutingOutcome#DELIVERED} when a
+     * matching event arrives after {@link #stopCatchUp()} interrupted a replay still in flight. The catch-up-then-live
+     * engine behind this feed drops such an event rather than delivering or buffering it, and this method reads that
+     * signal back instead of assuming delivery from a normal completion.
+     * <p>
      * Fails with an {@link IllegalStateException} when no projection is registered, for the reason
      * {@link #accept(Object)} gives, rather than completing with {@link RoutingOutcome#NOT_DELIVERABLE}. This feed,
      * unlike a push subscription model, has no write path to protect, and ADR 104 already refuses here for
      * {@link #accept(Object)} and {@link #accept(EventMetadata, Object)}.
      */
-    public Mono<RoutingOutcome> accept(CloudEvent cloudEvent) {
+    public Mono<RoutingOutcome> acceptCloudEvent(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         return registeredProjection().flatMap(registered -> {
             if (!registered.liveMatcher().test(cloudEvent)) {
                 return Mono.just(RoutingOutcome.FILTERED);
             }
             E event = converter.toDomainEvent(cloudEvent);
-            return registered.catchupFeed().accept(EventMetadata.from(cloudEvent), event).thenReturn(RoutingOutcome.DELIVERED);
+            return registered.catchupFeed().acceptReportingDelivery(EventMetadata.from(cloudEvent), event)
+                    .map(delivered -> delivered ? RoutingOutcome.DELIVERED : RoutingOutcome.NOT_DELIVERABLE);
         });
     }
 
