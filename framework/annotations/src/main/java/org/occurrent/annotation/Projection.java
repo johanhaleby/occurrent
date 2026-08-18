@@ -199,4 +199,22 @@ public @interface Projection {
      * that type exist. An empty string (the default) means unset. Ignored for {@link Source#EVENT_STORE}.
      */
     String subscriptionModelName() default "";
+
+    /**
+     * Whether this projection records every append it applies into the {@code AppliedAppendStore} bean, so a caller
+     * can ask whether this projection has applied a particular append
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>).
+     * {@code false} by default.
+     * <p>
+     * Refused at startup when no {@code AppliedAppendStore} bean exists, and when combined with
+     * {@link Mode#SYNCHRONOUS}, since a synchronous projection already updates inside the write and answers
+     * read-your-writes without this. Recording is skipped, quietly, for an event with no {@code appendid} extension:
+     * one written before this feature existed, or one delivered through a push feed whose producer supplied none.
+     * <p>
+     * Nothing is recorded while the projection is replaying. Whether that can be told apart from live delivery, and
+     * what happens to previously recorded appends after a replay, depends on the composition; see ADR 132 decisions
+     * 6 through 9. Configure the store's retention, the wait's poll pacing, and this feature's own replay-detection
+     * poll under {@code occurrent.projection.applied-append}.
+     */
+    boolean recordAppliedAppends() default false;
 }

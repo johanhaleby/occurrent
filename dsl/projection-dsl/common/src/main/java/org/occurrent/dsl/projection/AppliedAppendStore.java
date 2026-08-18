@@ -38,9 +38,9 @@ import static java.util.Objects.requireNonNull;
  * depended on and ADR 122 refuted.
  * <p>
  * This is the store a projection records into and a caller reads from. A projection records into it by calling
- * {@link #recordApplied(String, AppendId)} itself, or through a future {@code @Projection(recordAppliedAppends = true)}
- * opt-in and its recording wrapper in the blocking and reactor projection DSLs, which does not exist yet. Reading is
- * a plain call to {@link #hasApplied(String, AppendId)} or {@link #waitUntilApplied(String, AppendId, Duration)}.
+ * {@link #recordApplied(String, AppendId)} itself, or through the {@code @Projection(recordAppliedAppends = true)}
+ * opt-in and its recording wrapper in the blocking and reactor projection DSLs. Reading is a plain call to
+ * {@link #hasApplied(String, AppendId)} or {@link #waitUntilApplied(String, AppendId, Duration)}.
  */
 @NullMarked
 public interface AppliedAppendStore {

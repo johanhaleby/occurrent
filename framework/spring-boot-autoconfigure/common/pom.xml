@@ -92,6 +92,13 @@
             <artifactId>occurrent-application-service-common</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- ReplayPhase and AppliedAppendRecorder, so the applied-append recording poll's pacing lives here once,
+             shared by the blocking and reactor registrars rather than duplicated per module -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-projection-dsl-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>

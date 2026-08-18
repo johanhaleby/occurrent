@@ -26,8 +26,9 @@ package org.occurrent.dsl.view;
  * before this capability existed. Whoever drives a replay (a catch-up handover, for example) probes for it with an
  * {@code instanceof} check at the point of need, the same idiom {@code SagaInstances} uses for
  * {@code SagaStateStoreQueries}. There is deliberately no {@code static Optional<ReplayAware> findIn(...)}
- * helper. That shape exists elsewhere to unwrap a delegating view. This library does not currently build one that wraps
- * a {@link MaterializedView}, so there is nothing here that would need it.
+ * helper. That shape exists elsewhere to unwrap a delegating view. The one wrapper this library builds around a
+ * {@link MaterializedView}, the projection DSL's recording wrapper, forwards this capability to its delegate rather
+ * than needing to be unwrapped itself, so there is still nothing here that needs a {@code findIn}.
  * <p>
  * {@link #replayCompleted()} runs before the replay's driver records the catch-up as complete, so an implementation
  * that buffers must have written every buffered update by the time this method returns. A write that fails here fails

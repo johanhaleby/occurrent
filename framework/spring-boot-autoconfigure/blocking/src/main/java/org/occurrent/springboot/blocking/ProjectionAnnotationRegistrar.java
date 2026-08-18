@@ -19,16 +19,20 @@ package org.occurrent.springboot.blocking;
 
 import kotlin.Unit;
 import kotlin.jvm.functions.Function2;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.annotation.ResumeBehavior;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
+import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.dsl.projection.blocking.ProjectionRunner;
 import org.occurrent.dsl.projection.blocking.Projections;
+import org.occurrent.dsl.projection.blocking.RecordingMaterializedView;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
@@ -36,6 +40,8 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.springboot.common.AppliedAppendRecordingRegistry;
+import org.occurrent.springboot.common.AsynchronousSubscribables;
 import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.common.OccurrentProperties;
@@ -47,6 +53,8 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
+import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
@@ -64,8 +72,10 @@ import java.lang.reflect.Type;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static org.occurrent.subscription.StreamSubscriptionFilter.filter;
@@ -107,6 +117,12 @@ class ProjectionAnnotationRegistrar {
     // catch-up itself and the whole history would replay into a closing store.
     private volatile boolean closing = false;
 
+    // The applied-append recording poll's pacing (ADR 132 decision 7), and the scheduler that runs it. Both created
+    // lazily on the first recordAppliedAppends = true projection, so an application that never uses the feature pays
+    // for neither. One scheduler for every recording projection in this context, stopped in close().
+    private @Nullable AppliedAppendRecordingRegistry recordingRegistry;
+    private @Nullable ScheduledExecutorService recordingPollScheduler;
+
     private record DomainFeedCatchUp(String id, DomainEventFeed<?> feed, boolean waitUntilStarted) {
     }
 
@@ -125,6 +141,11 @@ class ProjectionAnnotationRegistrar {
     // unwind, so no replay thread survives the context that owns the store it is folding into.
     void close() {
         closing = true;
+        // Stopped before the push models: a poll tick still in flight when shutdownNow() is called is interrupted,
+        // and there is no in-flight replay of its own to wait for the way the push models below have.
+        if (recordingPollScheduler != null) {
+            recordingPollScheduler.shutdownNow();
+        }
         // The models first, because their shutdown is what stops a push replay and so releases the watcher joined
         // below. Each model waits for its own replays, so this can take that long again before the join starts.
         pushModels.forEach(CatchupThenPushSubscriptionModel::shutdown);
@@ -208,6 +229,105 @@ class ProjectionAnnotationRegistrar {
         };
     }
 
+    // What a recording projection asks to learn whether it is replaying, and whether the scheduled poll can
+    // usefully ask the same question (ADR 132 decision 7): never for a phase that can only ever answer live.
+    private record RecordingPhase(ReplayPhase phase, boolean registerWithPoll) {
+    }
+
+    // The ReplayPhase for a projection fed by the asynchronous Subscribable this context resolves for event-store
+    // and DCB subscriptions, per ADR 132 decision 8: ReplayAwareSubscriptions.findIn(...) unwraps whatever wrapper
+    // chain sits in front of the catch-up model, the same lookup SagaAnnotationRegistrar already relies on for its
+    // timer gate. Empty means the composition cannot say, so it is treated as never replaying.
+    private RecordingPhase asynchronousSubscribablePhase(String id) {
+        Subscribable subscribable = AsynchronousSubscribables.resolve(applicationContext, Subscribable.class, RegisteringSubscribable.class);
+        Optional<ReplayAwareSubscriptions> replayAware = ReplayAwareSubscriptions.findIn(subscribable);
+        ReplayPhase phase = replayAware.<ReplayPhase>map(r -> () -> r.isCatchingUp(id)).orElseGet(ReplayPhase::neverReplays);
+        return new RecordingPhase(phase, replayAware.isPresent());
+    }
+
+    // Wraps materializedView in the applied-append recorder when the annotation asks for it, resolving the phase
+    // through the asynchronous Subscribable this context resolves for event-store and DCB subscriptions. Returns
+    // materializedView unchanged when recording is off.
+    private <E> MaterializedView<E> wrapForRecordingIfNeeded(org.occurrent.annotation.Projection annotation, String id, MaterializedView<E> materializedView) {
+        if (!annotation.recordAppliedAppends()) {
+            return materializedView;
+        }
+        RecordingPhase recording = asynchronousSubscribablePhase(id);
+        return wrapForRecording(annotation, id, materializedView, recording.phase(), recording.registerWithPoll());
+    }
+
+    // Wraps materializedView in the applied-append recorder when the annotation asks for it, with an explicit phase
+    // and poll-registration decision the caller already worked out (the push paths, where the phase source is the
+    // push catch-up model rather than the asynchronous Subscribable). Returns materializedView unchanged when
+    // recording is off.
+    private <E> MaterializedView<E> wrapForRecording(org.occurrent.annotation.Projection annotation, String id, MaterializedView<E> materializedView, ReplayPhase phase, boolean registerWithPoll) {
+        if (!annotation.recordAppliedAppends()) {
+            return materializedView;
+        }
+        AppliedAppendStore store = resolveAppliedAppendStore(id);
+        RecordingMaterializedView<E> recordingView = Projections.recordingAppliedAppends(materializedView, id, store, phase);
+        if (registerWithPoll) {
+            recordingRegistry().register(id, phase, recordingView);
+            scheduleRecordingPoll(id);
+        }
+        return recordingView;
+    }
+
+    private AppliedAppendStore resolveAppliedAppendStore(String id) {
+        AppliedAppendStore store = applicationContext.getBeanProvider(AppliedAppendStore.class).getIfAvailable();
+        if (store == null) {
+            throw AppliedAppendRecordingRegistry.noAppliedAppendStoreConfigured(id);
+        }
+        return store;
+    }
+
+    private synchronized AppliedAppendRecordingRegistry recordingRegistry() {
+        if (recordingRegistry == null) {
+            OccurrentProperties.ProjectionProperties.AppliedAppendProperties.ReplayPollProperties pollProperties =
+                    applicationContext.getBean(OccurrentProperties.class).getProjection().getAppliedAppend().getReplayPoll();
+            recordingRegistry = new AppliedAppendRecordingRegistry(pollProperties.getInitial(), pollProperties.getMax(), pollProperties.getMultiplier());
+        }
+        return recordingRegistry;
+    }
+
+    private synchronized ScheduledExecutorService recordingPollScheduler() {
+        if (recordingPollScheduler == null) {
+            recordingPollScheduler = Executors.newSingleThreadScheduledExecutor(daemonThreadFactory("occurrent-applied-append-poll"));
+        }
+        return recordingPollScheduler;
+    }
+
+    // Self-rescheduling: each tick asks the registry how long until the projection is next due (an interval the
+    // tick itself may have just changed) and schedules exactly one more tick at that delay, rather than running a
+    // shared fixed-rate loop that wakes up for every registered projection whether or not it is due.
+    private void scheduleRecordingPoll(String id) {
+        if (closing) {
+            return;
+        }
+        ScheduledExecutorService scheduler = recordingPollScheduler();
+        AppliedAppendRecordingRegistry registry = recordingRegistry();
+        scheduler.schedule(() -> {
+            if (closing) {
+                return;
+            }
+            try {
+                registry.tick(id);
+            } catch (RuntimeException e) {
+                log.error("The applied-append recording poll for projection '{}' failed. It will be retried at the next tick.", id, e);
+            }
+            scheduleRecordingPoll(id);
+        }, registry.dueInNanos(id), TimeUnit.NANOSECONDS);
+    }
+
+    private static ThreadFactory daemonThreadFactory(String namePrefix) {
+        AtomicInteger counter = new AtomicInteger();
+        return runnable -> {
+            Thread thread = new Thread(runnable, namePrefix + "-" + counter.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+
     @SuppressWarnings("unchecked")
     <E, S, ID> void processProjectionAnnotation(Object bean, Method method, org.occurrent.annotation.Projection annotation) {
         String id = annotation.id();
@@ -223,6 +343,14 @@ class ProjectionAnnotationRegistrar {
                 annotation.startAtGlobalPosition() >= 0,
                 annotation.resumeBehavior() != ResumeBehavior.DEFAULT,
                 annotation.startupMode() != StartupMode.DEFAULT);
+        if (annotation.recordAppliedAppends()) {
+            if (synchronous) {
+                throw AppliedAppendRecordingRegistry.recordAppliedAppendsWithSynchronousMode(id);
+            }
+            // Failing fast here, rather than lazily the first time a recording projection would need the store,
+            // reports the misconfiguration at startup instead of leaving the projection running unrecorded.
+            resolveAppliedAppendStore(id);
+        }
 
         CloudEventConverter<E> converter = applicationContext.getBean(CloudEventConverter.class);
         Object descriptor = SubscriptionAnnotations.invokeDescriptorFactory("@Projection", bean, method);
@@ -248,7 +376,7 @@ class ProjectionAnnotationRegistrar {
 
         if (descriptor instanceof DcbProjection<?, ?, ?> raw) {
             DcbProjection<S, E, ID> dcbProjection = (DcbProjection<S, E, ID>) raw;
-            MaterializedView<E> materializedView = resolveStoreView(annotation, method, dcbProjection.projection(), id);
+            MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolveStoreView(annotation, method, dcbProjection.projection(), id));
             if (synchronous) {
                 // The synchronous subscription model is capability-neutral and applies no DCB criteria, so a DCB
                 // projection receives every synchronously dispatched event and the fold no-ops on unhandled types.
@@ -269,7 +397,7 @@ class ProjectionAnnotationRegistrar {
             }
         } else if (descriptor instanceof Projection<?, ?, ?> raw) {
             Projection<S, E, ID> projection = (Projection<S, E, ID>) raw;
-            MaterializedView<E> materializedView = resolveStoreView(annotation, method, projection, id);
+            MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolveStoreView(annotation, method, projection, id));
             Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
             Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
                 materializedView.update(metadata, event);
@@ -303,9 +431,10 @@ class ProjectionAnnotationRegistrar {
     @SuppressWarnings("unchecked")
     private <E, S, ID> void registerPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, PushSubscriptionModel pushModel) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
-        MaterializedView<E> materializedView = resolveStoreView(annotation, method, projection, id);
+        MaterializedView<E> resolvedView = resolveStoreView(annotation, method, projection, id);
         boolean catchesUp = annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;
         Subscribable subscribable;
+        ReplayPhase phase;
         if (catchesUp) {
             PositionOrderedReader reader = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Projection", PositionOrderedReader.class, id);
             CheckpointStorage catchupMarker = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Projection", CheckpointStorage.class, id);
@@ -318,13 +447,18 @@ class ProjectionAnnotationRegistrar {
             // reports catching up again instead of staying at whatever it reached the first time.
             withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
             subscribable = model;
+            phase = () -> model.isCatchingUp(id);
         } else {
             // catchup = NONE never replays, so it is live as soon as it is running. Asked rather than recorded because
             // occurrent.subscription.mode = manual defers the subscription, and a recorded Live would tell a readiness
             // probe that a projection nobody has started yet is ready to serve.
             withPushCatchupStatus(status -> status.register(id, () -> false, () -> pushModel.isRunning(id)));
             subscribable = pushModel;
+            phase = ReplayPhase.neverReplays();
         }
+        // Registers with the poll only when catchesUp: catchup = NONE never replays, so neverReplays() answers live
+        // for good and a poll asking it repeatedly would find out nothing a single check would not.
+        MaterializedView<E> materializedView = wrapForRecording(annotation, id, resolvedView, phase, catchesUp);
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ProjectionRunner<E> runner = stream ? ProjectionRunner.stream(subscribable, converter) : ProjectionRunner.agnostic(subscribable, converter);
         // No catchesUp guard needed: with catchup = NONE, validatePushDescriptor already rejected any startupMode but
@@ -388,7 +522,10 @@ class ProjectionAnnotationRegistrar {
     @SuppressWarnings("unchecked")
     private <E, S, ID> void registerDomainPushProjection(Method method, org.occurrent.annotation.Projection annotation, String id, CloudEventConverter<E> converter, Object descriptor, boolean synchronous, DomainEventFeed<?> feedBean) {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
-        MaterializedView<E> materializedView = resolveStoreView(annotation, method, projection, id);
+        // Never registers with the poll: a domain feed's own ReplayAware lifecycle (forwarded to the recording
+        // wrapper through CatchupProjectionFeed's instanceof probe) is this composition's only replay signal, so
+        // neverReplays() is correct for the phase a poll would otherwise ask (ADR 132 decisions 8 and 12).
+        MaterializedView<E> materializedView = wrapForRecording(annotation, id, resolveStoreView(annotation, method, projection, id), ReplayPhase.neverReplays(), false);
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
         Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
         boolean catchesUp = annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;

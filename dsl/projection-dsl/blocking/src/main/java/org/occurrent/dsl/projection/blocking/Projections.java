@@ -20,9 +20,11 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
+import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.MaterializedViewOptions;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.projection.internal.ProjectionKeys;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.view.MaterializedView;
@@ -288,5 +290,28 @@ public final class Projections {
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
         requireNonNull(queries, "queries cannot be null");
         return dcbProjection.projection().view().evolve(queries.query(dcbProjection.criteria()));
+    }
+
+    /**
+     * Wraps {@code view} so every live update it applies is also recorded into {@code store} as an applied append,
+     * letting a caller later ask whether {@code projectionId} has applied a particular append
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>).
+     * This is what {@code @Projection(recordAppliedAppends = true)} builds on the blocking stack; call it directly
+     * when composing a projection programmatically instead of through the annotation.
+     * <p>
+     * {@code phase} answers whether the projection is currently replaying, so the wrapper can skip recording during
+     * a catch-up. Pass {@link ReplayPhase#neverReplays()} for a composition that genuinely never replays (an
+     * in-memory model, a durable-only model with no catch-up layer, or a push feed with {@code catchup = NONE}); a
+     * composition that does replay must supply a phase that can tell, since nothing here can work that out from
+     * {@code view} alone. If {@code view} is itself {@link org.occurrent.dsl.view.ReplayAware}, wrap the delegate
+     * (not the result of this call) with your own replay-aware behaviour first, since the returned view forwards to
+     * whatever {@code view} was when this was called.
+     */
+    public static <E> RecordingMaterializedView<E> recordingAppliedAppends(MaterializedView<E> view, String projectionId, AppliedAppendStore store, ReplayPhase phase) {
+        requireNonNull(view, "view cannot be null");
+        requireNonNull(projectionId, "projectionId cannot be null");
+        requireNonNull(store, "store cannot be null");
+        requireNonNull(phase, "phase cannot be null");
+        return new RecordingMaterializedView<>(view, projectionId, store, phase);
     }
 }
