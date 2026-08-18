@@ -2,6 +2,10 @@
 
 #### Highlights
 
+* Declaring a sealed event supertype now matches every concrete type it permits, in projections, DSL subscriptions, queries and snapshot views alike, the same way sagas already did.
+* `PushSubscriptionModel` takes an optional `PushObserver` that tells you whether each delivered event matched a registered subscription, so a misconfigured queue binding or type mapping is visible instead of silent.
+* The flow saga's deprecated `join` is removed. The `org.occurrent.UpgradeToOccurrent_0_34` recipe rewrites the mechanical call sites to `on(allOf(...))` for you.
+
 #### Changes
 
 * **`MigrateSubscriptionModeProperty_0_32`'s YAML half no longer drops an unrelated profile's document from a multi-document `application.yml`.** The guard against re-adding `occurrent.subscription.mode` when a document already has it used `org.openrewrite.yaml.search.FindProperty` as a precondition, which OpenRewrite evaluates over the whole file rather than the one document that sets it. A Spring profile document that never set `occurrent.subscription.mode` could still lose its `occurrent.subscription.enabled` key, and with it the whole document if that key was all it had, because a different profile in the same file happened to set the new key. The YAML half of the guard is now `DropRedundantYamlProperty`, a small imperative recipe (one no-arg subclass per property pair, since this module has neither Lombok nor `-parameters` to bind a declarative options map onto it) that re-checks the replacement key against the specific `Yaml.Document` it would delete from. The `.properties` half is unaffected, since a `.properties` file has no multi-document concept for the bug to exploit. Fixes [#828](https://github.com/johanhaleby/occurrent/issues/828).
