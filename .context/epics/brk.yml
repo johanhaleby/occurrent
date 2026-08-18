@@ -1,7 +1,7 @@
 schema_version: 1
 epic: brk
-revision: 37
-updated_at: 2026-08-18T14:15:24Z
+revision: 41
+updated_at: 2026-08-18T14:36:21Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly. Gate-ask rulings 2026-08-18T~10:58Z: the ADR review loop STOPPED at ten rounds, Johan's own read of PR 847 is the closing review; #848 ADOPTED as U11 at Opus/high, blocking both consume bridges."
@@ -80,7 +80,7 @@ units:
     last_meaningful_progress_at: 2026-08-18T13:39:02Z
     observed:
       session: {id: local_33cadfac-2b42-4785-ae48-44fca593953a, worktree: "mystifying-swanson-b2f576", via: "transcript marker search on the opening prompt", at: 2026-08-18T12:38:36Z}
-      pr_849: {head: "459c3743fc909dc05a13dda3b9f62a247394fe03", branch: "brk/u2-broker-api-foundation", rollup: "0fail running (fourth fold push)", review: "worker in review loop, DELIVERY_RESULT owed", via: "monitor PR-DELTA", at: 2026-08-18T13:39:02Z}
+      pr_849: {head: "8255700e1662b0810243045e3e0c1c5dc4a47668", branch: "brk/u2-broker-api-foundation", rollup: "0fail DONE, matrix green on the changelog+assertions head (adversarial-pass additions)", review: "a fresh Copilot round on the new prose is possible; updated DELIVERY_RESULT owed", via: "monitor PR-DELTA", at: 2026-08-18T14:26:27Z}
     assessment: "Sonnet/high chip. No kafka-clients version here (U5 owns it); testcontainers-bom already manages testcontainers-{rabbitmq,kafka}. No changelog entry (no user-visible capability without a transport). Brief carries the merged ADR as binding text, catchAllDestination default, forwarder split, releasable-as-is."
   U3:
     issue: 414
@@ -210,7 +210,7 @@ units:
     last_meaningful_progress_at: 2026-08-18T13:03:58Z
     observed:
       session: {id: local_186d111c-cf8b-40b2-af39-4e17d2d6b7b2, worktree: "wizardly-allen-e0b356", via: "transcript marker search on the opening prompt", at: 2026-08-18T12:38:36Z}
-      pr_850: {head: "3711f8a4db1125116f3b3f4fdc3ac1f18bb07643", branch: "brk/u11-push-routing-outcome", rollup: "0fail running (worker pushed after the two red shards, rerun in flight)", review: "in the worker's loop", via: "monitor PR-DELTA", at: 2026-08-18T14:12:49Z}
+      pr_850: {head: "18012e24d2aa3cceddb996f8e8b81f4a179b9e7f", branch: "brk/u11-push-routing-outcome", rollup: "0fail running (review-fold push after the green matrix)", review: "in the worker's loop, DELIVERY_RESULT owed", via: "monitor PR-DELTA", at: 2026-08-18T14:31:47Z}
     assessment: "Adopted at the 2026-08-18 gate ask, Opus/high chip by Johan's explicit tier choice (two non-breaking attempts raced on pause-then-resume, so the concurrency earns the tier). #848 milestoned 0.34.0 and labeled in-progress. Adversarial verify attacks the race claim before merge."
   U12:
     issue: 852
@@ -221,11 +221,11 @@ units:
     depends_on: []
     session: local_cbdf365c-b9df-48bd-b417-69e6e0936ba3
     deliverables:
-      - {check: manual_approval, ref: "fix direction settled at the orchestrator gate before implementation lands (ruled by the orchestrator where prior rulings already answered it, Johan's veto open until merge)", met: true, evidence: "Candidate (a) ruled 2026-08-18T14:14Z on ADR 89:146 + the shipped ManualStart refusal + the amendment naming this residual; derivation in ORCHESTRATOR.md and the ruling message; Johan informed in the same tick's report"}
+      - {check: manual_approval, ref: "fix direction settled at the orchestrator gate before implementation lands (orchestrator ruling on precedent, then Johan's direct refinement)", met: true, evidence: "Candidate (a) ruled 2026-08-18T14:14Z on ADR 89:146 + shipped precedents; REFINED by Johan 2026-08-18T~14:33Z: refusal stays default, plus an opt-in override mirroring restartSubscriptionsOnChangeStreamHistoryLost at both the model-config and OccurrentProperties levels, so shared-Atlas apps keep a no-code-change path; relayed 14:36Z"}
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 852, met: false, evidence: null}
     blocking_on: []
-    next_action: "Phase 2 running under the ruling: eager subscribe(..) refusal, restart-after-first-failure test mutation-proved, refusal tests, composing-module runs, the two stale globalCheckpoint comments (ownership widened), migration-guide section, changelog entry, then pr-create and the loop. Deadline 2026-08-18T15:40Z"
+    next_action: "Phase 2 running under the REFINED ruling: eager refusal default naming the override in its message, opt-in config + OccurrentProperties property (both starters, reactor-consistency question echoed at the gate), chosen name flagged in DELIVERY_RESULT for Johan's rename window, migration guide leads with the property, both paths tested, plus the original obligations (mutation-proved restart test, comment fixes, composing-module runs). Deadline extended for the wider scope: 2026-08-18T16:10Z"
     last_meaningful_progress_at: 2026-08-18T14:00:55Z
     observed: {}
     assessment: "Adopted by Johan's word 2026-08-18T~14:00Z, reversing the deferral (decline-register entry retired). Sonnet/high chip, decision gate at orchestrator venue. Disjoint from U2 (broker) and U11 (push); changelog conflicts resolve by rebase, loser rebases."
