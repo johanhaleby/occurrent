@@ -20,6 +20,7 @@ import com.rabbitmq.client.AMQP.BasicProperties;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventData;
 
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -34,7 +35,8 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * Every CloudEvent attribute, the context attributes and the extensions alike, becomes an entry in
  * {@link BasicProperties#getHeaders()} under its own name prefixed with {@value #HEADER_PREFIX}, written as a
- * string. {@code datacontenttype} is the one exception, since it becomes {@link BasicProperties#getContentType()}
+ * string. A binary extension is Base64-encoded rather than written through its raw {@code toString()}.
+ * {@code datacontenttype} is the one exception, since it becomes {@link BasicProperties#getContentType()}
  * instead, a dedicated AMQP field rather than a header. The event data becomes the message body unchanged.
  */
 public final class RabbitMqCloudEventMapper {
@@ -72,7 +74,7 @@ public final class RabbitMqCloudEventMapper {
         for (String extensionName : cloudEvent.getExtensionNames()) {
             Object value = cloudEvent.getExtension(extensionName);
             if (value != null) {
-                headers.put(HEADER_PREFIX + extensionName, value.toString());
+                headers.put(HEADER_PREFIX + extensionName, encodeExtensionValue(value));
             }
         }
 
@@ -80,6 +82,14 @@ public final class RabbitMqCloudEventMapper {
                 .contentType(cloudEvent.getDataContentType())
                 .headers(headers)
                 .build();
+    }
+
+    /**
+     * A binary extension is Base64-encoded rather than written through {@link Object#toString()}, which would
+     * otherwise produce {@code byte[]}'s Java identity string instead of the extension's actual bytes.
+     */
+    private static String encodeExtensionValue(Object value) {
+        return value instanceof byte[] bytes ? Base64.getEncoder().encodeToString(bytes) : value.toString();
     }
 
     /**

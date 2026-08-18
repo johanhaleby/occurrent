@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
+import java.util.Base64;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -58,6 +59,21 @@ class RabbitMqCloudEventMapperTest {
                 .containsEntry("cloudEvents_streamid", "stream-1")
                 .containsEntry("cloudEvents_streamversion", "3")
                 .doesNotContainKey("cloudEvents_datacontenttype");
+    }
+
+    @Test
+    void toBasicProperties_base64_encodes_a_binary_extension_instead_of_writing_its_raw_toString() {
+        byte[] binaryExtensionValue = {1, 2, 3, 4, 5};
+        CloudEvent cloudEvent = CloudEventBuilder.v1()
+                .withId("id-1")
+                .withSource(URI.create("urn:test"))
+                .withType("t")
+                .withExtension("dcbtags", binaryExtensionValue)
+                .build();
+
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, Map.of());
+
+        assertThat(properties.getHeaders()).containsEntry("cloudEvents_dcbtags", Base64.getEncoder().encodeToString(binaryExtensionValue));
     }
 
     @Test
