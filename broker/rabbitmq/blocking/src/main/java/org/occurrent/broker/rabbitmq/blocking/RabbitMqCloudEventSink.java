@@ -27,6 +27,9 @@ import org.occurrent.retry.RetryStrategy;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -49,10 +52,12 @@ import static java.util.Objects.requireNonNull;
  * broker that never answers, and {@link Builder#acknowledgementTimeout(Duration)} is not offered as something that
  * can be turned off, for the same reason {@link CloudEventSink}'s own javadoc gives.
  * <p>
- * Publishes on one sink are serialized on its channel. Correlating a confirm and a possible {@code basic.return}
- * with the message that produced them needs that, since neither AMQP method carries a caller-chosen correlation id
- * of its own. An application that needs more publish throughput than one serialized channel gives builds more than
- * one sink, each with its own {@link Channel}.
+ * Each publish carries its own random {@code correlationId}, so a {@code basic.return} is matched to the publish it
+ * belongs to and never to a different one, including a retry of the same event after an earlier attempt's
+ * acknowledgement timed out. Publishes on one sink are still serialized on its channel, the simplest way to avoid
+ * depending on exactly how this client version handles concurrent publishing on one {@link Channel}. An application
+ * that needs more publish throughput than one serialized channel gives builds more than one sink, each with its own
+ * {@link Channel}.
  * <p>
  * A transient failure, a dropped connection mid-publish for example, is retried under {@link Builder#retryStrategy(RetryStrategy)}
  * before a caller sees it, exponential backoff from 100 ms up to 2 seconds by default. The retry is not a substitute
@@ -68,15 +73,19 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
     private final Duration acknowledgementTimeout;
     private final RetryStrategy retryStrategy;
     private final Lock publishLock = new ReentrantLock();
-
-    private volatile boolean returned;
+    private final Set<String> returnedCorrelationIds = ConcurrentHashMap.newKeySet();
 
     private RabbitMqCloudEventSink(Channel channel, DestinationResolver<RabbitMqDestination> resolver, Duration acknowledgementTimeout, RetryStrategy retryStrategy) {
         this.channel = channel;
         this.resolver = resolver;
         this.acknowledgementTimeout = acknowledgementTimeout;
         this.retryStrategy = retryStrategy;
-        channel.addReturnListener(ignored -> returned = true);
+        channel.addReturnListener(returned -> {
+            String correlationId = returned.getProperties().getCorrelationId();
+            if (correlationId != null) {
+                returnedCorrelationIds.add(correlationId);
+            }
+        });
     }
 
     /**
@@ -96,15 +105,18 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
 
     private void publishOnce(CloudEvent cloudEvent) {
         RabbitMqDestination destination = resolver.destinationFor(cloudEvent);
-        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers());
+        // basic.return carries no delivery tag, so this internal correlationId is the only way to tell which
+        // publish a return belongs to. It is not part of the CloudEvent mapping and carries no other meaning.
+        String correlationId = UUID.randomUUID().toString();
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers())
+                .builder().correlationId(correlationId).build();
         byte[] body = RabbitMqCloudEventMapper.toBody(cloudEvent);
 
         publishLock.lock();
         try {
-            returned = false;
             channel.basicPublish(destination.exchange(), destination.routingKey(), true, properties, body);
             channel.waitForConfirmsOrDie(acknowledgementTimeout.toMillis());
-            if (returned) {
+            if (returnedCorrelationIds.remove(correlationId)) {
                 throw new RabbitMqUnroutableEventException(destination.exchange(), destination.routingKey());
             }
         } catch (IOException e) {

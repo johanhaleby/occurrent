@@ -49,8 +49,6 @@ public record RabbitMqDestination(String exchange, String routingKey, Map<String
                         "\" prefix, which is reserved for the CloudEvent attributes " + RabbitMqCloudEventMapper.class.getSimpleName() + " writes");
             }
         }
-        // A plain copy rather than Map.copyOf, so that a caller-visible NullPointerException from a null value reads
-        // the same way it would for any other unmodifiable copy, and so an empty map stays cheap to construct.
         headers = Map.copyOf(headers);
     }
 
