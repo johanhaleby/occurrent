@@ -1,7 +1,7 @@
 schema_version: 1
 epic: brk
-revision: 9
-updated_at: 2026-08-18T06:04:32Z
+revision: 13
+updated_at: 2026-08-18T06:27:17Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -38,10 +38,11 @@ units:
       - {check: pr_merged, ref: 847, met: false, evidence: null}
       - {check: issue_closed, ref: 412, met: false, evidence: null}
     blocking_on: []
-    next_action: "Worker re-seated on the fourth Copilot round (landed 06:01:35Z after its delivery; 3 current unresolved threads: AMQP 1.0 vs 0-9-1 SDK-writer gap, Kafka acks=0, DLX no-confirms). Its first DELIVERY_RESULT failed thread verification (claimed 7/7, actual 10 with 3 open) via the round race, caught by the sweep. On its re-delivery: ONE gate ask to Johan carrying the design-gate close plus the worker's PushObserver breaking-change escalation (three-valued routing outcome; subscription/push IS in the 0.33.0 tag, so released surface, recipe territory). New expected-progress deadline 2026-08-18T06:50Z"
-    last_meaningful_progress_at: 2026-08-18T06:04:32Z
+    next_action: "HOST RESTART 2026-08-18T~06:26Z survived: PR 847 intact at f9a7485, threads 13 total 0 unresolved (fourth-round fold COMPLETE on the platform), worker session down mid-tail owing only bookkeeping (mirror update to attempt 2 + the updated block + fourth-round dispositions, incl. whether binary-only survived the AMQP 0-9-1 finding). Resume message sent 06:2xZ via session-mgmt (transport-confirmed only); observable proof is the updated mirror or its reply, deadline 2026-08-18T07:00Z. Past deadline: salvage from platform reads (work is done, only bookkeeping is missing) and take the gate ask to Johan directly. Then: ONE ask, design-gate close + PushObserver breaking-change escalation"
+    last_meaningful_progress_at: 2026-08-18T06:27:17Z
     observed:
-      pr_847: {head: 118cdcb85c8fcf01ed8ecda16ff1b077b6d94ae5, branch: "brk/u1-adr-broker-architecture", rollup: "0fail DONE (prose-only, ci skip)", review: "FOUR Copilot rounds, fourth at 06:01:35Z post-delivery; threads 10 total 3 unresolved (isResolved-only count), all current", delivery_mirror: "PR comment 5324261505, attempt 1, outcome blocked", via: "GraphQL reviewThreads + gh pr view", at: 2026-08-18T06:04:32Z}
+      pr_847: {head: f9a7485cdab43a27e3a4ab7947b4a107b565de91, branch: "brk/u1-adr-broker-architecture", rollup: "0fail DONE (prose-only, ci skip)", review: "13 threads, 0 unresolved (isResolved-only count, post-restart re-read)", delivery_mirror: "PR comment 5324261505 still attempt 1 (pre-re-seat), update owed", via: "post-restart gh + GraphQL reads", at: 2026-08-18T06:27:17Z}
+      session_u1: {id: local_6d2cff8f-dcf0-45fd-abc7-0a70177df2a7, worktree: "hungry-shtern-13eb45", state: "down at recovery, last activity 06:25:03Z, identity via transcript marker search", at: 2026-08-18T06:27:17Z}
       pushobserver_escalation: {claim: "routeReportingMatch boolean conflates four outcomes; bridge ack-safety needs DELIVERED/FILTERED/NOT_DELIVERABLE from the one routing evaluation", released: "subscription/push present in occurrent-0.33.0 tag, verified git ls-tree", call_site: "PushSubscriptionModel.java:146", via: "worker message + own greps", at: 2026-08-18T06:04:32Z}
       branch: {name: "brk/u1-adr-broker-architecture", head: "15737e7ba13afdae59a38bf15b850b0f018ae52d", via: "git ls-remote after the worker's gate message", at: 2026-08-18T05:18:00Z}
       session: {address: "uds:/tmp/cc-socks/33860.sock", via: "cross-session gate message carrying the U1 marker", at: 2026-08-18T05:18:00Z}
