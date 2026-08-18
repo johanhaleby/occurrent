@@ -1,14 +1,14 @@
 schema_version: 1
 epic: brk
-revision: 21
-updated_at: 2026-08-18T12:16:30Z
+revision: 48
+updated_at: 2026-08-18T15:15:26Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly. Gate-ask rulings 2026-08-18T~10:58Z: the ADR review loop STOPPED at ten rounds, Johan's own read of PR 847 is the closing review; #848 ADOPTED as U11 at Opus/high, blocking both consume bridges."
 milestone: 3
 registered_at: 2026-08-18T04:44:26Z
 definition_of_done:
-  - "#412-#417, #419 and #846 closed via merged PRs; ADR 0133 merged after an explicitly closed design gate"
+  - "#412-#417, #419, #846 and #852 closed via merged PRs; ADR 0133 merged after an explicitly closed design gate"
   - "#421 held docs branch review-clean in occurrent-org.github.io, registered in the release merge order, rebased on its base, addedTags present, AGENTS.md:91 late-joiner check done, frozen for its release day per the release-train ruling"
   - "U9 fixpoint converged under the stopping rule Johan sets at approval, plus its mechanical checklist green (mvn_local_snapshot.sh artifact proof for all publishable leaves, required-test-images.sh emits both broker images warning-free, shard-timing within budget on the last brk merge, cross-transport API symmetry check, #414 thinness re-check)"
   - "Every merge to main was releasable as-is (no BOM/excludeArtifacts/modules entry ever referenced a not-yet-existing artifact)"
@@ -16,6 +16,22 @@ definition_of_done:
   - "#388 closed"
   - "Memory checkpointed, sessions archived at closeout, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
 pending_actions:
+  - id: act-005
+    type: dispatch-chip
+    target: "U3 chip task_dca9fcca, title ⌁[brk/U3#414] RabbitMQ publish module · Sonnet/high"
+    expected: "chip visible to Johan; on start, worker session resolved by the ⌁[brk/U3] marker via transcript search"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-18T15:15:26Z
+  - id: act-004
+    type: merge
+    target: "PR 849, CAS-pinned to d70885e6f71b6089b86fc2fb930a20ec1cb0583c"
+    expected: "PR 849 merged, merged head equals the pin, #413 closed"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-18T15:14:27Z
   - id: act-003
     type: dispatch-chip
     target: "U11 chip task_9b414ed8, title ⌁[brk/U11#848] Three-valued push routing outcome · Opus/high"
@@ -67,18 +83,20 @@ units:
   U2:
     issue: 413
     goal: "occurrent-broker-api-blocking: forwarders, default resolver, fake-sink tests; inert-and-true scaffolding only (root modules entry, broker + broker/api aggregators, BOM + excludeArtifacts for what U2 itself creates, integration-tests.{rabbitmq,kafka}.version properties + required-test-images.sh greps, shard paths for the broker subtree)"
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U1]
-    session: null
+    session: local_33cadfac-2b42-4785-ae48-44fca593953a
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: issue_closed, ref: 413, met: false, evidence: null}
+      - {check: pr_merged, ref: 849, met: true, evidence: "squash 43af19f9f, CAS pin d70885e matched, tip==pin before branch delete; gate facts verified on the exact head incl. the 15:13 all-declines final round; adversarial verify ran (2 findings, both fixed pre-merge)"}
+      - {check: issue_closed, ref: 413, met: true, evidence: "gh issue view state CLOSED post-merge 2026-08-18T15:14Z"}
     blocking_on: []
-    next_action: "Chip task_2e833152 awaits Johan's click (#413 claimed, comment 5327938857). On start: resolve session by the ⌁[brk/U2] marker, stamp the expected-progress deadline"
-    last_meaningful_progress_at: 2026-08-18T12:16:30Z
-    observed: {}
+    next_action: "none; session archiving batches at closeout. Main's matrix on 43af19f9f checked at the next sweep"
+    last_meaningful_progress_at: 2026-08-18T15:15:26Z
+    observed:
+      session: {id: local_33cadfac-2b42-4785-ae48-44fca593953a, worktree: "mystifying-swanson-b2f576", via: "transcript marker search on the opening prompt", at: 2026-08-18T12:38:36Z}
+      pr_849: {head: "d70885e6f71b6089b86fc2fb930a20ec1cb0583c", branch: "brk/u2-broker-api-foundation", rollup: "0fail DONE, matrix green; no new push, delivery block expected next (worker composing or one more Copilot round)", review: "in the worker's loop", via: "monitor PR-DELTA", at: 2026-08-18T15:08:06Z}
     assessment: "Sonnet/high chip. No kafka-clients version here (U5 owns it); testcontainers-bom already manages testcontainers-{rabbitmq,kafka}. No changelog entry (no user-visible capability without a transport). Brief carries the merged ADR as binding text, catchAllDestination default, forwarder split, releasable-as-is."
   U3:
     issue: 414
@@ -92,10 +110,10 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 414, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch after U2 merges"
-    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    next_action: "Chip task_dca9fcca awaits Johan's click (#414 claimed, comment 5330218539). On start: resolve session by marker, stamp the deadline"
+    last_meaningful_progress_at: 2026-08-18T15:15:26Z
     observed: {}
-    assessment: "Sonnet/high chip. Establishes the publish-side shape U5 mirrors. Rabbit container version comes from the U2-declared property."
+    assessment: "Sonnet/high chip. Establishes the publish-side shape U5 mirrors. Brief carries the merged ADR's 0-9-1 mapping, confirms + mandatory/basic.return, edit-the-changelog-entry rule, releasable-as-is."
   U4:
     issue: 415
     goal: "RabbitMQ consume bridge into Pushable/DomainEventFeed, ack-after-success, nack on handler exception, topology from destinationsFor(filter) with explicit-config escape hatch, Testcontainers incl. redelivery-no-double-process; folds changelog"
@@ -194,27 +212,47 @@ units:
     assessment: "Adopted on Johan's ruling at the U1 design gate 2026-08-18 (own issue, in the 0.34.0 milestone, adopted by an orchestrator). Sonnet/high chip. @RabbitSaga/@KafkaSaga stay out of scope, a later layer."
   U11:
     issue: 848
-    goal: "The two consume-bridge prerequisites in released subscription/push code, per ADR 0133 and #848 as corrected: three-valued PushObserver routing outcome (DELIVERED, FILTERED, NOT_DELIVERABLE from the one routing evaluation, replacing the boolean) with observer wiring per decision 1, and a live-match capability on DomainEventFeed per decision 5; breaking released surface, so recipe plus migration-guide section"
-    phase: PLANNED
+    goal: "The two consume-bridge prerequisites in subscription/push code, per ADR 0133 and #848 as corrected: three-valued PushObserver routing outcome (DELIVERED, FILTERED, NOT_DELIVERABLE from the one routing evaluation, replacing the boolean) with observer wiring per decision 1, and a live-match capability on DomainEventFeed per decision 5. UNRELEASED surface (PushObserver absent from the occurrent-0.33.0 tag, worker-verified and orchestrator-confirmed): no recipe, no migration guide, the existing pending changelog entry absorbs the outcome contract per ADR 133 decision 1"
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U1]
-    session: null
+    session: local_186d111c-cf8b-40b2-af39-4e17d2d6b7b2
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 850, met: false, evidence: null}
       - {check: issue_closed, ref: 848, met: false, evidence: null}
     blocking_on: []
-    next_action: "Chip task_9b414ed8 awaits Johan's click. On start: resolve session by the ⌁[brk/U11] marker, stamp the expected-progress deadline; adversarial verify attacks the stated interleaving invariant before merge"
-    last_meaningful_progress_at: 2026-08-18T12:16:30Z
-    observed: {}
+    next_action: "PR 850 open, matrix running (ci-wait). On DELIVERY_RESULT: merge gate four facts + the adversarial verify against the stated interleaving invariant, then CAS merge. Deadline 2026-08-18T14:30Z"
+    last_meaningful_progress_at: 2026-08-18T13:03:58Z
+    observed:
+      session: {id: local_186d111c-cf8b-40b2-af39-4e17d2d6b7b2, worktree: "wizardly-allen-e0b356", via: "transcript marker search on the opening prompt", at: 2026-08-18T12:38:36Z}
+      pr_850: {head: "c88bb745b1ac121703fe76f9481ac81d971d28ba", branch: "brk/u11-push-routing-outcome", rollup: "CONFLICTING after U2's changelog entry merged; rebase nudge sent 15:15Z, worker keeps both entries per brief", review: "in the worker's loop", via: "monitor PR-DELTA", at: 2026-08-18T15:15:26Z}
     assessment: "Adopted at the 2026-08-18 gate ask, Opus/high chip by Johan's explicit tier choice (two non-breaking attempts raced on pause-then-resume, so the concurrency earns the tier). #848 milestoned 0.34.0 and labeled in-progress. Adversarial verify attacks the race claim before merge."
+  U12:
+    issue: 852
+    goal: "First-event loss in released occurrent-subscription-durable-blocking: when checkpoint storage starts empty and the wrapped model's globalCheckpoint() returns null, no checkpoint is ever persisted before the first successful delivery, so a crash re-evaluates now and loses the failed first event. Investigate, hand the fix-direction decision back through the orchestrator (refuse to start, durably pinned initial position, or a better option the evidence surfaces, reactor twin checked for the same defect), then implement the ruling with tests and the released-surface changelog entry"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: local_cbdf365c-b9df-48bd-b417-69e6e0936ba3
+    deliverables:
+      - {check: manual_approval, ref: "fix direction settled at the orchestrator gate before implementation lands (orchestrator ruling on precedent, then Johan's direct refinement)", met: true, evidence: "Candidate (a) ruled 2026-08-18T14:14Z on ADR 89:146 + shipped precedents; REFINED by Johan 2026-08-18T~14:33Z: refusal stays default, plus an opt-in override mirroring restartSubscriptionsOnChangeStreamHistoryLost at both the model-config and OccurrentProperties levels, so shared-Atlas apps keep a no-code-change path; relayed 14:36Z"}
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 852, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Alive and healthy per its 14:50Z reply: the observed stop was a foreground composing-module Maven sweep still running (durable + Mongo models + checkpoint storages + api/blocking + autoconfigure + starters, -am, Testcontainers). Already green: durable -am, 11 blocking refusal/override tests (4 mutation-proved failing against main), 4 reactor override tests; refined ruling implemented on BOTH stacks at 3138126. Then blocking-starter re-run, pr-create, loop, DELIVERY_RESULT. Quiet threshold for this workload is the sweep length; deadline 2026-08-18T15:50Z"
+    last_meaningful_progress_at: 2026-08-18T14:50:12Z
+    observed:
+      branch: {name: "brk/u12-durable-first-event", head: "313812695f033180c02b4d4de584493fa2ca0f38", commits: "refusal, changelog+upgrade-guide, override on both models", via: "git ls-remote + worktree log after the liveness sweep", at: 2026-08-18T14:48:51Z}
+    assessment: "Adopted by Johan's word 2026-08-18T~14:00Z, reversing the deferral (decline-register entry retired). Sonnet/high chip, decision gate at orchestrator venue. Disjoint from U2 (broker) and U11 (push); changelog conflicts resolve by rebase, loser rebases."
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
     phase: PLANNED
     health: PROGRESSING
     swept: false
-    depends_on: [U7, U8, U10]
+    depends_on: [U7, U8, U10, U12]
     session: null
     deliverables:
       - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
