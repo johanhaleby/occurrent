@@ -34,6 +34,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
@@ -235,16 +236,17 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // Runs on the subscriber's own thread before the wrapped model is handed anything, so the refusal reaches
     // the caller. Thrown from inside the dynamic supplier it would surface on the wrapped model's own evaluation
     // path instead, which NativeMongoSubscriptionModel runs under a retry wrapper that would re-evaluate forever
-    // and tell nobody. The supplier still does its own read, so a re-evaluation picks up the latest checkpoint.
-    private void recordFirstPositionOrRefuse(String subscriptionId) {
+    // and tell nobody. Answers the checkpoint it recorded, for the supplier's first evaluation, and null when
+    // something was stored already or the override let an unanswerable source through.
+    private @Nullable Checkpoint recordFirstPositionOrRefuse(String subscriptionId) {
         Checkpoint checkpoint = storage.read(subscriptionId);
         if (checkpoint != null) {
-            return;
+            return null;
         }
         Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
         if (globalCheckpoint == null) {
             if (config.startWhenNoStartPositionCanBeRecorded) {
-                return;
+                return null;
             }
             throw new IllegalStateException("The wrapped subscription model " + subscriptionModel.getClass().getName() +
                                             " answered nothing when asked for the current position for subscription " +
@@ -262,16 +264,22 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                             "starts from that checkpoint and is never refused this way. Subscribing with a " +
                                             "StartAt of your own records no position and makes no such promise.");
         }
-        storage.save(subscriptionId, globalCheckpoint, writeConditionFor(subscriptionId));
+        return storage.save(subscriptionId, globalCheckpoint, writeConditionFor(subscriptionId));
     }
 
     @Nullable
     private StartAt generateStartAtPositionFrom(String subscriptionId, StartAt originalStartAt) {
         final StartAt startAtToUse;
         if (originalStartAt.isDefault()) {
-            recordFirstPositionOrRefuse(subscriptionId);
+            // Consumed by the supplier's first evaluation, so the position recorded just now is not read back or,
+            // on a storage that answers reads from somewhere the write has not reached, saved a second time.
+            AtomicReference<@Nullable Checkpoint> recordedFirstPosition = new AtomicReference<>(recordFirstPositionOrRefuse(subscriptionId));
             StartAt startAtIfNoSubscriptionFound = StartAt.subscriptionModelDefault();
             startAtToUse = StartAt.dynamic(() -> {
+                Checkpoint recorded = recordedFirstPosition.getAndSet(null);
+                if (recorded != null) {
+                    return StartAt.checkpoint(recorded);
+                }
                 // Read inside the supplier so a retry picks up the latest checkpoint, not a stale one
                 Checkpoint checkpoint = storage.read(subscriptionId);
                 if (checkpoint == null) {
