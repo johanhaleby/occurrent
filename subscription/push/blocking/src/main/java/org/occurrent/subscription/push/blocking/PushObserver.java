@@ -33,8 +33,9 @@ import org.occurrent.subscription.RoutingOutcome;
  * no running, unpaused subscription for the event to reach at all, whether because nothing is registered, the model
  * is stopped, or the subscription is paused. A caller acknowledging an externally sourced event may acknowledge on
  * {@link RoutingOutcome#DELIVERED} once {@code accept(...)} has returned normally, and on
- * {@link RoutingOutcome#FILTERED}, where redelivering would loop forever since the event is simply not this
- * consumer's. It must never acknowledge on {@link RoutingOutcome#NOT_DELIVERABLE}, which is why the three are kept
+ * {@link RoutingOutcome#FILTERED}, where redelivering would loop forever against this same registration, since
+ * the event is not this consumer's under the filter currently registered for it. It must never acknowledge on
+ * {@link RoutingOutcome#NOT_DELIVERABLE}, which is why the three are kept
  * apart rather than collapsed back into a single flag. It shares the same filter evaluation the actual dispatch
  * decision is made from, so the two can never disagree, and no lifecycle transition landing between the evaluation
  * and this call can change which outcome is reported.

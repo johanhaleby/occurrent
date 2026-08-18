@@ -36,15 +36,21 @@ package org.occurrent.subscription;
 public enum RoutingOutcome {
 
     /**
-     * A running, unpaused subscription's filter accepted the event. The registered handler is then invoked; whether
-     * that handler itself succeeds or throws is a separate signal from this outcome, which is reported before the
-     * handler runs.
+     * A running, unpaused subscription's filter accepted the event. Whether the registered handler has actually run
+     * by the time this outcome is reported is a per-surface question, not something this outcome answers on its own.
+     * A direct dispatch such as {@code PushObserver} invokes the handler before reporting this outcome, but a
+     * catch-up-then-live engine can report it for an event handed off into a buffer, ahead of the fold that
+     * eventually runs against it. Whether the handler succeeded or threw is a separate signal from this outcome
+     * either way. Consult the reporting method's own javadoc for what this outcome guarantees on that particular
+     * surface.
      */
     DELIVERED,
 
     /**
-     * A running, unpaused subscription evaluated the event and its filter declined it. Redelivering this event would
-     * loop forever, since the filter's answer does not depend on how many times the same event is offered to it.
+     * The subscription evaluated the event under the filter registered at that moment and declined it. Redelivering
+     * the same event against that same registration would loop forever, since the filter's answer for a fixed
+     * registration does not depend on how many times the event is offered to it. A later redelivery is only safe to
+     * skip if the registration in force has not changed since this outcome was reported.
      */
     FILTERED,
 

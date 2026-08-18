@@ -33,11 +33,12 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -467,18 +468,26 @@ class PushSubscriptionModelTest {
     @Test
     void concurrent_pause_and_resume_never_makes_the_reported_outcome_disagree_with_what_was_actually_delivered() throws InterruptedException {
         // A broader, genuinely multi-threaded version of the race above: one thread hammers accept() (subscribing
-        // to each returned Mono synchronously) while another toggles pause/resume on the same subscription.
-        // Whatever RoutingOutcome the observer is told for a given event must agree with whether that event
-        // actually reached the handler, for every one of many interleavings, not just the hand-picked one above.
+        // to each returned Mono synchronously) while another toggles pause/resume on the same subscription. Every
+        // event pushed is one of two types, only one of which matches the subscription's filter, so a run exercises
+        // FILTERED as well as DELIVERED and NOT_DELIVERABLE, not just the two outcomes a filter that always matches
+        // would produce. Whatever RoutingOutcome the observer is told for a given event must agree both with
+        // whether that event actually reached the handler and with whether its type was one the filter accepts,
+        // for every one of many interleavings, not just the hand-picked one above.
         int eventCount = 2_000;
+        String matchingType = "NameDefined";
+        String nonMatchingType = "SomethingElseHappened";
         List<RoutingOutcome> outcomes = new ArrayList<>(eventCount);
-        AtomicInteger deliveredCount = new AtomicInteger();
+        List<String> types = new ArrayList<>(eventCount);
+        Set<String> deliveredIds = ConcurrentHashMap.newKeySet();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (cloudEvent, outcome) -> {
             synchronized (outcomes) {
                 outcomes.add(outcome);
+                types.add(cloudEvent.getType());
             }
         });
-        model.subscribe("sub", cloudEvent -> Mono.fromRunnable(deliveredCount::incrementAndGet));
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.type(matchingType)),
+                cloudEvent -> Mono.fromRunnable(() -> deliveredIds.add(cloudEvent.getId())));
 
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
@@ -500,7 +509,8 @@ class PushSubscriptionModelTest {
                 ready.countDown();
                 await(go);
                 for (int i = 0; i < eventCount; i++) {
-                    model.accept(cloudEvent(String.valueOf(i), "NameDefined")).block();
+                    String type = i % 2 == 0 ? matchingType : nonMatchingType;
+                    model.accept(cloudEvent(String.valueOf(i), type)).block();
                 }
             });
 
@@ -515,13 +525,23 @@ class PushSubscriptionModelTest {
         }
 
         assertThat(outcomes).hasSize(eventCount);
-        long reportedDelivered = outcomes.stream().filter(outcome -> outcome == DELIVERED).count();
-        assertThat(outcomes).as("the filter always matches here, so nothing is ever reported FILTERED: every event "
-                        + "is either genuinely delivered or genuinely not deliverable")
-                .allMatch(outcome -> outcome == DELIVERED || outcome == NOT_DELIVERABLE);
-        assertThat(reportedDelivered).as("the outcome reported for every event must agree with how many times the "
-                        + "handler actually ran, across the whole run, under real concurrent pause/resume pressure")
-                .isEqualTo(deliveredCount.get());
+        for (int i = 0; i < eventCount; i++) {
+            RoutingOutcome outcome = outcomes.get(i);
+            boolean typeMatches = types.get(i).equals(matchingType);
+            boolean wasDelivered = deliveredIds.contains(String.valueOf(i));
+            if (typeMatches) {
+                assertThat(outcome).as("event %d has the matching type, so its filter is never the reason it is not delivered", i)
+                        .isIn(DELIVERED, NOT_DELIVERABLE);
+            } else {
+                assertThat(outcome).as("event %d has the non-matching type, so a running subscription always declines it", i)
+                        .isIn(FILTERED, NOT_DELIVERABLE);
+            }
+            assertThat(wasDelivered).as("event %d: whether the handler actually ran must agree with a reported outcome of DELIVERED", i)
+                    .isEqualTo(outcome == DELIVERED);
+        }
+        assertThat(outcomes).as("this run must genuinely exercise the filter's two definite outcomes, not just one")
+                .contains(DELIVERED)
+                .contains(FILTERED);
     }
 
     private static void await(CountDownLatch latch) {
