@@ -1,7 +1,7 @@
 schema_version: 1
 epic: brk
-revision: 60
-updated_at: 2026-08-18T18:40:26Z
+revision: 62
+updated_at: 2026-08-18T19:15:30Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly. Gate-ask rulings 2026-08-18T~10:58Z: the ADR review loop STOPPED at ten rounds, Johan's own read of PR 847 is the closing review; #848 ADOPTED as U11 at Opus/high, blocking both consume bridges."
@@ -257,10 +257,10 @@ units:
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 859, met: true, evidence: "squash 0c1f9349, CAS pin 4c45097 matched, tip==pin before branch delete; five fresh-context review shards all empty served as the adversarial pass; Copilot round clean, zero threads; worker's not_run exit was the correct handoff of the CI wait"}
       - {check: manual_approval, ref: "orchestrator verifies main's misc shard green on the post-U13-merge sha (a ci_green check gains that sha only at merge time, so the obligation is held here)", met: false, evidence: null}
     blocking_on: []
-    next_action: "Worktree-isolated subagent dispatching this tick (Unattended vehicle)"
+    next_action: "Main's matrix on 0c1f9349 is the remaining proof (ci-wait, ~20 min): verify the misc shard green on that sha, mark this check met, notify the ayi orchestrator. U3 nudged to rebase onto the fixed main"
     last_meaningful_progress_at: 2026-08-18T18:40:26Z
     observed:
       main_red: {runs: "32169494047 (edd61341c) and 32170703373 (bf99724) both failure, misc shard both JDKs; 43af19f9f green before", via: "gh run list + run view, peer report from ayi verified", at: 2026-08-18T18:40:26Z}
