@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Five things are worth reading, two of them compile-time breaks. At compile time, if you use the flow saga's
+Six things are worth reading, two of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, which most callers need to do nothing about. Read
@@ -13,7 +13,10 @@ refusal 0.33.0 already shipped for a saga and an annotation-based subscription. 
 [section 3](#3-a-projection-a-subscription-a-query-or-a-snapshot-declaring-a-supertype-event-is-refused). At
 startup, if you set a MongoDB collection name, a MongoDB time representation, or whether a subscription restarts
 after losing change-stream history, through `OccurrentProperties`, four configuration keys are deprecated and have
-a recipe that rewrites them for you. Read [section 4](#4-four-mongodb-only-keys-move-under-mongodb).
+a recipe that rewrites them for you. Read [section 4](#4-four-mongodb-only-keys-move-under-mongodb). A
+`@Projection`, `@Saga`, or `@Snapshot` factory method no longer runs through a proxy, so class-level advice that
+ran as a side effect of building the descriptor at startup no longer runs at all. Read
+[section 5](#5-a-descriptor-factorys-class-level-advice-no-longer-runs-at-startup).
 `WriteResult` and `DcbAppendResult` both gain a fourth component. Deconstructing either with a record pattern is
 a second compile-time break, and comparing either whole for equality fails silently at runtime instead. Read
 [section 6](#6-writeresult-and-dcbappendresult-gain-a-fourth-component-the-append-id).
@@ -401,5 +404,7 @@ The same applies to `DcbAppendResult`, and to an `instanceof` pattern as much as
 Unlike the equality case above, the record-pattern break is mechanical. A record pattern's arity is a fact
 the compiler enforces, not a judgement call, so `UpgradeToOccurrent_0_34` appends the fourth binding,
 `var appendId`, to any three-component deconstruction pattern against either type, whatever the first
-three bindings were named or typed. Run it the same way [section 4](#4-four-mongodb-only-keys-move-under-mongodb)
-does.
+three bindings were named or typed. If a name called `appendId` is already bound in the pattern or an
+enclosing scope, the recipe falls back to `appendId1`, then `appendId2`, and so on, so the added binding
+never collides with one that is already there. Run it the same way
+[section 4](#4-four-mongodb-only-keys-move-under-mongodb) does.

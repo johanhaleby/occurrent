@@ -39,7 +39,7 @@ import java.util.List;
  * Unlike the by-hand cases {@link MigrateSagaTimerName} leaves a review marker for, a record pattern's arity is a
  * compiler-enforced fact rather than a judgement call, so this rewrite is unconditional wherever it applies. Any
  * three-binding deconstruction pattern against either type gains a fourth, {@code var appendId} by default, or a
- * scope-checked variant of that name ({@code appendId2} and so on) when {@code appendId} is already bound in scope,
+ * scope-checked variant of that name ({@code appendId1} and so on) when {@code appendId} is already bound in scope,
  * whether the first three bindings are typed or {@code var}. Nothing in this repository uses either pattern (ADR
  * 132 says so directly), so this exists for a caller's own source. See doc/migration/upgrading-to-0.34.0.md.
  */
