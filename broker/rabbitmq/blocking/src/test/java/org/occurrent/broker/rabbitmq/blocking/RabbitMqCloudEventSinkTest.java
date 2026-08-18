@@ -25,6 +25,7 @@ import org.occurrent.retry.RetryStrategy;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -85,6 +86,19 @@ class RabbitMqCloudEventSinkTest extends RabbitMqTestSupport {
 
             assertThatThrownBy(() -> sink.publish(cloudEvent)).isInstanceOf(RabbitMqUnroutableEventException.class);
         }
+    }
+
+    /**
+     * A duration that truncates to zero milliseconds is read by the RabbitMQ client as "wait indefinitely" rather
+     * than "don't wait", which would silently defeat the bounded wait this sink documents.
+     */
+    @Test
+    void acknowledgementTimeout_refuses_a_duration_that_truncates_to_zero_milliseconds() {
+        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+        RabbitMqCloudEventSink.Builder builder = RabbitMqCloudEventSink.builder(connection(), resolver);
+
+        assertThatThrownBy(() -> builder.acknowledgementTimeout(Duration.ZERO)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> builder.acknowledgementTimeout(Duration.ofNanos(500))).isInstanceOf(IllegalArgumentException.class);
     }
 
     private static final class OrderPlaced {

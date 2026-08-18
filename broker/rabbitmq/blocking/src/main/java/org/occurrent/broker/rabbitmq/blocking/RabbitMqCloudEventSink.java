@@ -118,7 +118,14 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         publishLock.lock();
         try {
             channel.basicPublish(destination.exchange(), destination.routingKey(), true, properties, body);
-            channel.waitForConfirmsOrDie(acknowledgementTimeout.toMillis());
+            // waitForConfirms, not waitForConfirmsOrDie: the latter closes this sink's own long-lived channel on a
+            // nack or a timeout, which would fail every later publish on it too. A nack is reported through the
+            // boolean return instead.
+            boolean acknowledged = channel.waitForConfirms(acknowledgementTimeout.toMillis());
+            if (!acknowledged) {
+                throw new RabbitMqPublishException("Broker sent a negative acknowledgement for a publish to exchange \"" +
+                        destination.exchange() + "\" with routing key \"" + destination.routingKey() + "\"");
+            }
             if (returnedCorrelationIds.remove(correlationId)) {
                 throw new RabbitMqUnroutableEventException(destination.exchange(), destination.routingKey());
             }
@@ -158,10 +165,15 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
          * How long {@link #publish(CloudEvent)} waits for the broker's publisher confirm before failing with
          * {@link RabbitMqPublishTimeoutException}. Five seconds by default. This is a timeout, not a switch.
          * There is deliberately no way to publish without waiting for it, for the reason {@link CloudEventSink}'s
-         * javadoc gives.
+         * javadoc gives, so a duration that truncates to zero or fewer milliseconds is refused rather than accepted
+         * and read by the RabbitMQ client as "wait indefinitely".
          */
         public Builder acknowledgementTimeout(Duration acknowledgementTimeout) {
-            this.acknowledgementTimeout = requireNonNull(acknowledgementTimeout, "acknowledgementTimeout cannot be null");
+            requireNonNull(acknowledgementTimeout, "acknowledgementTimeout cannot be null");
+            if (acknowledgementTimeout.toMillis() <= 0) {
+                throw new IllegalArgumentException("acknowledgementTimeout must be at least 1 millisecond, was " + acknowledgementTimeout);
+            }
+            this.acknowledgementTimeout = acknowledgementTimeout;
             return this;
         }
 
