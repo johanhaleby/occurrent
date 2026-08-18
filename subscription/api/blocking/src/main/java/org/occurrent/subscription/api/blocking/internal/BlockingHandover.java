@@ -171,17 +171,50 @@ public final class BlockingHandover<T> {
      *                                during the catch-up.
      */
     public void accept(T payload) {
+        acceptReportingDelivery(payload);
+    }
+
+    /**
+     * As {@link #accept(Object)}, additionally reporting whether the payload was genuinely handled (buffered for the
+     * replay to drain, delivered live, or already delivered by an earlier attempt) rather than silently dropped
+     * because a replay that would have drained it was stopped. A caller that acknowledges an externally sourced
+     * payload (a broker message, say) needs this to tell the two apart, since {@link #accept(Object)} returns
+     * normally either way.
+     *
+     * @return {@code false} when this handover is stopped and the payload was dropped rather than buffered or
+     *         delivered, or when a concurrent delivery of the same payload is already running and this call is not
+     *         the one deciding whether it succeeds. {@code true} otherwise, including a de-duplicated repeat of a
+     *         payload an earlier attempt already delivered.
+     * @throws IllegalStateException for the same reasons {@link #accept(Object)} does.
+     */
+    public boolean acceptReportingDelivery(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
         String deliverKey = null;
+        boolean dropped = false;
         synchronized (lock) {
             if (catchUpFailure != null) {
                 throw new IllegalStateException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
             }
             if (live) {
-                deliverKey = tryReserve(payload);
+                String key = dedupKey(payload);
+                if (deliveredIds.contains(key)) {
+                    // An earlier attempt already delivered this key, so this call reports it delivered without
+                    // redelivering.
+                } else if (!inFlight.add(key)) {
+                    // A concurrent delivery of the same key is running right now, outside this lock, and its own
+                    // success or failure is what decides deliveredIds (see the inFlight field javadoc). This call
+                    // cannot wait for that attempt without blocking under the lock, and reporting delivered would
+                    // let a caller acknowledge a payload whose actual delivery has not succeeded yet, and never
+                    // will if that attempt throws. Reporting it dropped is always safe to retry, since a
+                    // redelivery of the same key lands on deliveredIds once the in-flight attempt actually finishes.
+                    dropped = true;
+                } else {
+                    deliverKey = key;
+                }
             } else if (stopped) {
                 // Dropped rather than buffered: the replay that would have drained this buffer was stopped, so
                 // nothing is coming to fold it and buffering would just fill up and overflow.
+                dropped = true;
             } else if (buffer.size() >= maxBufferedEvents) {
                 throw new IllegalStateException(HandoverMessages.bufferOverflow(maxBufferedEvents));
             } else {
@@ -191,6 +224,7 @@ public final class BlockingHandover<T> {
         if (deliverKey != null) {
             deliverOutsideLock(payload, deliverKey);
         }
+        return !dropped;
     }
 
     /**

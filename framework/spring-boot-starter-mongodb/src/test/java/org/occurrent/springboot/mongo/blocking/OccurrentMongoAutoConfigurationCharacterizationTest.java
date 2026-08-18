@@ -133,6 +133,25 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
     }
 
     @Test
+    void binds_start_when_no_start_position_can_be_recorded_through_spring_property_binding() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(OccurrentMongoAutoConfiguration.class))
+                .withUserConfiguration(EnabledOccurrentConfiguration.class, TestEventTypeMapperConfiguration.class)
+                .withBean(MongoDatabaseFactory.class, () -> mock(MongoDatabaseFactory.class))
+                .withBean(MongoTemplate.class, () -> mock(MongoTemplate.class))
+                .withPropertyValues(
+                        "occurrent.event-store.enabled=false",
+                        "occurrent.subscription.enabled=false",
+                        "occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:test",
+                        "occurrent.subscription.start-when-no-start-position-can-be-recorded=true")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    OccurrentProperties properties = context.getBean(OccurrentProperties.class);
+                    assertThat(properties.getSubscription().isStartWhenNoStartPositionCanBeRecorded()).isTrue();
+                });
+    }
+
+    @Test
     void a_contradicting_old_and_new_collection_key_pair_fails_the_context_instead_of_silently_picking_one() {
         eventStoreConfigContextRunner()
                 .withPropertyValues(

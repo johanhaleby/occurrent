@@ -368,8 +368,8 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
             currentOperationTime = MongoCommons.getServerOperationTime(database.runCommand(new Document("hostInfo", 1)), 1);
         } catch (MongoCommandException e) {
             log.warn(cannotFindGlobalCheckpointErrorMessage(e));
-            // Happens when the server prohibits "hostInfo" (e.g. shared Atlas clusters), falls back to the
-            // client's current time.
+            // Happens when the server prohibits "hostInfo" (e.g. shared Atlas clusters). Null is the contract's
+            // answer for a problem this model cannot resolve.
             return null;
         }
         return new MongoOperationTimeCheckpoint(currentOperationTime);

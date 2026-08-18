@@ -1,0 +1,65 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.subscription;
+
+/**
+ * What a single routing evaluation decided for one event, on the blocking and reactor {@code RegisteringSubscribable}
+ * and everything built on it ({@code PushObserver}, and {@code DomainEventFeed}'s live match).
+ * <p>
+ * A caller that acknowledges an externally sourced event (a broker message, say) has to tell {@link #DELIVERED} and
+ * {@link #FILTERED} apart from {@link #NOT_DELIVERABLE}. The first two describe an event a filter evaluated and
+ * either accepted or declined on its own terms. The third covers every other reason the event was not actually
+ * consumed. The filter was never asked at all, because there was no running, unpaused subscription for the event to
+ * reach, or a filter was asked and threw instead of answering, or a filter accepted the event but the delivery
+ * itself was then dropped rather than handled. Acknowledging on {@link #NOT_DELIVERABLE} discards an event nothing
+ * consumed.
+ * <p>
+ * All three come out of one evaluation, not a check taken before or after dispatch. A check taken separately would
+ * let a {@code stop()}, a {@code pauseSubscription} or a {@code cancelSubscription} land between the check and the
+ * dispatch, so the outcome reported here is guaranteed to be the one that was true at the moment routing decided it,
+ * not at some other moment a race could have moved past it.
+ */
+public enum RoutingOutcome {
+
+    /**
+     * A running, unpaused subscription's filter accepted the event. Whether the registered handler has actually run
+     * by the time this outcome is reported is a per-surface question, not something this outcome answers on its own,
+     * and on every surface examined so far the answer is no. A direct dispatch such as {@code PushObserver} reports
+     * this outcome before the handler is invoked at all, and a catch-up-then-live engine can report it for an event
+     * only just handed off into a buffer, ahead of the fold that eventually runs against it. Whether the handler
+     * succeeds or throws is a separate signal from this outcome either way. Consult the reporting method's own
+     * javadoc for what this outcome guarantees on a particular surface.
+     */
+    DELIVERED,
+
+    /**
+     * The subscription evaluated the event under the filter registered at that moment and declined it. Redelivering
+     * the same event against that same registration would loop forever, since the filter's answer for a fixed
+     * registration does not depend on how many times the event is offered to it. A later redelivery is only safe to
+     * skip if the registration in force has not changed since this outcome was reported.
+     */
+    FILTERED,
+
+    /**
+     * The event was not delivered, for a reason that is never a filter declining it. Nothing is registered, the
+     * model is not running, or the sole subscription is paused, so the filter was never asked. A filter that was
+     * asked and threw instead of answering reports this too, since a filter that failed to answer did not decline
+     * the event. Never reported as a stand-in for {@link #FILTERED}, so a caller can tell "this event is not mine"
+     * from "nothing here is currently able to receive it".
+     */
+    NOT_DELIVERABLE
+}
