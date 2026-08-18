@@ -1452,3 +1452,18 @@ head, since the run list is the ground truth the rollup only summarizes. The wor
 check-the-history-first response is the model behavior and cost the fleet nothing; the wrong
 count cost one redundant message. Fold the CANCELLED exclusion into references/fleet-monitor.md
 at its next edit.
+
+## A socket address from an earlier worker message is not a unit identity (2026-08-18, brk)
+
+A rebase nudge meant for U3 went to uds:/tmp/cc-socks/92153.sock, which was U2's address,
+because the socket was recalled from message history instead of read from the unit's recorded
+session id. The two risks compound: socket paths are per-process and say nothing about which
+unit lives behind them after restarts, and a completed worker receiving another unit's
+instruction may act on a branch it does not own (U2's remit boundary plus an immediate
+countermand contained it this time).
+
+The rule: a send to a worker goes to the SESSION ID recorded in the epic state for that unit
+(via the session-mgmt tool), or to a socket address read back from that unit's OWN most recent
+message in the same breath. Never to a socket recalled from earlier context while multiple
+workers are live. The state file already records session ids per unit precisely so addressing
+never relies on recall; use them.
