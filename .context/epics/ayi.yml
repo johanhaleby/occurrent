@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 16
-updated_at: 2026-08-18T11:16:00Z
+revision: 17
+updated_at: 2026-08-18T11:30:00Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -129,8 +129,8 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "Worker reading ADR and plan, its plan summary comes here for the gate before implementation"
-    last_meaningful_progress_at: 2026-08-18T11:16:00Z
+    next_action: "Plan APPROVED at the orchestrator gate 2026-08-18T11:30Z with four notes (retention default 7d decided with derivation, constructor-time indexes, property-naming consistency check against the withdrawn precedent, TTL IndexOptionsConflict collMod handling plus its container test). Worker implementing"
+    last_meaningful_progress_at: 2026-08-18T11:30:00Z
     observed:
       session: {id: local_c0323f10-77f7-4c75-a54f-4dfa869533c3, via: "worker's own marker message on start", at: 2026-08-18T11:16:00Z}
     assessment: "Sonnet/high chip. Wait contract: non-null AppendId, absent-id case is type-guided by the Optional component."
