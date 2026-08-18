@@ -23,6 +23,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 
 import java.net.URI;
@@ -53,7 +54,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
         });
 
-        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), (cloudEvent, matched) -> {
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> {
             throw shared;
         }));
 
@@ -72,7 +73,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
         });
 
-        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), (cloudEvent, matched) -> {
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> {
             throw observerFailure;
         }));
 
@@ -93,7 +94,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
             super(Consumers.ONE, dataFieldReader);
         }
 
-        void acceptRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, Boolean> matchObserver) {
+        void acceptRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
             routeReportingMatch(cloudEvent, matchObserver);
         }
     }

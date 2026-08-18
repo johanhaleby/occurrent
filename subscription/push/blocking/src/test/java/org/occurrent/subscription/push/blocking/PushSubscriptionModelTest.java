@@ -24,13 +24,23 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+
+import static org.occurrent.subscription.RoutingOutcome.DELIVERED;
+import static org.occurrent.subscription.RoutingOutcome.FILTERED;
+import static org.occurrent.subscription.RoutingOutcome.NOT_DELIVERABLE;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -226,80 +236,81 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void the_observer_is_told_a_matched_event_before_the_handler_runs() {
+    void the_observer_is_told_delivered_before_the_handler_runs() {
         List<String> observed = new ArrayList<>();
         List<String> handled = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
-                (CloudEvent cloudEvent, boolean matched) -> observed.add(cloudEvent.getId() + ":" + matched + ":" + handled.size()));
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> observed.add(cloudEvent.getId() + ":" + outcome + ":" + handled.size()));
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent.getId()));
 
         model.accept(cloudEvent("1", "NameDefined"));
 
-        assertThat(observed).containsExactly("1:true:0");
+        assertThat(observed).containsExactly("1:DELIVERED:0");
         assertThat(handled).containsExactly("1");
     }
 
     @Test
-    void the_observer_is_told_an_event_is_unmatched_when_nothing_is_registered() {
-        List<Boolean> matches = new ArrayList<>();
+    void the_observer_is_told_not_deliverable_when_nothing_is_registered() {
+        List<RoutingOutcome> outcomes = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
-                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
 
         model.accept(cloudEvent("1", "NameDefined"));
 
-        assertThat(matches).containsExactly(false);
+        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
     }
 
     @Test
-    void the_observer_is_told_an_event_is_unmatched_while_the_model_is_stopped() {
-        // A stopped model drops live events by design (ADR 85), and the observer contract mirrors that: matched
-        // reflects what would actually be delivered, not merely what the filter would have accepted.
-        List<Boolean> matches = new ArrayList<>();
+    void the_observer_is_told_not_deliverable_while_the_model_is_stopped() {
+        // A stopped model drops live events by design (ADR 85), and the observer contract mirrors that: the
+        // outcome reflects what would actually be delivered, not merely what the filter would have accepted.
+        List<RoutingOutcome> outcomes = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
-                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
         model.subscribe("sub", cloudEvent -> {
         });
         model.stop();
 
         model.accept(cloudEvent("1", "NameDefined"));
 
-        assertThat(matches).containsExactly(false);
+        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
     }
 
     @Test
-    void the_observer_is_told_an_event_is_unmatched_while_the_subscription_is_paused_on_a_running_model() {
-        // Distinct from the stopped case above. Here the model itself is running, only the one subscription is
-        // paused, so hasMatchingRegistration(..) has to walk the paused set to see it, not just the running flag.
-        List<Boolean> matches = new ArrayList<>();
+    void the_observer_is_told_not_deliverable_while_the_subscription_is_paused_on_a_running_model() {
+        // Distinct from the stopped case above, and distinct from FILTERED: a paused subscription's filter is never
+        // consulted, so reporting FILTERED here would tell a caller the event was this subscription's and it was
+        // declined, when in truth nothing decided that.
+        List<RoutingOutcome> outcomes = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
-                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
         model.subscribe("sub", cloudEvent -> {
         });
         model.pauseSubscription("sub");
 
         model.accept(cloudEvent("1", "NameDefined"));
 
-        assertThat(matches).containsExactly(false);
+        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
     }
 
     @Test
-    void the_observer_is_told_an_event_is_unmatched_when_the_registered_filter_declines_it() {
-        List<Boolean> matches = new ArrayList<>();
+    void the_observer_is_told_filtered_when_the_registered_filter_declines_it() {
+        List<RoutingOutcome> outcomes = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
-                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.type("SomethingElseHappened")), cloudEvent -> {
         });
 
         model.accept(cloudEvent("1", "NameDefined"));
 
-        assertThat(matches).containsExactly(false);
+        assertThat(outcomes).containsExactly(FILTERED);
     }
 
     @Test
     void the_observer_still_sees_the_event_when_the_matching_handler_throws() {
-        List<Boolean> matches = new ArrayList<>();
+        List<RoutingOutcome> outcomes = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
-                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
         model.subscribe("boom", cloudEvent -> {
             throw new IllegalStateException("handler failed");
         });
@@ -307,46 +318,47 @@ class PushSubscriptionModelTest {
         Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class);
-        assertThat(matches).containsExactly(true);
+        assertThat(outcomes).containsExactly(DELIVERED);
     }
 
     @Test
     void the_observer_still_sees_the_event_when_evaluating_the_filter_itself_throws() {
         // A supplied DataFieldReader can throw while reading the payload, the same hazard the shared dispatch loop
         // documents (routeIsolated). The "every event is observed" promise has to survive that too, not just a
-        // handler that throws, and the original exception still has to reach the caller afterward.
-        List<Boolean> matches = new ArrayList<>();
+        // handler that throws, and the original exception still has to reach the caller afterward. Reported as
+        // NOT_DELIVERABLE rather than FILTERED, since a filter that failed to answer did not decline the event.
+        List<RoutingOutcome> outcomes = new ArrayList<>();
         DataFieldReader throwingReader = (cloudEvent, path) -> {
             throw new IllegalStateException("payload unreadable");
         };
         PushSubscriptionModel model = new PushSubscriptionModel(throwingReader,
-                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
         });
 
         Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessage("payload unreadable");
-        assertThat(matches).containsExactly(false);
+        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
     }
 
     @Test
     void the_observer_still_sees_the_event_when_evaluating_the_filter_itself_fails_an_assertion() {
         // Same as the RuntimeException case above, but for a DataFieldReader instrumented as a test double, which is
         // as likely to throw AssertionError as a spy observer is.
-        List<Boolean> matches = new ArrayList<>();
+        List<RoutingOutcome> outcomes = new ArrayList<>();
         DataFieldReader throwingReader = (cloudEvent, path) -> {
             throw new AssertionError("payload assertion failed");
         };
         PushSubscriptionModel model = new PushSubscriptionModel(throwingReader,
-                (CloudEvent cloudEvent, boolean matched) -> matches.add(matched));
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
         });
 
         Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
 
         assertThat(thrown).isInstanceOf(AssertionError.class).hasMessage("payload assertion failed");
-        assertThat(matches).containsExactly(false);
+        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
     }
 
     @Test
@@ -356,7 +368,7 @@ class PushSubscriptionModelTest {
         DataFieldReader throwingReader = (cloudEvent, path) -> {
             throw new IllegalStateException("payload unreadable");
         };
-        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader, (CloudEvent cloudEvent, boolean matched) -> {
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader, (CloudEvent cloudEvent, RoutingOutcome outcome) -> {
             throw new Error("observer blew up too");
         });
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
@@ -378,7 +390,7 @@ class PushSubscriptionModelTest {
         DataFieldReader throwingReader = (cloudEvent, path) -> {
             throw shared;
         };
-        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader, (CloudEvent cloudEvent, boolean matched) -> {
+        PushSubscriptionModel model = new PushSubscriptionModel(throwingReader, (CloudEvent cloudEvent, RoutingOutcome outcome) -> {
             throw shared;
         });
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> {
@@ -393,7 +405,7 @@ class PushSubscriptionModelTest {
     @Test
     void a_throwing_observer_is_swallowed_and_the_matching_handler_still_runs() {
         List<String> handled = new ArrayList<>();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (CloudEvent cloudEvent, boolean matched) -> {
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (CloudEvent cloudEvent, RoutingOutcome outcome) -> {
             throw new IllegalStateException("observer failed");
         });
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent.getId()));
@@ -410,7 +422,7 @@ class PushSubscriptionModelTest {
         // The same guarantee has to hold for it. Observing must never be what turns a delivered event into a
         // broker redelivery.
         List<String> handled = new ArrayList<>();
-        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (CloudEvent cloudEvent, boolean matched) -> {
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (CloudEvent cloudEvent, RoutingOutcome outcome) -> {
             throw new AssertionError("observer assertion failed");
         });
         model.subscribe("sub", cloudEvent -> handled.add(cloudEvent.getId()));
@@ -425,7 +437,7 @@ class PushSubscriptionModelTest {
     void a_batch_stops_observing_once_a_handler_throws() {
         List<String> observed = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
-                (CloudEvent cloudEvent, boolean matched) -> observed.add(cloudEvent.getId()));
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> observed.add(cloudEvent.getId()));
         model.subscribe("boom", cloudEvent -> {
             if (cloudEvent.getId().equals("2")) {
                 throw new IllegalStateException("handler failed");
@@ -437,6 +449,107 @@ class PushSubscriptionModelTest {
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class);
         assertThat(observed).containsExactly("1", "2");
+    }
+
+    @Test
+    void a_resume_landing_immediately_after_the_evaluation_does_not_change_the_outcome_already_reported() {
+        // The race #848 names: a caller that checked isRunning(subscriptionId) *after* accept() returns, instead of
+        // reading the outcome the observer was told *during* the one routing evaluation, could see a concurrent
+        // resume make isRunning() answer true for an event that was actually dropped while paused. The observer
+        // callback runs synchronously inside the same evaluation that decided NOT_DELIVERABLE, so triggering the
+        // resume from inside it is the earliest a "concurrent" resume could possibly land relative to accept()
+        // returning, and the already-reported outcome must not be retroactively correct about a state that didn't
+        // hold at evaluation time.
+        List<RoutingOutcome> outcomes = new ArrayList<>();
+        List<String> handled = new ArrayList<>();
+        var modelRef = new java.util.concurrent.atomic.AtomicReference<PushSubscriptionModel>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (cloudEvent, outcome) -> {
+            outcomes.add(outcome);
+            modelRef.get().resumeSubscription("sub");
+        });
+        modelRef.set(model);
+        model.subscribe("sub", cloudEvent -> handled.add(cloudEvent.getId()));
+        model.pauseSubscription("sub");
+
+        model.accept(cloudEvent("1", "NameDefined"));
+
+        assertThat(outcomes).as("the outcome reported during evaluation reflects the paused state at that moment")
+                .containsExactly(NOT_DELIVERABLE);
+        assertThat(handled).as("the event was genuinely dropped, never handed to the handler")
+                .isEmpty();
+        assertThat(model.isRunning("sub")).as("a caller checking isRunning(..) *after* accept() returns would now "
+                        + "wrongly see true, which is exactly why the ack decision must come from the reported "
+                        + "outcome and never from a state check taken after the fact")
+                .isTrue();
+    }
+
+    @Test
+    void concurrent_pause_and_resume_never_makes_the_reported_outcome_disagree_with_what_was_actually_delivered() throws InterruptedException {
+        // A broader, genuinely multi-threaded version of the race above: one thread hammers accept() while another
+        // toggles pause/resume on the same subscription. Whatever RoutingOutcome the observer is told for a given
+        // event must agree with whether that event actually reached the handler, for every one of many
+        // interleavings, not just the hand-picked one above.
+        int eventCount = 2_000;
+        List<RoutingOutcome> outcomes = new ArrayList<>(eventCount);
+        AtomicInteger deliveredCount = new AtomicInteger();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), (cloudEvent, outcome) -> {
+            synchronized (outcomes) {
+                outcomes.add(outcome);
+            }
+        });
+        model.subscribe("sub", cloudEvent -> deliveredCount.incrementAndGet());
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch go = new CountDownLatch(1);
+
+            var toggler = executor.submit(() -> {
+                ready.countDown();
+                await(go);
+                for (int i = 0; i < eventCount; i++) {
+                    if (model.isPaused("sub")) {
+                        model.resumeSubscription("sub");
+                    } else {
+                        model.pauseSubscription("sub");
+                    }
+                }
+            });
+            var pusher = executor.submit(() -> {
+                ready.countDown();
+                await(go);
+                for (int i = 0; i < eventCount; i++) {
+                    model.accept(cloudEvent(String.valueOf(i), "NameDefined"));
+                }
+            });
+
+            ready.await();
+            go.countDown();
+            toggler.get(30, TimeUnit.SECONDS);
+            pusher.get(30, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+            throw new AssertionError(e);
+        } finally {
+            executor.shutdownNow();
+        }
+
+        assertThat(outcomes).hasSize(eventCount);
+        long reportedDelivered = outcomes.stream().filter(outcome -> outcome == DELIVERED).count();
+        assertThat(outcomes).as("the filter always matches here, so nothing is ever reported FILTERED: every event "
+                        + "is either genuinely delivered or genuinely not deliverable")
+                .allMatch(outcome -> outcome == DELIVERED || outcome == NOT_DELIVERABLE);
+        assertThat(reportedDelivered).as("the outcome reported for every event must agree with how many times the "
+                        + "handler actually ran, across the whole run, under real concurrent pause/resume pressure")
+                .isEqualTo(deliveredCount.get());
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
     }
 
     @Test
