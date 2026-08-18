@@ -1467,3 +1467,7 @@ The rule: a send to a worker goes to the SESSION ID recorded in the epic state f
 message in the same breath. Never to a socket recalled from earlier context while multiple
 workers are live. The state file already records session ids per unit precisely so addressing
 never relies on recall; use them.
+
+## A fork dispatched for research from inside an implementation agent will implement
+
+During ayi/U4 (2026-08-18) the implementation subagent spawned a `fork`-type subagent to gather line numbers and signatures before writing code. The fork inherits the parent's FULL context, including the implementation directive, and it acted on that directive: it wrote seven production files and the changelog in the same worktree while the parent wrote the DSL layer, and neither could address the other (both name lookups failed), so the only stop signal was file-mtime quiet. The two writers happened to split cleanly along layer lines and nothing was lost, but only by luck. Rules that follow: research from inside a write-capable agent goes to a read-only agent type (Explore) with an explicit read-only instruction, never a fork. A fork is for continuing the parent's own task, so give one only a directive you want executed. On collision, the recovery shape is single-writer takeover: wait for quiet, commit the combined state immediately, review the other writer's output as untrusted input, then finish alone.
