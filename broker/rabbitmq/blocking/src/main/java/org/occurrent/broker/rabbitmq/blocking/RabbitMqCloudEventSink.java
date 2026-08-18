@@ -128,6 +128,12 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
             return channel;
         } catch (IOException e) {
             throw new RabbitMqPublishException("Failed to create a confirm-mode RabbitMQ channel", e);
+        } catch (ShutdownSignalException e) {
+            // openChannel() throws this unchecked, not as an IOException, when the connection is itself already
+            // closed. Wrapped the same way as every other RabbitMQ client failure here, so retireChannelPreserving
+            // recognises it as this sink's own failure type rather than letting it replace the primary failure
+            // it belongs on.
+            throw new RabbitMqPublishException("Failed to create a confirm-mode RabbitMQ channel because the connection is shut down", e);
         }
     }
 
