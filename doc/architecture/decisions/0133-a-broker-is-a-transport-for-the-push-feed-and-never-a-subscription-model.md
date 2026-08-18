@@ -96,9 +96,16 @@ So a CloudEvent bridge that only looked at whether `accept(...)` threw would ack
 states, before anything is registered, while the model is stopped, and while its subscription is paused. `route`
 returns normally in all three.
 
-**The acknowledgement decision comes from a `PushObserver`, not from a check taken before or after the push.** A
-bridge attaches one, and `PushSubscriptionModel` reports through `routeReportingMatch`, which evaluates the sole
-registration's eligibility once and tells the observer that same answer before dispatching. A check taken separately
+**The acknowledgement decision comes from a `PushObserver`, not from a check taken before or after the push.**
+`PushSubscriptionModel` reports through `routeReportingMatch`, which evaluates the sole registration's eligibility
+once and tells the observer that same answer before dispatching.
+
+**The bridge cannot attach that observer, so the wiring order is part of this decision.** The observer is a
+constructor argument on `PushSubscriptionModel` and there is no method to set one afterwards, while the bridge is
+constructed from a model that already exists. So the application creates the outcome channel first, passes it to the
+model's constructor, and passes the same channel to the bridge, which reads its outcomes. That channel delegates to
+whatever `PushObserver` the application already wanted, so a deployment with its own diagnostics keeps them instead of
+having to choose. A check taken separately
 would be two steps, so a `stop()`, a `pauseSubscription` or a `cancelSubscription` landing between them would
 acknowledge into a model that then drops the event.
 
@@ -252,9 +259,14 @@ extensions, so the id, source, subject and time the store recorded do not reach 
 new ones. The Occurrent extensions do survive, which is what the consuming side needs to build `EventMetadata`, so
 this path is sound for a consumer that keys on stream, version or position.
 
-The restriction is easier to state by what does survive, because that is the shorter list. The event type survives,
-since the sink derives it from the domain event's class through the same `CloudEventTypeMapper` the stored event was
-written with. The Occurrent extensions survive, because the forwarder puts them on as headers. **Everything else a
+The restriction is easier to state by what does survive, because that is the shorter list. The Occurrent extensions
+survive, because the forwarder puts them on as headers rather than deriving them.
+
+The event type usually survives but is not promised to. `DomainEventSink<E>` does not require the sink to use the
+forwarder's `CloudEventTypeMapper`, and even the same mapper need not map an aliased or renamed type back to the
+string the stored event was written with. So a type filter can disagree between the broker path and a catch-up too,
+just less often, and a deployment relying on it should treat this path the same way as one filtering on the
+attributes below. **Everything else a
 `Filter` can match on does not.** `EventMetadata.from` reads only `getExtensionNames()`, so `id`, `time`, `source`,
 `subject`, `dataschema` and `datacontenttype` never reach the sink and whatever it publishes has new ones. Data
 survives only where the sink's encoding is the one the store holds, which is the application's to know rather than
@@ -349,19 +361,23 @@ no plain `Filter` inside it at all, it has a `DcbCriteria`, so a DCB filter cann
 refused there. ADR 62 already refuses one for a catch-up replay on the same grounds, that a DCB boundary needs a
 different read, so this inherits an existing limit rather than adding one.
 
-**That filter is configured twice, once on the bridge and once on the registration, and nothing checks that the two
-agree.** This is the one place this design does not deliver what its Context section complains about, so it is stated
-plainly rather than left for an implementer to notice. The registration's filter selects what the catch-up replays,
-the bridge's decides live delivery, and an application that sets them differently gets a projection whose history and
-whose live tail were selected by different rules.
+**Configuring that filter separately from the registration's would lose events, so the domain bridge does not ship
+until the feed can perform the live match itself.** A bridge filter narrower than the registration's replay filter
+makes the bridge treat an event as not matching and acknowledge it, while the projection's replay contract says that
+event was one of its own. That is a loss, not two rules disagreeing, so `AGENTS.md` decides it rather than a judgement
+about how likely the misconfiguration is.
 
-It cannot currently be closed from a broker module. `RegisteringSubscribable` keeps only the derived
+It cannot be closed from inside a broker module. `RegisteringSubscribable` keeps only the derived
 `Predicate<CloudEvent>` and not the `SubscriptionFilter` it was built from, `DomainEventFeed` exposes neither its
 filter nor a live match, and `ProjectionAnnotationRegistrar` derives the filter and calls `register` itself for
 `@Projection(source = PUSH)`, which decision 9 relies on continuing to work. Making the bridge own registration would
-break that annotation path, so this ADR does not do it. Closing it properly means the feed either exposing the filter
-it was registered with or performing the live match itself, which is a change outside the three broker modules and is
-recorded with [#848](https://github.com/johanhaleby/occurrent/issues/848) rather than decided here.
+break that annotation path, so this ADR does not do it.
+
+So [#848](https://github.com/johanhaleby/occurrent/issues/848) is a **prerequisite** for the domain bridge rather than
+an improvement to it, on the same footing as the three-valued outcome decision 1 needs. The feed performs the live
+match against the filter it was registered with, the bridge asks it and never holds a filter of its own, and the
+symmetry with the CloudEvent level is then exact, where the model decides and the bridge only acknowledges what it is
+told.
 
 **A filter with a payload condition needs a `DataFieldReader`, and is refused at startup without one.** The
 one-argument `SubscriptionFilterMatcher.matcherFor` builds with `DataFieldReader.refusing()` and throws while
@@ -530,8 +546,12 @@ In both cases a failed parking publish leaves the original unacknowledged, which
 lost. That is the rule the whole ADR runs on, that nothing is acknowledged until the event is somewhere it can be read
 from again. What neither bridge may do is acknowledge or commit after logging the failure.
 
-**The Kafka resolver uses the stream id as the message key by default.** Kafka only orders within a partition, and a
-projection reading one stream needs that stream's events in order, so keying by stream id puts them on one partition.
+**The Kafka resolver uses the stream id as the message key by default, and a null key when there is no stream id.**
+Kafka only orders within a partition, and a projection reading one stream needs that stream's events in order, so
+keying by stream id puts them on one partition. An event published through `publish(E)` has no stream identity at all,
+which decision 4 explains, so the default resolver reads the extension rather than demanding it and leaves the key
+null when it is absent. `KafkaDestination` declares the key nullable for exactly this, and the alternative would be
+the metadata-free overload throwing on a resolver the caller never chose.
 An application that wants a different partitioning replaces the resolver, which is one of the two things a resolver is
 for.
 
