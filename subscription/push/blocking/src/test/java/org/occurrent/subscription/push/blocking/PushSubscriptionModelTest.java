@@ -507,6 +507,18 @@ class PushSubscriptionModelTest {
         });
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.type(matchingType)), cloudEvent -> deliveredIds.add(cloudEvent.getId()));
 
+        // A deterministic warm-up, run unpaused before the race starts, so DELIVERED and FILTERED are proven to
+        // occur regardless of how the toggler and pusher threads happen to interleave below. Left to the race
+        // alone, an unlucky schedule (the toggler pauses once and is never rescheduled before the pusher finishes)
+        // could leave the subscription paused for the whole run and report every event NOT_DELIVERABLE, which
+        // would fail the two-outcome assertion further down despite nothing being wrong.
+        model.accept(cloudEvent("warmup-match", matchingType));
+        model.accept(cloudEvent("warmup-no-match", nonMatchingType));
+        assertThat(outcomes).containsExactly(DELIVERED, FILTERED);
+        outcomes.clear();
+        types.clear();
+        deliveredIds.clear();
+
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
             CountDownLatch ready = new CountDownLatch(2);
@@ -557,9 +569,6 @@ class PushSubscriptionModelTest {
             assertThat(wasDelivered).as("event %d: whether the handler actually ran must agree with a reported outcome of DELIVERED", i)
                     .isEqualTo(outcome == DELIVERED);
         }
-        assertThat(outcomes).as("this run must genuinely exercise the filter's two definite outcomes, not just one")
-                .contains(DELIVERED)
-                .contains(FILTERED);
     }
 
     private static void await(CountDownLatch latch) {

@@ -37,12 +37,12 @@ public enum RoutingOutcome {
 
     /**
      * A running, unpaused subscription's filter accepted the event. Whether the registered handler has actually run
-     * by the time this outcome is reported is a per-surface question, not something this outcome answers on its own.
-     * A direct dispatch such as {@code PushObserver} invokes the handler before reporting this outcome, but a
-     * catch-up-then-live engine can report it for an event handed off into a buffer, ahead of the fold that
-     * eventually runs against it. Whether the handler succeeded or threw is a separate signal from this outcome
-     * either way. Consult the reporting method's own javadoc for what this outcome guarantees on that particular
-     * surface.
+     * by the time this outcome is reported is a per-surface question, not something this outcome answers on its own,
+     * and on every surface examined so far the answer is no. A direct dispatch such as {@code PushObserver} reports
+     * this outcome before the handler is invoked at all, and a catch-up-then-live engine can report it for an event
+     * only just handed off into a buffer, ahead of the fold that eventually runs against it. Whether the handler
+     * succeeds or throws is a separate signal from this outcome either way. Consult the reporting method's own
+     * javadoc for what this outcome guarantees on a particular surface.
      */
     DELIVERED,
 
