@@ -467,6 +467,7 @@
                 <configuration>
                     <systemPropertyVariables>
                         <test.mongo.version>${integration-tests.mongo.version}</test.mongo.version>
+                        <test.rabbitmq.version>${integration-tests.rabbitmq.version}</test.rabbitmq.version>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>
@@ -567,6 +568,7 @@
                                 <excludeArtifact>application-service</excludeArtifact>
                                 <excludeArtifact>application</excludeArtifact>
                                 <excludeArtifact>broker-api</excludeArtifact>
+                                <excludeArtifact>broker-rabbitmq</excludeArtifact>
                                 <excludeArtifact>broker</excludeArtifact>
                                 <excludeArtifact>cloudevent-converter</excludeArtifact>
                                 <excludeArtifact>cloudevent-type-mapper</excludeArtifact>
