@@ -134,18 +134,24 @@ class MongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
     }
 
     @Test
-    void propagates_exception_when_finite_retry_attempts_exhausted() {
+    void keeps_polling_until_its_own_deadline_when_a_finite_retry_exhausts_well_before_it() {
         MongoOperations mongoOperations = mock(MongoOperations.class);
         when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
-        RuntimeException storeFailure = new RuntimeException("persistent store error");
         when(mongoOperations.exists(any(Query.class), anyString()))
-                .thenThrow(storeFailure);
+                .thenThrow(new RuntimeException("persistent store error"));
+        // Exhausts in roughly 20 ms, far short of the 300 ms wait below, so a poll's own retry exhaustion must not
+        // end the wait early, only the wait's own deadline may. ADR 132 decision 5 states this unconditionally,
+        // matching the reactive store's own equivalent test.
         RetryStrategy finiteRetry = RetryStrategy.retry().backoff(Backoff.fixed(10)).maxAttempts(2);
-        AppliedAppendStore store = new MongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7), finiteRetry, Backoff.fixed(100));
-        Duration generousTimeout = Duration.ofSeconds(10);
+        AppliedAppendStore store = new MongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7), finiteRetry, Backoff.fixed(20));
+        Duration timeout = Duration.ofMillis(300);
 
-        assertThatThrownBy(() ->
-                store.waitUntilApplied("orders", AppendId.mint(), generousTimeout)
-        ).isEqualTo(storeFailure);
+        Instant start = Instant.now();
+        boolean applied = store.waitUntilApplied("orders", AppendId.mint(), timeout);
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(applied).isFalse();
+        assertThat(elapsed).isGreaterThanOrEqualTo(timeout.minusMillis(50));
+        assertThat(elapsed).isLessThan(timeout.plusSeconds(2));
     }
 }

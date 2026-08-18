@@ -741,8 +741,11 @@ public class OccurrentProperties {
     public static class ProjectionProperties {
 
         /**
-         * Configuration for the {@code AppliedAppendStore} a {@code @Projection(recordAppliedAppends = true)}
-         * resolves when the application declares none, see <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>.
+         * Configuration for the {@code AppliedAppendStore} bean the starter auto-configures when the application
+         * declares none, see <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>.
+         * A projection records into it directly for now, through {@code AppliedAppendStore.recordApplied(..)}. A
+         * future {@code @Projection(recordAppliedAppends = true)} opt-in that records automatically is not part of
+         * this release.
          */
         private AppliedAppendProperties appliedAppend = new AppliedAppendProperties();
 

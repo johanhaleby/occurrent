@@ -38,11 +38,12 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
- * The {@link AppliedAppendStore} the reactive Mongo starter contributes as
- * {@code @Projection(recordAppliedAppends = true)}'s zero-config default. {@link AppliedAppendStore} is a
- * blocking-shaped interface on both stacks, called from the reactor recorder's {@code doOnSuccess} callback, which
- * already runs on {@code boundedElastic}, so blocking on the underlying reactive Mongo call here is the same bridge
- * the rest of this reactor stack makes in the other direction.
+ * The {@link AppliedAppendStore} the reactive Mongo starter auto-configures when the application declares none. A
+ * projection records into it directly for now, through {@link AppliedAppendStore#recordApplied(String, AppendId)}.
+ * A future {@code @Projection(recordAppliedAppends = true)} opt-in that records automatically, from a callback
+ * already running on {@code boundedElastic}, is not part of this release. {@link AppliedAppendStore} is a
+ * blocking-shaped interface on both stacks regardless, so this store bridges to the underlying reactive Mongo calls
+ * with {@code block()}, the same direction that future callback would bridge in.
  * <p>
  * One document per (projection id, append id) pair, indexed by a unique compound index on both fields. Calling
  * {@link #recordApplied(String, AppendId)} twice for the same pair upserts the same document rather than inserting
@@ -70,11 +71,9 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * applied. {@link Retry} rather than the blocking {@code RetryStrategy} because this is the reactive stack, matching
  * how the reactive starter retries elsewhere.
  * <p>
- * {@link #defaultRetry()} gives up after a fixed number of attempts rather than retrying forever, a deliberate
- * divergence from the blocking store's default, which keeps {@link #hasApplied(String, AppendId)} and
- * {@link #recordApplied(String, AppendId)} from blocking a direct caller indefinitely under a sustained outage. An
- * application that needs parity with the blocking store's retry, which keeps retrying with no limit, should supply
- * its own {@link Retry}.
+ * {@link #defaultRetry()} retries with no limit, matching the blocking store's default, so a sustained outage keeps
+ * {@link #hasApplied(String, AppendId)} and {@link #recordApplied(String, AppendId)} retrying rather than failing
+ * the caller. An application that needs a bound on that retry should supply its own {@link Retry}.
  */
 @NullMarked
 public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
@@ -95,13 +94,12 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     private volatile boolean indexesEnsured = false;
 
     /**
-     * Retries a failing read or write with backoff from 100 ms up to 2 seconds, giving up after 5 retries (6
-     * attempts total) and surfacing the last failure. The blocking store does not give up this way, it retries the
-     * same backoff forever, since it keeps {@code recordApplied(..)} durable under an outage. This store's default
-     * gives up so a direct call to {@link #hasApplied(String, AppendId)} or {@link #recordApplied(String, AppendId)}
-     * does not block a caller indefinitely. {@link #waitUntilApplied(String, AppendId, Duration)} never inherits
-     * that exhaustion though, its own reads answer {@code false} rather than surfacing the failure, so a wait
-     * against this default still resolves by its own deadline. Polls a wait at
+     * Retries a failing read or write with backoff from 100 ms up to 2 seconds, with no attempt limit, so a
+     * transient outage of the store does not turn a direct call to {@link #hasApplied(String, AppendId)} or
+     * {@link #recordApplied(String, AppendId)} into a failure, matching the blocking store's own default and ADR
+     * 132 decision 5's requirement that both stacks apply it. {@link #waitUntilApplied(String, AppendId, Duration)}
+     * is unaffected either way, its own reads answer {@code false} rather than surfacing a failure, so a wait
+     * resolves by its own deadline regardless of what a caller supplies here. Polls a wait at
      * {@link AppliedAppendStore#DEFAULT_POLL_BACKOFF}.
      */
     public ReactiveMongoAppliedAppendStore(ReactiveMongoOperations mongoOperations, String collection, Duration retention) {
@@ -269,8 +267,12 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
         }
     }
 
+    /**
+     * {@code Retry.backoff} takes a mandatory attempt limit, unlike the blocking {@code RetryStrategy}'s own
+     * infinite() sentinel, so {@code Long.MAX_VALUE} is what expresses no limit here.
+     */
     private static Retry defaultRetry() {
-        return Retry.backoff(5, Duration.ofMillis(100))
+        return Retry.backoff(Long.MAX_VALUE, Duration.ofMillis(100))
                 .maxBackoff(Duration.ofSeconds(2))
                 .onRetryExhaustedThrow((spec, signal) -> signal.failure());
     }

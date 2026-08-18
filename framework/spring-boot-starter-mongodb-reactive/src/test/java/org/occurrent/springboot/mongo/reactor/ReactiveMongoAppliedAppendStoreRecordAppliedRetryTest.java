@@ -32,6 +32,10 @@ import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
+import java.util.Iterator;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -69,5 +73,26 @@ class ReactiveMongoAppliedAppendStoreRecordAppliedRetryTest {
         store.recordApplied("orders", AppendId.mint());
 
         verify(mongoOperations, times(2)).upsert(any(Query.class), any(UpdateDefinition.class), anyString());
+    }
+
+    @Test
+    void the_default_retry_survives_more_failures_than_its_old_five_attempt_cap_because_adr_132_requires_an_unbounded_retry_on_both_stacks() {
+        int failuresBeforeSuccess = 7;
+        ReactiveMongoOperations mongoOperations = mock(ReactiveMongoOperations.class);
+        ReactiveIndexOperations indexOperations = mock(ReactiveIndexOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(indexOperations);
+        when(indexOperations.ensureIndex(any())).thenReturn(Mono.just("index"));
+        List<Mono<UpdateResult>> attempts = Stream.concat(
+                        Stream.generate(() -> Mono.<UpdateResult>error(new RuntimeException("transient store error"))).limit(failuresBeforeSuccess),
+                        Stream.of(Mono.just(mock(UpdateResult.class))))
+                .collect(Collectors.toList());
+        Iterator<Mono<UpdateResult>> remaining = attempts.iterator();
+        when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
+                .thenAnswer(invocation -> remaining.next());
+        AppliedAppendStore store = new ReactiveMongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7));
+
+        store.recordApplied("orders", AppendId.mint());
+
+        verify(mongoOperations, times(failuresBeforeSuccess + 1)).upsert(any(Query.class), any(UpdateDefinition.class), anyString());
     }
 }

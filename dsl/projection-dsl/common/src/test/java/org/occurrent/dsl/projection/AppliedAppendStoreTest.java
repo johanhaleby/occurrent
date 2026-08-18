@@ -146,6 +146,15 @@ class AppliedAppendStoreTest {
     }
 
     @Test
+    void waitUntilApplied_rejects_an_exponential_backoff_whose_initial_interval_exceeds_its_max_because_the_first_poll_would_ignore_the_cap() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+
+        assertThat(catchThrowable(() -> store.waitUntilApplied("orders", AppendId.mint(), Duration.ofMillis(50), Backoff.exponential(Duration.ofHours(1), Duration.ofMillis(250), 2.0))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("initial interval cannot exceed its max interval");
+    }
+
+    @Test
     void an_exponential_backoff_grows_the_interval_between_polls_and_stops_growing_at_its_max() {
         List<Long> pollGapsMillis = new ArrayList<>();
         long[] previousPoll = {System.nanoTime()};

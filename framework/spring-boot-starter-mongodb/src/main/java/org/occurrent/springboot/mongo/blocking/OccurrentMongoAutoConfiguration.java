@@ -180,8 +180,9 @@ public class OccurrentMongoAutoConfiguration<E> {
     }
 
     /**
-     * The zero-config {@link AppliedAppendStore} a {@code @Projection(recordAppliedAppends = true)} resolves
-     * when the application declares none.
+     * The zero-config {@link AppliedAppendStore} an application gets when it declares none itself. A future
+     * {@code @Projection(recordAppliedAppends = true)} opt-in would resolve this same bean, but that annotation
+     * attribute is not part of this release.
      */
     @Bean
     @ConditionalOnMissingBean(AppliedAppendStore.class)

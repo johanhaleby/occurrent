@@ -163,8 +163,9 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     }
 
     /**
-     * The zero-config {@link AppliedAppendStore} a {@code @Projection(recordAppliedAppends = true)} resolves
-     * when the application declares none.
+     * The zero-config {@link AppliedAppendStore} an application gets when it declares none itself. A future
+     * {@code @Projection(recordAppliedAppends = true)} opt-in would resolve this same bean, but that annotation
+     * attribute is not part of this release.
      */
     @Bean
     @ConditionalOnMissingBean(AppliedAppendStore.class)
@@ -172,7 +173,10 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend = occurrentProperties.getProjection().getAppliedAppend();
         OccurrentProperties.ProjectionProperties.AppliedAppendProperties.WaitBackoffProperties waitBackoff = appliedAppend.getWaitBackoff();
         Backoff pollBackoff = Backoff.exponential(waitBackoff.getInitial(), waitBackoff.getMax(), waitBackoff.getMultiplier());
-        Retry storeRetry = Retry.backoff(5, Duration.ofMillis(100))
+        // Long.MAX_VALUE attempts, matching ReactiveMongoAppliedAppendStore.defaultRetry(), because ADR 132
+        // decision 5 requires both stacks to retry a transient outage with no limit, and this bean builds its own
+        // Retry rather than reusing that private default.
+        Retry storeRetry = Retry.backoff(Long.MAX_VALUE, Duration.ofMillis(100))
                 .maxBackoff(Duration.ofSeconds(2))
                 .onRetryExhaustedThrow((spec, signal) -> signal.failure());
         return new ReactiveMongoAppliedAppendStore(mongo, appliedAppend.getCollection(), appliedAppend.getRetention(), storeRetry, pollBackoff);

@@ -158,10 +158,14 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      * to this same deadline, exactly like a failing read, rather than throwing out of a method documented to never
      * throw.
      * A store that is still failing once the deadline arrives answers {@code false} instead of retrying past it, so
-     * the wait's own deadline check is what ends the wait. A thread interrupted during a retry's backoff sleep also
-     * answers {@code false} here, the same as an interrupted poll sleep in the loop above it, rather than
-     * propagating the {@code RuntimeException} {@code RetryExecution} wraps that interrupt in. The interrupt flag
-     * itself is already restored by {@code RetryExecution}, this only decides what this method returns.
+     * the wait's own deadline check is what ends the wait. ADR 132 decision 5 states this unconditionally, a store
+     * that cannot be read keeps the wait polling until its timeout expires, so a caller-supplied
+     * {@link #retryStrategy} that exhausts its own attempt limit before the deadline also answers {@code false}
+     * here rather than surfacing that exhaustion, the same as {@link #recordApplied(String, AppendId)} or
+     * {@link #hasApplied(String, AppendId)} would surface it outside a wait. A thread interrupted during a retry's
+     * backoff sleep answers {@code false} the same way, the same as an interrupted poll sleep in the loop above it,
+     * rather than propagating the {@code RuntimeException} {@code RetryExecution} wraps that interrupt in. Any
+     * interrupt flag is already restored by {@code RetryExecution} before this method ever sees the exception.
      */
     private boolean readOnceBoundedBy(String projectionId, AppendId appendId, long deadlineNanos) {
         Supplier<Boolean> read = () -> readOnce(projectionId, appendId);
@@ -169,10 +173,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
         try {
             return requireNonNull(executeWithRetry(read, notShutdownAndBeforeDeadline, retryStrategy).get());
         } catch (RuntimeException e) {
-            if (Thread.currentThread().isInterrupted() || System.nanoTime() >= deadlineNanos) {
-                return false;
-            }
-            throw e;
+            return false;
         }
     }
 

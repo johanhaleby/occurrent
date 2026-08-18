@@ -73,12 +73,15 @@ public interface AppliedAppendStore {
     void clear(String projectionId);
 
     /**
-     * Rejects a {@code backoff} that a wait loop cannot use without becoming a busy loop against the store. This
-     * rejects {@link Backoff#none()}, and it also rejects an exponential backoff whose initial or max interval is
-     * zero or negative, or whose multiplier is below 1.0 (this also catches {@code NaN}, since every comparison
-     * against {@code NaN} except {@code !=} is false) and so shrinks the interval back to zero after enough polls.
-     * Shared by this interface's own wait loop and by every store's override, so the rule is enforced once rather
-     * than repeated per implementation.
+     * Rejects a {@code backoff} a wait loop cannot use as documented. This rejects {@link Backoff#none()}, an
+     * exponential backoff whose initial or max interval is zero or negative, or whose multiplier is below 1.0 (this
+     * also catches {@code NaN}, since every comparison against {@code NaN} except {@code !=} is false) and so
+     * shrinks the interval back to zero after enough polls, becoming a busy loop against the store. It also rejects
+     * an exponential backoff whose initial interval exceeds its max, which is not a busy loop but breaks the "first
+     * poll stays fast" contract {@link #DEFAULT_POLL_BACKOFF} documents, since the wait loop's first sleep is
+     * {@code initial} unchanged and an initial larger than max would suppress re-checking well past what max is
+     * supposed to cap it at. Shared by this interface's own wait loop and by every store's override, so the rule is
+     * enforced once rather than repeated per implementation.
      */
     static void rejectBusyLoopBackoff(Backoff backoff) {
         if (backoff instanceof Backoff.None) {
@@ -89,6 +92,9 @@ public interface AppliedAppendStore {
                 || exponential.max.isZero() || exponential.max.isNegative()
                 || !(exponential.multiplier >= 1.0))) {
             throw new IllegalArgumentException("backoff's initial and max intervals must be positive and its multiplier must be at least 1.0, an interval that never grows past zero is a busy loop on the store.");
+        }
+        if (backoff instanceof Backoff.Exponential exponential && exponential.initial.compareTo(exponential.max) > 0) {
+            throw new IllegalArgumentException("backoff's initial interval cannot exceed its max interval, the first poll would then sleep longer than the max this backoff is supposed to cap every poll at.");
         }
     }
 
