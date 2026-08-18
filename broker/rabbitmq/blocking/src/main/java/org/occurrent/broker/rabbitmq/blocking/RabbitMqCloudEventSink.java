@@ -53,7 +53,10 @@ import static java.util.Objects.requireNonNull;
  * confirm that follows it would otherwise look like success. An acknowledgement timeout, five seconds by default,
  * bounds the wait and fails it with {@link RabbitMqPublishTimeoutException} rather than blocking forever on a
  * broker that never answers, and {@link Builder#acknowledgementTimeout(Duration)} is not offered as something that
- * can be turned off, for the same reason {@link CloudEventSink}'s own javadoc gives.
+ * can be turned off, for the same reason {@link CloudEventSink}'s own javadoc gives. A timed-out publish is left
+ * outstanding on the broker's side of that channel, so this sink retires the channel and opens a fresh one
+ * underneath the timeout, and a later publish is never kept waiting on an abandoned one or blamed for its eventual
+ * nack.
  * <p>
  * Each publish carries its own random {@code correlationId}, so a {@code basic.return} is matched to the publish it
  * belongs to and never to a different one, including a retry of the same event after an earlier attempt's
@@ -67,8 +70,8 @@ import static java.util.Objects.requireNonNull;
  * wait, since a publish that was never acknowledged is not known to have failed, only unresolved. Per ADR 133, an
  * expired {@link RabbitMqPublishTimeoutException} is for the caller to decide on rather than something this retry
  * absorbs, so the default excludes it, along with {@link RabbitMqUnroutableEventException}, a channel this client
- * has already closed, and an unrecognised cloud event type from the resolver, none of which a retry can turn into
- * success.
+ * has already closed, an interrupted wait, and an unrecognised cloud event type from the resolver, none of which a
+ * retry can turn into success.
  * <p>
  * Call {@link #close()} once the sink is no longer needed. It closes the {@link Channel} this sink created, not the
  * {@link Connection} it was given, since the connection may be shared with other channels the caller still owns.
@@ -83,7 +86,8 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
      */
     private static final int MAX_TRACKED_RETURNED_CORRELATION_IDS = 10_000;
 
-    private final Channel channel;
+    private final Connection connection;
+    private volatile Channel channel;
     private final DestinationResolver<RabbitMqDestination> resolver;
     private final Duration acknowledgementTimeout;
     private final RetryStrategy retryStrategy;
@@ -96,17 +100,51 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
                 }
             }));
 
-    private RabbitMqCloudEventSink(Channel channel, DestinationResolver<RabbitMqDestination> resolver, Duration acknowledgementTimeout, RetryStrategy retryStrategy) {
+    private RabbitMqCloudEventSink(Connection connection, Channel channel, DestinationResolver<RabbitMqDestination> resolver, Duration acknowledgementTimeout, RetryStrategy retryStrategy) {
+        this.connection = connection;
         this.channel = channel;
         this.resolver = resolver;
         this.acknowledgementTimeout = acknowledgementTimeout;
         this.retryStrategy = retryStrategy;
+        installReturnListener(channel);
+    }
+
+    private void installReturnListener(Channel channel) {
         channel.addReturnListener(returned -> {
             String correlationId = returned.getProperties().getCorrelationId();
             if (correlationId != null) {
                 returnedCorrelationIds.add(correlationId);
             }
         });
+    }
+
+    private static Channel openConfirmChannel(Connection connection) {
+        try {
+            // createChannel() returns null rather than throwing when no channel number is available, so
+            // openChannel()'s Optional is used instead of risking a bare NullPointerException out of confirmSelect().
+            Channel channel = connection.openChannel()
+                    .orElseThrow(() -> new RabbitMqPublishException("No RabbitMQ channel number was available to create a confirm-mode channel on"));
+            channel.confirmSelect();
+            return channel;
+        } catch (IOException e) {
+            throw new RabbitMqPublishException("Failed to create a confirm-mode RabbitMQ channel", e);
+        }
+    }
+
+    // Called under publishLock, after waitForConfirms has timed out. The RabbitMQ client leaves that publish's
+    // delivery tag outstanding on the channel forever, so a later publish on the same channel would wait on it too
+    // and could inherit its eventual nack. Retiring the channel and opening a fresh one keeps that abandoned
+    // publish's outcome from ever being attributed to a later, unrelated one.
+    private void retireChannel() {
+        Channel retiring = channel;
+        channel = openConfirmChannel(connection);
+        installReturnListener(channel);
+        try {
+            retiring.close();
+        } catch (IOException | TimeoutException | RuntimeException ignored) {
+            // Best effort. This channel already failed to confirm a publish in time, so any error closing it is
+            // discarded along with the channel itself.
+        }
     }
 
     /**
@@ -156,6 +194,7 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
             throw new RabbitMqPublishException("Channel or connection shut down while publishing to exchange \"" +
                     destination.exchange() + "\" with routing key \"" + destination.routingKey() + "\"", e);
         } catch (TimeoutException e) {
+            retireChannel();
             throw new RabbitMqPublishTimeoutException(acknowledgementTimeout, e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -215,16 +254,8 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         }
 
         public RabbitMqCloudEventSink build() {
-            try {
-                // createChannel() returns null rather than throwing when no channel number is available, so
-                // openChannel()'s Optional is used instead of risking a bare NullPointerException out of confirmSelect().
-                Channel channel = connection.openChannel()
-                        .orElseThrow(() -> new RabbitMqPublishException("No RabbitMQ channel number was available to create a confirm-mode channel on"));
-                channel.confirmSelect();
-                return new RabbitMqCloudEventSink(channel, resolver, acknowledgementTimeout, retryStrategy);
-            } catch (IOException e) {
-                throw new RabbitMqPublishException("Failed to create a confirm-mode RabbitMQ channel", e);
-            }
+            Channel channel = openConfirmChannel(connection);
+            return new RabbitMqCloudEventSink(connection, channel, resolver, acknowledgementTimeout, retryStrategy);
         }
 
         /**
@@ -232,16 +263,18 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
          * (a configuration bug, not a transient failure) nor caused by a {@link ShutdownSignalException} (this
          * sink's channel is closed by then, per the RabbitMQ client, so retrying against it can never succeed).
          * {@link RabbitMqPublishTimeoutException} is excluded too, per ADR 133, since an expired acknowledgement
-         * timeout is for the caller to decide on, not for this retry to absorb. Whatever the resolver's
-         * {@code CloudEventTypeMapper} throws for a type it does not recognise is not a {@link RabbitMqPublishException}
-         * at all, so it is never retried either.
+         * timeout is for the caller to decide on, not for this retry to absorb. A wait interrupted by
+         * {@link InterruptedException} is excluded as well, since the thread asked to stop is not asking to try
+         * again. Whatever the resolver's {@code CloudEventTypeMapper} throws for a type it does not recognise is not
+         * a {@link RabbitMqPublishException} at all, so it is never retried either.
          */
         private static RetryStrategy defaultRetryStrategy() {
             return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)
                     .retryIf(throwable -> throwable instanceof RabbitMqPublishException publishException
                             && !(publishException instanceof RabbitMqUnroutableEventException)
                             && !(publishException instanceof RabbitMqPublishTimeoutException)
-                            && !(publishException.getCause() instanceof ShutdownSignalException));
+                            && !(publishException.getCause() instanceof ShutdownSignalException)
+                            && !(publishException.getCause() instanceof InterruptedException));
         }
     }
 }
