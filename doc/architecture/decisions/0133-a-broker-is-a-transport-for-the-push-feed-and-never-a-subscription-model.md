@@ -57,11 +57,17 @@ string twice, once in an exchange-and-routing-key expression and once in a queue
 
 The publisher and the consumer also have to agree on what a message looks like once it arrives. The Occurrent
 extensions are the part that matters. `streamid`, `streamversion` and `position` come from
-`OccurrentCloudEventExtension`, and `dcbtags` comes from `EventStoreCloudEventExtensions`. `EventMetadata` reads all
-four off the CloudEvent, and every DSL that keys on stream or position reads them through it. A message that arrives
-without them produces an empty `EventMetadata`, and ADR 62's 2026-07-26 amendment recorded what that does to a
-projection keyed by metadata. The loud half throws. The quiet half returns `null` for the projection id, which is a
-documented instruction to skip the event, so the projection silently receives nothing.
+`OccurrentCloudEventExtension`, and `dcbtags` comes from `EventStoreCloudEventExtensions`. `EventMetadata` reads them
+off the CloudEvent, and every DSL that keys on stream or position reads them through it.
+
+A message that arrives without them produces an empty `EventMetadata`. A projection keyed by metadata now fails loudly
+on that, because ADR 62's 2026-07-26 amendment added the delivery-time guard and `ProjectionKeys.failIfKeyNeededMetadata`
+throws rather than resolving the key to `null` and skipping the event. So the worst case is no longer silent, and this
+ADR does not need to argue as if it were.
+
+What stays quiet is a consumer that is not keyed by metadata and reads `EventMetadata.getPosition()` or `get(key)`
+for its own purposes. Those still answer `null` on empty metadata, and nothing guards a caller that treats the answer
+as real. That is the case the header rule in decision 4 protects.
 
 ## Decision
 
@@ -85,20 +91,30 @@ delivery. It deliberately did not make `PushSubscriptionModel` refuse, because t
 path by `new InMemoryEventStore(pushModel::accept)`, where refusing would fail a write to protect nothing. A stopped
 model also drops live events and returns normally, which ADR 85 decided and ADR 104 kept.
 
-So a CloudEvent bridge that only looked at whether `accept(...)` threw would acknowledge and lose events in two states,
-before anything is registered and while the model is stopped. It has to ask instead, and `PushSubscriptionModel`'s own
-javadoc says the same thing, to ask `hasSubscriptions()` before feeding the model from a broker and to register the
-subscription before the listener starts consuming.
+So a CloudEvent bridge that only looked at whether `accept(...)` threw would acknowledge and lose events in three
+states, before anything is registered, while the model is stopped, and while its subscription is paused. `route`
+returns normally in all three.
 
-**A CloudEvent bridge therefore holds the `PushSubscriptionModel`, not a bare `Pushable`.** That is the practical
-consequence and it is worth stating, because `Pushable` is otherwise the natural type for something that pushes events.
-`hasSubscriptions()` is declared on `RegisteringSubscribable`, and the only capability reachable from a `Pushable` is
-`IntrospectableSubscriptions.findIn(...)`, which answers `subscriptionIds()` and whose empty result means the model
+**The bridge asks `isRunning(subscriptionId)` before it consumes, and it holds the `PushSubscriptionModel` rather than
+a bare `Pushable`.** `isRunning(String)` is the one accessor that answers all three states at once, because it is
+`running && registered && !paused`. `hasSubscriptions()` is not enough, since it stays true for a paused subscription
+and `route` skips exactly that registration. The bridge holds the model because neither accessor is reachable through
+`Pushable`. `hasSubscriptions()` is declared on `RegisteringSubscribable`, and the only capability a `Pushable` can be
+asked for is `IntrospectableSubscriptions`, which answers `subscriptionIds()` and whose empty result means the model
 cannot list its subscriptions rather than that it has none. A bridge cannot tell "not ready" from "cannot answer"
-through that, and this is a decision about not losing events, so it takes the type that can answer.
+through that, and this is a decision about not losing events, so it takes the type that can answer. The bridge knows
+which id to ask about because ADR 90 gives it exactly one.
 
-The bridge then does not start consuming until its model reports a registered subscription, and it stops consuming
-while the model is stopped rather than draining the queue into a model that drops what it receives.
+**One narrow window stays open, and it is named here rather than left implied.** Asking and then pushing is two steps,
+so a `stop()`, a `pauseSubscription` or a `cancelSubscription` landing between them still acknowledges into a model
+that drops the event. `AGENTS.md` says a narrow, documented loss window is still a loss, so this is a limit rather
+than a solved problem. It is small enough to accept here only because closing it needs the model to refuse, which ADR
+104 decided it must not do for `PushSubscriptionModel`. A bridge that wants to observe what happened attaches a
+`PushObserver`, which is told about every event and whether it matched.
+
+The bridge feeds the live `PushSubscriptionModel`. When a subscription needs history first, `CatchupThenPushSubscriptionModel`
+composes in front of it and takes that model as a constructor argument, so it is not itself the push target and a
+bridge does not hand events to it.
 
 [ADR 90](0090-a-push-sink-feeds-one-consumer.md) decided that a push sink takes exactly one consumer, because one
 received message has one acknowledgement decision. So one bridge feeds one `PushSubscriptionModel` or one
@@ -107,14 +123,22 @@ Kafka.
 
 ### 2. Three interface families, in an api module with no transport dependency
 
-**`EventDestination`** says where an event goes. It is one record per transport, defined in that transport's own
-module, because an exchange and a routing key are not a topic and a partition key and pretending otherwise buys
-nothing. `RabbitMqDestination` has an exchange, a routing key and headers. `KafkaDestination` has a topic, a nullable
-message key and headers.
+**`EventDestination`** says where an event goes. It is an interface in the api module, and each transport module
+contributes one record implementing it, because an exchange and a routing key are not a topic and a partition key and
+pretending otherwise buys nothing. `RabbitMqDestination` has an exchange, a routing key and headers.
+`KafkaDestination` has a topic, a nullable message key and headers.
 
 Headers are a component of the record from the start rather than a later addition. A header added by the sink instead
 would be the same for every event the sink publishes, and the whole reason to want application headers is that they
 vary with the event.
+
+**A destination means slightly different things in the two directions, and both are fixed here** because decision 5
+returns the same record type to a consumer that is declaring bindings. Publishing uses every component. A binding uses
+only the routing ones, the exchange and routing key on RabbitMQ and the topic on Kafka, and the resolver leaves the
+per-message components empty in what `destinationsFor` returns, so a Kafka message key is `null` and the headers map
+is empty there. A routing key in that direction is read as the binding pattern rather than as one message's exact key.
+The queue or the consumer group is not a component at all, because it belongs to the consumer rather than to the
+mapping, which is also why two projections reading the same event type get two queues without the resolver knowing.
 
 **`DestinationResolver<D extends EventDestination>`** derives the destination, and it answers in both directions:
 
@@ -180,24 +204,31 @@ a domain event, which is exactly the double conversion ADR 62 added the domain f
 
 ### 4. The Occurrent extensions are written as message headers, at both levels and in both directions
 
-`streamid`, `streamversion`, `position` and `dcbtags` are on the message as headers, never only inside the body.
+Whatever extensions an event has are written as message headers, never only inside the body. `streamid`,
+`streamversion`, `position` and `dcbtags` are the ones that matter, and the rule is stated over whatever the event
+actually has rather than over those four, because no event has all four. `dcbtags` is stamped only by a DCB append and
+a stream-written event never has it, and `position` is legitimately absent when stream positions are switched off.
 
 This is an invariant rather than a convenience. `EventMetadata` is how the subscription, saga, projection, view and
-DCB DSLs all read stream identity and position, so a message without those headers produces an empty `EventMetadata`
-and the failure described in the Context section. It also makes
-[#389](https://github.com/johanhaleby/occurrent/issues/389) harder rather than easier, since a consumer that cannot
-see a stream version cannot detect that it received events out of order.
+DCB DSLs all read stream identity and position, so a message that leaves them in the body produces an empty
+`EventMetadata` on a consumer that reads them off the headers.
 
 At the CloudEvent level the sinks write through the CloudEvents SDK's own binary message writer for that transport, so
-the four extensions are written as CloudEvent extension attributes and the header names follow the CloudEvents binding
+every extension attribute on the event becomes a message header and the header names follow the CloudEvents binding
 specification rather than a naming scheme invented here. Decision 8 covers the binding mode itself.
 
 At the domain level the extensions come from wherever the caller got them, and the API says so rather than pretending
-otherwise. `publish(EventMetadata, E)` writes the four headers from the metadata the caller supplies, which is what a
-subscription forwarding stored events in domain space has. `publish(E)` writes whatever the `CloudEventConverter`
-produced, and for an event that has never been through the event store that is nothing, because a stream version and a
-position are properties of a stored event and Occurrent cannot derive them. A consumer of such a message sees an empty
-`EventMetadata`, and a projection keyed by metadata refuses it at delivery.
+otherwise. `publish(EventMetadata, E)` converts the domain event and then stamps the supplied metadata onto the
+resulting CloudEvent before handing it to the `CloudEventSink`, which is a second place extensions are written and is
+called out here so no implementer has to guess. Everything `EventMetadata` holds is stamped, not only the four named
+above, since `EventMetadata.from` reads every extension off the event and dropping the rest would mean the metadata
+does not survive the round trip. Where the converter already set an extension the supplied metadata wins, because the
+caller reading it off a stored event is the one with the store's answer.
+
+`publish(E)` writes whatever the `CloudEventConverter` produced. For an event that has never been through the event
+store that is no stream identity at all, because a stream version and a position are properties of a stored event and
+Occurrent cannot derive them. A consumer of such a message sees an empty `EventMetadata`, and a projection keyed by
+metadata refuses it at delivery.
 
 ### 5. A binding derived from a filter narrows what arrives, and never decides what is handled
 
@@ -206,8 +237,17 @@ only the topics it wants, instead of taking everything and discarding most of it
 
 It works for the event-type part of a filter and for nothing else, because the event type is the only part of a filter
 the destination mapping knows about. A stream id, a data field, a time range and a DCB criteria are all invisible to
-the broker. So `SubscriptionFilterMatcher` on the consumer side still decides whether a received event reaches the
-handler, exactly as it does for a change-stream subscription model, and a bridge always applies it.
+the broker.
+
+So the subscription's own filter is what decides whether a received event reaches the handler, and **the bridge does
+not evaluate a filter of its own.** `RegisteringSubscribable.subscribe` already builds the predicate from the filter
+it was given and `route` applies it before calling the handler, so a bridge that filtered as well would need a second
+copy of the filter, configured separately from the subscription's. Two copies that nothing compares is the problem
+this ADR opened by describing, so it would be a poor thing to add while fixing it.
+
+That leaves the bindings as the only thing derived from the filter, and they are derived from the same filter object
+the subscription was registered with. A bridge that wants to see what arrived and whether it matched attaches a
+`PushObserver`, which is told about every event either way and shares the dispatch decision rather than recomputing it.
 
 A filter whose type part cannot be derived returns an empty `Optional`, and a consumer that gets one binds the
 transport's own catch-all rather than a set of destinations. On RabbitMQ that is a `#` binding on the topic exchange,
@@ -240,6 +280,13 @@ are on, since RabbitMQ AMQP headers are `Map<String, Object>` and Kafka headers 
 CloudEvent attributes are strings in both bindings anyway, so a richer value type would only be usable for application
 headers and would then differ per transport.
 
+**An application header may not use the prefix the CloudEvents binding reserves, and a colliding key is refused when
+the destination is built.** Decision 8 writes every CloudEvent attribute into the same header namespace, under the
+prefix that transport's binding specification defines, so an application header using it could overwrite `streamid`
+and break decision 4's invariant without anything failing. Refusing at construction makes that a startup error in the
+code that named the header rather than a wrong value on a consumer much later. Each transport module holds the prefix
+it enforces, taken from the CloudEvents SDK rather than written out again here.
+
 **The publish acknowledgement setting is named the same on both sinks, and it is a timeout rather than a switch.**
 RabbitMQ calls the mechanism publisher confirms and Kafka calls it acks plus waiting on the send future, and neither
 name is usable on the other transport. Both builders take `acknowledgementTimeout(Duration)`, defaulting to 5 seconds,
@@ -250,6 +297,12 @@ message reports success for an event the broker may never have received, so turn
 window, and `AGENTS.md` says a loss window that is narrow, documented and warn-logged is still a loss. Offering the
 switch would put that choice in the API and then have to defend it. An application that genuinely wants to publish
 without waiting implements `CloudEventSink`, the same way out as structured mode in decision 8.
+
+**An expired acknowledgement timeout throws.** This is the branch the setting most needs decided, because the message
+may or may not have reached the broker and returning normally would report a success nobody established. Throwing
+hands the caller a decision it can act on, and the caller republishing after a timeout may produce a duplicate, which
+is the same at-least-once contract every consumer here already works under. The `RetryStrategy` does not cover this
+case, which is why the two are described separately below.
 
 **A destination is a record with static factories, a sink is a builder.** A destination has three components and no
 optional wiring, so it gets a canonical constructor, an `of(...)` factory for the common case, and a
@@ -330,9 +383,8 @@ defers the answer to what the code looks like once written. The position taken h
 the position is provisional by the issue's own terms.
 
 Two things decide it. The publisher confirms handling and the CloudEvents binding are the parts an application gets
-subtly wrong, and both are code rather than a snippet. And an example in the documentation has no test and no version,
-so it drifts from the library silently, while `AGENTS.md` already requires the documentation to describe released
-behaviour rather than to be the behaviour.
+subtly wrong, and both are code rather than a snippet. And an example in the documentation has no test and no
+released version behind it, so it drifts from the library with nothing failing when it does.
 
 The closing review of this epic checks how much of the module is left once the destination record and the resolver are
 taken out. If the answer is a thin wrapper over the transport client, the ruling is worth taking again on that
@@ -354,6 +406,9 @@ Delivery guarantees are unchanged from ADR 62. Steady-state delivery is at-least
 the same event twice has to reach the same state as one that received it once. Ordering follows the transport, which
 is why decision 7 keys Kafka messages by stream id rather than leaving partitioning to chance.
 
-The reactor variants have to repeat the interface families rather than share them, because `Pushable` and
-`DomainEventFeed` already exist once per stack. #418 decides how much of the transport-specific code the two stacks
-can share.
+The reactor variants repeat less than the module names suggest. The sinks and the bridges are stack-typed, because
+`PushSubscriptionModel` and `DomainEventFeed` already exist once per stack and a blocking sink returns `void` where a
+reactor one returns a `Mono`. `EventDestination` and `DestinationResolver` are not, since they name only `CloudEvent`
+and `SubscriptionFilter`, and `SubscriptionFilter` already lives in the stack-neutral `occurrent-subscription-core`. So
+putting them in a `-blocking` artifact is a cost this decision accepts for one artifact per broker today, and #418
+decides whether they move to a stack-neutral module when the reactor variants arrive.
