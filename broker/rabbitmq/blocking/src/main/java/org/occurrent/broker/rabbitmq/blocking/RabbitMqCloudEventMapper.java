@@ -38,6 +38,8 @@ import static java.util.Objects.requireNonNull;
  * string. A binary extension is Base64-encoded rather than written through its raw {@code toString()}.
  * {@code datacontenttype} is the one exception, since it becomes {@link BasicProperties#getContentType()}
  * instead, a dedicated AMQP field rather than a header. The event data becomes the message body unchanged.
+ * Every message is published persistent, since a transient one a broker restart discards would otherwise still
+ * count as delivered once {@link RabbitMqCloudEventSink} sees its publisher confirm.
  */
 public final class RabbitMqCloudEventMapper {
 
@@ -48,6 +50,12 @@ public final class RabbitMqCloudEventMapper {
     public static final String HEADER_PREFIX = "cloudEvents_";
 
     private static final String DATA_CONTENT_TYPE_ATTRIBUTE = "datacontenttype";
+
+    /**
+     * AMQP's persistent delivery mode. Unset defaults to transient, which a broker restart can discard even after a
+     * publisher confirm, so every message this mapper writes asks to survive one instead.
+     */
+    private static final int PERSISTENT_DELIVERY_MODE = 2;
 
     private RabbitMqCloudEventMapper() {
     }
@@ -81,6 +89,7 @@ public final class RabbitMqCloudEventMapper {
         return new BasicProperties.Builder()
                 .contentType(cloudEvent.getDataContentType())
                 .headers(headers)
+                .deliveryMode(PERSISTENT_DELIVERY_MODE)
                 .build();
     }
 

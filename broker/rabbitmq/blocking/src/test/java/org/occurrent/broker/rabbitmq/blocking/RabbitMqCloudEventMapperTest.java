@@ -77,6 +77,13 @@ class RabbitMqCloudEventMapperTest {
     }
 
     @Test
+    void toBasicProperties_publishes_persistent_so_a_broker_restart_cannot_discard_a_confirmed_message() {
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(minimalCloudEvent(), Map.of());
+
+        assertThat(properties.getDeliveryMode()).isEqualTo(2);
+    }
+
+    @Test
     void toBasicProperties_includes_the_application_headers_alongside_the_cloudEvent_attribute_headers() {
         CloudEvent cloudEvent = minimalCloudEvent();
 
