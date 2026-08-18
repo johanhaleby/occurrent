@@ -79,13 +79,31 @@ public final class RabbitMqDomainEventSink<E> implements DomainEventSink<E> {
      * Converts {@code domainEvent} and stamps every extension {@code metadata} carries onto the resulting
      * {@link CloudEvent} before publishing it, so a consumer can rebuild an {@link EventMetadata} that matches what
      * {@code metadata} held here. Where {@code converter} already set an extension of its own, {@code metadata}
-     * wins, since the caller reading it off a stored event is the one with the store's own answer.
+     * wins, since the caller reading it off a stored event is the one with the store's own answer, including a
+     * {@code null} value in {@code metadata}, which drops that extension entirely rather than leaving the
+     * converter's own value in place.
      */
     @Override
     public void publish(EventMetadata metadata, E domainEvent) {
         requireNonNull(metadata, EventMetadata.class.getSimpleName() + " cannot be null");
         requireNonNull(domainEvent, "domainEvent cannot be null");
-        CloudEventBuilder builder = CloudEventBuilder.v1(converter.toCloudEvent(domainEvent));
+        CloudEvent convertedEvent = converter.toCloudEvent(domainEvent);
+        CloudEventBuilder builder = CloudEventBuilder.v1()
+                .withId(convertedEvent.getId())
+                .withSource(convertedEvent.getSource())
+                .withType(convertedEvent.getType())
+                .withSubject(convertedEvent.getSubject())
+                .withTime(convertedEvent.getTime())
+                .withDataSchema(convertedEvent.getDataSchema())
+                .withDataContentType(convertedEvent.getDataContentType())
+                .withData(convertedEvent.getData());
+        for (String extensionName : convertedEvent.getExtensionNames()) {
+            // metadata decides this extension's fate below, whether that is overriding it or dropping it, so it is
+            // left out of this copy rather than set here and possibly overwritten a few lines down.
+            if (!metadata.getData().containsKey(extensionName)) {
+                stampExtension(builder, extensionName, convertedEvent.getExtension(extensionName));
+            }
+        }
         for (Map.Entry<String, Object> extension : metadata.getData().entrySet()) {
             Object value = extension.getValue();
             if (value != null) {

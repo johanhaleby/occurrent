@@ -29,6 +29,7 @@ import org.occurrent.cloudevents.EventMetadata;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -74,6 +75,26 @@ class RabbitMqDomainEventSinkTest extends RabbitMqTestSupport {
         }
     }
 
+    @Test
+    void publish_with_metadata_drops_a_null_valued_extension_the_converter_already_set() throws Exception {
+        String queue = adminChannel.queueDeclare().getQueue();
+        adminChannel.queueBind(queue, exchange, TestOrderPlaced.class.getName());
+
+        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+        try (RabbitMqCloudEventSink cloudEventSink = RabbitMqCloudEventSink.builder(connection(), resolver).build()) {
+            RabbitMqDomainEventSink<TestOrderPlaced> domainEventSink = RabbitMqDomainEventSink.using(cloudEventSink, converter);
+            Map<String, Object> data = new HashMap<>();
+            data.put("streamid", null);
+            EventMetadata metadata = new EventMetadata(data);
+
+            domainEventSink.publish(metadata, new TestOrderPlaced("order-3"));
+
+            GetResponse response = adminChannel.basicGet(queue, true);
+            assertThat(response).isNotNull();
+            assertThat(response.getProps().getHeaders()).doesNotContainKey("cloudEvents_streamid");
+        }
+    }
+
     private record TestOrderPlaced(String orderId) {
     }
 
@@ -87,6 +108,7 @@ class RabbitMqDomainEventSinkTest extends RabbitMqTestSupport {
                     .withType(TestOrderPlaced.class.getName())
                     .withDataContentType("text/plain")
                     .withData(domainEvent.orderId().getBytes(StandardCharsets.UTF_8))
+                    .withExtension("streamid", "stream-from-converter")
                     .build();
         }
 
