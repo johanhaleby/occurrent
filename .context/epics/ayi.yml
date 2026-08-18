@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 24
-updated_at: 2026-08-18T20:17:44Z
+revision: 25
+updated_at: 2026-08-18T20:40:00Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -154,7 +154,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "PR 860 open, checks running (ci-wait). Worker owns review rounds after the fork-collision takeover (single-writer since 824a093cf). On delivery: four-fact gate, adversarial verify, CAS merge"
+    next_action: "DELIVERY_RESULT received 2026-08-18T20:3xZ; deviations 1 and 3 accepted (refusal-test reallocation, the independent reactor metadata-drop bug fix), deviation 2 REJECTED and returned: the poll must retry an owed clear (pendingClear-gated) on live ticks too, else a failed clear with no subsequent deliveries leaves hasApplied lying indefinitely. Worker resumed with the fix and its state-machine test; Copilot round also still pending"
     last_meaningful_progress_at: 2026-08-18T20:17:44Z
     observed:
       plan: {path: "scratchpad/u4-approved-plan.md in the session scratchpad", approved: 2026-08-18T19:00:00Z, at: 2026-08-18T19:05:00Z}
