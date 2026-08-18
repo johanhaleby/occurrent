@@ -118,17 +118,30 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
 
     /**
      * Ensures the compound unique index and the TTL index exist, once, the first time this store is actually asked
-     * to do anything. Synchronized rather than a lock-free check-then-act, since a race here would mean two threads
-     * both attempting index creation concurrently, which is at worst wasted work and at best exactly the
-     * {@code IndexOptionsConflict} path {@link #ensureIndexes} already handles, but is not worth risking on a
-     * one-time setup step.
+     * to do anything. Composed entirely as {@code Mono} operations rather than a nested {@code block()}, as an
+     * earlier version of this method had. {@code retryWhen}'s delayed resubscription runs on
+     * {@code Schedulers.parallel()}, whose worker threads this project's dependencies do not instrument to reject a
+     * blocking call, so a nested {@code block()} there does not throw, but it does hold one of that shared pool's
+     * few threads for the length of the Mongo call on every retry, which is worth avoiding regardless of whether it
+     * throws. Wrapped in {@link Mono#defer(java.util.function.Supplier)} so a retry re-checks
+     * {@link #indexesEnsured} and rebuilds this {@code Mono} fresh, the same reason
+     * {@link #recordApplied(String, AppendId)}'s own upsert is deferred. A race between two threads both finding
+     * {@link #indexesEnsured} false is at worst wasted work and at best exactly the {@code IndexOptionsConflict}
+     * path below already handles, so nothing here needs to serialize against it.
      */
-    private synchronized void ensureIndexesOnce() {
-        if (indexesEnsured) {
-            return;
-        }
-        ensureIndexes(mongoOperations, collection, retention);
-        indexesEnsured = true;
+    private Mono<Void> ensureIndexesOnce() {
+        return Mono.defer(() -> {
+            if (indexesEnsured) {
+                return Mono.empty();
+            }
+            ReactiveIndexOperations indexOps = mongoOperations.indexOps(collection);
+            Mono<Void> uniqueIndex = indexOps.ensureIndex(new Index().on(PROJECTION_ID, Direction.ASC).on(APPEND_ID, Direction.ASC).named(PROJECTION_ID_APPEND_ID_INDEX).unique()).then();
+            Mono<Void> ttlIndex = indexOps.ensureIndex(new Index().on(RECORDED_AT, Direction.ASC).named(RECORDED_AT_TTL_INDEX).expire(retention)).then()
+                    .onErrorResume(e -> isIndexOptionsConflict(e)
+                            ? indexOps.alterIndex(RECORDED_AT_TTL_INDEX, IndexOptions.expireAfter(retention))
+                            : Mono.error(e));
+            return uniqueIndex.then(ttlIndex).doOnSuccess(ignored -> indexesEnsured = true);
+        });
     }
 
     @Override
@@ -139,7 +152,7 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
         // Built once outside a defer, a retry would resubscribe to the same upsert Mono and reuse the first
         // attempt's timestamp, so a record that only succeeds after several retries would carry a recordedAt from
         // well before the insert, shortening its actual time in the TTL index.
-        Mono.fromRunnable(this::ensureIndexesOnce)
+        ensureIndexesOnce()
                 .then(Mono.defer(() -> mongoOperations.upsert(
                         query(where(PROJECTION_ID).is(projectionId).and(APPEND_ID).is(appendId.value().toString())),
                         new Update().setOnInsert(RECORDED_AT, new Date()),
@@ -164,7 +177,7 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * straight out of the caller.
      */
     private Mono<Boolean> existsWithIndexesEnsured(String projectionId, AppendId appendId) {
-        return Mono.fromRunnable(this::ensureIndexesOnce)
+        return ensureIndexesOnce()
                 .then(mongoOperations.exists(query(where(PROJECTION_ID).is(projectionId).and(APPEND_ID).is(appendId.value().toString())), collection));
     }
 
@@ -197,7 +210,7 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     @Override
     public void clear(String projectionId) {
         requireNonNull(projectionId, "projectionId cannot be null");
-        Mono.fromRunnable(this::ensureIndexesOnce)
+        ensureIndexesOnce()
                 .then(mongoOperations.remove(query(where(PROJECTION_ID).is(projectionId)), collection))
                 .retryWhen(retry)
                 .block();
@@ -254,19 +267,6 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
         return Retry.backoff(5, Duration.ofMillis(100))
                 .maxBackoff(Duration.ofSeconds(2))
                 .onRetryExhaustedThrow((spec, signal) -> signal.failure());
-    }
-
-    private static void ensureIndexes(ReactiveMongoOperations mongoOperations, String collection, Duration retention) {
-        ReactiveIndexOperations indexOps = mongoOperations.indexOps(collection);
-        indexOps.ensureIndex(new Index().on(PROJECTION_ID, Direction.ASC).on(APPEND_ID, Direction.ASC).named(PROJECTION_ID_APPEND_ID_INDEX).unique()).block();
-        try {
-            indexOps.ensureIndex(new Index().on(RECORDED_AT, Direction.ASC).named(RECORDED_AT_TTL_INDEX).expire(retention)).block();
-        } catch (RuntimeException e) {
-            if (!isIndexOptionsConflict(e)) {
-                throw e;
-            }
-            indexOps.alterIndex(RECORDED_AT_TTL_INDEX, IndexOptions.expireAfter(retention)).block();
-        }
     }
 
     /**
