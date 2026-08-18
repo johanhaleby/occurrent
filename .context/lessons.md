@@ -1432,3 +1432,23 @@ costs the worker a fake deliverable.
 directory-level or module-level check. When a merged ADR states the release status of the surface it
 governs, the brief quotes that line instead of re-deriving it, since the ADR text survived ten
 review rounds and the re-derivation ran once.
+
+## A cancelled twin run makes a green head read as five red shards (2026-08-18, brk U12)
+
+Two maven runs were created one second apart on the same head (a push raced the concurrency
+group, one run cancelled, the other ran green). The cancelled run's jobs stay attached to the
+head as check runs with conclusion CANCELLED, and the v7 monitor's failure filter counts every
+conclusion outside SUCCESS/NEUTRAL/SKIPPED as a failure, so a head whose real matrix was green
+reported "6fail" and then "5fail" and the orchestrator relayed five real-looking failures to the
+worker. The worker checked the branch's actual run history before acting, found only two genuine
+failures on superseded heads (both its own already-fixed bug), and refuted the count.
+
+Two rules. The monitor's failure filter excludes CANCELLED alongside SKIPPED (armed as v8 here);
+a cancelled job is a scheduling artifact, never a verdict, and it is common on exactly the busy
+branches that matter because every quick double-push cancels a twin. And a relayed failure count
+is a claim like any DELIVERY_RESULT line: before sending a worker after N red shards, confirm
+with `gh run list --branch <b> --workflow maven.yml` that a FAILED run actually exists for the
+head, since the run list is the ground truth the rollup only summarizes. The worker's
+check-the-history-first response is the model behavior and cost the fleet nothing; the wrong
+count cost one redundant message. Fold the CANCELLED exclusion into references/fleet-monitor.md
+at its next edit.
