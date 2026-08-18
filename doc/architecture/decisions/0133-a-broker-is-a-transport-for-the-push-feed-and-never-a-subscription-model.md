@@ -342,18 +342,26 @@ the rebuild possible, since binary mode puts every CloudEvent attribute in the h
 plus the body without decoding anything. A filter that does not match ends there and the domain event is never
 decoded, which also means the common case costs nothing.
 
-**The bridge registers the projection on the feed, so there is one filter rather than two.** `DomainEventFeed` keeps
-the `Filter` it is given inside a `CatchupProjectionFeed` and exposes neither it nor a live match, so a bridge
-configured with its own filter alongside would be the two independently configured copies this decision just refused,
-and replay and live delivery could disagree. Instead the bridge is constructed with the feed and the filter and is
-what calls `register` on the feed.
+The bridge is configured with a plain `Filter`, not a `SubscriptionFilter`, because those are two different types
+here. `DomainEventFeed.register` takes a `Filter`, while `matcherFor` and `destinationsFor` take a
+`SubscriptionFilter`, so the bridge wraps its `Filter` where the other two are wanted. A `DcbSubscriptionFilter` has
+no plain `Filter` inside it at all, it has a `DcbCriteria`, so a DCB filter cannot drive a domain bridge and is
+refused there. ADR 62 already refuses one for a catch-up replay on the same grounds, that a DCB boundary needs a
+different read, so this inherits an existing limit rather than adding one.
 
-The one thing it is configured with is a plain `Filter`, not a `SubscriptionFilter`, because those are two different
-types here and only one of them fits both places. `register` takes a `Filter`, while `matcherFor` and
-`destinationsFor` take a `SubscriptionFilter`, so the bridge passes the `Filter` straight to `register` and wraps it
-for the other two. A `DcbSubscriptionFilter` has no plain `Filter` inside it at all, it has a `DcbCriteria`, so a DCB
-filter cannot drive a domain bridge and is refused there. ADR 62 already refuses one for a catch-up replay on the same
-grounds, that a DCB boundary needs a different read, so this inherits an existing limit rather than adding one.
+**That filter is configured twice, once on the bridge and once on the registration, and nothing checks that the two
+agree.** This is the one place this design does not deliver what its Context section complains about, so it is stated
+plainly rather than left for an implementer to notice. The registration's filter selects what the catch-up replays,
+the bridge's decides live delivery, and an application that sets them differently gets a projection whose history and
+whose live tail were selected by different rules.
+
+It cannot currently be closed from a broker module. `RegisteringSubscribable` keeps only the derived
+`Predicate<CloudEvent>` and not the `SubscriptionFilter` it was built from, `DomainEventFeed` exposes neither its
+filter nor a live match, and `ProjectionAnnotationRegistrar` derives the filter and calls `register` itself for
+`@Projection(source = PUSH)`, which decision 9 relies on continuing to work. Making the bridge own registration would
+break that annotation path, so this ADR does not do it. Closing it properly means the feed either exposing the filter
+it was registered with or performing the live match itself, which is a change outside the three broker modules and is
+recorded with [#848](https://github.com/johanhaleby/occurrent/issues/848) rather than decided here.
 
 **A filter with a payload condition needs a `DataFieldReader`, and is refused at startup without one.** The
 one-argument `SubscriptionFilterMatcher.matcherFor` builds with `DataFieldReader.refusing()` and throws while
@@ -361,13 +369,27 @@ constructing the matcher when the filter reads a data field, so the bridge takes
 overload. That refusal happening at startup rather than on the first matching event is the existing behaviour on the
 subscribe path, and inheriting it is what keeps the two consistent.
 
-That leaves the bindings derived from the same filter the consumer is configured with at both levels. A CloudEvent
-bridge that wants to see what arrived and whether it matched reads its `PushObserver`, which decision 1 already
-requires it to have.
+**Bindings default to `catchAllDestination()`, and narrowing them is something an application asks for.** At the
+CloudEvent level a bridge has no way to read the filter its subscription was registered with. `ProjectionRunner`
+derives that filter internally for `@Projection(source = PUSH)`, `PushSubscriptionModel` exposes neither it nor its
+matcher, and `PushObserver` reports per-event outcomes rather than the filter behind them. So a bridge that claimed to
+derive bindings from the subscription's filter would be describing something it cannot reach.
+
+Taking the catch-all as the default is the right answer rather than a concession. Bindings are a topology decision and
+the filter is a delivery decision, and this ADR only ever promised that the first narrows and the second decides.
+Binding everything narrows nothing, which is always safe. An application that wants the narrowing hands the bridge a
+filter for that purpose, and then `destinationsFor` derives the bindings from it.
+
+**A binding filter supplied that way has to be at least as inclusive as the subscription's**, since a narrower one
+stops events reaching a matcher that would have accepted them, and that is a loss rather than a tuning mistake.
+Nothing checks it, which is the same limitation as at the domain level and has the same fix behind it.
 
 A filter whose type part cannot be derived returns an empty `Optional`, and the consumer then binds
-`catchAllDestination()`. Guessing narrower would drop an event the filter would have matched, and losing an event is a
-hard rule in `AGENTS.md` rather than a tuning question, so the imprecise answer has to be the inclusive one.
+`catchAllDestination()` too. Guessing narrower would drop an event the filter would have matched, so the imprecise
+answer has to be the inclusive one.
+
+A CloudEvent bridge that wants to see what arrived and whether it matched reads its `PushObserver`, which decision 1
+already requires it to have.
 
 **The catch-all is a third method on the resolver rather than something the bridge works out**, because an empty
 `Optional` says only that the filter could not be narrowed and says nothing about where to listen instead. RabbitMQ
@@ -447,7 +469,7 @@ way.
 optional wiring, so it gets a canonical constructor, an `of(...)` factory for the common case, and a
 `withHeaders(Map<String, String>)` copy method. Both transports use the same factory name for the same idea.
 
-A sink takes a client connection, a resolver, an acknowledgement setting, a timeout and a `RetryStrategy`, so it gets
+A sink takes a client connection, a resolver, an acknowledgement timeout and a `RetryStrategy`, so it gets
 a builder reached through `RabbitMqCloudEventSink.builder(...)` and `KafkaCloudEventSink.builder(...)`. Every builder
 method that is not transport-specific has the same name on both.
 
