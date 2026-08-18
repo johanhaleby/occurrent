@@ -58,6 +58,11 @@ public class OccurrentProperties {
      */
     private SagaProperties saga = new SagaProperties();
 
+    /**
+     * Projection Configuration (the {@code @Projection} read model, both stacks)
+     */
+    private ProjectionProperties projection = new ProjectionProperties();
+
 
     public static class ApplicationServiceProperties {
 
@@ -692,6 +697,14 @@ public class OccurrentProperties {
         this.saga = saga;
     }
 
+    public ProjectionProperties getProjection() {
+        return projection;
+    }
+
+    public void setProjection(ProjectionProperties projection) {
+        this.projection = projection;
+    }
+
     public static class SagaProperties {
 
         /**
@@ -740,6 +753,117 @@ public class OccurrentProperties {
 
             public void setEnabled(boolean enabled) {
                 this.enabled = enabled;
+            }
+        }
+    }
+
+    public static class ProjectionProperties {
+
+        /**
+         * Configuration for the {@code AppliedAppendStore} bean the starter auto-configures when the application
+         * declares none, see <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>.
+         * A projection records into it directly for now, through {@code AppliedAppendStore.recordApplied(..)}. A
+         * future {@code @Projection(recordAppliedAppends = true)} opt-in that records automatically is not part of
+         * this release.
+         */
+        private AppliedAppendProperties appliedAppend = new AppliedAppendProperties();
+
+        public AppliedAppendProperties getAppliedAppend() {
+            return appliedAppend;
+        }
+
+        public void setAppliedAppend(AppliedAppendProperties appliedAppend) {
+            this.appliedAppend = appliedAppend;
+        }
+
+        public static class AppliedAppendProperties {
+
+            /**
+             * The collection the Mongo starter's zero-config {@code AppliedAppendStore} records applied appends
+             * into. One document per (projection id, append id) pair.
+             */
+            private String collection = "appliedAppends";
+
+            /**
+             * How long a recorded append is kept before a MongoDB TTL index evicts it. Storage housekeeping only.
+             * A wait for an evicted append times out rather than answering wrong, which is the safe direction.
+             * Defaults to 7 days, well past the seconds-to-minutes scale a wait actually runs on, leaving a wide margin for
+             * debugging a stuck wait before its record disappears.
+             */
+            private Duration retention = Duration.ofDays(7);
+
+            /**
+             * How {@code AppliedAppendStore.waitUntilApplied(..)} paces its polls.
+             */
+            private WaitBackoffProperties waitBackoff = new WaitBackoffProperties();
+
+            public String getCollection() {
+                return collection;
+            }
+
+            public void setCollection(String collection) {
+                this.collection = collection;
+            }
+
+            public Duration getRetention() {
+                return retention;
+            }
+
+            public void setRetention(Duration retention) {
+                this.retention = retention;
+            }
+
+            public WaitBackoffProperties getWaitBackoff() {
+                return waitBackoff;
+            }
+
+            public void setWaitBackoff(WaitBackoffProperties waitBackoff) {
+                this.waitBackoff = waitBackoff;
+            }
+
+            public static class WaitBackoffProperties {
+
+                /**
+                 * The interval before the first re-check of whether the append has been applied. Kept short so a
+                 * projection that has already applied it answers immediately.
+                 */
+                private Duration initial = Duration.ofMillis(25);
+
+                /**
+                 * The longest the interval grows to. A wait that has been running for a while is polled at this
+                 * pace rather than at {@code initial}, which is what keeps a slow-to-apply projection from being
+                 * hammered by every waiting caller.
+                 */
+                private Duration max = Duration.ofMillis(250);
+
+                /**
+                 * What the interval is multiplied by after each poll that found the append not yet applied.
+                 */
+                private double multiplier = 2.0;
+
+                public Duration getInitial() {
+                    return initial;
+                }
+
+                public void setInitial(Duration initial) {
+                    this.initial = initial;
+                }
+
+                public Duration getMax() {
+                    return max;
+                }
+
+                public void setMax(Duration max) {
+                    this.max = max;
+                }
+
+                public double getMultiplier() {
+                    return multiplier;
+                }
+
+                public void setMultiplier(double multiplier) {
+                    this.multiplier = multiplier;
+                }
             }
         }
     }

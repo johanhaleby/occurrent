@@ -1,7 +1,7 @@
 schema_version: 1
 epic: brk
-revision: 59
-updated_at: 2026-08-18T18:23:11Z
+revision: 60
+updated_at: 2026-08-18T18:40:26Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly. Gate-ask rulings 2026-08-18T~10:58Z: the ADR review loop STOPPED at ten rounds, Johan's own read of PR 847 is the closing review; #848 ADOPTED as U11 at Opus/high, blocking both consume bridges."
@@ -248,6 +248,23 @@ units:
     observed:
       branch: {name: "brk/u12-durable-first-event", head: "313812695f033180c02b4d4de584493fa2ca0f38", commits: "refusal, changelog+upgrade-guide, override on both models", via: "git ls-remote + worktree log after the liveness sweep", at: 2026-08-18T14:48:51Z}
     assessment: "Adopted by Johan's word 2026-08-18T~14:00Z, reversing the deferral (decline-register entry retired). Sonnet/high chip, decision gate at orchestrator venue. Disjoint from U2 (broker) and U11 (push); changelog conflicts resolve by rebase, loser rebases."
+  U13:
+    issue: null
+    goal: "Restore main's green: broker forwarder tests (CloudEventForwarderTest 2 errors, DomainEventForwarderTest 3) broken by U12's refusal landing after U2 merged, the cross-PR semantic collision (real DurableSubscriptionModel over a fake wrapped model whose globalCheckpoint answers null, empty storage, default start). Fix the FIXTURE so the tests' proven claims survive; never weaken U12's refusal or the tests' assertions"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: manual_approval, ref: "orchestrator verifies main's misc shard green on the post-U13-merge sha (a ci_green check gains that sha only at merge time, so the obligation is held here)", met: false, evidence: null}
+    blocking_on: []
+    next_action: "Worktree-isolated subagent dispatching this tick (Unattended vehicle)"
+    last_meaningful_progress_at: 2026-08-18T18:40:26Z
+    observed:
+      main_red: {runs: "32169494047 (edd61341c) and 32170703373 (bf99724) both failure, misc shard both JDKs; 43af19f9f green before", via: "gh run list + run view, peer report from ayi verified", at: 2026-08-18T18:40:26Z}
+    assessment: "Adopted under the epic's own authority: restoring green main is inside brk's definition of done, no scope widening. ayi merged its 851 under sibling-green leniency and holds an interest in this landing."
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"

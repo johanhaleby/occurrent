@@ -37,6 +37,7 @@ import org.occurrent.command.StreamIdResolver;
 import org.occurrent.command.annotation.AnnotationStreamIdResolver;
 import org.occurrent.dsl.dcb.blocking.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
+import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.query.blocking.DomainEventQueries;
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
@@ -49,6 +50,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
+import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.blocking.*;
 import org.occurrent.springboot.common.*;
@@ -81,6 +83,7 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 
+import java.time.Duration;
 import java.util.List;
 
 import static java.util.Objects.requireNonNull;
@@ -176,6 +179,28 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public CheckpointStorage occurrentCheckpointStorage(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
         return new SpringMongoCheckpointStorage(mongoTemplate, occurrentProperties.getSubscription().resolveCollection());
+    }
+
+    /**
+     * The zero-config {@link AppliedAppendStore} an application gets when it declares none itself. A future
+     * {@code @Projection(recordAppliedAppends = true)} opt-in would resolve this same bean, but that annotation
+     * attribute is not part of this release.
+     * <p>
+     * {@code @Fallback} alongside the condition, for the same reason {@code occurrentTypeMapper()} is one. This
+     * configuration is activated by {@code @EnableOccurrent}'s plain {@code @Import}, so
+     * {@code @ConditionalOnMissingBean} can be evaluated before an application's own {@link AppliedAppendStore} bean
+     * is registered, letting both through. A {@code @Fallback} bean is excluded at dependency-resolution time
+     * instead, which registration order cannot affect.
+     */
+    @Bean
+    @Fallback
+    @ConditionalOnMissingBean(AppliedAppendStore.class)
+    public AppliedAppendStore occurrentAppliedAppendStore(MongoTemplate mongoTemplate, OccurrentProperties occurrentProperties) {
+        OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend = occurrentProperties.getProjection().getAppliedAppend();
+        OccurrentProperties.ProjectionProperties.AppliedAppendProperties.WaitBackoffProperties waitBackoff = appliedAppend.getWaitBackoff();
+        Backoff pollBackoff = Backoff.exponential(waitBackoff.getInitial(), waitBackoff.getMax(), waitBackoff.getMultiplier());
+        return new MongoAppliedAppendStore(mongoTemplate, appliedAppend.getCollection(), appliedAppend.getRetention(),
+                RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), pollBackoff);
     }
 
     /**
