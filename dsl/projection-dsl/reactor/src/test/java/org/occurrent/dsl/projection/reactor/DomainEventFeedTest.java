@@ -32,6 +32,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.UnreadableLiveFilterException;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -48,6 +49,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
@@ -495,8 +497,45 @@ class DomainEventFeedTest {
 
         Throwable thrown = catchThrowable(() -> feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))).block());
 
-        assertThat(thrown).isInstanceOf(UnsupportedOperationException.class)
+        assertThat(thrown).isInstanceOf(UnreadableLiveFilterException.class)
                 .hasMessageContaining("DataFieldReader");
+    }
+
+    @Test
+    void the_first_refusal_is_cached_and_replayed_on_every_later_call_instead_of_rebuilding_the_matcher() {
+        // The refusal is a permanent condition of this registration, not a per-message answer: rebuilding and
+        // rethrowing on every call would still be the poison loop the finding was about, just slower. A reader that
+        // counts how many times it is asked whether it supports payload fields proves the matcher is built once.
+        AtomicInteger supportsPayloadFieldsCalls = new AtomicInteger();
+        DataFieldReader countingRefusingReader = new DataFieldReader() {
+            @Override
+            public Optional<Object> read(CloudEvent cloudEvent, String path) {
+                throw new AssertionError("a refusing reader must never be asked to read once it has refused");
+            }
+
+            @Override
+            public boolean supportsPayloadFields() {
+                supportsPayloadFieldsCalls.incrementAndGet();
+                return false;
+            }
+        };
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId, null,
+                CatchupThenLiveOptions.defaults(), countingRefusingReader);
+        Function<Counted, Mono<Void>> fold = event -> Mono.empty();
+        feed.register("counter", fold, Filter.data("amount", eq(42)));
+        feed.goLive("counter").block();
+        CloudEvent event = converter.toCloudEvent(new Counted("1"));
+
+        Throwable first = catchThrowable(() -> feed.acceptCloudEvent(event).block());
+        Throwable second = catchThrowable(() -> feed.acceptCloudEvent(event).block());
+        Throwable third = catchThrowable(() -> feed.acceptCloudEvent(event).block());
+
+        assertThat(first).isInstanceOf(UnreadableLiveFilterException.class);
+        assertThat(second).as("the same exception instance, not a fresh one rebuilt for this call").isSameAs(first);
+        assertThat(third).as("the same exception instance, not a fresh one rebuilt for this call").isSameAs(first);
+        assertThat(supportsPayloadFieldsCalls).as("the matcher is built once, on the first call, never again")
+                .hasValue(1);
     }
 
     @Test
@@ -555,6 +594,47 @@ class DomainEventFeedTest {
 
         assertThat(outcome).as("the event matched the filter but the stopped handover dropped it, so it was never "
                         + "actually delivered to the projection")
+                .isEqualTo(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(repo).doesNotContainKey("counter");
+    }
+
+    @Test
+    void accept_cloud_event_reports_not_deliverable_for_an_event_buffered_before_a_stop_resolves_it() {
+        // Distinct from the test above: this event arrives WHILE the catch-up is still buffering (before the stop),
+        // not after. The reactor engine does not complete acceptCloudEvent's Mono until it resolves the buffered
+        // acknowledgement, and a stop resolves every still-pending one as not delivered, so this must also report
+        // NOT_DELIVERABLE rather than the DELIVERED the blocking engine would report for the same interleaving
+        // (see acceptCloudEvent's own javadoc for why the two stacks differ here).
+        CountDownLatch parked = new CountDownLatch(1);
+        CountDownLatch proceed = new CountDownLatch(1);
+        AtomicInteger converted = new AtomicInteger();
+        CloudEventConverter<Counted> converter = parkingConverter(converted, parked, proceed);
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader("1", "2"), converter, Counted::eventId);
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+
+        CountDownLatch catchUpFinished = new CountDownLatch(1);
+        feed.catchUpAll().doFinally(signal -> catchUpFinished.countDown()).subscribe();
+        awaitUninterruptibly(parked);
+
+        // Subscribed before the stop, so the buffered acknowledgement is genuinely pending when stopCatchUp() runs.
+        AtomicReference<RoutingOutcome> outcomeRef = new AtomicReference<>();
+        CountDownLatch acceptCompleted = new CountDownLatch(1);
+        feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live")))
+                .doOnSuccess(outcome -> {
+                    outcomeRef.set(outcome);
+                    acceptCompleted.countDown();
+                })
+                .subscribe();
+
+        feed.stopCatchUp();
+        proceed.countDown();
+        assertThat(awaitBoolean(catchUpFinished, 5, TimeUnit.SECONDS)).isTrue();
+        assertThat(awaitBoolean(acceptCompleted, 5, TimeUnit.SECONDS)).isTrue();
+
+        assertThat(outcomeRef.get()).as("the event was buffered before the stop, but the stop resolved that "
+                        + "buffered acknowledgement as not delivered rather than leaving it to complete as though "
+                        + "the fold had run")
                 .isEqualTo(RoutingOutcome.NOT_DELIVERABLE);
         assertThat(repo).doesNotContainKey("counter");
     }

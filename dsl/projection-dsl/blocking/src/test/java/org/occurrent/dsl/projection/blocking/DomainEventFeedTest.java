@@ -36,6 +36,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.UnreadableLiveFilterException;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.net.URI;
@@ -596,8 +597,47 @@ class DomainEventFeedTest {
 
         Throwable thrown = catchThrowable(() -> feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))));
 
-        assertThat(thrown).isInstanceOf(UnsupportedOperationException.class)
+        assertThat(thrown).isInstanceOf(UnreadableLiveFilterException.class)
                 .hasMessageContaining("DataFieldReader");
+    }
+
+    @Test
+    void the_first_refusal_is_cached_and_replayed_on_every_later_call_instead_of_rebuilding_the_matcher() {
+        // The refusal is a permanent condition of this registration, not a per-message answer: rebuilding and
+        // rethrowing on every call would still be the poison loop the finding was about, just slower. A reader that
+        // counts how many times it is asked whether it supports payload fields proves the matcher is built once.
+        AtomicInteger supportsPayloadFieldsCalls = new AtomicInteger();
+        DataFieldReader countingRefusingReader = new DataFieldReader() {
+            @Override
+            public java.util.Optional<Object> read(CloudEvent cloudEvent, String path) {
+                throw new AssertionError("a refusing reader must never be asked to read once it has refused");
+            }
+
+            @Override
+            public boolean supportsPayloadFields() {
+                supportsPayloadFieldsCalls.incrementAndGet();
+                return false;
+            }
+        };
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId, null,
+                CatchupThenLiveOptions.defaults(), countingRefusingReader);
+        MaterializedView<Counted> view = event -> {
+        };
+        feed.register("counter", view, Filter.data("amount", eq(42)));
+        feed.goLive("counter");
+        CloudEvent event = converter.toCloudEvent(new Counted("1"));
+
+        Throwable first = catchThrowable(() -> feed.acceptCloudEvent(event));
+        Throwable second = catchThrowable(() -> feed.acceptCloudEvent(event));
+        Throwable third = catchThrowable(() -> feed.acceptCloudEvent(event));
+
+        assertThat(first).isInstanceOf(UnreadableLiveFilterException.class);
+        assertThat(second).as("the same exception instance, not a fresh one rebuilt for this call").isSameAs(first);
+        assertThat(third).as("the same exception instance, not a fresh one rebuilt for this call").isSameAs(first);
+        assertThat(supportsPayloadFieldsCalls).as("the matcher is built once, on the first call, never again")
+                .hasValue(1);
     }
 
     @Test

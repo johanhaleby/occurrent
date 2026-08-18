@@ -31,6 +31,7 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
+import org.occurrent.subscription.UnreadableLiveFilterException;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.internal.SingleConsumerMessages;
 import reactor.core.publisher.Mono;
@@ -136,8 +137,8 @@ public final class DomainEventFeed<E> {
      * {@link #acceptCloudEvent} existed. The store still evaluates it during the replay however it always has,
      * including a {@code data} payload condition this feed has no {@link DataFieldReader} for, since that evaluation
      * has nothing to do with this feed's own {@link DataFieldReader}. {@link #acceptCloudEvent} is what needs one,
-     * and only refuses such a filter there, the first time it is called, so a caller that never touches the live
-     * CloudEvent path keeps registering exactly the filters it always could.
+     * and only refuses such a filter there, the first time it is called, permanently, so a caller that never
+     * touches the live CloudEvent path keeps registering exactly the filters it always could.
      *
      * @throws IllegalArgumentException if a projection is already registered on this feed
      */
@@ -215,8 +216,9 @@ public final class DomainEventFeed<E> {
      * only if it matches, delivers it, and completes with which of the three {@link RoutingOutcome}s happened. Call
      * this from a broker listener that has a CloudEvent to rebuild rather than a domain event and an
      * {@link EventMetadata} already in hand, and acknowledge on {@link RoutingOutcome#DELIVERED} once the returned
-     * {@link Mono} completes, and on {@link RoutingOutcome#FILTERED}, where redelivering would loop forever since
-     * the event is simply not this projection's. Named distinctly from {@link #accept(Object)} rather than
+     * {@link Mono} completes, and on {@link RoutingOutcome#FILTERED}, where redelivering would loop forever against
+     * this same registration, since the event is not this projection's under the {@link Filter} currently
+     * registered. Named distinctly from {@link #accept(Object)} rather than
      * overloaded onto it, since a {@code DomainEventFeed<CloudEvent>} would otherwise let the compiler silently pick
      * between two overloads with different behavior for the same argument.
      * <p>
@@ -226,10 +228,13 @@ public final class DomainEventFeed<E> {
      * <p>
      * This feed holds no filter of its own beyond the one {@link #register} was called with. The live match is
      * always evaluated against that same filter, so the replay and the live path can never disagree about which
-     * events are this projection's. That matcher is built fresh from the registered {@link Filter} on every call
-     * rather than at {@link #register}, so a {@code data} payload condition this feed has no {@link DataFieldReader}
-     * for is refused here, the first time this method is called, rather than blocking {@link #register} for a
-     * caller that never calls this method at all.
+     * events are this projection's. That matcher is built from the registered {@link Filter} the first time this
+     * method is called rather than at {@link #register}, so a {@code data} payload condition this feed has no
+     * {@link DataFieldReader} for is refused here instead of blocking {@link #register} for a caller that never
+     * calls this method at all.
+     * <p>
+     * Whichever of the two this first call produces, a working matcher or the refusal below, is then cached and
+     * reused for every call after that against the same registration, rather than rebuilt each time.
      * <p>
      * Completes with {@link RoutingOutcome#NOT_DELIVERABLE} rather than {@link RoutingOutcome#DELIVERED} when a
      * matching event arrives after {@link #stopCatchUp()} interrupted a replay still in flight. The catch-up-then-live
@@ -237,22 +242,37 @@ public final class DomainEventFeed<E> {
      * signal back instead of assuming delivery from a normal completion.
      * <p>
      * A matching event that arrives <em>before</em> a stop, while the catch-up is still buffering live events for
-     * the drain that follows the replay, still completes with {@link RoutingOutcome#DELIVERED}, even though a stop
-     * right afterwards means that buffered event will not actually be folded by this attempt. That is the same
-     * contract the catch-up-then-live engine already keeps for {@link #accept(Object)}: nothing is lost, because
-     * the completion marker is never recorded for an interrupted attempt, so the next {@link #catchUpAll()}
-     * replays the whole history again, including this event, from the store rather than from the buffer.
+     * the drain that follows the replay, also completes with {@link RoutingOutcome#NOT_DELIVERABLE} if that stop
+     * lands before the buffer is drained. The returned {@link Mono} does not complete until this engine resolves
+     * the buffered acknowledgement, and a stop resolves every still-pending one as not delivered rather than
+     * leaving it to complete as though the fold had run. This differs from the blocking {@code DomainEventFeed},
+     * where a buffered payload's acceptance completes synchronously before the fold, so a stop afterwards cannot
+     * take that answer back, and {@link RoutingOutcome#DELIVERED} there means only that the payload was handed
+     * off, not that the fold has run. Either way nothing is lost, because the completion marker is never recorded
+     * for an interrupted attempt, so the next {@link #catchUpAll()} replays the whole history again, including
+     * this event, from the store.
      * <p>
      * Fails with an {@link IllegalStateException} when no projection is registered, for the reason
      * {@link #accept(Object)} gives, rather than completing with {@link RoutingOutcome#NOT_DELIVERABLE}. This feed,
      * unlike a push subscription model, has no write path to protect, and ADR 104 already refuses here for
      * {@link #accept(Object)} and {@link #accept(EventMetadata, Object)}.
+     * <p>
+     * Fails with {@link UnreadableLiveFilterException} the first time this is called on a registration whose
+     * {@link Filter} references a {@code data} field this feed's {@link DataFieldReader} cannot read, and again with
+     * the exact same exception instance on every later call on that registration. This is a permanent configuration
+     * error, not a transient one, a caller catching it must stop or park the registration rather than retry, and
+     * must never acknowledge and redeliver the event that triggered it expecting a different answer. Register a new
+     * {@code DomainEventFeed} with a {@link Filter} that does not reference the field, or with a
+     * {@link DataFieldReader} that can read it.
      */
     public Mono<RoutingOutcome> acceptCloudEvent(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         return registeredProjection().flatMap(registered -> {
-            Predicate<CloudEvent> liveMatcher = SubscriptionFilterMatcher.matcherFor(AgnosticSubscriptionFilter.filter(registered.replayFilter()), dataFieldReader);
-            if (!liveMatcher.test(cloudEvent)) {
+            LiveMatcher liveMatcher = liveMatcherFor(registered);
+            if (liveMatcher.refusal() != null) {
+                return Mono.error(liveMatcher.refusal());
+            }
+            if (!liveMatcher.matcher().test(cloudEvent)) {
                 return Mono.just(RoutingOutcome.FILTERED);
             }
             E event = converter.toDomainEvent(cloudEvent);
@@ -273,10 +293,76 @@ public final class DomainEventFeed<E> {
         });
     }
 
+    // Builds the live matcher for a registration on the first acceptCloudEvent call, then reuses it, whether that
+    // build succeeded or refused. A benign race between two concurrent first calls can build it twice, but
+    // matcherFor is pure for the same Filter and DataFieldReader, so the loser's copy, success or refusal, is just
+    // discarded work: every caller ends up with the same winner, which is what makes a cached refusal always the
+    // same exception instance rather than a fresh one built per call.
+    private LiveMatcher liveMatcherFor(Registered<E> registered) {
+        LiveMatcher cached = registered.liveMatcher.get();
+        if (cached != null) {
+            return cached;
+        }
+        LiveMatcher built;
+        try {
+            built = LiveMatcher.matched(SubscriptionFilterMatcher.matcherFor(AgnosticSubscriptionFilter.filter(registered.replayFilter), dataFieldReader));
+        } catch (UnsupportedOperationException e) {
+            String id = registered.catchupFeed().id();
+            built = LiveMatcher.refused(new UnreadableLiveFilterException("The Filter registered for '" + id
+                    + "' references a data field this feed's DataFieldReader cannot read, so its live CloudEvent "
+                    + "match can never succeed. Register with a Filter that does not reference a data field, or "
+                    + "build this feed with a DataFieldReader that can read it.", e));
+        }
+        registered.liveMatcher.compareAndSet(null, built);
+        return registered.liveMatcher.get();
+    }
+
+    // The outcome of the first acceptCloudEvent call for one registration: either a working matcher, or the
+    // permanent refusal every later call on that same registration replays instead of rebuilding.
+    private static final class LiveMatcher {
+        private final @Nullable Predicate<CloudEvent> matcher;
+        private final @Nullable UnreadableLiveFilterException refusal;
+
+        private LiveMatcher(@Nullable Predicate<CloudEvent> matcher, @Nullable UnreadableLiveFilterException refusal) {
+            this.matcher = matcher;
+            this.refusal = refusal;
+        }
+
+        private static LiveMatcher matched(Predicate<CloudEvent> matcher) {
+            return new LiveMatcher(matcher, null);
+        }
+
+        private static LiveMatcher refused(UnreadableLiveFilterException refusal) {
+            return new LiveMatcher(null, refusal);
+        }
+
+        private Predicate<CloudEvent> matcher() {
+            return matcher;
+        }
+
+        private @Nullable UnreadableLiveFilterException refusal() {
+            return refusal;
+        }
+    }
+
     // Pairs a registration with the Filter it was registered with, so acceptCloudEvent always matches against the
     // one filter this feed was actually given. See the Filter-taking register(..) overloads' javadoc for why there
     // is only ever one filter here, and its own javadoc for why it is not turned into a matcher until then.
-    private record Registered<E>(CatchupProjectionFeed<E> catchupFeed, Filter replayFilter) {
+    // liveMatcher caches the outcome of that first build, one cache per registration since a new register() call
+    // creates a new Registered with a fresh, empty cache.
+    private static final class Registered<E> {
+        private final CatchupProjectionFeed<E> catchupFeed;
+        private final Filter replayFilter;
+        private final AtomicReference<@Nullable LiveMatcher> liveMatcher = new AtomicReference<>();
+
+        private Registered(CatchupProjectionFeed<E> catchupFeed, Filter replayFilter) {
+            this.catchupFeed = catchupFeed;
+            this.replayFilter = replayFilter;
+        }
+
+        private CatchupProjectionFeed<E> catchupFeed() {
+            return catchupFeed;
+        }
     }
 
     /**
