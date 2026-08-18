@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 13
-updated_at: 2026-08-18T06:35:00Z
+revision: 14
+updated_at: 2026-08-18T10:45:00Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -18,6 +18,14 @@ definition_of_done:
   - "#740 closed at ship; #361 closed as duplicate of #740, never resolved separately"
   - "Memory checkpointed, sessions archived, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
 pending_actions:
+  - id: act-004
+    type: dispatch-chip
+    target: "U3 chip task_cadd2ad4, title ⌁[ayi/U3#740] Membership store and wait · Sonnet/high"
+    expected: "chip visible to Johan; on start, worker session resolved by marker and plan gate comes to the orchestrator"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-18T10:47:00Z
   - id: act-003
     type: dispatch-chip
     target: "U2 chip task_17de7750, title ⌁[ayi/U2#740] Mint and stamp append ids · Sonnet/high"
@@ -87,21 +95,20 @@ units:
   U2:
     issue: 740
     goal: "Mint, stamp, return: AppendId type, appendid extension, unconditional stamping on all four stores' stream and DCB paths, updateEvent preservation, records widened per D2, equality tests migrated, TCK additions, changelog and migration-guide section"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U1]
     session: local_0adf4d40-dfb7-4321-9d59-26638a9b0939
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 844, met: true, evidence: "squash 494d609f6, CAS pin 7530ca75 matched, merged state read back 2026-08-18T10:41Z, branch deleted after tip==pin"}
     blocking_on: []
-    session_note: "chip task_17de7750 started; worktree vigilant-wilson-c6862c, ListAgents send name vigilant-wilson-c6862c-7e, identity confirmed by the fleet marker in its opening prompt via transcript search"
-    next_action: "Worker resumed 2026-08-18T06:3xZ after the host restart killed it mid-round-4. Round 4 owes two fixes: reactor assembly-time minting (inline thread, mint in Mono.defer per subscription) and @Nullable on getAppendId (suppressed). Then round 5, DELIVERY_RESULT, adversarial verify, CAS merge"
-    last_meaningful_progress_at: 2026-08-18T06:35:00Z
+    session_note: "chip task_17de7750; worker survived a host-sleep stop and a host-restart kill, resumed twice by the orchestrator"
+    next_action: "none. Main's matrix on squash 494d609f6 pending green (DoD item), session archiving batches at closeout"
+    last_meaningful_progress_at: 2026-08-18T10:45:00Z
     observed:
-      session: {id: local_0adf4d40-dfb7-4321-9d59-26638a9b0939, via: "transcript marker search, opening prompt carries the U2 marker", at: 2026-08-17T18:19:10Z}
-      pr_844: {head: ea53b0ee55288c28e2285d432adb75eb1157c4e3, branch: "ayi/u2-append-id-stamping", rollup: "26/26 SUCCESS", threads: "10 total, 1 unresolved (round 4's reactor finding)", review: "4 Copilot rounds, rounds 1-3 fully triaged (13 findings fixed incl 4 suppressed), round 4 owes the reactor per-subscription minting fix and the @Nullable suppressed fix", via: "gh reads 2026-08-18T06:2xZ", at: 2026-08-18T06:35:00Z}
-    assessment: "Sonnet/high chip. Verification modules: DCB touched-module set plus tck, eventstore/inmemory, dsl/decider, application/service/blocking."
+      pr_844: {merged: 494d609f6f7c300c356183d5a5fae46c51932f1d, review: "5 Copilot rounds, 15 findings fixed (3 correctness bugs: updateEvent id drop, preserveAppendId pre-feature stamping, reactor assembly-time minting), round 5 clean incl body read", verify: "adversarial pass CLAIM-HOLDS, all 6 claims confirmed, empirical reactor resubscription repro", at: 2026-08-18T10:45:00Z}
+    assessment: "DONE. Adversarial verifier's low finding routed to U5: reactor write() lacks the resubscription regression test its DCB sibling got (write() proven correct empirically, coverage asymmetry only)."
   U3:
     issue: 740
     goal: "Membership store and wait: interface, in-memory, wait loop, Mongo and reactive Mongo stores with TTL, delete-by-projection-id, properties"
@@ -113,8 +120,8 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch after U2 merges"
-    last_meaningful_progress_at: 2026-08-17T14:37:26Z
+    next_action: "Chip task_cadd2ad4 awaiting the start click (dispatched in U2's completion tick)"
+    last_meaningful_progress_at: 2026-08-18T10:45:00Z
     observed: {}
     assessment: "Sonnet/high chip. Wait contract: non-null AppendId, absent-id case is type-guided by the Optional component."
   U4:
@@ -146,7 +153,7 @@ units:
     next_action: "Dispatch after U4 merges"
     last_meaningful_progress_at: 2026-08-17T14:37:26Z
     observed: {}
-    assessment: "Sonnet/high chip. A contract finding here re-triggers a U6 pass."
+    assessment: "Sonnet/high chip. A contract finding here re-triggers a U6 pass. Carries from U2's adversarial verify: add the reactor write() resubscription test (same shape as ReactorMongoEventStoreDcbTest's resubscribing_the_same_append_publisher test, aimed at write())."
   U6:
     issue: 740
     goal: "Held docs branch docs/append-identity in occurrent-org.github.io, news-post mention coordinated with r34's release-notes branch, addedTags entry, the honest window bound"
