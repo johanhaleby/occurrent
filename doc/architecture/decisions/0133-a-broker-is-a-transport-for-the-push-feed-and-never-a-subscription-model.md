@@ -126,8 +126,11 @@ where redelivering would loop forever because the event is simply not this consu
 This refines a shape that has not shipped rather than breaking a released one, since `PushObserver` is still in the
 unreleased section of `changelog.md`, so its existing entry absorbs the outcome contract instead of a migration note
 being needed. [#848](https://github.com/johanhaleby/occurrent/issues/848) owns the change and has to be done before
-the consume bridges in #415 and #417, which are what need the contract. It is the one change this design needs outside
-the three broker modules.
+the consume bridges in #415 and #417, which are what need the contract.
+
+#848 owns a second prerequisite too, the live match decision 5 needs on `DomainEventFeed`. Those two are the only
+changes this design needs outside the three broker modules, and both are prerequisites rather than improvements, so
+neither belongs at the end of an implementation plan.
 
 **The bridge therefore holds the `PushSubscriptionModel` rather than a bare `Pushable`.** The observer is a
 constructor argument on the model, and the readiness accessors are not reachable through `Pushable` either. The bridge
@@ -347,25 +350,11 @@ reads out of the event store and has no effect on the live path. A domain bridge
 therefore deliver events the subscription excluded. This is not the duplicate filter refused above, because at this
 level there is no other evaluation to disagree with.
 
-It evaluates that filter before decoding, on a CloudEvent rebuilt from the message rather than on the domain event.
-`SubscriptionFilterMatcher.matcherFor` gives a `Predicate<CloudEvent>`, and a decoded domain event plus an
-`EventMetadata` of extensions cannot answer a condition on subject, source, time or raw data. Decision 8 is what makes
-the rebuild possible, since binary mode puts every CloudEvent attribute in the headers, so the bridge has all of them
-plus the body without decoding anything. A filter that does not match ends there and the domain event is never
-decoded, which also means the common case costs nothing.
-
-The bridge is configured with a plain `Filter`, not a `SubscriptionFilter`, because those are two different types
-here. `DomainEventFeed.register` takes a `Filter`, while `matcherFor` and `destinationsFor` take a
-`SubscriptionFilter`, so the bridge wraps its `Filter` where the other two are wanted. A `DcbSubscriptionFilter` has
-no plain `Filter` inside it at all, it has a `DcbCriteria`, so a DCB filter cannot drive a domain bridge and is
-refused there. ADR 62 already refuses one for a catch-up replay on the same grounds, that a DCB boundary needs a
-different read, so this inherits an existing limit rather than adding one.
-
-**Configuring that filter separately from the registration's would lose events, so the domain bridge does not ship
-until the feed can perform the live match itself.** A bridge filter narrower than the registration's replay filter
-makes the bridge treat an event as not matching and acknowledge it, while the projection's replay contract says that
-event was one of its own. That is a loss, not two rules disagreeing, so `AGENTS.md` decides it rather than a judgement
-about how likely the misconfiguration is.
+**Giving the bridge its own filter would lose events, so the feed does the matching and the domain bridge does not
+ship until it can.** A bridge filter narrower than the one the registration was made with makes the bridge treat an
+event as not matching and acknowledge it, while the projection's replay contract says that event was one of its own.
+That is a loss rather than two rules disagreeing, so `AGENTS.md` settles it and no judgement about how likely the
+misconfiguration is comes into it.
 
 It cannot be closed from inside a broker module. `RegisteringSubscribable` keeps only the derived
 `Predicate<CloudEvent>` and not the `SubscriptionFilter` it was built from, `DomainEventFeed` exposes neither its
@@ -374,16 +363,26 @@ filter nor a live match, and `ProjectionAnnotationRegistrar` derives the filter 
 break that annotation path, so this ADR does not do it.
 
 So [#848](https://github.com/johanhaleby/occurrent/issues/848) is a **prerequisite** for the domain bridge rather than
-an improvement to it, on the same footing as the three-valued outcome decision 1 needs. The feed performs the live
-match against the filter it was registered with, the bridge asks it and never holds a filter of its own, and the
-symmetry with the CloudEvent level is then exact, where the model decides and the bridge only acknowledges what it is
-told.
+an improvement to it, on the same footing as the three-valued outcome decision 1 needs.
 
-**A filter with a payload condition needs a `DataFieldReader`, and is refused at startup without one.** The
-one-argument `SubscriptionFilterMatcher.matcherFor` builds with `DataFieldReader.refusing()` and throws while
-constructing the matcher when the filter reads a data field, so the bridge takes a reader and uses the two-argument
-overload. That refusal happening at startup rather than on the first matching event is the existing behaviour on the
-subscribe path, and inheriting it is what keeps the two consistent.
+**What that gives the feed is the same shape `routeReportingMatch` already has one level up.** The bridge rebuilds a
+CloudEvent from the message and hands it over, and the feed matches, decodes with its own converter, delivers, and
+reports which of the three outcomes happened. The bridge acknowledges on that outcome exactly as the CloudEvent bridge
+does, and the two levels become one mechanism described twice rather than two designs.
+
+Handing over a CloudEvent rather than a domain event is what makes the match answerable at all, since a decoded domain
+event plus an `EventMetadata` of extensions cannot answer a condition on subject, source, time or raw data. Decision 8
+is what makes the rebuild cheap, because binary mode puts every attribute in the headers, so nothing is decoded to
+find out whether it matches and a non-matching event is never decoded at all.
+
+**Everything about building that matcher belongs to the feed, not to the bridge**, since the feed is what owns the
+filter now. That covers three things the bridge would otherwise have had to hold. `register` takes a plain `Filter`
+while `matcherFor` takes a `SubscriptionFilter`, so the wrapping happens there. A `DcbSubscriptionFilter` holds a
+`DcbCriteria` rather than a `Filter`, so it cannot drive this path and is refused, which ADR 62 already does for a
+catch-up replay on the same grounds. And a filter with a payload condition needs a `DataFieldReader`, because the
+one-argument `matcherFor` builds with `DataFieldReader.refusing()` and throws while constructing the matcher, so the
+reader is supplied to the feed alongside the filter and a payload filter without one is refused at startup, which is
+what the subscribe path already does.
 
 **Bindings default to `catchAllDestination()`, and narrowing them is something an application asks for.** At the
 CloudEvent level a bridge has no way to read the filter its subscription was registered with. `ProjectionRunner`
@@ -446,6 +445,12 @@ header using that prefix could overwrite `streamid` and break decision 4's invar
 Refusing at construction makes that a startup error in the code that named the header rather than a wrong value on a
 consumer much later. Kafka takes the prefix from `cloudevents-kafka`, and RabbitMQ takes it from the `cloudEvents_`
 mapping decision 4 defines for it, since there is no SDK constant to take it from there.
+
+A prefix is not the whole reservation on either transport. The Kafka binary binding also puts `datacontenttype` in an
+unprefixed `content-type` header, so an application header of that name would silently change a message's media type
+while passing a prefix check, and `content-type` is reserved there alongside the `ce_` prefix. RabbitMQ has the same
+attribute in `BasicProperties.contentType`, which is a field rather than a header entry and so cannot be collided with
+in the first place.
 
 **The publish acknowledgement setting is named the same on both sinks, and it is a timeout rather than a switch.**
 RabbitMQ calls the mechanism publisher confirms and Kafka calls it acks plus waiting on the send future, and neither
@@ -529,6 +534,12 @@ mistake is invisible.
 continuing through it after a failure means committing a higher offset for the same partition and skipping the record
 that failed, which is the same loss by a slower route. Other partitions in the same poll are unaffected, since their
 offsets are independent.
+
+**The bridge commits an explicit offset per partition and never the no-argument form.** `poll()` advances the
+consumer's own position across the whole returned batch, so `commitSync()` with no arguments after the first
+successful `accept(...)` commits every record the poll returned, including ones nothing has processed yet. The bridge
+therefore commits `record.offset() + 1` for that record's partition, and only once that record has succeeded. Turning
+auto-commit off does not cover this on its own, which is why both are written down.
 
 **`PARK` is a publish the bridge does itself, waits for, and only then acknowledges the original.** It is the same
 sequence on both transports, which is worth stating because the shortcut differs on each and both shortcuts lose
