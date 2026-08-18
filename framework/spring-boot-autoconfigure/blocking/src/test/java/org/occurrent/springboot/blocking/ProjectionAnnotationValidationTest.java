@@ -205,6 +205,26 @@ class ProjectionAnnotationValidationTest {
         });
     }
 
+    @Test
+    void record_applied_appends_with_no_applied_append_store_bean_fails_fast() {
+        runner.withUserConfiguration(RecordAppliedAppendsConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("sets recordAppliedAppends = true, but no AppliedAppendStore bean exists");
+        });
+    }
+
+    @Test
+    void record_applied_appends_combined_with_synchronous_mode_fails_fast() {
+        runner.withUserConfiguration(RecordAppliedAppendsSynchronousConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot combine recordAppliedAppends = true with mode = SYNCHRONOUS");
+        });
+    }
+
     private static org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> countProjection() {
         return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
                 .id(event -> "k")
@@ -570,6 +590,36 @@ class ProjectionAnnotationValidationTest {
         // bean the convention-based resolution must fail fast instead of using the zero-config default.
         @Projection(id = "raw-return")
         org.occurrent.dsl.projection.Projection projection() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class RecordAppliedAppendsConfiguration {
+        @Bean
+        RecordAppliedAppendsProjection recordAppliedAppendsProjection() {
+            return new RecordAppliedAppendsProjection();
+        }
+    }
+
+    static class RecordAppliedAppendsProjection {
+        @Projection(id = "record-applied-appends-no-store", recordAppliedAppends = true)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class RecordAppliedAppendsSynchronousConfiguration {
+        @Bean
+        RecordAppliedAppendsSynchronousProjection recordAppliedAppendsSynchronousProjection() {
+            return new RecordAppliedAppendsSynchronousProjection();
+        }
+    }
+
+    static class RecordAppliedAppendsSynchronousProjection {
+        @Projection(id = "record-applied-appends-sync", recordAppliedAppends = true, mode = Mode.SYNCHRONOUS)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return countProjection();
         }
     }
