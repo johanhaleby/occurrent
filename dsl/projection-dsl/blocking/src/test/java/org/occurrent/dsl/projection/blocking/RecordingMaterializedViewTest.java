@@ -164,6 +164,28 @@ class RecordingMaterializedViewTest {
     }
 
     @Test
+    void nothing_is_recorded_for_a_delegate_that_reports_skipping_the_event() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppendId appendId = AppendId.mint();
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(skippingDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+
+        recording.update(metadataWithAppendId(appendId), "event");
+
+        assertThat(store.hasApplied(PROJECTION_ID, appendId)).isFalse();
+    }
+
+    @Test
+    void an_applied_event_is_still_recorded_when_the_delegate_can_report_skipping() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppendId appendId = AppendId.mint();
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(applyingDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+
+        recording.update(metadataWithAppendId(appendId), "event");
+
+        assertThat(store.hasApplied(PROJECTION_ID, appendId)).isTrue();
+    }
+
+    @Test
     void replayAware_lifecycle_is_forwarded_to_a_replayAware_delegate() {
         List<String> calls = new ArrayList<>();
         MaterializedView<String> delegate = new ReplayAwareDelegate(calls);
@@ -197,6 +219,32 @@ class RecordingMaterializedViewTest {
             public void update(String event) {
             }
         };
+    }
+
+    // Mirrors CoalescingMaterializedView's own null-id skip, without needing a real ViewStateRepository.
+    private static MaterializedView<String> skippingDelegate() {
+        return new SkippableDelegate(false);
+    }
+
+    private static MaterializedView<String> applyingDelegate() {
+        return new SkippableDelegate(true);
+    }
+
+    private static final class SkippableDelegate implements MaterializedView<String>, SkippableUpdate<String> {
+        private final boolean applies;
+
+        private SkippableDelegate(boolean applies) {
+            this.applies = applies;
+        }
+
+        @Override
+        public void update(String event) {
+        }
+
+        @Override
+        public boolean applyReportingWhetherApplied(EventMetadata metadata, String event) {
+            return applies;
+        }
     }
 
     private static MaterializedView<String> throwingDelegate() {

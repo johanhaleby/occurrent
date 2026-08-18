@@ -34,7 +34,9 @@ import static java.util.Objects.requireNonNull;
  * builds
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>).
  * Applies the wrapped update and then, once it completes, records the delivered event's append id, so the recorded
- * membership never claims state the delegate has not actually written yet.
+ * membership never claims state the delegate has not actually written yet. Nothing is recorded for a delegate that
+ * reports skipping the event, {@link CoalescingMaterializedUpdate} when its id mapper resolves to no key, since such
+ * an event never changed the read model this recording claims to describe.
  * <p>
  * {@link AppliedAppendStore} is a blocking-shaped interface, so both the readiness check and the record itself hop to
  * {@link Schedulers#boundedElastic()} together in one subscription, the same precedent
@@ -62,7 +64,17 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
 
     @Override
     public Mono<Void> apply(EventMetadata metadata, E event) {
-        return delegate.apply(metadata, event).then(Mono.defer(() -> recordOnBoundedElastic(metadata)));
+        return applyDelegate(metadata, event).flatMap(wasApplied -> wasApplied ? recordOnBoundedElastic(metadata) : Mono.empty());
+    }
+
+    // The unchecked cast is safe: only a CoalescingMaterializedUpdate<?, E, ?> for this same E ever implements
+    // SkippableUpdate<E>, since it is package-private and delegate's own generic parameter already fixes E.
+    @SuppressWarnings("unchecked")
+    private Mono<Boolean> applyDelegate(EventMetadata metadata, E event) {
+        if (delegate instanceof SkippableUpdate<?> skippable) {
+            return ((SkippableUpdate<E>) skippable).applyReportingWhetherApplied(metadata, event);
+        }
+        return delegate.apply(metadata, event).thenReturn(true);
     }
 
     private Mono<Void> recordOnBoundedElastic(EventMetadata metadata) {

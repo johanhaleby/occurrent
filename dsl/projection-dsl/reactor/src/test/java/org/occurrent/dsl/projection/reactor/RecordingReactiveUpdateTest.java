@@ -142,6 +142,28 @@ class RecordingReactiveUpdateTest {
     }
 
     @Test
+    void nothing_is_recorded_for_a_delegate_that_reports_skipping_the_event() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppendId appendId = AppendId.mint();
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(skippingDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+
+        StepVerifier.create(recording.apply(metadataWithAppendId(appendId), "event")).verifyComplete();
+
+        assertThat(store.hasApplied(PROJECTION_ID, appendId)).isFalse();
+    }
+
+    @Test
+    void an_applied_event_is_still_recorded_when_the_delegate_can_report_skipping() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppendId appendId = AppendId.mint();
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(applyingDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+
+        StepVerifier.create(recording.apply(metadataWithAppendId(appendId), "event")).verifyComplete();
+
+        assertThat(store.hasApplied(PROJECTION_ID, appendId)).isTrue();
+    }
+
+    @Test
     void replayCompleted_chains_the_delegates_mono_first() {
         List<String> order = new ArrayList<>();
         ReactiveReplayAware delegate = new ReactiveReplayAware() {
@@ -211,6 +233,33 @@ class RecordingReactiveUpdateTest {
 
     private static BiFunction<EventMetadata, String, Mono<Void>> noopDelegate() {
         return (metadata, event) -> Mono.empty();
+    }
+
+    // Mirrors CoalescingMaterializedUpdate's own null-id skip, without needing a real ViewStateRepository.
+    private static BiFunction<EventMetadata, String, Mono<Void>> skippingDelegate() {
+        return new SkippableDelegate(false);
+    }
+
+    private static BiFunction<EventMetadata, String, Mono<Void>> applyingDelegate() {
+        return new SkippableDelegate(true);
+    }
+
+    private static final class SkippableDelegate implements BiFunction<EventMetadata, String, Mono<Void>>, SkippableUpdate<String> {
+        private final boolean applies;
+
+        private SkippableDelegate(boolean applies) {
+            this.applies = applies;
+        }
+
+        @Override
+        public Mono<Void> apply(EventMetadata metadata, String event) {
+            return Mono.empty();
+        }
+
+        @Override
+        public Mono<Boolean> applyReportingWhetherApplied(EventMetadata metadata, String event) {
+            return Mono.just(applies);
+        }
     }
 
     private static BiFunction<EventMetadata, String, Mono<Void>> orderTrackingDelegate(List<String> order, String marker) {

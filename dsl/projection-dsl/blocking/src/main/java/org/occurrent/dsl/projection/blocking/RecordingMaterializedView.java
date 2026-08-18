@@ -34,7 +34,9 @@ import static java.util.Objects.requireNonNull;
  * Always delegates {@link #update(EventMetadata, Object)} first, then records the delivered event's append id into
  * {@code store}, so the recorded membership never claims state the delegate has not actually written yet. Nothing
  * is recorded while the wrapped projection is replaying, and {@link #update(Object)} (no metadata, so no append id
- * to read) delegates with no attempt to record.
+ * to read) delegates with no attempt to record. Nothing is recorded either for a delegate that reports skipping the
+ * event, {@link CoalescingMaterializedView} when its id mapper resolves to no key, since such an event never
+ * changed the read model this recording claims to describe.
  * <p>
  * Implements {@link ReplayAware} and forwards every call to the delegate when it is one too, so a batching view
  * underneath keeps batching, and drives its own replay bookkeeping either way: a domain-feed or catch-up-feed
@@ -63,8 +65,20 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
 
     @Override
     public void update(EventMetadata metadata, E event) {
+        if (applyDelegate(metadata, event)) {
+            recording.recordIfReady(metadata);
+        }
+    }
+
+    // The unchecked cast is safe: only a CoalescingMaterializedView<?, E, ?> for this same E ever implements
+    // SkippableUpdate<E>, since it is package-private and delegate's own generic parameter already fixes E.
+    @SuppressWarnings("unchecked")
+    private boolean applyDelegate(EventMetadata metadata, E event) {
+        if (delegate instanceof SkippableUpdate<?> skippable) {
+            return ((SkippableUpdate<E>) skippable).applyReportingWhetherApplied(metadata, event);
+        }
         delegate.update(metadata, event);
-        recording.recordIfReady(metadata);
+        return true;
     }
 
     @Override

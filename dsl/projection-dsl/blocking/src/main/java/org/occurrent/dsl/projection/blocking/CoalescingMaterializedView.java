@@ -53,7 +53,7 @@ import java.util.function.BiFunction;
  * recovery.
  */
 @NullMarked
-final class CoalescingMaterializedView<S extends @Nullable Object, E, ID> implements MaterializedView<E>, ReplayAware {
+final class CoalescingMaterializedView<S extends @Nullable Object, E, ID> implements MaterializedView<E>, ReplayAware, SkippableUpdate<E> {
 
     private final View<S, E> view;
     private final ViewStateRepository<S, ID> repository;
@@ -83,9 +83,14 @@ final class CoalescingMaterializedView<S extends @Nullable Object, E, ID> implem
 
     @Override
     public void update(EventMetadata metadata, E event) {
+        applyReportingWhetherApplied(metadata, event);
+    }
+
+    @Override
+    public boolean applyReportingWhetherApplied(EventMetadata metadata, E event) {
         @Nullable ID id = resolveId.apply(metadata, event);
         if (id == null) {
-            return;
+            return false;
         }
         if (replaying) {
             buffered.computeIfAbsent(id, ignored -> new ArrayList<>()).add(new Buffered<>(metadata, event));
@@ -96,6 +101,7 @@ final class CoalescingMaterializedView<S extends @Nullable Object, E, ID> implem
         } else {
             updateFromRepository(id, metadata, event, view, repository, retryStrategy);
         }
+        return true;
     }
 
     @Override
