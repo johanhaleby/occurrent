@@ -1,10 +1,10 @@
 schema_version: 1
 epic: brk
-revision: 1
-updated_at: 2026-08-18T04:44:26Z
+revision: 2
+updated_at: 2026-08-18T04:55:28Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
-authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic rulings pending Johan's registration ask: release-train (0.34.0 waits on brk+ayi vs alternatives), plan approval (revision 2), fixpoint stopping rule, U1 dispatch. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
+authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
 milestone: 3
 registered_at: 2026-08-18T04:44:26Z
 definition_of_done:
@@ -15,7 +15,15 @@ definition_of_done:
   - "Main green on the last brk merge"
   - "#388 closed"
   - "Memory checkpointed, sessions archived at closeout, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
-pending_actions: []
+pending_actions:
+  - id: act-001
+    type: dispatch-chip
+    target: "U1 chip task_6afd231e, title ⌁[brk/U1#412] Broker architecture ADR · Opus/high"
+    expected: "chip visible to Johan; on start, worker session resolved by the ⌁[brk/U1] marker via transcript search, never by title"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-18T04:55:28Z
 units:
   U1:
     issue: 412
@@ -30,8 +38,8 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 412, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch on Johan's approval at the registration ask (Opus/high chip); claim #412 at dispatch; ADR 0133 carried as a resolved literal plus the cross-branch re-audit command"
-    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    next_action: "Chip task_6afd231e awaits Johan's click. #412 claimed (label + routing comment 5323773029, read back). On start: resolve the session by marker, arm the quiet/stalled detector once its worktree exists (journaled trigger), expect the three-decision gate message"
+    last_meaningful_progress_at: 2026-08-18T04:55:28Z
     observed: {}
     assessment: "ADR number 0133 reserved (cross-branch scan 2026-08-18T04:3xZ: max 0132 on origin/*, ledger empty above). The reservation is a courtesy; adr-numbering CI on the merged checkout is the enforcing guard. Prose-only diff expected, so the [ci skip] marker rule applies."
   U2:
