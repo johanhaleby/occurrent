@@ -278,8 +278,8 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
         } catch (UncategorizedMongoDbException e) {
             if (e.getCause() instanceof MongoCommandException) {
                 log.warn(cannotFindGlobalCheckpointErrorMessage(e.getCause()));
-                // Happens when the server prohibits "hostInfo" (e.g. shared Atlas clusters), falls back to
-                // the client's current time.
+                // Happens when the server prohibits "hostInfo" (e.g. shared Atlas clusters). Null is the
+                // contract's answer for a problem this model cannot resolve.
                 return null;
             } else {
                 throw e;
