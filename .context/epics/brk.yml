@@ -1,7 +1,7 @@
 schema_version: 1
 epic: brk
-revision: 60
-updated_at: 2026-08-18T18:40:26Z
+revision: 64
+updated_at: 2026-08-18T20:20:09Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly. Gate-ask rulings 2026-08-18T~10:58Z: the ADR review loop STOPPED at ten rounds, Johan's own read of PR 847 is the closing review; #848 ADOPTED as U11 at Opus/high, blocking both consume bridges."
@@ -110,7 +110,7 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 414, met: false, evidence: null}
     blocking_on: []
-    next_action: "PR 856 open, worker iterating through its review loop (seven heads by 18:0x, currently 14602f0, matrix running). On DELIVERY_RESULT: merge gate + adversarial verify on the confirm-and-routed publish invariant. Deadline 2026-08-18T18:50Z"
+    next_action: "DELIVERY_RESULT mirror found (posted 18:59Z, direct message lost; blocker was the red main, resolved). Twelve review rounds, every one but the last fix-bearing incl. serious transport catches (wrong-publish confirm correlation, waitForConfirmsOrDie channel death, deliveryMode). Stop rule sent 20:19Z: current-round triage in one pass, any-decline round is final, at most one more push, mirror updated to final head, then quiet. Then: gate facts + adversarial verify (confirm-and-routed incl. persistent deliveryMode) + CAS merge + U4/U5 subagent dispatches. Worker-filed #858 closed as resolved by #859 (comment 5333592820). Deadline 2026-08-18T21:00Z"
     last_meaningful_progress_at: 2026-08-18T18:10:01Z
     observed:
       session: {id: local_60dca6d4-7ad1-4187-acb5-c816d2738ec8, worktree: "intelligent-curie-e60812", via: "transcript marker search", at: 2026-08-18T16:41:24Z}
@@ -251,16 +251,16 @@ units:
   U13:
     issue: null
     goal: "Restore main's green: broker forwarder tests (CloudEventForwarderTest 2 errors, DomainEventForwarderTest 3) broken by U12's refusal landing after U2 merged, the cross-PR semantic collision (real DurableSubscriptionModel over a fake wrapped model whose globalCheckpoint answers null, empty storage, default start). Fix the FIXTURE so the tests' proven claims survive; never weaken U12's refusal or the tests' assertions"
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: manual_approval, ref: "orchestrator verifies main's misc shard green on the post-U13-merge sha (a ci_green check gains that sha only at merge time, so the obligation is held here)", met: false, evidence: null}
+      - {check: pr_merged, ref: 859, met: true, evidence: "squash 0c1f9349, CAS pin 4c45097 matched, tip==pin before branch delete; five fresh-context review shards all empty served as the adversarial pass; Copilot round clean, zero threads; worker's not_run exit was the correct handoff of the CI wait"}
+      - {check: manual_approval, ref: "orchestrator verifies main's misc shard green on the post-U13-merge sha", met: true, evidence: "maven run on 0c1f9349 completed success, verified by run list keyed to the exact sha 2026-08-18T19:22Z; ayi notified"}
     blocking_on: []
-    next_action: "Worktree-isolated subagent dispatching this tick (Unattended vehicle)"
+    next_action: "none; subagent worktree auto-cleans, no session to archive"
     last_meaningful_progress_at: 2026-08-18T18:40:26Z
     observed:
       main_red: {runs: "32169494047 (edd61341c) and 32170703373 (bf99724) both failure, misc shard both JDKs; 43af19f9f green before", via: "gh run list + run view, peer report from ayi verified", at: 2026-08-18T18:40:26Z}
