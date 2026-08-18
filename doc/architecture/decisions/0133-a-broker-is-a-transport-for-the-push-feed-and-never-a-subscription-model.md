@@ -76,12 +76,34 @@ No new `SubscriptionModel` is added, for the reason above, and none of `PushSubs
 Two existing rules constrain what a bridge may do, and both are there to stop events being lost.
 
 [ADR 104](0104-an-undeliverable-push-event-is-refused-not-acknowledged.md) decided that an `accept(...)` which returns
-normally without delivering is an acknowledgement of an event nothing consumed. So a bridge acknowledges the broker
-message only after `accept(...)` returns normally, and never when it throws.
+normally without delivering is an acknowledgement of an event nothing consumed. So a bridge never acknowledges when
+`accept(...)` throws.
+
+A normal return is not on its own proof of delivery, and the CloudEvent bridge needs one more check because of it.
+ADR 104 made `DomainEventFeed` refuse when nothing is registered, so the domain bridge can read a normal return as
+delivery. It deliberately did not make `PushSubscriptionModel` refuse, because that model is also fed from the write
+path by `new InMemoryEventStore(pushModel::accept)`, where refusing would fail a write to protect nothing. A stopped
+model also drops live events and returns normally, which ADR 85 decided and ADR 104 kept.
+
+So a CloudEvent bridge that only looked at whether `accept(...)` threw would acknowledge and lose events in two states,
+before anything is registered and while the model is stopped. It has to ask instead, and `PushSubscriptionModel`'s own
+javadoc says the same thing, to ask `hasSubscriptions()` before feeding the model from a broker and to register the
+subscription before the listener starts consuming.
+
+**A CloudEvent bridge therefore holds the `PushSubscriptionModel`, not a bare `Pushable`.** That is the practical
+consequence and it is worth stating, because `Pushable` is otherwise the natural type for something that pushes events.
+`hasSubscriptions()` is declared on `RegisteringSubscribable`, and the only capability reachable from a `Pushable` is
+`IntrospectableSubscriptions.findIn(...)`, which answers `subscriptionIds()` and whose empty result means the model
+cannot list its subscriptions rather than that it has none. A bridge cannot tell "not ready" from "cannot answer"
+through that, and this is a decision about not losing events, so it takes the type that can answer.
+
+The bridge then does not start consuming until its model reports a registered subscription, and it stops consuming
+while the model is stopped rather than draining the queue into a model that drops what it receives.
 
 [ADR 90](0090-a-push-sink-feeds-one-consumer.md) decided that a push sink takes exactly one consumer, because one
-received message has one acknowledgement decision. So one bridge feeds one `Pushable` or one `DomainEventFeed`, and a
-deployment with three projections has three queues on RabbitMQ or three consumer groups on Kafka.
+received message has one acknowledgement decision. So one bridge feeds one `PushSubscriptionModel` or one
+`DomainEventFeed`, and a deployment with three projections has three queues on RabbitMQ or three consumer groups on
+Kafka.
 
 ### 2. Three interface families, in an api module with no transport dependency
 
@@ -99,8 +121,13 @@ vary with the event.
 ```java
 D destinationFor(CloudEvent cloudEvent);
 
-Set<D> destinationsFor(SubscriptionFilter filter);
+Optional<Set<D>> destinationsFor(SubscriptionFilter filter);
 ```
+
+The reverse method returns an `Optional` because a resolver often cannot answer it. `CloudEventTypeMapper` translates
+a known class to a type and a known type back to a class, and it cannot list every event type an application has, so
+there is no set of destinations that means "everything". An empty result therefore means the resolver could not narrow
+this filter, and decision 5 says what a consumer does with that.
 
 The shipped implementations derive the destination from the cloud event type through `CloudEventTypeMapper`. That is
 the point of putting the mapping here. A publisher and a consumer agree because they read one mapping, the same one
@@ -140,9 +167,11 @@ dependencies to declare for one broker.
 
 The two levels are not symmetric about where the conversion happens, and the asymmetry is deliberate.
 
-On the publish side, `DomainEventSink<E>` holds a `CloudEventSink` and a `CloudEventConverter<E>`, converts, and
-delegates. A domain event has to be serialized exactly once whichever way it is done, so delegating costs nothing and
-it keeps one place that writes the extension headers.
+On the publish side the shipped domain sinks, `RabbitMqDomainEventSink` and `KafkaDomainEventSink`, are each built
+from a `CloudEventSink` and a `CloudEventConverter<E>`. They convert and delegate rather than talking to the broker
+client themselves. `DomainEventSink<E>` stays an interface with no such requirement, so an application is free to
+implement it directly. A domain event has to be serialized exactly once whichever way it is done, so delegating costs
+nothing and it keeps one place that writes the extension headers.
 
 On the consume side there is no such delegation. The domain bridge reads the message body with the application's
 converter and the extension headers into an `EventMetadata`, then calls `DomainEventFeed.accept(metadata, event)`.
@@ -180,9 +209,14 @@ the destination mapping knows about. A stream id, a data field, a time range and
 the broker. So `SubscriptionFilterMatcher` on the consumer side still decides whether a received event reaches the
 handler, exactly as it does for a change-stream subscription model, and a bridge always applies it.
 
-A filter whose type part cannot be derived resolves to every destination. Guessing narrower would drop an event that
-the filter would have matched, and losing an event is a hard rule in `AGENTS.md` rather than a tuning question, so the
-imprecise answer has to be the inclusive one.
+A filter whose type part cannot be derived returns an empty `Optional`, and a consumer that gets one binds the
+transport's own catch-all rather than a set of destinations. On RabbitMQ that is a `#` binding on the topic exchange,
+and on Kafka it is a subscription by pattern. Guessing narrower would drop an event the filter would have matched, and
+losing an event is a hard rule in `AGENTS.md` rather than a tuning question, so the imprecise answer has to be the
+inclusive one.
+
+A deployment whose platform team owns the topology declares its queues and bindings itself and ignores this method
+entirely, which #415 already says has to stay possible.
 
 ### 6. Three modules, named after the existing convention
 
@@ -206,14 +240,16 @@ are on, since RabbitMQ AMQP headers are `Map<String, Object>` and Kafka headers 
 CloudEvent attributes are strings in both bindings anyway, so a richer value type would only be usable for application
 headers and would then differ per transport.
 
-**The publish acknowledgement setting is named the same on both sinks.** RabbitMQ calls it publisher confirms and
-Kafka calls it acks plus waiting on the send future, and neither name is usable on the other transport. Both builders
-take `waitForAcknowledgement(boolean)` and `acknowledgementTimeout(Duration)`, and the transport javadoc names the
-underlying mechanism.
+**The publish acknowledgement setting is named the same on both sinks, and it is a timeout rather than a switch.**
+RabbitMQ calls the mechanism publisher confirms and Kafka calls it acks plus waiting on the send future, and neither
+name is usable on the other transport. Both builders take `acknowledgementTimeout(Duration)`, defaulting to 5 seconds,
+and the transport javadoc names the underlying mechanism.
 
-Waiting is the default, with a timeout of 5 seconds. A publish that returns before the broker accepted the message
-reports success for an event the broker may never have received, and `AGENTS.md` makes no design may lose events a
-hard rule rather than a default worth trading for throughput.
+There is deliberately no `waitForAcknowledgement(false)`. A publish that returns before the broker accepted the
+message reports success for an event the broker may never have received, so turning the wait off is a documented loss
+window, and `AGENTS.md` says a loss window that is narrow, documented and warn-logged is still a loss. Offering the
+switch would put that choice in the API and then have to defend it. An application that genuinely wants to publish
+without waiting implements `CloudEventSink`, the same way out as structured mode in decision 8.
 
 **A destination is a record with static factories, a sink is a builder.** A destination has three components and no
 optional wiring, so it gets a canonical constructor, an `of(...)` factory for the common case, and a
@@ -232,11 +268,20 @@ have failed.
 **A domain sink is built from a CloudEvent sink and a converter, through the same factory name on both transports.**
 `RabbitMqDomainEventSink.using(cloudEventSink, cloudEventConverter)` and its Kafka twin.
 
-**The two consume-side bridges differ in exactly one place, and it is written down here so the Kafka one does not
-invent something else.** RabbitMQ has a per-message negative acknowledgement, so a bridge whose `accept(...)` threw
-calls `basicNack` with requeue and the broker redelivers. Kafka has no such thing, so the bridge does not commit the
-offset and seeks back to it, which is how the record is redelivered. What the Kafka bridge must not do is log the
-failure and commit anyway, because that is the loss ADR 104 named.
+**What a bridge does after a failed `accept(...)` is fixed in one respect and configurable in another.** The fixed
+part is that it never plainly acknowledges the message, because that is the loss ADR 104 named. Everything else is the
+application's to configure, and #415 already requires it, since always requeueing keeps a message that fails every
+time in a redelivery loop forever and takes the operator's own policy away from them.
+
+So each bridge takes a failure policy with the same two choices under the same names, retry the message or route it to
+a holding destination that nobody consumes from, so an operator can look at what failed. RabbitMQ implements both
+through `basicNack`, with requeue for the first and without it for the second so the queue's configured dead-letter
+exchange takes over. Kafka has no per-message negative acknowledgement, so it implements the first by declining to
+commit the offset and seeking back to it, and the second by producing the record to a separate topic and then
+committing.
+
+That is the one place the two bridges genuinely differ in mechanism, and it is written down here so the Kafka one does
+not invent a third behaviour. What neither may do is commit or acknowledge after logging the failure.
 
 **The Kafka resolver uses the stream id as the message key by default.** Kafka only orders within a partition, and a
 projection reading one stream needs that stream's events in order, so keying by stream id puts them on one partition.
