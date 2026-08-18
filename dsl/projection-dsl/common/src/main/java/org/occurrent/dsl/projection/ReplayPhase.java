@@ -44,8 +44,18 @@ public interface ReplayPhase {
     /**
      * A phase for a composition that never replays: an in-memory model, a durable-only model with no catch-up layer,
      * or a push feed with {@code catchup = NONE}. Always answers {@code false}.
+     * <p>
+     * Always the same instance, so a caller distinguishing this known case from an unresolved one can compare with
+     * {@code ==} rather than needing its own sentinel. A non-capturing lambda expression here would not give that
+     * guarantee, since the platform is free to allocate a fresh instance per call.
      */
     static ReplayPhase neverReplays() {
-        return () -> false;
+        return NeverReplays.INSTANCE;
+    }
+
+    // Interfaces cannot declare a private field, so the singleton instance neverReplays() hands out lives here
+    // instead, in a nested class initialized on first use.
+    class NeverReplays {
+        private static final ReplayPhase INSTANCE = () -> false;
     }
 }
