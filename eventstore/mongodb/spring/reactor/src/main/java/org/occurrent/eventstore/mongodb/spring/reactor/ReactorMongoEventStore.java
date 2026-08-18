@@ -344,33 +344,36 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // outer transaction is already active the operator joins it, so the counter update joins it too and the counter
         // document becomes a conflict point shared by every concurrent append in that transaction. Either way a doomed
         // or condition-failed append abandons its block, so position may have gaps (DCB permits this, see ADR 0021).
-        // A DCB append always persists at least one event (validateDcbEvents above refuses an empty list), so this
-        // is minted unconditionally, unlike the stream write path.
-        AppendId appendId = AppendId.mint();
+        return Mono.defer(() -> {
+            // A DCB append always persists at least one event (validateDcbEvents above refuses an empty list), so this
+            // is minted unconditionally, unlike the stream write path. Minted inside this defer, per subscription, so
+            // a reused publisher gets a fresh id for every append execution instead of reusing the one from its first.
+            AppendId appendId = AppendId.mint();
 
-        return reservePositions(eventCount).flatMap(firstPosition -> {
-            long lastPosition = firstPosition + eventCount - 1;
-            Mono<DcbAppendResult> transaction = transactionalOperator.transactional(
-                    currentStreamVersion(streamId).flatMap(currentStreamVersion -> {
-                        final Mono<Void> conditionAndMarkers;
-                        if (condition != null) {
-                            conditionAndMarkers = enforceAppendCondition(condition, eventsToAppend, lastPosition);
-                        } else {
-                            // An unconditional append still increments its events' markers, so a concurrent conditional
-                            // append on an overlapping tag or type shares a marker, serializes against it, and its
-                            // consistency-token check observes it. Without this, nothing forces a write-write conflict
-                            // and a concurrent conditional append's snapshot could miss this append (write skew). See ADR 0021.
-                            conditionAndMarkers = incrementConflictMarkers(DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
-                        }
-                        return conditionAndMarkers.then(Mono.defer(() -> {
-                            List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition, appendId);
-                            return insertAllDcb(streamId, currentStreamVersion, documents).thenReturn(new DcbAppendResult(firstPosition, lastPosition, eventCount, Optional.of(appendId)));
+            return reservePositions(eventCount).flatMap(firstPosition -> {
+                long lastPosition = firstPosition + eventCount - 1;
+                Mono<DcbAppendResult> transaction = transactionalOperator.transactional(
+                        currentStreamVersion(streamId).flatMap(currentStreamVersion -> {
+                            final Mono<Void> conditionAndMarkers;
+                            if (condition != null) {
+                                conditionAndMarkers = enforceAppendCondition(condition, eventsToAppend, lastPosition);
+                            } else {
+                                // An unconditional append still increments its events' markers, so a concurrent conditional
+                                // append on an overlapping tag or type shares a marker, serializes against it, and its
+                                // consistency-token check observes it. Without this, nothing forces a write-write conflict
+                                // and a concurrent conditional append's snapshot could miss this append (write skew). See ADR 0021.
+                                conditionAndMarkers = incrementConflictMarkers(DcbMarkerModel.eventMarkerKeys(eventsToAppend), lastPosition);
+                            }
+                            return conditionAndMarkers.then(Mono.defer(() -> {
+                                List<Document> documents = convertDcbCloudEventsToDocuments(streamId, eventsToAppend, currentStreamVersion, firstPosition, appendId);
+                                return insertAllDcb(streamId, currentStreamVersion, documents).thenReturn(new DcbAppendResult(firstPosition, lastPosition, eventCount, Optional.of(appendId)));
+                            }));
                         }));
-                    }));
-            // The driver does not auto-retry a transient transaction conflict reactively, so retry it here, plus a
-            // DuplicateKeyException from two transactions first-creating the same conflict marker at once. A
-            // DcbAppendConditionNotFulfilledException and a DuplicateCloudEventException are deliberately not retried.
-            return retryOnlyWhenThisStoreOwnsTheTransaction(transaction, TRANSIENT_CONFLICT_RETRY);
+                // The driver does not auto-retry a transient transaction conflict reactively, so retry it here, plus a
+                // DuplicateKeyException from two transactions first-creating the same conflict marker at once. A
+                // DcbAppendConditionNotFulfilledException and a DuplicateCloudEventException are deliberately not retried.
+                return retryOnlyWhenThisStoreOwnsTheTransaction(transaction, TRANSIENT_CONFLICT_RETRY);
+            });
         });
     }
 

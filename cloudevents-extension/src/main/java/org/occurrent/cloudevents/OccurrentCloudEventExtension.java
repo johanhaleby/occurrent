@@ -19,6 +19,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.CloudEventExtension;
 import io.cloudevents.CloudEventExtensions;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.jspecify.annotations.Nullable;
 
 import java.util.*;
 
@@ -132,7 +133,7 @@ public class OccurrentCloudEventExtension implements CloudEventExtension {
     /**
      * Reads the append id from a CloudEvent, or {@code null} when the event has none.
      */
-    public static String getAppendId(CloudEvent cloudEvent) {
+    public static @Nullable String getAppendId(CloudEvent cloudEvent) {
         requireNonNull(cloudEvent, "CloudEvent cannot be null");
         Object appendId = cloudEvent.getExtension(APPEND_ID);
         return appendId == null ? null : appendId.toString();
