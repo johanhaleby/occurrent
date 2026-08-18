@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 14
-updated_at: 2026-08-18T10:45:00Z
+revision: 15
+updated_at: 2026-08-18T11:04:00Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -18,6 +18,14 @@ definition_of_done:
   - "#740 closed at ship; #361 closed as duplicate of #740, never resolved separately"
   - "Memory checkpointed, sessions archived, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
 pending_actions:
+  - id: act-005
+    type: dispatch-chip
+    target: "U3 chip task_976993fd (re-spawn, act-004's chip lost to the host restart before the start click), same title and brief"
+    expected: "chip visible to Johan; on start, worker session resolved by marker and plan gate comes to the orchestrator"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-18T11:04:00Z
   - id: act-004
     type: dispatch-chip
     target: "U3 chip task_cadd2ad4, title ⌁[ayi/U3#740] Membership store and wait · Sonnet/high"
@@ -104,7 +112,7 @@ units:
       - {check: pr_merged, ref: 844, met: true, evidence: "squash 494d609f6, CAS pin 7530ca75 matched, merged state read back 2026-08-18T10:41Z, branch deleted after tip==pin"}
     blocking_on: []
     session_note: "chip task_17de7750; worker survived a host-sleep stop and a host-restart kill, resumed twice by the orchestrator"
-    next_action: "none. Main's matrix on squash 494d609f6 pending green (DoD item), session archiving batches at closeout"
+    next_action: "none. Main GREEN on squash 494d609f6 (all three workflows success, verified 2026-08-18T11:01Z), session archiving batches at closeout"
     last_meaningful_progress_at: 2026-08-18T10:45:00Z
     observed:
       pr_844: {merged: 494d609f6f7c300c356183d5a5fae46c51932f1d, review: "5 Copilot rounds, 15 findings fixed (3 correctness bugs: updateEvent id drop, preserveAppendId pre-feature stamping, reactor assembly-time minting), round 5 clean incl body read", verify: "adversarial pass CLAIM-HOLDS, all 6 claims confirmed, empirical reactor resubscription repro", at: 2026-08-18T10:45:00Z}
@@ -120,7 +128,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "Chip task_cadd2ad4 awaiting the start click (dispatched in U2's completion tick)"
+    next_action: "Chip task_976993fd awaiting the start click (re-spawned after the restart ate task_cadd2ad4)"
     last_meaningful_progress_at: 2026-08-18T10:45:00Z
     observed: {}
     assessment: "Sonnet/high chip. Wait contract: non-null AppendId, absent-id case is type-guided by the Optional component."
