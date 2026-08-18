@@ -38,9 +38,9 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * All I/O this class performs ({@link AppliedAppendStore#clear(String)} and {@link AppliedAppendStore#recordApplied(String, org.occurrent.eventstore.api.AppendId)})
  * runs on whichever thread the caller invokes it from. It performs no scheduling or thread-hopping of its own, so the
- * reactor wrapper is responsible for calling {@link #readyToRecord()} and {@link #record(EventMetadata)} only after
- * hopping to a blocking-safe scheduler, and {@link #replayStarted()} is deliberately I/O-free so a reactive
- * lifecycle signal that is never awaited can call it inline without blocking.
+ * reactor wrapper is responsible for calling {@link #recordIfReady(EventMetadata)} and {@link #replayCompleted()}
+ * only after hopping to a blocking-safe scheduler, and {@link #replayStarted()}/{@link #replayAbandoned()} are
+ * deliberately I/O-free so a reactive lifecycle signal that is never awaited can call them inline without blocking.
  */
 @NullMarked
 public final class AppliedAppendRecording {
@@ -51,9 +51,11 @@ public final class AppliedAppendRecording {
     private final AppliedAppendStore store;
     private final ReplayPhase phase;
 
-    // Guards a clear attempt so the poll and a live delivery can never run store.clear() concurrently for the same
-    // projection. Held only around the clear itself, not around readyToRecord()'s fast path, so an ordinary live
-    // delivery pays nothing while no clear is pending.
+    // Guards every check-and-write against a concurrent clear attempt, from whichever of readyness check, record,
+    // or clear runs first: without one lock spanning both halves, a live delivery that read "ready" just before a
+    // poll-driven clear could still write its append back in immediately after that clear finished, reinstating a
+    // record the clear was supposed to remove. Reentrant, so a method already holding it can still call another
+    // that also declares it, on the same thread.
     private final Object clearLock = new Object();
     private volatile boolean pendingClear = false;
     // Set by the view-DSL replay lifecycle (CatchupProjectionFeed/DomainEventFeed), independent of what phase says.
@@ -73,29 +75,34 @@ public final class AppliedAppendRecording {
     }
 
     /**
-     * Whether the caller may record now. {@code false} while replaying (lifecycle or phase, whichever says so),
-     * which also marks a clear as needed. {@code false} while a needed clear has not yet succeeded, attempting that
-     * clear as a side effect. Safe to call from any thread; may block on {@link AppliedAppendStore#clear(String)}
-     * when a clear is due, so a reactive caller must already be off the event loop before calling this.
+     * Records {@code metadata}'s append id if the projection is ready to record right now, atomically with a
+     * concurrent clear: a write already about to happen when a clear runs can never land after it and reinstate
+     * what the clear just removed. Not recording is never an error. It means the projection is currently replaying
+     * (lifecycle or phase, whichever says so), which also attempts the clear that implies, or a previously owed
+     * clear has not yet succeeded, which this also retries. An append with no identifier (predates this feature, or
+     * arrived through a push feed whose producer supplied none), a malformed one, or a repeat of the one just
+     * recorded for this instance, is skipped quietly either way. May block on {@link AppliedAppendStore#clear(String)}
+     * or {@link AppliedAppendStore#recordApplied}, so a reactive caller must already be off the event loop.
      */
-    public boolean readyToRecord() {
-        if (lifecycleReplaying || phase.isReplaying()) {
-            pendingClear = true;
-            return false;
+    public void recordIfReady(EventMetadata metadata) {
+        requireNonNull(metadata, "metadata cannot be null");
+        synchronized (clearLock) {
+            if (lifecycleReplaying || phase.isReplaying()) {
+                pendingClear = true;
+                attemptClear();
+                return;
+            }
+            if (pendingClear) {
+                attemptClear();
+                if (pendingClear) {
+                    return;
+                }
+            }
+            doRecord(metadata);
         }
-        if (pendingClear) {
-            attemptClear();
-        }
-        return !pendingClear;
     }
 
-    /**
-     * Records {@code metadata}'s append id, unless it has none (predates this feature, or arrived through a push
-     * feed whose producer supplied none), is malformed, or is the same one just recorded for this instance. Call
-     * only after {@link #readyToRecord()} answered {@code true}. May block on {@link AppliedAppendStore#recordApplied}.
-     */
-    public void record(EventMetadata metadata) {
-        requireNonNull(metadata, "metadata cannot be null");
+    private void doRecord(EventMetadata metadata) {
         Optional<AppendId> appendId;
         try {
             appendId = AppendId.from(metadata);
@@ -120,12 +127,13 @@ public final class AppliedAppendRecording {
     /**
      * The one hook {@code AppliedAppendRecorder.replayObserved()} forwards to: mark a clear as needed and attempt it
      * on the calling thread now. Used by the Spring Boot registrars' poll, which always calls this from a thread
-     * that tolerates blocking. Not called by the view-DSL replay lifecycle forwarding below, which must stay
-     * non-blocking; see {@link #replayStarted()}.
+     * that tolerates blocking.
      */
     public void replayObserved() {
-        pendingClear = true;
-        attemptClear();
+        synchronized (clearLock) {
+            pendingClear = true;
+            attemptClear();
+        }
     }
 
     /**
@@ -135,8 +143,10 @@ public final class AppliedAppendRecording {
      * clear it caused having succeeded.
      */
     public void retryPendingClear() {
-        if (pendingClear) {
-            attemptClear();
+        synchronized (clearLock) {
+            if (pendingClear) {
+                attemptClear();
+            }
         }
     }
 
@@ -145,7 +155,8 @@ public final class AppliedAppendRecording {
      * needed but, deliberately, does not attempt it here: {@code ReplayAware.replayStarted()} and
      * {@code ReactiveReplayAware.replayStarted()} are void signals the driving engine calls inline and never waits
      * on, so attempting a blocking clear from here could stall that engine's own thread. The attempt happens lazily,
-     * the next time {@link #readyToRecord()} or {@link #replayObserved()} runs on a thread that can afford to block.
+     * the next time {@link #recordIfReady(EventMetadata)}, {@link #replayCompleted()}, {@link #replayObserved()}, or
+     * {@link #retryPendingClear()} runs on a thread that can afford to block.
      */
     public void replayStarted() {
         lifecycleReplaying = true;
@@ -153,30 +164,47 @@ public final class AppliedAppendRecording {
     }
 
     /**
-     * The replay lifecycle ended, whether it finished or was abandoned. Either way nothing more is buffered to
-     * apply, so recording may resume once the pending clear (marked by {@link #replayStarted()}) succeeds.
+     * The replay lifecycle finished delivering everything it had. Unlike {@link #replayStarted()} this is safe to
+     * attempt the clear from directly: {@code ReplayAware.replayCompleted()} is a plain synchronous call already
+     * tolerant of blocking work, and {@code ReactiveReplayAware.replayCompleted()} returns the one lifecycle
+     * {@code Mono} its driving engine actually awaits, so the reactor wrapper hops this call to a blocking-safe
+     * scheduler rather than needing to defer it further. Closes the window a replay that delivers nothing matching
+     * would otherwise leave open until a live event, or the poll (for a composition that has one), got to it.
      */
-    public void replayEnded() {
+    public void replayCompleted() {
+        lifecycleReplaying = false;
+        synchronized (clearLock) {
+            attemptClear();
+        }
+    }
+
+    /**
+     * The replay lifecycle was abandoned before it finished. Deliberately does not attempt the clear here, for the
+     * same reason {@link #replayStarted()} does not: {@code replayAbandoned()} is a void signal on both stacks that
+     * its driving engine never awaits, so blocking here could stall it. {@link #replayStarted()} already marked the
+     * clear as owed, and a later delivery, {@link #replayCompleted()} on the replay that follows, or the poll,
+     * retries it.
+     */
+    public void replayAbandoned() {
         lifecycleReplaying = false;
     }
 
+    // Assumes clearLock is already held by the caller.
     private void attemptClear() {
-        synchronized (clearLock) {
-            if (!pendingClear) {
-                return;
-            }
-            try {
-                store.clear(projectionId);
-                pendingClear = false;
-                lastRecorded = null;
-                clearFailureLogged = false;
-            } catch (RuntimeException e) {
-                if (clearFailureLogged) {
-                    log.debug("Projection '{}' retried clearing its previously recorded appends and it is still failing. Recording stays off until a clear succeeds.", projectionId, e);
-                } else {
-                    log.error("Projection '{}' observed a replay and could not clear its previously recorded appends. Recording stays off, and a wait for an append recorded before this replay may keep answering true about a read model this rebuild is discarding, until a clear succeeds.", projectionId, e);
-                    clearFailureLogged = true;
-                }
+        if (!pendingClear) {
+            return;
+        }
+        try {
+            store.clear(projectionId);
+            pendingClear = false;
+            lastRecorded = null;
+            clearFailureLogged = false;
+        } catch (RuntimeException e) {
+            if (clearFailureLogged) {
+                log.debug("Projection '{}' retried clearing its previously recorded appends and it is still failing. Recording stays off until a clear succeeds.", projectionId, e);
+            } else {
+                log.error("Projection '{}' observed a replay and could not clear its previously recorded appends. Recording stays off, and a wait for an append recorded before this replay may keep answering true about a read model this rebuild is discarding, until a clear succeeds.", projectionId, e);
+                clearFailureLogged = true;
             }
         }
     }

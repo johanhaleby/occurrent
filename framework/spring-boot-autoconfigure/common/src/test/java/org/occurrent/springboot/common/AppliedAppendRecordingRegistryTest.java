@@ -42,6 +42,44 @@ class AppliedAppendRecordingRegistryTest {
             new AppliedAppendRecordingRegistry(Duration.ofMillis(200), Duration.ofSeconds(5), 2.0);
 
     @Test
+    void a_zero_or_negative_initial_interval_is_rejected() {
+        assertThatThrownBy(() -> new AppliedAppendRecordingRegistry(Duration.ZERO, Duration.ofSeconds(5), 2.0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("initial must be positive");
+        assertThatThrownBy(() -> new AppliedAppendRecordingRegistry(Duration.ofMillis(-1), Duration.ofSeconds(5), 2.0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("initial must be positive");
+    }
+
+    @Test
+    void a_zero_or_negative_max_interval_is_rejected() {
+        assertThatThrownBy(() -> new AppliedAppendRecordingRegistry(Duration.ofMillis(200), Duration.ZERO, 2.0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("max must be positive");
+    }
+
+    @Test
+    void an_initial_interval_exceeding_max_is_rejected() {
+        assertThatThrownBy(() -> new AppliedAppendRecordingRegistry(Duration.ofSeconds(10), Duration.ofSeconds(5), 2.0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("initial cannot exceed max");
+    }
+
+    @Test
+    void a_multiplier_below_one_is_rejected_because_it_would_shrink_the_interval_to_a_busy_loop() {
+        assertThatThrownBy(() -> new AppliedAppendRecordingRegistry(Duration.ofMillis(200), Duration.ofSeconds(5), 0.5))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("multiplier must be at least 1.0");
+    }
+
+    @Test
+    void a_nan_multiplier_is_rejected() {
+        assertThatThrownBy(() -> new AppliedAppendRecordingRegistry(Duration.ofMillis(200), Duration.ofSeconds(5), Double.NaN))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("multiplier must be at least 1.0");
+    }
+
+    @Test
     void a_freshly_registered_projection_is_due_at_the_initial_interval() {
         registry.register("p1", () -> false, () -> {
         });
@@ -152,8 +190,7 @@ class AppliedAppendRecordingRegistryTest {
         assertThat(store.hasApplied("orders", before)).isFalse();
 
         AppendId after = AppendId.mint();
-        assertThat(recording.readyToRecord()).isTrue();
-        recording.record(metadataWithAppendId(after));
+        recording.recordIfReady(metadataWithAppendId(after));
         assertThat(store.hasApplied("orders", after)).isTrue();
     }
 

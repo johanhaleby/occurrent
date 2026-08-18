@@ -51,9 +51,31 @@ public final class AppliedAppendRecordingRegistry {
     private record Entry(ReplayPhase phase, AppliedAppendRecorder recorder, long[] intervalNanos) {
     }
 
+    /**
+     * @param initial    the interval a newly registered projection, or one just seen replaying, is next due at.
+     * @param max        the interval growth is capped at once a projection has stayed live for a while.
+     * @param multiplier what the interval is multiplied by after each tick that found the projection live.
+     * @throws IllegalArgumentException if {@code initial} or {@code max} is zero or negative, if {@code initial}
+     *                                   exceeds {@code max}, or if {@code multiplier} is below 1.0 (this also
+     *                                   catches {@code NaN}, since every comparison against it except {@code !=}
+     *                                   is false). Each of those would converge the poll to a zero-delay busy loop
+     *                                   rather than the paced schedule this class exists to keep it on.
+     */
     public AppliedAppendRecordingRegistry(Duration initial, Duration max, double multiplier) {
         requireNonNull(initial, "initial cannot be null");
         requireNonNull(max, "max cannot be null");
+        if (initial.isZero() || initial.isNegative()) {
+            throw new IllegalArgumentException("initial must be positive, a poll ticking at a zero or negative interval is a busy loop.");
+        }
+        if (max.isZero() || max.isNegative()) {
+            throw new IllegalArgumentException("max must be positive, a poll capped at a zero or negative interval is a busy loop.");
+        }
+        if (initial.compareTo(max) > 0) {
+            throw new IllegalArgumentException("initial cannot exceed max, the first tick would then wait longer than max is supposed to cap it at.");
+        }
+        if (!(multiplier >= 1.0)) {
+            throw new IllegalArgumentException("multiplier must be at least 1.0, a smaller value shrinks the interval back toward zero and becomes a busy loop.");
+        }
         this.initialNanos = initial.toNanos();
         this.maxNanos = max.toNanos();
         this.multiplier = multiplier;

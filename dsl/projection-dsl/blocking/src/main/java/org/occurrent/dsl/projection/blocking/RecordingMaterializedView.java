@@ -64,9 +64,7 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
     @Override
     public void update(EventMetadata metadata, E event) {
         delegate.update(metadata, event);
-        if (recording.readyToRecord()) {
-            recording.record(metadata);
-        }
+        recording.recordIfReady(metadata);
     }
 
     @Override
@@ -92,7 +90,7 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
         if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayCompleted();
         }
-        recording.replayEnded();
+        recording.replayCompleted();
     }
 
     @Override
@@ -100,6 +98,6 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
         if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayAbandoned();
         }
-        recording.replayEnded();
+        recording.replayAbandoned();
     }
 }

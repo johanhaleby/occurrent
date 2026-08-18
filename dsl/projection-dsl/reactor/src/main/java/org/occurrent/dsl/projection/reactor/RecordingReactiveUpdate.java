@@ -42,9 +42,12 @@ import static java.util.Objects.requireNonNull;
  * delegate this class wraps is caller-supplied and nothing guarantees it completes off a non-blocking thread, so a
  * delegate finishing on a Reactor Netty event loop would otherwise make the blocking store call throw.
  * <p>
- * Implements {@link ReactiveReplayAware} and forwards every lifecycle call to the delegate when it is one too. None
- * of the three lifecycle calls touch {@code store}: a replay records nothing by design (ADR 132 decision 6), so
- * there is nothing to write here, only bookkeeping to update, which needs no thread hop of its own.
+ * Implements {@link ReactiveReplayAware} and forwards every lifecycle call to the delegate when it is one too.
+ * {@link #replayStarted()} and {@link #replayAbandoned()} are plain bookkeeping, void signals the driving engine
+ * never awaits, so neither touches {@code store} and neither needs a thread hop. {@link #replayCompleted()} does
+ * touch {@code store}, retrying a clear the replay may have left owed, hopped to {@link Schedulers#boundedElastic()}
+ * after the delegate's own completion, since it is the one lifecycle {@code Mono} this class's driving engine
+ * actually awaits.
  */
 @NullMarked
 public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAware, AppliedAppendRecorder {
@@ -63,11 +66,7 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
     }
 
     private Mono<Void> recordOnBoundedElastic(EventMetadata metadata) {
-        return Mono.<Void>fromRunnable(() -> {
-            if (recording.readyToRecord()) {
-                recording.record(metadata);
-            }
-        }).subscribeOn(Schedulers.boundedElastic());
+        return Mono.<Void>fromRunnable(() -> recording.recordIfReady(metadata)).subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
@@ -91,8 +90,7 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
     @Override
     public Mono<Void> replayCompleted() {
         Mono<Void> delegateCompletion = delegate instanceof ReactiveReplayAware replayAware ? replayAware.replayCompleted() : Mono.empty();
-        // A plain field write, no store call, so this needs no boundedElastic hop of its own.
-        return delegateCompletion.doOnSuccess(ignored -> recording.replayEnded());
+        return delegateCompletion.then(Mono.<Void>fromRunnable(recording::replayCompleted).subscribeOn(Schedulers.boundedElastic()));
     }
 
     @Override
@@ -100,6 +98,6 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
         if (delegate instanceof ReactiveReplayAware replayAware) {
             replayAware.replayAbandoned();
         }
-        recording.replayEnded();
+        recording.replayAbandoned();
     }
 }

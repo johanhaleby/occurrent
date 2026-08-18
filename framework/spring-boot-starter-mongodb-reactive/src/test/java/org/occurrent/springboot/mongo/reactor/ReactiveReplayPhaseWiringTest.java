@@ -19,13 +19,17 @@ package org.occurrent.springboot.mongo.reactor;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.reactor.ComposedReplayPhase;
-import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.springframework.context.support.GenericApplicationContext;
+import org.springframework.data.mongodb.core.ReactiveMongoOperations;
+
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
@@ -34,7 +38,12 @@ import static org.mockito.Mockito.*;
  * Mirrors {@link ReactiveCatchupLayerWiringTest}: the composition the durable model wraps is what
  * {@link ComposedReplayPhase} is filled from
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>
- * decision 8), so whenever a catch-up layer is composed the holder can answer, and whenever none is, it cannot.
+ * decision 8), so whenever a catch-up layer is composed the holder can answer, and whenever none is, the holder
+ * still answers, with the known {@link ReplayPhase#neverReplays()} rather than an unresolved empty result.
+ * <p>
+ * Calls the real {@code occurrentDurableSubscriptionModel} bean method rather than reproducing its composition and
+ * calling {@code suppliedBy} directly, so a regression that stops the bean method from filling the holder fails
+ * here instead of passing.
  * <p>
  * Container-free for the same reason {@link ReactiveCatchupLayerWiringTest} is: the composition is decided from bean
  * types and properties, so mocks answer it and a real MongoDB adds nothing.
@@ -48,34 +57,35 @@ class ReactiveReplayPhaseWiringTest {
             applicationContext.registerBean("userEventStore", EventStore.class, () -> positionOrderedEventStore(true));
             applicationContext.refresh();
 
-            CheckpointAwareSubscriptionModel composed = OccurrentReactiveMongoAutoConfiguration.composeCatchupLayer(
-                    mock(CheckpointAwareSubscriptionModel.class), new OccurrentProperties().getEventStore(),
-                    applicationContext.getBeanProvider(DcbEventStore.class), applicationContext);
-
-            ComposedReplayPhase holder = new ComposedReplayPhase();
-            holder.suppliedBy(composed);
+            ComposedReplayPhase holder = fillHolderThroughTheBeanMethod(applicationContext);
 
             assertThat(holder.forSubscription("some-subscription")).isPresent();
         }
     }
 
     @Test
-    void the_holder_is_empty_when_the_composition_has_no_catchup_layer() {
-        CheckpointAwareSubscriptionModel liveModel = mock(CheckpointAwareSubscriptionModel.class);
-
+    void the_holder_answers_neverReplays_when_the_composition_has_no_catchup_layer() {
         try (GenericApplicationContext applicationContext = new GenericApplicationContext()) {
             applicationContext.registerBean("userEventStore", EventStore.class, () -> positionOrderedEventStore(false));
             applicationContext.refresh();
 
-            CheckpointAwareSubscriptionModel composed = OccurrentReactiveMongoAutoConfiguration.composeCatchupLayer(
-                    liveModel, new OccurrentProperties().getEventStore(),
-                    applicationContext.getBeanProvider(DcbEventStore.class), applicationContext);
+            ComposedReplayPhase holder = fillHolderThroughTheBeanMethod(applicationContext);
 
-            ComposedReplayPhase holder = new ComposedReplayPhase();
-            holder.suppliedBy(composed);
-
-            assertThat(holder.forSubscription("some-subscription")).isEmpty();
+            Optional<ReplayPhase> phase = holder.forSubscription("some-subscription");
+            assertThat(phase).isPresent();
+            assertThat(phase.get().isReplaying()).isFalse();
         }
+    }
+
+    // Calls OccurrentReactiveMongoAutoConfiguration.occurrentDurableSubscriptionModel(..) itself, the production
+    // bean method, rather than reproducing its composeCatchupLayer(..) call and filling the holder by hand, so a
+    // regression that stops the bean method from calling suppliedBy fails this test instead of passing it.
+    private static ComposedReplayPhase fillHolderThroughTheBeanMethod(GenericApplicationContext applicationContext) {
+        ComposedReplayPhase holder = new ComposedReplayPhase();
+        OccurrentReactiveMongoAutoConfiguration<Object> autoConfiguration = new OccurrentReactiveMongoAutoConfiguration<>();
+        autoConfiguration.occurrentDurableSubscriptionModel(mock(ReactiveMongoOperations.class), mock(CheckpointStorage.class),
+                new OccurrentProperties(), applicationContext.getBeanProvider(DcbEventStore.class), applicationContext, holder);
+        return holder;
     }
 
     private static EventStore positionOrderedEventStore(boolean writesPosition) {

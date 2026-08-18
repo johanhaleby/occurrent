@@ -107,8 +107,14 @@ class ProjectionAnnotationRegistrar {
     // The applied-append recording poll's pacing (ADR 132 decision 7), and the scheduler that runs it. Both created
     // lazily on the first recordAppliedAppends = true projection, so an application that never uses the feature pays
     // for neither. One single-worker Scheduler for every recording projection in this context, disposed in close().
+    // recordingLock guards both fields' initialization and recordingPollScheduler's disposal, since a manually
+    // started push projection can register concurrently with another one, or with close() itself.
+    private final Object recordingLock = new Object();
     private @Nullable AppliedAppendRecordingRegistry recordingRegistry;
     private @Nullable Scheduler recordingPollScheduler;
+    // Set by close(). Checked before scheduling a poll tick, and again inside it, so neither a registration nor a
+    // reschedule racing close() can create or use a scheduler this registrar has already disposed.
+    private volatile boolean closing = false;
 
     private record DomainFeedCatchUp(String id, DomainEventFeed<?> feed, boolean waitUntilStarted) {
     }
@@ -123,6 +129,7 @@ class ProjectionAnnotationRegistrar {
     // store the closing context is about to dispose. Telling a replay to stop is not enough on its own: it notices at
     // its next event, and the store can be gone by then.
     void close() {
+        closing = true;
         pushModels.forEach(CatchupThenPushSubscriptionModel::shutdown);
         pushModels.clear();
         backgroundFeeds.forEach(DomainEventFeed::stopCatchUp);
@@ -140,8 +147,10 @@ class ProjectionAnnotationRegistrar {
             }
         }
         backgroundCatchUps.clear();
-        if (recordingPollScheduler != null) {
-            recordingPollScheduler.dispose();
+        synchronized (recordingLock) {
+            if (recordingPollScheduler != null) {
+                recordingPollScheduler.dispose();
+            }
         }
     }
 
@@ -308,7 +317,11 @@ class ProjectionAnnotationRegistrar {
         ComposedReplayPhase holder = applicationContext.getBeanProvider(ComposedReplayPhase.class).getIfAvailable();
         Optional<ReplayPhase> composed = holder == null ? Optional.empty() : holder.forSubscription(id);
         if (composed.isPresent()) {
-            return new ReplayPhaseResolution(composed.get(), true);
+            ReplayPhase phase = composed.get();
+            // The holder can answer neverReplays() as a known fact (the default composition legitimately has no
+            // catch-up layer, decision 9), not only as a live subscription's isCatchingUp. Polling a phase that can
+            // never report true would only cost a tick every interval for an answer that cannot change.
+            return new ReplayPhaseResolution(phase, phase != ReplayPhase.neverReplays());
         }
         Optional<ReplayAwareSubscriptions> direct = subscribable.capability(ReplayAwareSubscriptions.class);
         if (direct.isPresent()) {
@@ -343,36 +356,54 @@ class ProjectionAnnotationRegistrar {
     // projection on one fixed global tick. boundedElastic-family only, per this epic's ruling, since AppliedAppendStore
     // is a blocking-shaped interface and the tick calls it directly.
     private void registerForPoll(String id, ReplayPhase phase, AppliedAppendRecorder recorder) {
-        AppliedAppendRecordingRegistry registry = appliedAppendRecordingRegistry();
-        registry.register(id, phase, recorder);
-        Scheduler scheduler = appliedAppendPollScheduler();
-        scheduleNextTick(scheduler, registry, id);
+        appliedAppendRecordingRegistry().register(id, phase, recorder);
+        scheduleNextTick(id);
     }
 
-    private void scheduleNextTick(Scheduler scheduler, AppliedAppendRecordingRegistry registry, String id) {
-        long delayNanos = registry.dueInNanos(id);
+    // Self-rescheduling: each tick asks the registry how long until the projection is next due (an interval the
+    // tick itself may have just changed) and schedules exactly one more tick at that delay. A tick that throws is
+    // caught and logged rather than left to cancel the reschedule below it, the same protection the blocking
+    // registrar's poll already has, so a transient failure (a flaky phase or store) costs a skipped tick rather
+    // than replay detection for the rest of the context's life.
+    private void scheduleNextTick(String id) {
+        if (closing) {
+            return;
+        }
+        Scheduler scheduler = appliedAppendPollScheduler();
+        AppliedAppendRecordingRegistry registry = appliedAppendRecordingRegistry();
         scheduler.schedule(() -> {
-            registry.tick(id);
-            scheduleNextTick(scheduler, registry, id);
-        }, delayNanos, java.util.concurrent.TimeUnit.NANOSECONDS);
+            if (closing) {
+                return;
+            }
+            try {
+                registry.tick(id);
+            } catch (RuntimeException e) {
+                log.error("The applied-append recording poll for projection '{}' failed. It will be retried at the next tick.", id, e);
+            }
+            scheduleNextTick(id);
+        }, registry.dueInNanos(id), java.util.concurrent.TimeUnit.NANOSECONDS);
     }
 
     private AppliedAppendRecordingRegistry appliedAppendRecordingRegistry() {
-        if (recordingRegistry == null) {
-            ReplayPollProperties pollProperties = applicationContext.getBean(OccurrentProperties.class).getProjection().getAppliedAppend().getReplayPoll();
-            recordingRegistry = new AppliedAppendRecordingRegistry(pollProperties.getInitial(), pollProperties.getMax(), pollProperties.getMultiplier());
+        synchronized (recordingLock) {
+            if (recordingRegistry == null) {
+                ReplayPollProperties pollProperties = applicationContext.getBean(OccurrentProperties.class).getProjection().getAppliedAppend().getReplayPoll();
+                recordingRegistry = new AppliedAppendRecordingRegistry(pollProperties.getInitial(), pollProperties.getMax(), pollProperties.getMultiplier());
+            }
+            return recordingRegistry;
         }
-        return recordingRegistry;
     }
 
     private Scheduler appliedAppendPollScheduler() {
-        if (recordingPollScheduler == null) {
-            // Bounded, not unbounded. A leak in registration (impossible today, since one poll task exists per
-            // registered projection for the life of the context) would otherwise grow this worker pool without limit.
-            // 100 is comfortably above any realistic number of recording projections in one context.
-            recordingPollScheduler = Schedulers.newBoundedElastic(1, 100, "occurrent-applied-append-poll", 60, true);
+        synchronized (recordingLock) {
+            if (recordingPollScheduler == null) {
+                // Unbounded queue cap deliberately: one long-delayed, self-rescheduling task lives per registered
+                // recording projection at a time, so the queue's natural size is the number of such projections, a
+                // legitimate registration count rather than something a fixed cap should reject once exceeded.
+                recordingPollScheduler = Schedulers.newBoundedElastic(1, Integer.MAX_VALUE, "occurrent-applied-append-poll", 60, true);
+            }
+            return recordingPollScheduler;
         }
-        return recordingPollScheduler;
     }
 
     // Register a source=PUSH projection whose feed bean is a PushSubscriptionModel (CloudEvents). Wrapped in a

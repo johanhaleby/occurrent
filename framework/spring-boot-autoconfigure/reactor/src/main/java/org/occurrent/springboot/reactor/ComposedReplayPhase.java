@@ -44,6 +44,10 @@ import static java.util.Objects.requireNonNull;
 @NullMarked
 public final class ComposedReplayPhase {
 
+    // Distinct from replayAware being null: that also happens when suppliedBy was given a composition with no
+    // catch-up layer at all, a known fact rather than an unknown one, and the two must not answer forSubscription
+    // the same way. See its javadoc.
+    private volatile boolean supplied = false;
     private volatile @Nullable ReplayAwareSubscriptions replayAware;
 
     /**
@@ -58,20 +62,27 @@ public final class ComposedReplayPhase {
      */
     public void suppliedBy(Object composedModel) {
         requireNonNull(composedModel, "composedModel cannot be null");
+        this.supplied = true;
         this.replayAware = composedModel instanceof ReplayAwareSubscriptions replayAwareSubscriptions ? replayAwareSubscriptions : null;
     }
 
     /**
      * A {@link ReplayPhase} answering for {@code subscriptionId} against the composition {@link #suppliedBy} was
-     * given, or empty when {@link #suppliedBy} was never called or the composition cannot say whether it is
-     * replaying (no catch-up layer). Empty is the caller's cue to fall back to another phase source, ultimately
-     * {@link ReplayPhase#neverReplays()} with the warning ADR 132 decision 2 requires.
+     * given. Present and able to say when that composition exposes {@link ReplayAwareSubscriptions}. Present and
+     * {@link ReplayPhase#neverReplays()} when it was supplied a composition that does not, a store with no catch-up
+     * layer at all (ADR 132 decision 9), which is a known fact about that composition rather than an unresolved
+     * question. Empty only when {@link #suppliedBy} was never called, the caller's cue to fall back to another
+     * phase source, ultimately {@link ReplayPhase#neverReplays()} with the warning decision 2 requires for that
+     * genuinely unknown case.
      */
     public Optional<ReplayPhase> forSubscription(String subscriptionId) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        if (!supplied) {
+            return Optional.empty();
+        }
         ReplayAwareSubscriptions capability = replayAware;
         if (capability == null) {
-            return Optional.empty();
+            return Optional.of(ReplayPhase.neverReplays());
         }
         return Optional.of(() -> capability.isCatchingUp(subscriptionId));
     }
