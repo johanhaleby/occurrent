@@ -20,6 +20,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.eventstore.api.EventStoreCloudEventExtensions;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
@@ -52,6 +53,8 @@ class DomainEventForwarderTest {
         assertThat(published.domainEvent()).isEqualTo("hello");
         assertThat(published.metadata().getStreamId()).isEqualTo("stream1");
         assertThat(published.metadata().getStreamVersion()).isEqualTo(1);
+        assertThat(published.metadata().getPosition()).isEqualTo(1L);
+        assertThat(published.metadata().<String>get(EventStoreCloudEventExtensions.DCB_TAGS)).isEqualTo("tag1\ntag2");
     }
 
     @Test
@@ -94,6 +97,8 @@ class DomainEventForwarderTest {
                 .withType("SomethingHappened")
                 .withData(data.getBytes(StandardCharsets.UTF_8))
                 .withExtension(OccurrentCloudEventExtension.occurrent("stream1", position))
+                .withExtension(OccurrentCloudEventExtension.POSITION, position)
+                .withExtension(EventStoreCloudEventExtensions.DCB_TAGS, "tag1\ntag2")
                 .build();
         return new CheckpointAwareCloudEvent(cloudEvent, GlobalCheckpoint.of(position));
     }
