@@ -67,15 +67,16 @@ class RabbitMqCloudEventSinkTest extends RabbitMqTestSupport {
     /**
      * The other half of the same invariant. A confirm alone is not proof of delivery, so a publish the broker could
      * not route (nothing bound to the routing key) has to fail even though RabbitMQ confirms it before discarding
-     * it. {@link RetryStrategy#none()} keeps this from retrying into the same permanent failure forever.
+     * it. Uses the builder's default {@link RetryStrategy}, which excludes
+     * {@link RabbitMqUnroutableEventException} from its retries, since it is a configuration bug rather than a
+     * transient failure, so this also proves the publish fails promptly instead of retrying into the same
+     * permanent failure forever.
      */
     @Test
     void publish_throws_when_the_broker_returns_the_message_as_unroutable() throws Exception {
         // No queue is bound to this routing key on this exchange.
         RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
-        try (RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection(), resolver)
-                .retryStrategy(RetryStrategy.none())
-                .build()) {
+        try (RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection(), resolver).build()) {
             CloudEvent cloudEvent = CloudEventBuilder.v1()
                     .withId("id-2")
                     .withSource(URI.create("urn:test"))

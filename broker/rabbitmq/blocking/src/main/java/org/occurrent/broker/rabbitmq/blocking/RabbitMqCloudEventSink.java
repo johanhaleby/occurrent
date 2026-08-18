@@ -62,6 +62,9 @@ import static java.util.Objects.requireNonNull;
  * A transient failure, a dropped connection mid-publish for example, is retried under {@link Builder#retryStrategy(RetryStrategy)}
  * before a caller sees it, exponential backoff from 100 ms up to 2 seconds by default. The retry is not a substitute
  * for the acknowledgement wait, since a publish that was never acknowledged is not known to have failed, only unresolved.
+ * The default only retries a failure whose outcome was never established, {@link RabbitMqPublishTimeoutException}
+ * included. {@link RabbitMqUnroutableEventException} and an unrecognised cloud event type from the resolver are
+ * configuration bugs, not transient failures, and reach the caller on the first attempt instead.
  * <p>
  * Call {@link #close()} once the sink is no longer needed. It closes the {@link Channel} this sink created, not the
  * {@link Connection} it was given, since the connection may be shared with other channels the caller still owns.
@@ -165,8 +168,11 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         /**
          * How a transient publish failure is retried before {@link #publish(CloudEvent)} throws. Exponential
          * backoff from 100 ms up to 2 seconds by default, {@link CloudEventForwarder}'s own template for an
-         * external store. Guards against a transient failure only. It never substitutes for the acknowledgement
-         * wait {@link #acknowledgementTimeout(Duration)} configures.
+         * external store, retrying only {@link RabbitMqPublishTimeoutException} and the general
+         * {@link RabbitMqPublishException} rather than {@link RabbitMqUnroutableEventException}. Passing a
+         * {@link RetryStrategy} here replaces that predicate too, so a caller that wants unroutable events retried
+         * as well configures its own. It never substitutes for the acknowledgement wait
+         * {@link #acknowledgementTimeout(Duration)} configures.
          */
         public Builder retryStrategy(RetryStrategy retryStrategy) {
             this.retryStrategy = requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
@@ -183,8 +189,16 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
             }
         }
 
+        /**
+         * Retries {@link RabbitMqPublishTimeoutException} and every other {@link RabbitMqPublishException}, since
+         * both mean the publish's outcome was never established. {@link RabbitMqUnroutableEventException} and
+         * whatever the resolver's {@code CloudEventTypeMapper} throws for a type it does not recognise are
+         * configuration bugs, not transient failures, so they are excluded and reach the caller on the first
+         * attempt instead of retrying forever.
+         */
         private static RetryStrategy defaultRetryStrategy() {
-            return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f);
+            return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)
+                    .retryIf(throwable -> throwable instanceof RabbitMqPublishException && !(throwable instanceof RabbitMqUnroutableEventException));
         }
     }
 }
