@@ -245,9 +245,23 @@ This is an invariant rather than a convenience. `EventMetadata` is how the subsc
 DCB DSLs all read stream identity and position, so a message that leaves them in the body produces an empty
 `EventMetadata` on a consumer that reads them off the headers.
 
-At the CloudEvent level the sinks write through the CloudEvents SDK's own binary message writer for that transport, so
-every extension attribute on the event becomes a message header and the header names follow the CloudEvents binding
-specification rather than a naming scheme invented here. Decision 8 covers the binding mode itself.
+At the CloudEvent level every extension attribute on the event becomes a message header. **Only one of the two
+transports gets that from the CloudEvents SDK, and the ADR says which**, because assuming both do would leave the
+RabbitMQ module with no mapping at all.
+
+Kafka uses `cloudevents-kafka`, whose binary message writer produces the headers the Kafka binding specification
+defines. RabbitMQ has no such writer. The SDK's AMQP module is built on Qpid Proton and targets AMQP 1.0, while this
+design uses the AMQP 0-9-1 client, which is where `basicNack`, exchanges and routing keys come from, and nothing in
+the SDK writes a `BasicProperties`. There is no official CloudEvents binding for 0-9-1 either.
+
+So the RabbitMQ module defines that mapping, and it is fixed here rather than per implementer, modelled on the AMQP
+1.0 binding so it is recognisable. Each CloudEvent attribute becomes an entry in `BasicProperties.headers` under its
+name prefixed with `cloudEvents_`, which is the separator the AMQP binding recommends and the one that avoids the
+colon form's awkwardness in a header name. `datacontenttype` becomes `BasicProperties.contentType`. The event data is
+the message body unchanged. One class owns this mapping in both directions, so the bridge that reads it and the sink
+that writes it cannot drift apart.
+
+Decision 8 covers the binding mode itself.
 
 At the domain level the extensions come from wherever the caller got them, and the API says so rather than pretending
 otherwise. `publish(EventMetadata, E)` converts the domain event and then stamps the supplied metadata onto the
@@ -328,12 +342,12 @@ are on, since RabbitMQ AMQP headers are `Map<String, Object>` and Kafka headers 
 CloudEvent attributes are strings in both bindings anyway, so a richer value type would only be usable for application
 headers and would then differ per transport.
 
-**An application header may not use the prefix the CloudEvents binding reserves, and a colliding key is refused when
-the destination is built.** Decision 8 writes every CloudEvent attribute into the same header namespace, under the
-prefix that transport's binding specification defines, so an application header using it could overwrite `streamid`
-and break decision 4's invariant without anything failing. Refusing at construction makes that a startup error in the
-code that named the header rather than a wrong value on a consumer much later. Each transport module holds the prefix
-it enforces, taken from the CloudEvents SDK rather than written out again here.
+**An application header may not use the prefix the binding reserves, and a colliding key is refused when the
+destination is built.** Decision 8 writes every CloudEvent attribute into the same header namespace, so an application
+header using that prefix could overwrite `streamid` and break decision 4's invariant without anything failing.
+Refusing at construction makes that a startup error in the code that named the header rather than a wrong value on a
+consumer much later. Kafka takes the prefix from `cloudevents-kafka`, and RabbitMQ takes it from the `cloudEvents_`
+mapping decision 4 defines for it, since there is no SDK constant to take it from there.
 
 **The publish acknowledgement setting is named the same on both sinks, and it is a timeout rather than a switch.**
 RabbitMQ calls the mechanism publisher confirms and Kafka calls it acks plus waiting on the send future, and neither
@@ -351,6 +365,14 @@ may or may not have reached the broker and returning normally would report a suc
 hands the caller a decision it can act on, and the caller republishing after a timeout may produce a duplicate, which
 is the same at-least-once contract every consumer here already works under. The `RetryStrategy` does not cover this
 case, which is why the two are described separately below.
+
+**Waiting is only worth anything if the producer is configured to make the broker answer, so the Kafka sink requires
+`acks=all` and refuses to start below it.** Under `acks=0` a send future completes once the record reaches the socket
+buffer, and Kafka promises nothing about the broker having it, so the sink would wait, succeed, and let
+`CloudEventForwarder` advance its checkpoint past an event no broker ever stored. That is the timeout doing the
+opposite of its job. Refusing at startup is the only place this can be caught, since afterwards the failure looks
+exactly like success. RabbitMQ needs no equivalent, because publisher confirms have no setting that weakens them this
+way.
 
 **A destination is a record with static factories, a sink is a builder.** A destination has three components and no
 optional wiring, so it gets a canonical constructor, an `of(...)` factory for the common case, and a
@@ -380,22 +402,25 @@ transport enums that happen to line up, with two constants. `REDELIVER` puts the
 take it through a builder method named `onDeliveryFailure(DeliveryFailurePolicy)`, and `REDELIVER` is the default
 because it is the choice that cannot lose a message on a transient failure.
 
-RabbitMQ implements both through `basicNack`, with requeue for `REDELIVER` and without it for `PARK` so the queue's
-dead-letter exchange takes over, that being the exchange RabbitMQ hands a rejected message to when one is configured
-on the queue. Kafka has no per-message negative acknowledgement, so it implements
-`REDELIVER` by declining to commit the offset and seeking back to it, and `PARK` by producing the record to a separate
-topic.
+`REDELIVER` is where the two transports genuinely differ in mechanism, and it is written down here so the Kafka one
+does not invent a third behaviour. RabbitMQ has a per-message negative acknowledgement, so it calls `basicNack` with
+requeue and the broker redelivers. Kafka has none, so it declines to commit the offset and seeks back to it.
 
-**`PARK` has to actually park the message, and on both transports the obvious implementation does not.** RabbitMQ
-throws a `basicNack(requeue = false)` message away when the queue has no dead-letter exchange configured, so a bridge
-set to `PARK` checks for one when it starts and refuses to start without it, rather than discarding messages later and
-calling it parking. Kafka loses the record if the offset is committed before the parking publish is acknowledged, so
-the bridge waits for that acknowledgement and commits only after it, and leaves the original uncommitted when the
-parking publish fails. Both are the same rule as everywhere else here, which is that nothing is acknowledged until the
-event is somewhere it can be read from again.
+**`PARK` is a publish the bridge does itself, waits for, and only then acknowledges the original.** It is the same
+sequence on both transports, which is worth stating because the shortcut differs on each and both shortcuts lose
+messages.
 
-That is the one place the two bridges genuinely differ in mechanism, and it is written down here so the Kafka one does
-not invent a third behaviour. What neither may do is commit or acknowledge after logging the failure.
+Handing the message to RabbitMQ's own dead-lettering is the shortcut there, and it is not enough. Dead-lettering is
+the broker feature where a rejected message goes to a dead-letter exchange named on the queue, which then routes it
+onward. `basicNack(requeue = false)` throws the message away outright when no such exchange is configured, and even
+with one the broker republishes the message without publisher confirms, so an unavailable or unbound target can still
+drop it. So the bridge publishes to the parking exchange itself, with confirms, and acknowledges the original
+only once that confirm arrives. Kafka's shortcut is committing the offset before the parking record is acknowledged,
+which loses the original the same way, so it waits for that acknowledgement first too.
+
+In both cases a failed parking publish leaves the original unacknowledged, which means it is redelivered rather than
+lost. That is the rule the whole ADR runs on, that nothing is acknowledged until the event is somewhere it can be read
+from again. What neither bridge may do is acknowledge or commit after logging the failure.
 
 **The Kafka resolver uses the stream id as the message key by default.** Kafka only orders within a partition, and a
 projection reading one stream needs that stream's events in order, so keying by stream id puts them on one partition.
