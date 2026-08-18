@@ -112,8 +112,8 @@ class ProjectionAnnotationRegistrar {
     private final Object recordingLock = new Object();
     private @Nullable AppliedAppendRecordingRegistry recordingRegistry;
     private @Nullable Scheduler recordingPollScheduler;
-    // Set by close(). Checked before scheduling a poll tick, and again inside it, so neither a registration nor a
-    // reschedule racing close() can create or use a scheduler this registrar has already disposed.
+    // Set by close(), before close() reaches recordingLock below, so any check of this flag made while holding that
+    // lock sees it in the same order close() itself observes recordingPollScheduler in.
     private volatile boolean closing = false;
 
     private record DomainFeedCatchUp(String id, DomainEventFeed<?> feed, boolean waitUntilStarted) {
@@ -365,23 +365,33 @@ class ProjectionAnnotationRegistrar {
     // caught and logged rather than left to cancel the reschedule below it, the same protection the blocking
     // registrar's poll already has, so a transient failure (a flaky phase or store) costs a skipped tick rather
     // than replay detection for the rest of the context's life.
+    //
+    // The closing check and the scheduler's lazy creation share recordingLock with close()'s own dispose check, so a
+    // registration racing close() either creates the scheduler before close() sees it (and close() disposes what it
+    // just created) or sees closing already set (and creates nothing close() would have to know about). Checking
+    // closing outside that lock, or creating the scheduler outside it, leaves a window where a scheduler created
+    // after close() ran is never disposed.
     private void scheduleNextTick(String id) {
-        if (closing) {
-            return;
-        }
-        Scheduler scheduler = appliedAppendPollScheduler();
         AppliedAppendRecordingRegistry registry = appliedAppendRecordingRegistry();
-        scheduler.schedule(() -> {
+        synchronized (recordingLock) {
             if (closing) {
                 return;
             }
-            try {
-                registry.tick(id);
-            } catch (RuntimeException e) {
-                log.error("The applied-append recording poll for projection '{}' failed. It will be retried at the next tick.", id, e);
+            if (recordingPollScheduler == null) {
+                // Unbounded queue cap deliberately: one long-delayed, self-rescheduling task lives per registered
+                // recording projection at a time, so the queue's natural size is the number of such projections, a
+                // legitimate registration count rather than something a fixed cap should reject once exceeded.
+                recordingPollScheduler = Schedulers.newBoundedElastic(1, Integer.MAX_VALUE, "occurrent-applied-append-poll", 60, true);
             }
-            scheduleNextTick(id);
-        }, registry.dueInNanos(id), java.util.concurrent.TimeUnit.NANOSECONDS);
+            recordingPollScheduler.schedule(() -> {
+                try {
+                    registry.tick(id);
+                } catch (RuntimeException e) {
+                    log.error("The applied-append recording poll for projection '{}' failed. It will be retried at the next tick.", id, e);
+                }
+                scheduleNextTick(id);
+            }, registry.dueInNanos(id), java.util.concurrent.TimeUnit.NANOSECONDS);
+        }
     }
 
     private AppliedAppendRecordingRegistry appliedAppendRecordingRegistry() {
@@ -391,18 +401,6 @@ class ProjectionAnnotationRegistrar {
                 recordingRegistry = new AppliedAppendRecordingRegistry(pollProperties.getInitial(), pollProperties.getMax(), pollProperties.getMultiplier());
             }
             return recordingRegistry;
-        }
-    }
-
-    private Scheduler appliedAppendPollScheduler() {
-        synchronized (recordingLock) {
-            if (recordingPollScheduler == null) {
-                // Unbounded queue cap deliberately: one long-delayed, self-rescheduling task lives per registered
-                // recording projection at a time, so the queue's natural size is the number of such projections, a
-                // legitimate registration count rather than something a fixed cap should reject once exceeded.
-                recordingPollScheduler = Schedulers.newBoundedElastic(1, Integer.MAX_VALUE, "occurrent-applied-append-poll", 60, true);
-            }
-            return recordingPollScheduler;
         }
     }
 
