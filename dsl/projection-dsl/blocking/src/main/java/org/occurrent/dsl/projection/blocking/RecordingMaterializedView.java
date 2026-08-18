@@ -55,7 +55,7 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
 
     @Override
     public void update(E event) {
-        // No metadata means no appendid to read, so there is nothing to attempt recording for; skip straight to the
+        // No metadata means no appendid to read, so there is nothing to attempt recording for. Skip straight to the
         // delegate rather than routing through update(EventMetadata, E) with EventMetadata.empty() only to have
         // AppliedAppendRecording.record(..) log a debug line for every such event.
         delegate.update(event);
@@ -72,6 +72,11 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
     @Override
     public void replayObserved() {
         recording.replayObserved();
+    }
+
+    @Override
+    public void retryPendingClear() {
+        recording.retryPendingClear();
     }
 
     @Override

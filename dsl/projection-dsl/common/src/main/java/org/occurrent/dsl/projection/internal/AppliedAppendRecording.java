@@ -129,6 +129,18 @@ public final class AppliedAppendRecording {
     }
 
     /**
+     * The one hook {@code AppliedAppendRecorder.retryPendingClear()} forwards to: retry a clear already marked as
+     * owed, doing nothing if none is. Lets a poll tick that finds the phase back to live still retry a clear a
+     * replay observed earlier and left failing, since the phase no longer reporting a replay is not the same as the
+     * clear it caused having succeeded.
+     */
+    public void retryPendingClear() {
+        if (pendingClear) {
+            attemptClear();
+        }
+    }
+
+    /**
      * A catch-up replay has started delivering to this projection (the view-DSL replay lifecycle). Marks a clear as
      * needed but, deliberately, does not attempt it here: {@code ReplayAware.replayStarted()} and
      * {@code ReactiveReplayAware.replayStarted()} are void signals the driving engine calls inline and never waits

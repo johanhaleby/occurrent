@@ -19,8 +19,16 @@ package org.occurrent.springboot.common;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.dsl.projection.AppliedAppendRecorder;
+import org.occurrent.dsl.projection.AppliedAppendStore;
+import org.occurrent.dsl.projection.ReplayPhase;
+import org.occurrent.dsl.projection.internal.AppliedAppendRecording;
+import org.occurrent.eventstore.api.AppendId;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -100,5 +108,94 @@ class AppliedAppendRecordingRegistryTest {
 
         assertThat(registry.dueInNanos("p1")).isEqualTo(Duration.ofMillis(400).toNanos());
         assertThat(registry.dueInNanos("p2")).isEqualTo(Duration.ofMillis(200).toNanos());
+    }
+
+    @Test
+    void a_live_tick_retries_a_pending_clear_through_retryPendingClear() {
+        AtomicInteger retryCalls = new AtomicInteger();
+        registry.register("p1", () -> false, new AppliedAppendRecorder() {
+            @Override
+            public void replayObserved() {
+            }
+
+            @Override
+            public void retryPendingClear() {
+                retryCalls.incrementAndGet();
+            }
+        });
+
+        registry.tick("p1");
+
+        assertThat(retryCalls.get()).isEqualTo(1);
+    }
+
+    // The sequence a live tick's retry exists for: a replay is observed and its clear fails (store outage), the
+    // replay ends and the phase reports live again, the store recovers, and no live event ever arrives to retry the
+    // clear through the wrapper's own update path. Without the live-tick retry, pendingClear stays set forever and
+    // hasApplied keeps answering true for the pre-replay appends the reset rule owes removal.
+    @Test
+    void a_clear_that_failed_during_a_replay_is_retried_on_a_later_live_tick_with_no_deliveries_and_recording_resumes() {
+        FlakyClearStore store = new FlakyClearStore();
+        AppendId before = AppendId.mint();
+        store.recordApplied("orders", before);
+        AtomicBoolean replaying = new AtomicBoolean(true);
+        AppliedAppendRecording recording = new AppliedAppendRecording("orders", store, ReplayPhase.neverReplays());
+        registry.register("orders", replaying::get, adapting(recording));
+
+        registry.tick("orders");
+        assertThat(store.hasApplied("orders", before)).isTrue();
+
+        replaying.set(false);
+        store.clearShouldFail = false;
+
+        registry.tick("orders");
+        assertThat(store.hasApplied("orders", before)).isFalse();
+
+        AppendId after = AppendId.mint();
+        assertThat(recording.readyToRecord()).isTrue();
+        recording.record(metadataWithAppendId(after));
+        assertThat(store.hasApplied("orders", after)).isTrue();
+    }
+
+    private static AppliedAppendRecorder adapting(AppliedAppendRecording recording) {
+        return new AppliedAppendRecorder() {
+            @Override
+            public void replayObserved() {
+                recording.replayObserved();
+            }
+
+            @Override
+            public void retryPendingClear() {
+                recording.retryPendingClear();
+            }
+        };
+    }
+
+    private static EventMetadata metadataWithAppendId(AppendId appendId) {
+        return new EventMetadata(Map.of(OccurrentCloudEventExtension.APPEND_ID, appendId.toString()));
+    }
+
+    // A store whose clear() fails until told otherwise, for the failed-clear-then-recovery test.
+    private static final class FlakyClearStore implements AppliedAppendStore {
+        private final AppliedAppendStore delegate = AppliedAppendStore.inMemory();
+        boolean clearShouldFail = true;
+
+        @Override
+        public void recordApplied(String projectionId, AppendId appendId) {
+            delegate.recordApplied(projectionId, appendId);
+        }
+
+        @Override
+        public boolean hasApplied(String projectionId, AppendId appendId) {
+            return delegate.hasApplied(projectionId, appendId);
+        }
+
+        @Override
+        public void clear(String projectionId) {
+            if (clearShouldFail) {
+                throw new RuntimeException("clear failed");
+            }
+            delegate.clear(projectionId);
+        }
     }
 }

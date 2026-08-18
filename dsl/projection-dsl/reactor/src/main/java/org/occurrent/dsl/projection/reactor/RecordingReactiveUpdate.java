@@ -76,6 +76,11 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
     }
 
     @Override
+    public void retryPendingClear() {
+        recording.retryPendingClear();
+    }
+
+    @Override
     public void replayStarted() {
         if (delegate instanceof ReactiveReplayAware replayAware) {
             replayAware.replayStarted();

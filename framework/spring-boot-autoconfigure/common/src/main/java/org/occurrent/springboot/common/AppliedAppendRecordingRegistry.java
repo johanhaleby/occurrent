@@ -84,7 +84,10 @@ public final class AppliedAppendRecordingRegistry {
     /**
      * Asks {@code projectionId}'s {@link ReplayPhase}. Replaying calls {@link AppliedAppendRecorder#replayObserved()}
      * and resets the interval to {@code initial}, so a projection just seen replaying, or one that has just
-     * registered, is polled at the fast end. Live grows the interval by {@code multiplier}, capped at {@code max}.
+     * registered, is polled at the fast end. Live retries a clear the recorder already owes from an earlier
+     * replay, through {@link AppliedAppendRecorder#retryPendingClear()}, since the phase no longer reporting a
+     * replay is not the same as a clear that replay caused having succeeded, then grows the interval by
+     * {@code multiplier}, capped at {@code max}.
      *
      * @throws IllegalArgumentException if {@code projectionId} was never registered
      */
@@ -94,6 +97,7 @@ public final class AppliedAppendRecordingRegistry {
             entry.recorder().replayObserved();
             entry.intervalNanos()[0] = initialNanos;
         } else {
+            entry.recorder().retryPendingClear();
             entry.intervalNanos()[0] = Math.min((long) (entry.intervalNanos()[0] * multiplier), maxNanos);
         }
     }
