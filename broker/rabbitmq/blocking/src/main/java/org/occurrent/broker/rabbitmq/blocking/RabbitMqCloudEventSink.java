@@ -27,9 +27,11 @@ import org.occurrent.retry.RetryStrategy;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -71,12 +73,26 @@ import static java.util.Objects.requireNonNull;
  */
 public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseable {
 
+    /**
+     * Caps {@link #returnedCorrelationIds}. A publish that never removes its own correlationId, one whose
+     * acknowledgement timed out and was later returned anyway, would otherwise grow that set forever under
+     * repeated timeouts. Publishes are serialized on this sink's channel, so at most one correlationId is genuinely
+     * in flight at a time, well inside this cap, and the oldest entries are evicted first when it is exceeded.
+     */
+    private static final int MAX_TRACKED_RETURNED_CORRELATION_IDS = 10_000;
+
     private final Channel channel;
     private final DestinationResolver<RabbitMqDestination> resolver;
     private final Duration acknowledgementTimeout;
     private final RetryStrategy retryStrategy;
     private final Lock publishLock = new ReentrantLock();
-    private final Set<String> returnedCorrelationIds = ConcurrentHashMap.newKeySet();
+    private final Set<String> returnedCorrelationIds = Collections.synchronizedSet(Collections.newSetFromMap(
+            new LinkedHashMap<String, Boolean>() {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                    return size() > MAX_TRACKED_RETURNED_CORRELATION_IDS;
+                }
+            }));
 
     private RabbitMqCloudEventSink(Channel channel, DestinationResolver<RabbitMqDestination> resolver, Duration acknowledgementTimeout, RetryStrategy retryStrategy) {
         this.channel = channel;

@@ -37,15 +37,16 @@ import static java.util.Objects.requireNonNull;
  * the obvious choice for that delegate, but nothing here requires it. Any {@link CloudEventSink} works, including
  * an application's own wrapper.
  * <p>
- * Pairing this with {@link DomainEventForwarder} is the one combination this design tells you not to build. A
- * forwarder starts from a stored {@link CloudEvent}, so decoding it to a domain event and handing it to a sink that
- * converts straight back means one decode and one re-encode per event, and it is lossy besides, since
- * {@link #publish(Object)} builds a fresh event and only the id, source, subject and time a
+ * Pairing this with {@link DomainEventForwarder} is the one combination this design tells you not to build.
+ * {@link DomainEventForwarder} always starts from a stored {@link CloudEvent}, so decoding it to a domain event and
+ * handing it to a sink that converts straight back means one decode and one re-encode per event, and it is lossy
+ * besides, since {@link #publish(Object)} builds a fresh event and only the id, source, subject and time a
  * {@link CloudEventConverter} happens to reproduce survive the round trip. Forwarding stored events uses
  * {@link org.occurrent.broker.api.blocking.CloudEventForwarder} with a plain {@link CloudEventSink} instead, which
- * converts nothing. Pair this sink with {@link DomainEventForwarder} only when it is genuinely publishing a domain
- * event that never went through the event store, or through {@link #publish(EventMetadata, Object)} handed metadata
- * from elsewhere.
+ * converts nothing. {@link DomainEventForwarder} is for a {@link DomainEventSink} an application implements itself,
+ * one that genuinely publishes through its own converter, never for this sink. Call this sink directly instead,
+ * {@link #publish(Object)} for a domain event that never went through the event store, or
+ * {@link #publish(EventMetadata, Object)} for one whose metadata came from elsewhere.
  */
 public final class RabbitMqDomainEventSink<E> implements DomainEventSink<E> {
 
