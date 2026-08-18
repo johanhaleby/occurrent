@@ -107,14 +107,21 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     }
 
     /**
-     * @param pollBackoff rejected the same way {@link #waitUntilApplied(String, AppendId, Duration, Backoff)}
+     * @param retention    rejected if negative, since MongoDB would then reject the TTL index this store creates
+     *                      from it, and the default unbounded {@code Retry} would retry that permanent
+     *                      configuration error forever rather than fail once at startup.
+     * @param pollBackoff  rejected the same way {@link #waitUntilApplied(String, AppendId, Duration, Backoff)}
      *                     rejects one, so a {@code pollBackoff} that would busy-loop the store fails here, when the
      *                     bean is built, rather than at the first wait a caller happens to make.
      */
     public ReactiveMongoAppliedAppendStore(ReactiveMongoOperations mongoOperations, String collection, Duration retention, Retry retry, Backoff pollBackoff) {
         this.mongoOperations = requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collection = requireNonNull(collection, "collection cannot be null");
-        this.retention = requireNonNull(retention, "retention cannot be null");
+        requireNonNull(retention, "retention cannot be null");
+        if (retention.isNegative()) {
+            throw new IllegalArgumentException("retention cannot be negative, a TTL index cannot expire a document before it was inserted.");
+        }
+        this.retention = retention;
         this.retry = requireNonNull(retry, "retry cannot be null");
         AppliedAppendStore.rejectBusyLoopBackoff(requireNonNull(pollBackoff, "pollBackoff cannot be null"));
         this.pollBackoff = pollBackoff;

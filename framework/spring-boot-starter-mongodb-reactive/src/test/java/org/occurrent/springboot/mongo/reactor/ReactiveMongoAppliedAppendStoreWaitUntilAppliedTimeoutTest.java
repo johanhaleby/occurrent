@@ -120,6 +120,17 @@ class ReactiveMongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
     }
 
     @Test
+    void the_constructor_rejects_a_negative_retention_instead_of_retrying_the_resulting_mongo_error_forever() {
+        ReactiveMongoOperations mongoOperations = mock(ReactiveMongoOperations.class);
+
+        assertThatThrownBy(() ->
+                new ReactiveMongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(-1),
+                        Retry.backoff(5, Duration.ofMillis(100)).maxBackoff(Duration.ofSeconds(2)), Backoff.fixed(20))
+        ).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("retention cannot be negative");
+    }
+
+    @Test
     void keeps_polling_until_its_own_deadline_when_a_finite_retry_exhausts_well_before_it() {
         ReactiveMongoOperations mongoOperations = mongoOperationsWithIndexingStubbed();
         when(mongoOperations.exists(any(Query.class), anyString()))
