@@ -1,14 +1,14 @@
 schema_version: 1
 epic: brk
-revision: 2
-updated_at: 2026-08-18T04:55:28Z
+revision: 3
+updated_at: 2026-08-18T05:18:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
 milestone: 3
 registered_at: 2026-08-18T04:44:26Z
 definition_of_done:
-  - "#412-#417 and #419 closed via merged PRs; ADR 0133 merged after an explicitly closed design gate"
+  - "#412-#417, #419 and #846 closed via merged PRs; ADR 0133 merged after an explicitly closed design gate"
   - "#421 held docs branch review-clean in occurrent-org.github.io, registered in the release merge order, rebased on its base, addedTags present, AGENTS.md:91 late-joiner check done, frozen for its release day per the release-train ruling"
   - "U9 fixpoint converged under the stopping rule Johan sets at approval, plus its mechanical checklist green (mvn_local_snapshot.sh artifact proof for all publishable leaves, required-test-images.sh emits both broker images warning-free, shard-timing within budget on the last brk merge, cross-transport API symmetry check, #414 thinness re-check)"
   - "Every merge to main was releasable as-is (no BOM/excludeArtifacts/modules entry ever referenced a not-yet-existing artifact)"
@@ -28,20 +28,22 @@ units:
   U1:
     issue: 412
     goal: "ADR 0133: broker architecture, seams (EventDestination, DestinationResolver, sinks), module split, cross-transport convention section; three open decisions through the orchestrator gate (message binding, Spring Boot auto-config scope, #414 publish-vs-example presented honestly)"
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: "uds:/tmp/cc-socks/33860.sock"
     deliverables:
       - {check: manual_approval, ref: "design gate closed by Johan's explicit word, via the orchestrator", met: false, evidence: null}
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 412, met: false, evidence: null}
     blocking_on: []
-    next_action: "Chip task_6afd231e awaits Johan's click. #412 claimed (label + routing comment 5323773029, read back). On start: resolve the session by marker, arm the quiet/stalled detector once its worktree exists (journaled trigger), expect the three-decision gate message"
-    last_meaningful_progress_at: 2026-08-18T04:55:28Z
-    observed: {}
-    assessment: "ADR number 0133 reserved (cross-branch scan 2026-08-18T04:3xZ: max 0132 on origin/*, ledger empty above). The reservation is a courtesy; adr-numbering CI on the merged checkout is the enforcing guard. Prose-only diff expected, so the [ci skip] marker rule applies."
+    next_action: "Gate rulings relayed 2026-08-18T05:1xZ (binary-only binding, auto-config later as #846/U10, publish-as-module, CloudEventSink). Worker folds them, then pr-create + pr-fix + DELIVERY_RESULT. Expected-progress deadline 2026-08-18T06:20Z; past it, read the session tail"
+    last_meaningful_progress_at: 2026-08-18T05:18:00Z
+    observed:
+      branch: {name: "brk/u1-adr-broker-architecture", head: "15737e7ba13afdae59a38bf15b850b0f018ae52d", via: "git ls-remote after the worker's gate message", at: 2026-08-18T05:18:00Z}
+      session: {address: "uds:/tmp/cc-socks/33860.sock", via: "cross-session gate message carrying the U1 marker", at: 2026-08-18T05:18:00Z}
+    assessment: "ADR number 0133 re-audited clean by the worker (max 0132). Prose-only diff, [ci skip] rule applies. Gate reached exactly as briefed: no prompt, decisions handed back, worker parked in the foreground."
   U2:
     issue: 413
     goal: "occurrent-broker-api-blocking: forwarders, default resolver, fake-sink tests; inert-and-true scaffolding only (root modules entry, broker + broker/api aggregators, BOM + excludeArtifacts for what U2 itself creates, integration-tests.{rabbitmq,kafka}.version properties + required-test-images.sh greps, shard paths for the broker subtree)"
@@ -154,16 +156,32 @@ units:
     last_meaningful_progress_at: 2026-08-18T04:44:26Z
     observed: {}
     assessment: "Sonnet/medium chip. Depends on both transport tracks because the mandated scope includes Kafka partitioning/ordering, wider than the issue's explicit #414/#415/#419 line, deliberate. Docs-repo merges are Johan's. Maintainer declined community offers pending modules; that hold dissolves once U7 lands."
+  U10:
+    issue: 846
+    goal: "Spring Boot auto-configuration for the broker modules: property-driven sinks and bridges for both transports, conditional-on-classpath split, starter conventions per #409/ADR 0072; extends the held docs branch with the starter wiring section, coordinated with U8"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U4, U6]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 846, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U4 and U6 merge"
+    last_meaningful_progress_at: 2026-08-18T05:18:00Z
+    observed: {}
+    assessment: "Adopted on Johan's ruling at the U1 design gate 2026-08-18 (own issue, in the 0.34.0 milestone, adopted by an orchestrator). Sonnet/high chip. @RabbitSaga/@KafkaSaga stay out of scope, a later layer."
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
     phase: PLANNED
     health: PROGRESSING
     swept: false
-    depends_on: [U7, U8]
+    depends_on: [U7, U8, U10]
     session: null
     deliverables:
-      - {check: manual_approval, ref: "fixpoint clean under the stopping rule Johan sets at approval, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
+      - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
     blocking_on: []
     next_action: "Run as orchestrator-integrated subagent rounds after U7 and U8"
     last_meaningful_progress_at: 2026-08-18T04:44:26Z
