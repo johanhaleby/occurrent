@@ -53,10 +53,10 @@ import static java.util.Objects.requireNonNull;
  * confirm that follows it would otherwise look like success. An acknowledgement timeout, five seconds by default,
  * bounds the wait and fails it with {@link RabbitMqPublishTimeoutException} rather than blocking forever on a
  * broker that never answers, and {@link Builder#acknowledgementTimeout(Duration)} is not offered as something that
- * can be turned off, for the same reason {@link CloudEventSink}'s own javadoc gives. A timed-out publish is left
- * outstanding on the broker's side of that channel, so this sink retires the channel and opens a fresh one
- * underneath the timeout, and a later publish is never kept waiting on an abandoned one or blamed for its eventual
- * nack.
+ * can be turned off, for the same reason {@link CloudEventSink}'s own javadoc gives. A publish that ends this way,
+ * or one abandoned to an interrupted wait, is left outstanding on the broker's side of that channel, so this sink
+ * retires the channel and opens a fresh one underneath it, and a later publish is never kept waiting on an
+ * abandoned one or blamed for its eventual nack.
  * <p>
  * Each publish carries its own random {@code correlationId}, so a {@code basic.return} is matched to the publish it
  * belongs to and never to a different one, including a retry of the same event after an earlier attempt's
@@ -131,20 +131,29 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         }
     }
 
-    // Called under publishLock, after waitForConfirms has timed out. The RabbitMQ client leaves that publish's
-    // delivery tag outstanding on the channel forever, so a later publish on the same channel would wait on it too
-    // and could inherit its eventual nack. Retiring the channel and opening a fresh one keeps that abandoned
-    // publish's outcome from ever being attributed to a later, unrelated one. The old channel is closed first, not
-    // after, so its channel number is free again for the replacement, which matters on a connection with no spare
-    // number to hand out. A caller that cannot recreate a channel here still sees the timeout the caller asked
-    // about, not this secondary failure, since the retire failure is thrown separately and attached to it as
-    // suppressed rather than replacing it, and it is never classified as the sink's own retryable
-    // {@link RabbitMqPublishException}.
+    // Called under publishLock, after waitForConfirms has ended without confirming or denying the publish, by
+    // timeout or by interruption. The RabbitMQ client leaves that publish's delivery tag outstanding on the channel
+    // forever, so a later publish on the same channel would wait on it too and could inherit its eventual nack.
+    // Retiring the channel and opening a fresh one keeps that abandoned publish's outcome from ever being
+    // attributed to a later, unrelated one. The old channel is closed first, not after, so its channel number is
+    // free again for the replacement, which matters on a connection with no spare number to hand out.
     private void retireChannel() {
         closeQuietly(channel);
         Channel replacement = openConfirmChannel(connection);
         installReturnListener(replacement);
         channel = replacement;
+    }
+
+    // A failure to reopen the channel here is attached to primaryFailure as suppressed rather than thrown in its
+    // place, so the caller of this publish still sees the failure it actually asked about (a timeout or an
+    // interruption), not this secondary one. If reopening fails, the channel field is left pointing at the closed
+    // channel this call just retired, so every publish after this one fails fast on it instead of hanging.
+    private void retireChannelPreserving(Throwable primaryFailure) {
+        try {
+            retireChannel();
+        } catch (RabbitMqPublishException retireFailure) {
+            primaryFailure.addSuppressed(retireFailure);
+        }
     }
 
     private static void closeQuietly(Channel channel) {
@@ -204,19 +213,15 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
                     destination.exchange() + "\" with routing key \"" + destination.routingKey() + "\"", e);
         } catch (TimeoutException e) {
             RabbitMqPublishTimeoutException timeoutException = new RabbitMqPublishTimeoutException(acknowledgementTimeout, e);
-            try {
-                retireChannel();
-            } catch (RabbitMqPublishException retireFailure) {
-                // Channel replacement failed, so the channel field still points at the closed channel this call
-                // just retired, and every publish after this one fails fast on it. The caller of this publish still
-                // sees the timeout it actually asked about, not this secondary failure, which is attached to it as
-                // suppressed rather than thrown in its place.
-                timeoutException.addSuppressed(retireFailure);
-            }
+            retireChannelPreserving(timeoutException);
             throw timeoutException;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RabbitMqPublishException("Interrupted while waiting for a RabbitMQ publisher confirm", e);
+            // The unconfirmed publish is abandoned here too, exactly as it is on a confirm-wait timeout, so a later
+            // publish on this channel must not be left to wait on it or be failed by its eventual nack.
+            RabbitMqPublishException interruptedException = new RabbitMqPublishException("Interrupted while waiting for a RabbitMQ publisher confirm", e);
+            retireChannelPreserving(interruptedException);
+            throw interruptedException;
         } finally {
             publishLock.unlock();
         }
