@@ -188,6 +188,9 @@ class MongoAppliedAppendStore implements AppliedAppendStore {
      * keeps retrying with no limit. Without this, a sustained store outage keeps a single read retrying forever and
      * the wait never reaches the deadline check that is supposed to end it. The loop shape (read, check, sleep, grow
      * the backoff) otherwise matches the interface default. Only the read is store-specific.
+     * <p>
+     * The deadline is checked before a retried read sleeps, not after, so the last in-flight attempt can run past
+     * the deadline by up to one of {@link #retryStrategy}'s own backoff intervals before the wait gives up.
      */
     @Override
     public boolean waitUntilApplied(String projectionId, AppendId appendId, Duration timeout, Backoff backoff) {
