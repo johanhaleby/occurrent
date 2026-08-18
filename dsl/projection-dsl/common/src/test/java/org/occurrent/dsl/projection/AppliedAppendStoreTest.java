@@ -23,6 +23,7 @@ import org.occurrent.eventstore.api.AppendId;
 import org.occurrent.retry.Backoff;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -221,6 +222,32 @@ class AppliedAppendStoreTest {
         boolean applied = store.waitUntilApplied("orders", AppendId.mint(), Duration.ofMillis(100), Backoff.fixed(10));
 
         assertThat(applied).isFalse();
+    }
+
+    @Test
+    void waitUntilApplied_returns_false_at_its_deadline_rather_than_throwing_when_hasApplied_keeps_throwing() {
+        AppliedAppendStore alwaysThrows = new AppliedAppendStore() {
+            @Override
+            public void recordApplied(String projectionId, AppendId appendId) {
+            }
+
+            @Override
+            public boolean hasApplied(String projectionId, AppendId appendId) {
+                throw new RuntimeException("store outage");
+            }
+
+            @Override
+            public void clear(String projectionId) {
+            }
+        };
+        Duration timeout = Duration.ofMillis(100);
+
+        Instant start = Instant.now();
+        boolean applied = alwaysThrows.waitUntilApplied("orders", AppendId.mint(), timeout, Backoff.fixed(10));
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(applied).isFalse();
+        assertThat(elapsed).isGreaterThanOrEqualTo(timeout.minusMillis(20));
     }
 
     @Test

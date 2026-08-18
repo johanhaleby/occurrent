@@ -110,10 +110,10 @@ public interface AppliedAppendStore {
 
     /**
      * Blocks until {@code projectionId} has applied {@code appendId}, or {@code timeout} elapses. Returns
-     * {@code true} once applied, {@code false} on timeout or if the waiting thread is interrupted, and never throws
-     * for either, the same shape {@code Subscription.waitUntilStarted(Duration)} uses for a blocking wait elsewhere
-     * in this library. An interrupt restores the thread's interrupt flag before returning, so a caller that needs to
-     * tell the two apart can check {@link Thread#isInterrupted()} itself.
+     * {@code true} once applied, and {@code false} on timeout, on interrupt, or if {@link #hasApplied(String, AppendId)}
+     * keeps throwing, never throwing itself for any of those, the same shape {@code Subscription.waitUntilStarted(Duration)}
+     * uses for a blocking wait elsewhere in this library. An interrupt restores the thread's interrupt flag before
+     * returning, so a caller that needs to tell the cases apart can check {@link Thread#isInterrupted()} itself.
      * <p>
      * This is a plain read-and-sleep loop, since the record lives in a store this method cannot subscribe to for a
      * push notification. An implementation backed by a store that can push a change is free to override this method.
@@ -122,9 +122,10 @@ public interface AppliedAppendStore {
      * is never recorded, and the wait times out. That is the correct answer rather than a defect, since a
      * projection that never applies the append has no effect for the caller to read.
      * <p>
-     * {@code backoff} paces the polls only. It is not a retry policy for the store, which is an implementation's own
-     * concern. The Mongo stores wrap their reads and writes in a {@code RetryStrategy}, so a transient store error
-     * during a wait is absorbed there rather than ending the wait.
+     * {@code backoff} paces the polls only, not a retry policy for the store. A poll whose
+     * {@link #hasApplied(String, AppendId)} throws counts as not yet applied, so a store failure keeps the wait
+     * polling toward its deadline rather than ending it, the same absorb-and-poll behavior the Mongo stores
+     * establish with their own {@code RetryStrategy}.
      *
      * @param appendId the append to wait for, never {@code null}. An append that persisted no events has no
      *                 identity to wait for in the first place, see {@code WriteResult}/{@code DcbAppendResult}.
@@ -145,7 +146,13 @@ public interface AppliedAppendStore {
             case Backoff.None ignored -> throw new IllegalStateException("unreachable, rejected above");
         };
         while (true) {
-            if (hasApplied(projectionId, appendId)) {
+            boolean applied;
+            try {
+                applied = hasApplied(projectionId, appendId);
+            } catch (RuntimeException e) {
+                applied = false;
+            }
+            if (applied) {
                 return true;
             }
             long remainingNanos = deadlineNanos - System.nanoTime();
