@@ -168,6 +168,8 @@ mapping, which is also why two projections reading the same event type get two q
 D destinationFor(CloudEvent cloudEvent);
 
 Optional<Set<D>> destinationsFor(SubscriptionFilter filter);
+
+D catchAllDestination();
 ```
 
 The reverse method returns an `Optional` because a resolver often cannot answer it. `CloudEventTypeMapper` translates
@@ -250,9 +252,17 @@ extensions, so the id, source, subject and time the store recorded do not reach 
 new ones. The Occurrent extensions do survive, which is what the consuming side needs to build `EventMetadata`, so
 this path is sound for a consumer that keys on stream, version or position.
 
-It is not sound for a consumer filtering on subject, source or time, because that consumer can decide differently on
-the live path than the same filter does during a catch-up replay over the stored events. A deployment with such a
-consumer uses `CloudEventForwarder`, where nothing is regenerated because nothing is converted.
+The restriction is easier to state by what does survive, because that is the shorter list. The event type survives,
+since the sink derives it from the domain event's class through the same `CloudEventTypeMapper` the stored event was
+written with. The Occurrent extensions survive, because the forwarder puts them on as headers. **Everything else a
+`Filter` can match on does not.** `EventMetadata.from` reads only `getExtensionNames()`, so `id`, `time`, `source`,
+`subject`, `dataschema` and `datacontenttype` never reach the sink and whatever it publishes has new ones. Data
+survives only where the sink's encoding is the one the store holds, which is the application's to know rather than
+this design's to promise.
+
+So a consumer filtering on any of those can decide differently on the live path than the same filter does during a
+catch-up replay over the stored events, and a deployment with one uses `CloudEventForwarder`, where nothing is
+regenerated because nothing is converted.
 
 On the consume side there is no such delegation. The domain bridge reads the message body with the application's
 converter and the extension headers into an `EventMetadata`, then calls `DomainEventFeed.accept(metadata, event)`.
@@ -355,11 +365,17 @@ That leaves the bindings derived from the same filter the consumer is configured
 bridge that wants to see what arrived and whether it matched reads its `PushObserver`, which decision 1 already
 requires it to have.
 
-A filter whose type part cannot be derived returns an empty `Optional`, and a consumer that gets one binds the
-transport's own catch-all rather than a set of destinations. On RabbitMQ that is a `#` binding on the topic exchange,
-and on Kafka it is a subscription by pattern. Guessing narrower would drop an event the filter would have matched, and
-losing an event is a hard rule in `AGENTS.md` rather than a tuning question, so the imprecise answer has to be the
-inclusive one.
+A filter whose type part cannot be derived returns an empty `Optional`, and the consumer then binds
+`catchAllDestination()`. Guessing narrower would drop an event the filter would have matched, and losing an event is a
+hard rule in `AGENTS.md` rather than a tuning question, so the imprecise answer has to be the inclusive one.
+
+**The catch-all is a third method on the resolver rather than something the bridge works out**, because an empty
+`Optional` says only that the filter could not be narrowed and says nothing about where to listen instead. RabbitMQ
+needs the exchange to put a `#` binding on, Kafka needs a pattern narrow enough to avoid consuming unrelated topics,
+and a custom resolver knows both while the bridge cannot ask it by downcasting. Since the resolver is already the one
+place that knows this deployment's topology, it is also the only honest place to answer this. A resolver that routes
+everything through one exchange returns that exchange with `#`, and one that spreads events over a topic per context
+returns the pattern covering them.
 
 A deployment whose platform team owns the topology declares its queues and bindings itself and ignores this method
 entirely, which #415 already says has to stay possible.
@@ -464,6 +480,17 @@ thing an operator has to know the name of.
 `REDELIVER` is where the two transports genuinely differ in mechanism, and it is written down here so the Kafka one
 does not invent a third behaviour. RabbitMQ has a per-message negative acknowledgement, so it calls `basicNack` with
 requeue and the broker redelivers. Kafka has none, so it declines to commit the offset and seeks back to it.
+
+**Seeking only works if nothing else commits, so the Kafka bridge requires `enable.auto.commit=false` and refuses to
+start otherwise.** Auto-commit is Kafka's default, and it advances the offset on a timer regardless of what the bridge
+decided, so a bridge that seeks back while auto-commit is on will still commit past the failed record. This is the
+consume-side twin of the `acks=all` rule above, and it fails at startup for the same reason, that afterwards the
+mistake is invisible.
+
+**After a seek the bridge stops processing that partition's remaining polled records.** A poll returns a batch, so
+continuing through it after a failure means committing a higher offset for the same partition and skipping the record
+that failed, which is the same loss by a slower route. Other partitions in the same poll are unaffected, since their
+offsets are independent.
 
 **`PARK` is a publish the bridge does itself, waits for, and only then acknowledges the original.** It is the same
 sequence on both transports, which is worth stating because the shortcut differs on each and both shortcuts lose
