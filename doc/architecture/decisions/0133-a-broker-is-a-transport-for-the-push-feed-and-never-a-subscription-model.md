@@ -9,8 +9,9 @@ tracked by [#388](https://github.com/johanhaleby/occurrent/issues/388). This ADR
 The modules it names are built by #413 through #417.
 
 **Scope.** Blocking only. The reactor variants are [#418](https://github.com/johanhaleby/occurrent/issues/418) and are
-not decided here, beyond the requirement that nothing below prevents them. Spring Boot auto-configuration is not in
-scope either, for the reason given in decision 9. The `@RabbitSaga` and `@KafkaSaga` sketches on
+not decided here, beyond the requirement that nothing below prevents them. Spring Boot auto-configuration is
+[#846](https://github.com/johanhaleby/occurrent/issues/846) and is not in scope either, for the reason given in
+decision 9. The `@RabbitSaga` and `@KafkaSaga` sketches on
 [#415](https://github.com/johanhaleby/occurrent/issues/415) and
 [#417](https://github.com/johanhaleby/occurrent/issues/417) are ideas recorded for a future Spring Boot layer, not
 part of this design.
@@ -253,22 +254,29 @@ values twice, in the body and in the headers, and accepting that a consumer read
 different answer than a consumer reading the other. Binary mode also lets a broker route on the event type without
 opening the body, which is what decision 5's bindings depend on.
 
-Structured mode is therefore not offered, rather than offered and discouraged. An application that needs it for a
-consumer outside Occurrent implements `CloudEventSink`, which is what that interface is for. Adding a structured
-writer later changes neither `EventDestination`, nor `DestinationResolver`, nor either sink interface, so this is a
-decision that can be revisited without a migration.
+`AGENTS.md` is what settles this, rather than a preference for the smaller API. It allows the easier solution when it
+yields roughly the same result and refuses it when the difference is isolation or correctness, and two copies of the
+same four values that can disagree is a correctness difference.
 
-### 9. Spring Boot auto-configuration is deferred to its own issue
+Structured mode is therefore not offered, rather than offered and discouraged. An application that needs it for a
+consumer outside Occurrent implements `CloudEventSink`, which is what that interface is for. Refusing it now also
+takes nothing back later, because adding a structured writer changes neither `EventDestination`, nor
+`DestinationResolver`, nor either sink interface.
+
+### 9. Spring Boot auto-configuration is #846, and it comes after both consume bridges
 
 No `occurrent-spring-boot-starter-broker-*` module is built as part of this work.
+[#846](https://github.com/johanhaleby/occurrent/issues/846) builds it, in the same 0.34.0 milestone but after both
+transport modules and both consume bridges exist.
 
 Auto-configuration fixes property names and bean names, and doing that before anyone has wired these three interface
 families by hand fixes them against a guess. The manual wiring is also small already, since `@Projection(source =
 PUSH)` resolves a push feed bean without any broker knowledge, so what an application declares by hand is a sink bean
 and a bridge bean per consumer.
 
-The `@RabbitSaga` and `@KafkaSaga` ideas on #415 and #417 are the shape that layer will eventually take, and building
-auto-configuration now without them would produce a layer that gets rewritten by the work that was already planned.
+The `@RabbitSaga` and `@KafkaSaga` ideas on #415 and #417 are not part of #846 either. They are the shape a later
+Spring Boot layer may take, and putting them into the first auto-configuration would decide that layer before either
+transport module has been used by anyone.
 
 ### 10. The RabbitMQ publishing module ships as a module, not as a documented example
 
