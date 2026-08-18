@@ -1411,3 +1411,24 @@ directly within the session.
 - Push survives, worktrees do not: the reboot erased U7's whole unpushed implementation while U17 lost nothing because everything was on origin. Every brief now mandates committing and pushing at each coherent step, WIP commits included, the squash flattens them anyway (2026-08-17, r34 reboot recovery)
 - Questions flow through the orchestrator in both modes (Johan, 2026-08-17): one decision surface, ORCH recommendation attached, merged or split by fleet knowledge, journaled rulings, answers relayed back. The mode now decides only presentation cadence, which retires the venue-derivation drift class. Accepted costs: two hops of latency, relay compression, faster orchestrator context growth
 - The reboot recovery was wrong three times from one assumption: originals survived (two kept running), /tmp survived (two "lost" worktrees held live work), and the worktree registry is not a directory inventory. The skill now carries host-restart recovery rules: probe before redispatch even after a reboot, inventory by filesystem and branches, and never point a recovery dispatch at the original's directory (2026-08-17, r34, the shared-worktree collision on U18)
+
+## A directory in the release tag is not a released type, and the wrong direction costs a phantom migration (2026-08-18, brk U11)
+
+The U11 brief said "subscription/push shipped in 0.33.0, breaking released surface, recipe plus
+migration-guide" on the strength of `git ls-tree occurrent-0.33.0 subscription/push/` matching. The
+DIRECTORY shipped; the TYPE the unit changes (`PushObserver`, added for 0.34.0) did not exist at the
+tag, and ADR 133's own decision text already said so. The worker verified `git show <tag>:<full
+path>` before writing a phantom recipe and refuted the brief with the tag evidence plus the ADR
+line, which is exactly the evidence-first refusal the vgpr lesson praises.
+
+The apirev lesson already covers the mirror image (check a unit's own types against the tag before
+assuming a change is FREE). This is the same rule in the other direction, and the direction matters
+because the failure modes differ: assuming-free ships an unannounced break, assuming-breaking ships
+a migration guide and recipe for an API nobody ever had, which reads as noise in release notes and
+costs the worker a fake deliverable.
+
+**How to apply:** a released-surface claim in a brief names the TYPE and the command that proved it
+(`git ls-tree -r --name-only <tag> <full path> | grep <Type>`, or `git show <tag>:<path>`), never a
+directory-level or module-level check. When a merged ADR states the release status of the surface it
+governs, the brief quotes that line instead of re-deriving it, since the ADR text survived ten
+review rounds and the re-derivation ran once.
