@@ -44,7 +44,9 @@ import java.util.function.Predicate;
  * The domain-event twin of {@code PushSubscriptionModel}: a register-only sink the application owns and feeds with
  * <strong>domain events</strong>, giving one projection a catch-up and then a live feed. It lets an external source
  * (a RabbitMQ or Kafka listener with its own message converter) drive a projection without any CloudEvent conversion
- * on the live path.
+ * on the live path, through {@link #accept(Object)} and {@link #accept(EventMetadata, Object)}.
+ * {@link #acceptCloudEvent(CloudEvent)} is the one exception, for a listener that has a {@link CloudEvent} to
+ * rebuild rather than an already-decoded domain event.
  * <p>
  * The application declares it as a bean carrying the domain-specific {@code eventId} function (the catch-up de-dup key)
  * plus the CloudEvent-layer collaborators (the store {@link PositionOrderedReader}, the {@link CloudEventConverter} used
@@ -73,13 +75,14 @@ public final class DomainEventFeed<E> {
     private final DataFieldReader dataFieldReader;
     // The one projection registered on this feed, or null while it is free. Cleared by nothing today: a feed has no
     // unregister, so this is only ever set once in practice, but reading it is what names the collision. Paired with
-    // its live matcher in one record, so the two are always set together. Two separate references could let a
-    // reader observe a feed with no matcher yet.
+    // the Filter it was registered with, so acceptCloudEvent always reads the two together.
     private final AtomicReference<@Nullable Registered<E>> feed = new AtomicReference<>();
 
     /**
      * @param reader          The store read used to replay history during the projection's catch-up.
-     * @param converter       Decodes replayed CloudEvents to domain events (replay only, never the live path).
+     * @param converter       Decodes replayed CloudEvents to domain events. {@link #accept(Object)} and
+     *                        {@link #accept(EventMetadata, Object)} never use it on the live path, unlike
+     *                        {@link #acceptCloudEvent(CloudEvent)}, which does.
      * @param eventId         Extracts a stable id from a domain event, the replay-to-live de-dup key.
      * @param catchupMarker Records catch-up completion so a restart skips the replay, or {@code null}
      *                        to always catch up.
@@ -139,20 +142,22 @@ public final class DomainEventFeed<E> {
      * <p>
      * {@code replayFilter} is also what {@link #acceptCloudEvent(CloudEvent)} matches live events against, wrapped as an
      * {@link AgnosticSubscriptionFilter}. The one filter given here is the only one this feed ever holds, so the
-     * replay and the live path can never disagree about which events are this projection's. Building that matcher
-     * happens here, eagerly, so a {@code data} payload condition this feed has no {@link DataFieldReader} for is
-     * refused now rather than on the first live event.
+     * replay and the live path can never disagree about which events are this projection's. This does not build that
+     * matcher, or otherwise change what {@code replayFilter} was already accepted for before {@link #acceptCloudEvent}
+     * existed. The store still evaluates it during the replay however it always has, including a {@code data} payload
+     * condition this feed has no {@link DataFieldReader} for, since that evaluation has nothing to do with this
+     * feed's own {@link DataFieldReader}. {@link #acceptCloudEvent} is what needs one, and only refuses such a filter
+     * there, the first time it is called, so a caller that never touches the live CloudEvent path keeps registering
+     * exactly the filters it always could.
      *
      * @throws IllegalArgumentException if a projection is already registered on this feed
      */
     public void register(String id, MaterializedView<E> view, Filter replayFilter) {
         Objects.requireNonNull(id, "id cannot be null");
-        // Built before the slot is claimed, so a registration that fails validation (an unpositioned reader, or an
-        // unreadable payload filter) leaves the feed free rather than permanently taken by a projection that never
-        // existed.
+        // Built before the slot is claimed, so a registration that fails validation (an unpositioned reader, say)
+        // leaves the feed free rather than permanently taken by a projection that never existed.
         CatchupProjectionFeed<E> registering = CatchupProjectionFeed.create(id, view, replayFilter, reader, converter, eventId, catchupMarker, options);
-        Predicate<CloudEvent> liveMatcher = SubscriptionFilterMatcher.matcherFor(AgnosticSubscriptionFilter.filter(replayFilter), dataFieldReader);
-        if (!feed.compareAndSet(null, new Registered<>(registering, liveMatcher))) {
+        if (!feed.compareAndSet(null, new Registered<>(registering, replayFilter))) {
             Registered<E> existing = feed.get();
             throw new IllegalArgumentException(SingleConsumerMessages.singleConsumerOnly(
                     "DomainEventFeed", "projection", existing == null ? "<unknown>" : existing.catchupFeed().id(), id));
@@ -213,8 +218,10 @@ public final class DomainEventFeed<E> {
      * <p>
      * This feed holds no filter of its own beyond the one {@link #register} was called with. The live match is
      * always evaluated against that same filter, so the replay and the live path can never disagree about which
-     * events are this projection's. A filter with a {@code data} payload condition this feed has no
-     * {@link DataFieldReader} for was already refused at {@link #register}, so it cannot fail here.
+     * events are this projection's. That matcher is built fresh from the registered {@link Filter} on every call
+     * rather than at {@link #register}, so a {@code data} payload condition this feed has no {@link DataFieldReader}
+     * for is refused here, the first time this method is called, rather than blocking {@link #register} for a
+     * caller that never calls this method at all.
      * <p>
      * Reports {@link RoutingOutcome#NOT_DELIVERABLE} rather than {@link RoutingOutcome#DELIVERED} when a matching
      * event arrives after {@link #stopCatchUp()} interrupted a replay still in flight. The catch-up-then-live engine
@@ -230,7 +237,8 @@ public final class DomainEventFeed<E> {
     public RoutingOutcome acceptCloudEvent(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         Registered<E> registered = registeredProjection();
-        if (!registered.liveMatcher().test(cloudEvent)) {
+        Predicate<CloudEvent> liveMatcher = SubscriptionFilterMatcher.matcherFor(AgnosticSubscriptionFilter.filter(registered.replayFilter()), dataFieldReader);
+        if (!liveMatcher.test(cloudEvent)) {
             return RoutingOutcome.FILTERED;
         }
         E event = converter.toDomainEvent(cloudEvent);
@@ -248,10 +256,10 @@ public final class DomainEventFeed<E> {
         return registered;
     }
 
-    // Pairs a registration with the live matcher built from the same Filter it was registered with, so the two are
-    // always set (and read) together. See the register(String, MaterializedView, Filter) javadoc for why there is
-    // only ever one filter here.
-    private record Registered<E>(CatchupProjectionFeed<E> catchupFeed, Predicate<CloudEvent> liveMatcher) {
+    // Pairs a registration with the Filter it was registered with, so acceptCloudEvent always matches against the
+    // one filter this feed was actually given. See the register(String, MaterializedView, Filter) javadoc for why
+    // there is only ever one filter here, and its own javadoc for why it is not turned into a matcher until then.
+    private record Registered<E>(CatchupProjectionFeed<E> catchupFeed, Filter replayFilter) {
     }
 
     /**

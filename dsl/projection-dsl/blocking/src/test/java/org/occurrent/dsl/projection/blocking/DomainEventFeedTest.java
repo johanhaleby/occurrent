@@ -566,7 +566,12 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void registering_with_a_payload_filter_and_no_data_field_reader_is_refused_at_register_not_on_the_first_event() {
+    void registering_a_payload_filter_with_no_data_field_reader_still_succeeds_since_the_replay_never_needed_one() {
+        // DomainEventFeed.register(..) shipped long before acceptCloudEvent existed, and the store has always
+        // evaluated a data payload condition on the replay filter itself, with no DataFieldReader involved. An
+        // existing caller who never touches acceptCloudEvent must keep registering exactly the filters it always
+        // could, so this must not regress into a startup failure now that acceptCloudEvent needs a DataFieldReader
+        // for the very same filter.
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
@@ -575,10 +580,24 @@ class DomainEventFeedTest {
 
         Throwable thrown = catchThrowable(() -> feed.register("counter", view, Filter.data("amount", eq(42))));
 
+        assertThat(thrown).isNull();
+        assertThat(feed.hasProjection()).isTrue();
+    }
+
+    @Test
+    void a_payload_filter_with_no_data_field_reader_is_refused_on_the_first_accept_cloud_event_call_not_at_register() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+        MaterializedView<Counted> view = event -> {
+        };
+        feed.register("counter", view, Filter.data("amount", eq(42)));
+        feed.goLive("counter");
+
+        Throwable thrown = catchThrowable(() -> feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))));
+
         assertThat(thrown).isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("DataFieldReader");
-        assertThat(feed.hasProjection()).as("the failed registration must not permanently reserve the id")
-                .isFalse();
     }
 
     @Test
