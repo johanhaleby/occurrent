@@ -19,6 +19,23 @@ else
     echo "::warning::Could not read integration-tests.mongo.version from pom.xml, so the Mongo image is not mirrored and will come from Docker Hub." >&2
 fi
 
+# RabbitMQ. No shard starts one yet (the broker transport modules aren't built), but the property already
+# exists for them to read, so derive the image the same way as Mongo rather than waiting for the first user.
+rabbitmq_version=$(grep -oE '<integration-tests\.rabbitmq\.version>[^<]+' "$root/pom.xml" 2>/dev/null | sed 's/.*>//')
+if [ -n "$rabbitmq_version" ]; then
+    echo "rabbitmq:$rabbitmq_version"
+else
+    echo "::warning::Could not read integration-tests.rabbitmq.version from pom.xml, so the RabbitMQ image is not mirrored and will come from Docker Hub." >&2
+fi
+
+# Kafka. Same reasoning as RabbitMQ above.
+kafka_version=$(grep -oE '<integration-tests\.kafka\.version>[^<]+' "$root/pom.xml" 2>/dev/null | sed 's/.*>//')
+if [ -n "$kafka_version" ]; then
+    echo "apache/kafka:$kafka_version"
+else
+    echo "::warning::Could not read integration-tests.kafka.version from pom.xml, so the Kafka image is not mirrored and will come from Docker Hub." >&2
+fi
+
 # Redis. One shard needs it, and the tag is a literal in the test rather than a pom property, so read
 # it where it actually lives instead of repeating it here.
 redis_test="$root/subscription/redis/spring/blocking-checkpoint-storage/src/test/java/org/occurrent/subscription/redis/spring/blocking/SpringRedisCheckpointStorageTest.java"
