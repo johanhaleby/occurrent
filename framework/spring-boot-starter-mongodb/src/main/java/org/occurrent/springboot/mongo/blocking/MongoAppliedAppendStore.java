@@ -121,11 +121,13 @@ class MongoAppliedAppendStore implements AppliedAppendStore {
     public void recordApplied(String projectionId, AppendId appendId) {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(appendId, "appendId cannot be null");
-        ensureIndexesOnce();
-        Runnable write = () -> mongoOperations.upsert(
-                query(where(PROJECTION_ID).is(projectionId).and(APPEND_ID).is(appendId.value().toString())),
-                new Update().setOnInsert(RECORDED_AT, new Date()),
-                collection);
+        Runnable write = () -> {
+            ensureIndexesOnce();
+            mongoOperations.upsert(
+                    query(where(PROJECTION_ID).is(projectionId).and(APPEND_ID).is(appendId.value().toString())),
+                    new Update().setOnInsert(RECORDED_AT, new Date()),
+                    collection);
+        };
         executeWithRetry(write, __ -> !shutdown, retryStrategy).run();
     }
 
@@ -133,21 +135,24 @@ class MongoAppliedAppendStore implements AppliedAppendStore {
     public boolean hasApplied(String projectionId, AppendId appendId) {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(appendId, "appendId cannot be null");
-        ensureIndexesOnce();
         Supplier<Boolean> read = () -> readOnce(projectionId, appendId);
         return requireNonNull(executeWithRetry(read, __ -> !shutdown, retryStrategy).get());
     }
 
     private boolean readOnce(String projectionId, AppendId appendId) {
+        ensureIndexesOnce();
         return mongoOperations.exists(query(where(PROJECTION_ID).is(projectionId).and(APPEND_ID).is(appendId.value().toString())), collection);
     }
 
     /**
      * A read for {@link #waitUntilApplied(String, AppendId, Duration, Backoff)} whose retries stop once
      * {@code deadlineNanos} ({@link System#nanoTime()} scale) passes, rather than continuing on
-     * {@link #retryStrategy}'s own schedule, which otherwise keeps retrying with no limit. A store that is still
-     * failing once the deadline arrives answers {@code false} instead of retrying past it, so the wait's own
-     * deadline check is what ends the wait.
+     * {@link #retryStrategy}'s own schedule, which otherwise keeps retrying with no limit. {@link #readOnce} also
+     * ensures the indexes exist, so a fresh store whose index setup fails during an outage is retried, and limited
+     * to this same deadline, exactly like a failing read, rather than throwing out of a method documented to never
+     * throw.
+     * A store that is still failing once the deadline arrives answers {@code false} instead of retrying past it, so
+     * the wait's own deadline check is what ends the wait.
      */
     private boolean readOnceBoundedBy(String projectionId, AppendId appendId, long deadlineNanos) {
         Supplier<Boolean> read = () -> readOnce(projectionId, appendId);
@@ -165,8 +170,10 @@ class MongoAppliedAppendStore implements AppliedAppendStore {
     @Override
     public void clear(String projectionId) {
         requireNonNull(projectionId, "projectionId cannot be null");
-        ensureIndexesOnce();
-        Runnable delete = () -> mongoOperations.remove(query(where(PROJECTION_ID).is(projectionId)), collection);
+        Runnable delete = () -> {
+            ensureIndexesOnce();
+            mongoOperations.remove(query(where(PROJECTION_ID).is(projectionId)), collection);
+        };
         executeWithRetry(delete, __ -> !shutdown, retryStrategy).run();
     }
 
@@ -188,10 +195,7 @@ class MongoAppliedAppendStore implements AppliedAppendStore {
         requireNonNull(appendId, "appendId cannot be null");
         requireNonNull(timeout, "timeout cannot be null");
         requireNonNull(backoff, "backoff cannot be null");
-        if (backoff instanceof Backoff.None) {
-            throw new IllegalArgumentException("backoff cannot be Backoff.none(), a wait polls the store and needs a delay between polls. Use Backoff.fixed(..) or Backoff.exponential(..).");
-        }
-        ensureIndexesOnce();
+        AppliedAppendStore.rejectBusyLoopBackoff(backoff);
         long deadlineNanos = System.nanoTime() + timeout.toNanos();
         long intervalNanos = switch (backoff) {
             case Backoff.Fixed fixed -> Duration.ofMillis(fixed.millis).toNanos();

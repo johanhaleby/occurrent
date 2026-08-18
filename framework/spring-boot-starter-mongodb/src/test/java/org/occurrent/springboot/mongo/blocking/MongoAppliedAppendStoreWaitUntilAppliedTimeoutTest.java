@@ -73,6 +73,25 @@ class MongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
     }
 
     @Test
+    void returns_false_within_its_timeout_when_a_fresh_stores_index_setup_keeps_failing() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        IndexOperations indexOperations = mock(IndexOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(indexOperations);
+        when(indexOperations.ensureIndex(any())).thenThrow(new RuntimeException("store outage"));
+        RetryStrategy fastRetry = RetryStrategy.exponentialBackoff(Duration.ofMillis(10), Duration.ofMillis(50), 2.0);
+        AppliedAppendStore store = new MongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7), fastRetry, Backoff.fixed(20));
+        Duration timeout = Duration.ofMillis(200);
+
+        Instant start = Instant.now();
+        boolean applied = store.waitUntilApplied("orders", AppendId.mint(), timeout);
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(applied).isFalse();
+        assertThat(elapsed).isLessThan(timeout.plusSeconds(2));
+        verify(indexOperations, atLeast(2)).ensureIndex(any());
+    }
+
+    @Test
     void propagates_exception_when_finite_retry_attempts_exhausted() {
         MongoOperations mongoOperations = mock(MongoOperations.class);
         when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));

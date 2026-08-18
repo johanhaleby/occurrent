@@ -37,10 +37,10 @@ import static java.util.Objects.requireNonNull;
  * the withdrawn position-based design (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md">ADR 111</a>)
  * depended on and ADR 122 refuted.
  * <p>
- * A projection built with {@code @Projection(recordAppliedAppends = true)}, or the corresponding recording wrapper
- * in the blocking and reactor projection DSLs, records into this store automatically while it is delivering live
- * events, and clears its own records on a reset (a rebuild, or any replay). Reading it back is a plain call to
- * {@link #hasApplied(String, AppendId)} or {@link #waitUntilApplied(String, AppendId, Duration)}.
+ * This is the store a projection records into and a caller reads from. A projection records into it by calling
+ * {@link #recordApplied(String, AppendId)} itself, or through a future {@code @Projection(recordAppliedAppends = true)}
+ * opt-in and its recording wrapper in the blocking and reactor projection DSLs, which does not exist yet. Reading is
+ * a plain call to {@link #hasApplied(String, AppendId)} or {@link #waitUntilApplied(String, AppendId, Duration)}.
  */
 @NullMarked
 public interface AppliedAppendStore {
@@ -71,6 +71,23 @@ public interface AppliedAppendStore {
      * them.
      */
     void clear(String projectionId);
+
+    /**
+     * Rejects a {@code backoff} that a wait loop cannot use without becoming a busy loop against the store. This
+     * rejects {@link Backoff#none()}, and it also rejects an exponential backoff whose interval starts at zero or
+     * negative, or whose multiplier is below 1.0 and so shrinks the interval back to zero after enough polls. Shared
+     * by this interface's own wait loop and by every store's override, so the rule is enforced once rather than
+     * repeated per implementation.
+     */
+    static void rejectBusyLoopBackoff(Backoff backoff) {
+        if (backoff instanceof Backoff.None) {
+            throw new IllegalArgumentException("backoff cannot be Backoff.none(), a wait polls the store and needs a delay between polls. Use Backoff.fixed(..) or Backoff.exponential(..).");
+        }
+        if (backoff instanceof Backoff.Exponential exponential
+                && (exponential.initial.isZero() || exponential.initial.isNegative() || exponential.multiplier < 1.0)) {
+            throw new IllegalArgumentException("backoff's initial interval must be positive and its multiplier must be at least 1.0, an interval that never grows past zero is a busy loop on the store.");
+        }
+    }
 
     /**
      * As {@link #waitUntilApplied(String, AppendId, Duration, Backoff)}, pacing the polls with
@@ -111,9 +128,7 @@ public interface AppliedAppendStore {
         requireNonNull(appendId, "appendId cannot be null");
         requireNonNull(timeout, "timeout cannot be null");
         requireNonNull(backoff, "backoff cannot be null");
-        if (backoff instanceof Backoff.None) {
-            throw new IllegalArgumentException("backoff cannot be Backoff.none(), a wait polls the store and needs a delay between polls. Use Backoff.fixed(..) or Backoff.exponential(..).");
-        }
+        rejectBusyLoopBackoff(backoff);
         long deadlineNanos = System.nanoTime() + timeout.toNanos();
         long intervalNanos = switch (backoff) {
             case Backoff.Fixed fixed -> Duration.ofMillis(fixed.millis).toNanos();

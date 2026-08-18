@@ -27,6 +27,7 @@ import org.springframework.data.mongodb.core.index.Index;
 import org.springframework.data.mongodb.core.index.IndexOptions;
 import org.springframework.data.mongodb.core.index.ReactiveIndexOperations;
 import org.springframework.data.mongodb.core.query.Update;
+import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
@@ -134,11 +135,11 @@ class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     public void recordApplied(String projectionId, AppendId appendId) {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(appendId, "appendId cannot be null");
-        ensureIndexesOnce();
-        mongoOperations.upsert(
+        Mono.fromRunnable(this::ensureIndexesOnce)
+                .then(mongoOperations.upsert(
                         query(where(PROJECTION_ID).is(projectionId).and(APPEND_ID).is(appendId.value().toString())),
                         new Update().setOnInsert(RECORDED_AT, new Date()),
-                        collection)
+                        collection))
                 .retryWhen(retry)
                 .block();
     }
@@ -147,11 +148,20 @@ class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     public boolean hasApplied(String projectionId, AppendId appendId) {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(appendId, "appendId cannot be null");
-        ensureIndexesOnce();
-        Boolean applied = mongoOperations.exists(query(where(PROJECTION_ID).is(projectionId).and(APPEND_ID).is(appendId.value().toString())), collection)
+        Boolean applied = existsWithIndexesEnsured(projectionId, appendId)
                 .retryWhen(retry)
                 .block();
         return Boolean.TRUE.equals(applied);
+    }
+
+    /**
+     * Runs {@link #ensureIndexesOnce()} ahead of the existence check in the same reactive chain, so
+     * {@code .retryWhen(retry)} retries index setup exactly like a failing read rather than letting it throw
+     * straight out of the caller.
+     */
+    private Mono<Boolean> existsWithIndexesEnsured(String projectionId, AppendId appendId) {
+        return Mono.fromRunnable(this::ensureIndexesOnce)
+                .then(mongoOperations.exists(query(where(PROJECTION_ID).is(projectionId).and(APPEND_ID).is(appendId.value().toString())), collection));
     }
 
     /**
@@ -161,7 +171,9 @@ class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * retries themselves at the deadline, not just the wait loop around them. {@link #retry}'s default is finite,
      * so a sustained outage can also exhaust the retry itself well before the deadline. Either way the read answers
      * {@code false} rather than throwing. A wait polls for "not applied yet", and its own deadline check, not the
-     * read's failure, is what ends it.
+     * read's failure, is what ends it. This also covers a fresh store's index setup, since
+     * {@link #existsWithIndexesEnsured} runs it in the same chain as the read, retried and limited to the same
+     * deadline.
      */
     private boolean readOnceBoundedBy(String projectionId, AppendId appendId, long deadlineNanos) {
         long remainingNanos = deadlineNanos - System.nanoTime();
@@ -169,7 +181,7 @@ class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
             return false;
         }
         try {
-            Boolean applied = mongoOperations.exists(query(where(PROJECTION_ID).is(projectionId).and(APPEND_ID).is(appendId.value().toString())), collection)
+            Boolean applied = existsWithIndexesEnsured(projectionId, appendId)
                     .retryWhen(retry)
                     .block(Duration.ofNanos(remainingNanos));
             return Boolean.TRUE.equals(applied);
@@ -181,8 +193,8 @@ class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     @Override
     public void clear(String projectionId) {
         requireNonNull(projectionId, "projectionId cannot be null");
-        ensureIndexesOnce();
-        mongoOperations.remove(query(where(PROJECTION_ID).is(projectionId)), collection)
+        Mono.fromRunnable(this::ensureIndexesOnce)
+                .then(mongoOperations.remove(query(where(PROJECTION_ID).is(projectionId)), collection))
                 .retryWhen(retry)
                 .block();
     }
@@ -206,10 +218,7 @@ class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
         requireNonNull(appendId, "appendId cannot be null");
         requireNonNull(timeout, "timeout cannot be null");
         requireNonNull(backoff, "backoff cannot be null");
-        if (backoff instanceof Backoff.None) {
-            throw new IllegalArgumentException("backoff cannot be Backoff.none(), a wait polls the store and needs a delay between polls. Use Backoff.fixed(..) or Backoff.exponential(..).");
-        }
-        ensureIndexesOnce();
+        AppliedAppendStore.rejectBusyLoopBackoff(backoff);
         long deadlineNanos = System.nanoTime() + timeout.toNanos();
         long intervalNanos = switch (backoff) {
             case Backoff.Fixed fixed -> Duration.ofMillis(fixed.millis).toNanos();

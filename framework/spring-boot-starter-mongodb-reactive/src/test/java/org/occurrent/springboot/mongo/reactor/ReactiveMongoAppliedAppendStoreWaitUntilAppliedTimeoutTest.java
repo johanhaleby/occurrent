@@ -88,6 +88,26 @@ class ReactiveMongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
     }
 
     @Test
+    void returns_false_within_its_timeout_when_a_fresh_stores_index_setup_keeps_failing() {
+        ReactiveMongoOperations mongoOperations = mock(ReactiveMongoOperations.class);
+        ReactiveIndexOperations indexOperations = mock(ReactiveIndexOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(indexOperations);
+        when(indexOperations.ensureIndex(any())).thenReturn(Mono.error(new RuntimeException("store outage")));
+        Retry fastRetry = Retry.backoff(5, Duration.ofMillis(10))
+                .maxBackoff(Duration.ofMillis(50))
+                .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+        AppliedAppendStore store = new ReactiveMongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7), fastRetry, Backoff.fixed(20));
+        Duration timeout = Duration.ofMillis(200);
+
+        Instant start = Instant.now();
+        boolean applied = store.waitUntilApplied("orders", AppendId.mint(), timeout);
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(applied).isFalse();
+        assertThat(elapsed).isLessThan(timeout.plusSeconds(2));
+    }
+
+    @Test
     void keeps_polling_until_its_own_deadline_when_a_finite_retry_exhausts_well_before_it() {
         ReactiveMongoOperations mongoOperations = mongoOperationsWithIndexingStubbed();
         when(mongoOperations.exists(any(Query.class), anyString()))
