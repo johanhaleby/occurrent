@@ -1,10 +1,10 @@
 schema_version: 1
 epic: brk
-revision: 14
-updated_at: 2026-08-18T06:53:25Z
+revision: 19
+updated_at: 2026-08-18T10:58:39Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
-authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
+authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly. Gate-ask rulings 2026-08-18T~10:58Z: the ADR review loop STOPPED at ten rounds, Johan's own read of PR 847 is the closing review; #848 ADOPTED as U11 at Opus/high, blocking both consume bridges."
 milestone: 3
 registered_at: 2026-08-18T04:44:26Z
 definition_of_done:
@@ -38,10 +38,10 @@ units:
       - {check: pr_merged, ref: 847, met: false, evidence: null}
       - {check: issue_closed, ref: 412, met: false, evidence: null}
     blocking_on: []
-    next_action: "Round-seven triage in flight: the seventh Copilot review landed 06:31:57Z on the final head (1 inline thread on Kafka auto-commit vs commit-after-accept, 2 suppressed items on the domain-native filter restriction); worker re-seated 06:5xZ with the convergence rule restated (declines-only round is final). On its attempt-3 block: ONE gate ask to Johan (design-gate close + #848 PushObserver breaking-change adoption ruling). Attempt-2 dispositions verified and recorded: binary-only STANDS (explicit 0-9-1 mapping, cloudEvents_ headers, one mapping class both directions; Kafka via cloudevents-kafka), acks=all startup requirement, PARK is a bridge-performed confirmed publish, mandatory=true with basic.return correlation, forwarder double-conversion fixed, bridge owns register with one Filter value. Expected-progress deadline 2026-08-18T07:30Z"
-    last_meaningful_progress_at: 2026-08-18T06:53:25Z
+    next_action: "Machine review loop CLOSED at ten rounds by Johan's ruling; attempt-3 verified (head 9c9b200, 17 threads 0 unresolved). Waiting on Johan's own read of PR 847, which is the design gate; on his explicit close, CAS merge pinned to the verified head with [ci skip] carried, then U2 dispatch in the same tick. Human-wait: no deadline, worker stood down"
+    last_meaningful_progress_at: 2026-08-18T10:58:39Z
     observed:
-      pr_847: {head: f9a7485cdab43a27e3a4ab7947b4a107b565de91, branch: "brk/u1-adr-broker-architecture", rollup: "0fail DONE (prose-only, ci skip)", review: "7 Copilot rounds; 14 threads, 1 unresolved (round seven's Kafka auto-commit finding, current), 2 suppressed items unread by worker at delivery", delivery_mirror: "PR comment 5324261505 at attempt 2, verified read-back", via: "GraphQL + REST reads 06:5xZ", at: 2026-08-18T06:53:25Z}
+      pr_847: {head: 9c9b20087d823019f717441bb6294cf2fdbd5538, branch: "brk/u1-adr-broker-architecture", rollup: "0fail DONE (prose-only, ci skip)", review: "fourth push since the round-seven re-seat; attempt-3 block still owed", delivery_mirror: "PR comment 5324261505 at attempt 2, attempt-3 update owed", via: "monitor PR-DELTA", at: 2026-08-18T07:24:36Z}
       session_u1: {id: local_6d2cff8f-dcf0-45fd-abc7-0a70177df2a7, worktree: "hungry-shtern-13eb45", state: "woke on resume message, updated mirror to attempt 2 at ~06:31, stopped correctly; re-seated for round seven 06:5xZ", at: 2026-08-18T06:53:25Z}
       issue_848: {state: OPEN, marker: "present with origin link, verified", milestone: null, note: "worker-filed per protocol; adoption and the breaking-change ruling ride the gate ask", at: 2026-08-18T06:53:25Z}
       pushobserver_escalation: {claim: "routeReportingMatch boolean conflates four outcomes; bridge ack-safety needs DELIVERED/FILTERED/NOT_DELIVERABLE from the one routing evaluation", released: "subscription/push present in occurrent-0.33.0 tag, verified git ls-tree", call_site: "PushSubscriptionModel.java:146", via: "worker message + own greps", at: 2026-08-18T06:04:32Z}
@@ -86,7 +86,7 @@ units:
     phase: PLANNED
     health: PROGRESSING
     swept: false
-    depends_on: [U3]
+    depends_on: [U3, U11]
     session: null
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
@@ -118,7 +118,7 @@ units:
     phase: PLANNED
     health: PROGRESSING
     swept: false
-    depends_on: [U5]
+    depends_on: [U5, U11]
     session: null
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
@@ -176,6 +176,22 @@ units:
     last_meaningful_progress_at: 2026-08-18T05:18:00Z
     observed: {}
     assessment: "Adopted on Johan's ruling at the U1 design gate 2026-08-18 (own issue, in the 0.34.0 milestone, adopted by an orchestrator). Sonnet/high chip. @RabbitSaga/@KafkaSaga stay out of scope, a later layer."
+  U11:
+    issue: 848
+    goal: "The two consume-bridge prerequisites in released subscription/push code, per ADR 0133 and #848 as corrected: three-valued PushObserver routing outcome (DELIVERED, FILTERED, NOT_DELIVERABLE from the one routing evaluation, replacing the boolean) with observer wiring per decision 1, and a live-match capability on DomainEventFeed per decision 5; breaking released surface, so recipe plus migration-guide section"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U1]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 848, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U1's ADR merges; blocks U4 and U6"
+    last_meaningful_progress_at: 2026-08-18T10:58:39Z
+    observed: {}
+    assessment: "Adopted at the 2026-08-18 gate ask, Opus/high chip by Johan's explicit tier choice (two non-breaking attempts raced on pause-then-resume, so the concurrency earns the tier). #848 milestoned 0.34.0 and labeled in-progress. Adversarial verify attacks the race claim before merge."
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
