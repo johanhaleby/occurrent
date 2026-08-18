@@ -33,6 +33,7 @@
         <module>cloudevents-extension</module>
         <module>common</module>
         <module>application</module>
+        <module>broker</module>
         <module>dsl</module>
         <module>framework</module>
         <module>deadline</module>
@@ -89,6 +90,8 @@
         <jobrunr.version>8.1.0</jobrunr.version>
         <maven-javadoc-plugin.version>3.5.0</maven-javadoc-plugin.version>
         <integration-tests.mongo.version>8.0</integration-tests.mongo.version>
+        <integration-tests.rabbitmq.version>4.1</integration-tests.rabbitmq.version>
+        <integration-tests.kafka.version>3.9</integration-tests.kafka.version>
     </properties>
 
 
@@ -563,6 +566,8 @@
                                 <excludeArtifact>testing</excludeArtifact>
                                 <excludeArtifact>application-service</excludeArtifact>
                                 <excludeArtifact>application</excludeArtifact>
+                                <excludeArtifact>broker-api</excludeArtifact>
+                                <excludeArtifact>broker</excludeArtifact>
                                 <excludeArtifact>cloudevent-converter</excludeArtifact>
                                 <excludeArtifact>cloudevent-type-mapper</excludeArtifact>
                                 <excludeArtifact>common</excludeArtifact>
