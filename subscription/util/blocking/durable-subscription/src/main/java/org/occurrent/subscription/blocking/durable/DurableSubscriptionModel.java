@@ -62,6 +62,8 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * a {@link StartAt} of its own records no position and is never refused either. This is the same answer
  * {@link ManualStartSubscriptionModel} gives for a {@code null} position source and the same one the reactor
  * {@code ReactorDurableSubscriptionModel} gives for the same registration.
+ * {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turns the refusal into a
+ * start without a recorded position, accepting the loss window it documents.
  */
 @NullMarked
 public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
@@ -169,9 +171,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      *                               no checkpoint is stored for {@code subscriptionId}, and the wrapped model's
      *                               {@link CheckpointAwareSubscriptionModel#globalCheckpoint()} answers
      *                               {@code null}, which is how it reports a problem it cannot resolve. Nothing is
-     *                               registered for the id, so subscribe again once the model can answer, or pass
+     *                               registered for the id, so subscribe again once the model can answer, pass
      *                               a {@link StartAt} of your own, which records no position and makes no resume
-     *                               promise.
+     *                               promise, or configure
+     *                               {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)}.
      */
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
@@ -240,6 +243,9 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
         Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
         if (globalCheckpoint == null) {
+            if (config.startWhenNoStartPositionCanBeRecorded) {
+                return;
+            }
             throw new IllegalStateException("The wrapped subscription model " + subscriptionModel.getClass().getName() +
                                             " answered nothing when asked for the current position for subscription " +
                                             subscriptionId + ", which is how it reports a problem it cannot resolve, and no " +
@@ -248,10 +254,13 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                             "would then start over from wherever the feed has reached by that time, silently " +
                                             "skipping whatever was delivered and failed in between. The subscription is " +
                                             "therefore refused rather than started, and nothing is registered for its id, so " +
-                                            "subscribe again once the model can answer. A subscription with a checkpoint " +
-                                            "already stored starts from that checkpoint and is never refused this way. " +
-                                            "Subscribing with a StartAt of your own records no position and makes no such " +
-                                            "promise.");
+                                            "subscribe again once the model can answer. To start anyway, accepting that loss " +
+                                            "window, configure DurableSubscriptionModelConfig." +
+                                            "startWhenNoStartPositionCanBeRecorded(true), or set " +
+                                            "occurrent.subscription.start-when-no-start-position-can-be-recorded=true when " +
+                                            "using the Spring Boot starter. A subscription with a checkpoint already stored " +
+                                            "starts from that checkpoint and is never refused this way. Subscribing with a " +
+                                            "StartAt of your own records no position and makes no such promise.");
         }
         storage.save(subscriptionId, globalCheckpoint, writeConditionFor(subscriptionId));
     }

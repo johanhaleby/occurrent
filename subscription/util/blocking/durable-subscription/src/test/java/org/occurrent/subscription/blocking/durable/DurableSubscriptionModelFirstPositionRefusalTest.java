@@ -206,6 +206,41 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
         assertThat(storage.exists(SUBSCRIPTION_ID)).isFalse();
     }
 
+    @Test
+    void the_override_starts_a_subscription_the_position_source_cannot_answer_for_and_records_nothing() {
+        InMemoryFeed feed = new InMemoryFeed();
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage,
+                new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true));
+        List<String> delivered = new ArrayList<>();
+
+        durable.subscribe(SUBSCRIPTION_ID, cloudEvent -> delivered.add(cloudEvent.getId()));
+
+        assertThat(storage.exists(SUBSCRIPTION_ID)).isFalse();
+        feed.publish(cloudEvent("event-1"));
+        assertThat(delivered).containsExactly("event-1");
+    }
+
+    @Test
+    void the_override_keeps_the_loss_window_it_accepts_so_a_restart_after_a_failed_first_delivery_starts_from_the_feed() {
+        InMemoryFeed feed = new InMemoryFeed();
+        InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
+        DurableSubscriptionModelConfig config = new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true);
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(feed, storage, config);
+        durable.subscribe(SUBSCRIPTION_ID, __ -> {
+            throw new IllegalStateException("first delivery fails");
+        });
+        feed.publish(cloudEvent("event-1"));
+        durable.shutdown();
+
+        DurableSubscriptionModel restarted = new DurableSubscriptionModel(feed, storage, config);
+        List<String> deliveredAfterRestart = new ArrayList<>();
+        restarted.subscribe(SUBSCRIPTION_ID, cloudEvent -> deliveredAfterRestart.add(cloudEvent.getId()));
+        feed.publish(cloudEvent("event-2"));
+
+        assertThat(deliveredAfterRestart).containsExactly("event-2");
+    }
+
     private static CloudEvent cloudEvent(String id) {
         return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("test.event").build();
     }

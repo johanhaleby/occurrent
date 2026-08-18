@@ -56,7 +56,9 @@ import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorag
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModelConfig;
 import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModel;
+import org.occurrent.subscription.reactor.durable.ReactorDurableSubscriptionModelConfig;
 import org.occurrent.subscription.reactor.durable.catchup.ReactorCatchupSubscriptionModel;
+import org.occurrent.subscription.util.predicate.EveryN;
 import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -187,7 +189,9 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         ReactorMongoSubscriptionModel mongoSubscriptionModel = new ReactorMongoSubscriptionModel(mongo, eventStoreProperties.resolveCollection(), eventStoreProperties.resolveTimeRepresentation(),
                 ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().resolveRestartOnChangeStreamHistoryLost()));
-        ReactorDurableSubscriptionModel durableSubscriptionModel = new ReactorDurableSubscriptionModel(composeCatchupLayer(mongoSubscriptionModel, eventStoreProperties, dcbEventStore, applicationContext), storage);
+        ReactorDurableSubscriptionModelConfig durableConfig = new ReactorDurableSubscriptionModelConfig(EveryN.everyEvent())
+                .startWhenNoStartPositionCanBeRecorded(occurrentProperties.getSubscription().isStartWhenNoStartPositionCanBeRecorded());
+        ReactorDurableSubscriptionModel durableSubscriptionModel = new ReactorDurableSubscriptionModel(composeCatchupLayer(mongoSubscriptionModel, eventStoreProperties, dcbEventStore, applicationContext), storage, durableConfig);
         if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
             // Stopped here rather than after the annotations are scanned, so every subscription is registered on a
             // model that is already stopped and none of them delivers anything until the application starts it. No

@@ -429,14 +429,22 @@ delivery failed just before the crash was never seen again.
 The refusal replaces that quiet loss with an error at `subscribe(..)`, which for a Spring Boot application means
 at startup. Nothing is registered for the id, so subscribing again once the model can answer works.
 
-Two ways forward:
+Three ways forward, and the first needs no code change:
 
+* Set `occurrent.subscription.start-when-no-start-position-can-be-recorded=true` in the Spring Boot starter, or
+  configure `DurableSubscriptionModelConfig.startWhenNoStartPositionCanBeRecorded(true)` when building the model
+  yourself. The subscription then starts the way it did before this release, with nothing recorded until the
+  first checkpoint is saved and the loss window that comes with it, only now chosen deliberately instead of
+  decided silently by what the server refuses.
 * Run against a cluster that permits `hostInfo`, which on Atlas means a dedicated tier (M10 and up). The
   subscription then records its start position before anything is delivered and resumes from it after a crash,
   which is the promise `DurableSubscriptionModel` exists to make.
 * Subscribe with a `StartAt` of your own, `StartAt.now()` for example. That records no position and makes no
-  resume promise for the time before the first checkpoint is saved, which is exactly what the previous behavior
-  gave you, only now it is chosen in the caller's code instead of decided silently by what the server refuses.
+  resume promise for the time before the first checkpoint is saved.
 
 The blocking `ManualStartSubscriptionModel` and the reactor `ReactorDurableSubscriptionModel` have answered a
-`null` position source this way since 0.33.0. This change gives `DurableSubscriptionModel` the same answer.
+`null` position source this way since 0.33.0. This change gives `DurableSubscriptionModel` the same answer. The
+property reaches the reactive starter too, where
+`ReactorDurableSubscriptionModelConfig.startWhenNoStartPositionCanBeRecorded(true)` now lets
+`ReactorDurableSubscriptionModel` start such a registration as well, so a reactive application on a shared Atlas
+cluster gets the same no-code-change path out of the refusal it has had since 0.33.0.
