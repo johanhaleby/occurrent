@@ -166,8 +166,15 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
      * The zero-config {@link AppliedAppendStore} an application gets when it declares none itself. A future
      * {@code @Projection(recordAppliedAppends = true)} opt-in would resolve this same bean, but that annotation
      * attribute is not part of this release.
+     * <p>
+     * {@code @Fallback} alongside the condition, for the same reason {@code occurrentTypeMapper()} is one. This
+     * configuration is activated by {@code @EnableOccurrentReactive}'s plain {@code @Import}, so
+     * {@code @ConditionalOnMissingBean} can be evaluated before an application's own {@link AppliedAppendStore} bean
+     * is registered, letting both through. A {@code @Fallback} bean is excluded at dependency-resolution time
+     * instead, which registration order cannot affect.
      */
     @Bean
+    @Fallback
     @ConditionalOnMissingBean(AppliedAppendStore.class)
     public AppliedAppendStore occurrentAppliedAppendStore(ReactiveMongoOperations mongo, OccurrentProperties occurrentProperties) {
         OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend = occurrentProperties.getProjection().getAppliedAppend();
