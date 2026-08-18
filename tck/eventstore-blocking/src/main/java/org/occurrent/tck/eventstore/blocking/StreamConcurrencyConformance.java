@@ -23,18 +23,23 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.WriteConditionNotFulfilledException;
+import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.blocking.EventStream;
 import org.occurrent.tck.ConcurrentRendezvous;
 import org.occurrent.tck.ConcurrentRendezvous.Outcome;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.occurrent.tck.ConformanceEvents.event;
+import static org.occurrent.tck.ConformanceEvents.extension;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
 
 /**
@@ -153,6 +158,44 @@ public abstract class StreamConcurrencyConformance extends EventStoreConformance
             assertThat(idsOf(stream.eventList()))
                     .as("Iteration %d: stream '%s' must hold exactly the %d written events, each exactly once", i, streamId, threadCount)
                     .containsExactlyInAnyOrderElementsOf(writtenEventIds);
+        }
+    }
+
+    @Test
+    @Timeout(60)
+    void concurrent_unconditional_writes_to_the_same_stream_each_get_a_distinct_append_id_with_no_cross_contamination() throws Exception {
+        int threadCount = 6;
+
+        for (int i = 0; i < ITERATIONS; i++) {
+            String streamId = "unconditional-append-id-" + i;
+            int iteration = i;
+
+            List<Outcome<Map.Entry<String, String>>> outcomes = ConcurrentRendezvous.collide(threadCount, index -> {
+                String eventId = "event-" + iteration + "-" + index;
+                CloudEvent event = event(eventId, DEFINED);
+                return () -> {
+                    WriteResult result = eventStore().write(streamId, List.of(event));
+                    return Map.entry(eventId, result.appendId().orElseThrow().toString());
+                };
+            });
+
+            List<Map.Entry<String, String>> results = outcomes.stream().map(Outcome::value).toList();
+
+            assertThat(results.stream().map(Map.Entry::getValue).distinct().count())
+                    .as("Iteration %d: each of the %d concurrent writes to stream '%s' must be assigned a distinct append id",
+                            i, threadCount, streamId)
+                    .isEqualTo(threadCount);
+
+            EventStream<CloudEvent> stream = eventStore().read(streamId);
+            Map<String, String> appendIdByEventId = stream.eventList().stream()
+                    .collect(Collectors.toMap(CloudEvent::getId, event -> extension(event, OccurrentCloudEventExtension.APPEND_ID)));
+
+            for (Map.Entry<String, String> expected : results) {
+                assertThat(appendIdByEventId.get(expected.getKey()))
+                        .as("Iteration %d: event '%s' must have the append id its own write returned, not another writer's",
+                                i, expected.getKey())
+                        .isEqualTo(expected.getValue());
+            }
         }
     }
 }

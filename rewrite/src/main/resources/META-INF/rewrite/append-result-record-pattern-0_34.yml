@@ -1,0 +1,27 @@
+#
+# Copyright 2026 Johan Haleby
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MigrateAppendResultRecordPattern_0_34
+displayName: Add the append id binding to a WriteResult/DcbAppendResult record pattern
+description: >-
+  WriteResult and DcbAppendResult's canonical constructor grew a fourth component, the append id (ADR 132), so a
+  record pattern naming only the original three components stops compiling. Rewrites any three-binding
+  deconstruction pattern against either type, in a switch case or an instanceof pattern alike, to a four-binding
+  one by appending var appendId. This is unconditional, unlike this module's by-hand-marked recipes, since a
+  record pattern's arity is a compiler-enforced fact rather than a judgement call.
+recipeList:
+  - org.occurrent.rewrite.MigrateAppendResultRecordPattern

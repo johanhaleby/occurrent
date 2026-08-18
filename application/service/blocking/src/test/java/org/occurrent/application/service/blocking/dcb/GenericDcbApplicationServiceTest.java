@@ -55,7 +55,11 @@ class GenericDcbApplicationServiceTest {
             return List.of(new DomainEvent("NameChanged", "name:1"));
         });
 
-        assertThat(result).hasValue(new DcbAppendResult(2, 2, 1));
+        assertThat(result).hasValueSatisfying(dcbAppendResult -> {
+            assertThat(dcbAppendResult.firstSequencePosition()).isEqualTo(2);
+            assertThat(dcbAppendResult.lastSequencePosition()).isEqualTo(2);
+            assertThat(dcbAppendResult.eventCount()).isEqualTo(1);
+        });
         DcbEventStream eventStream = eventStore.read(tags(Tag.parse("name:1")));
         assertThat(eventStream.events())
                 .extracting(CloudEvent::getType)
@@ -99,7 +103,11 @@ class GenericDcbApplicationServiceTest {
             return List.of(new DomainEvent("NameChangedByService", "name:1"));
         });
 
-        assertThat(result).hasValue(new DcbAppendResult(3, 3, 1));
+        assertThat(result).hasValueSatisfying(dcbAppendResult -> {
+            assertThat(dcbAppendResult.firstSequencePosition()).isEqualTo(3);
+            assertThat(dcbAppendResult.lastSequencePosition()).isEqualTo(3);
+            assertThat(dcbAppendResult.eventCount()).isEqualTo(1);
+        });
         assertThat(attempts).hasValue(2);
         assertThat(delegate.read(tags(Tag.parse("name:1"))).events())
                 .extracting(CloudEvent::getType)

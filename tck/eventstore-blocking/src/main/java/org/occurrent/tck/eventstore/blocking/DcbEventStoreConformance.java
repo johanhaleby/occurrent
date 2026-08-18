@@ -35,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.wholeStoreLock;
+import static org.occurrent.tck.ConformanceEvents.extension;
 import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.*;
 
 /**
@@ -704,6 +705,32 @@ public abstract class DcbEventStoreConformance extends EventStoreConformance {
                     .as("A read after an append must observe a head at least as high as the position the append "
                             + "reported, since the head is a monotonic global cursor over the same sequence")
                     .isGreaterThanOrEqualTo(result.lastSequencePosition());
+        }
+
+        @Test
+        void every_event_of_one_append_has_the_same_append_id_the_append_returned() {
+            DcbAppendResult result = dcbEventStore().append(List.of(
+                    taggedEvent(DEFINED, NAME_1),
+                    taggedEvent(CHANGED, NAME_1)));
+
+            assertThat(result.appendId())
+                    .as("A successful DCB append always persists at least one event, so it must report an append id")
+                    .isPresent();
+            String appendId = result.appendId().get().toString();
+            assertThat(dcbEventStore().read(DcbCriteria.tags(tag(NAME_1))).events())
+                    .extracting(event -> extension(event, OccurrentCloudEventExtension.APPEND_ID))
+                    .as("Every event the append persisted must have the exact id the append reported")
+                    .containsExactly(appendId, appendId);
+        }
+
+        @Test
+        void distinct_appends_carry_distinct_append_ids() {
+            DcbAppendResult first = dcbEventStore().append(List.of(taggedEvent(DEFINED, NAME_1)));
+            DcbAppendResult second = dcbEventStore().append(List.of(taggedEvent(CHANGED, NAME_2)));
+
+            assertThat(first.appendId())
+                    .as("Two separate appends must not be assigned the same append id")
+                    .isNotEqualTo(second.appendId());
         }
     }
 

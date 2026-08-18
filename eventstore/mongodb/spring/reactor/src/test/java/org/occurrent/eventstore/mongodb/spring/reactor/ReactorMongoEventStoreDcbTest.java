@@ -43,6 +43,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
@@ -345,6 +346,24 @@ class ReactorMongoEventStoreDcbTest {
                 .verify(Duration.ofSeconds(10));
         long elapsedMillis = Duration.ofNanos(System.nanoTime() - start).toMillis();
         assertThat(elapsedMillis).as("a duplicate CloudEvent must not be retried, so it fails well before the multi-second backoff").isLessThan(3000L);
+    }
+
+    @Test
+    void resubscribing_the_same_append_publisher_mints_a_fresh_append_id_each_time() {
+        CloudEvent event = taggedEvent("NameDefined", "reuse:1");
+        Mono<DcbAppendResult> publisher = eventStore.append(List.of(event));
+
+        DcbAppendResult first = requireNonNull(publisher.block());
+        eventStore.deleteEvent(event.getId(), event.getSource()).block();
+        DcbAppendResult second = publisher.block();
+
+        assertAll(
+                () -> assertThat(first.appendId()).isPresent(),
+                () -> assertThat(requireNonNull(second).appendId()).isPresent(),
+                () -> assertThat(second.appendId())
+                        .as("a reused publisher must mint a fresh append id on every subscription, not reuse the one from its first execution")
+                        .isNotEqualTo(first.appendId())
+        );
     }
 
     @Test

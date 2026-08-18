@@ -314,7 +314,8 @@ public abstract class StreamEventStoreConformance extends EventStoreConformance 
             assertAll(
                     () -> assertThat(result.streamId()).isEqualTo(STREAM_ID),
                     () -> assertThat(result.oldStreamVersion()).isEqualTo(0L),
-                    () -> assertThat(result.newStreamVersion()).isEqualTo(0L)
+                    () -> assertThat(result.newStreamVersion()).isEqualTo(0L),
+                    () -> assertThat(result.appendId()).isEmpty()
             );
         }
 
@@ -327,7 +328,31 @@ public abstract class StreamEventStoreConformance extends EventStoreConformance 
             assertAll(
                     () -> assertThat(result.streamId()).isEqualTo(STREAM_ID),
                     () -> assertThat(result.oldStreamVersion()).isEqualTo(2L),
-                    () -> assertThat(result.newStreamVersion()).isEqualTo(2L)
+                    () -> assertThat(result.newStreamVersion()).isEqualTo(2L),
+                    () -> assertThat(result.appendId()).isEmpty()
+            );
+        }
+
+        @Test
+        void every_event_of_one_write_has_the_same_append_id_the_write_returned() {
+            WriteResult result = eventStore().write(STREAM_ID, List.of(event("event-1", DEFINED), event("event-2", CHANGED)));
+
+            assertThat(result.appendId()).isPresent();
+            String appendId = result.appendId().get().toString();
+            assertThat(eventStore().read(STREAM_ID).eventList())
+                    .extracting(event -> extension(event, OccurrentCloudEventExtension.APPEND_ID))
+                    .containsExactly(appendId, appendId);
+        }
+
+        @Test
+        void distinct_writes_to_the_same_stream_carry_distinct_append_ids() {
+            WriteResult first = eventStore().write(STREAM_ID, List.of(event("event-1", DEFINED)));
+            WriteResult second = eventStore().write(STREAM_ID, List.of(event("event-2", CHANGED)));
+
+            assertAll(
+                    () -> assertThat(first.appendId()).isPresent(),
+                    () -> assertThat(second.appendId()).isPresent(),
+                    () -> assertThat(first.appendId()).isNotEqualTo(second.appendId())
             );
         }
     }

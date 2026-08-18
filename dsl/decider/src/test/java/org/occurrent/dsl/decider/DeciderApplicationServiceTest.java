@@ -25,7 +25,6 @@ import org.occurrent.application.service.blocking.generic.GenericApplicationServ
 import org.occurrent.domain.DomainEvent;
 import org.occurrent.domain.NameDefined;
 import org.occurrent.domain.NameWasChanged;
-import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 
 import java.net.URI;
@@ -83,7 +82,9 @@ class DeciderApplicationServiceTest {
             var result = deciderApplicationService.execute(streamId, command, decider);
 
             // Then
-            assertThat(result).isEqualTo(new WriteResult(streamId.toString(), 0, 1));
+            assertThat(result.streamId()).isEqualTo(streamId.toString());
+            assertThat(result.oldStreamVersion()).isEqualTo(0);
+            assertThat(result.newStreamVersion()).isEqualTo(1);
         }
 
         @Test
@@ -96,7 +97,9 @@ class DeciderApplicationServiceTest {
             var result = deciderApplicationService.execute(streamId, command, decider);
 
             // Then
-            assertThat(result).isEqualTo(new WriteResult(streamId, 0, 1));
+            assertThat(result.streamId()).isEqualTo(streamId);
+            assertThat(result.oldStreamVersion()).isEqualTo(0);
+            assertThat(result.newStreamVersion()).isEqualTo(1);
         }
 
         @Test
@@ -111,7 +114,9 @@ class DeciderApplicationServiceTest {
 
             // Then
             assertAll(
-                    () -> assertThat(result).isEqualTo(new WriteResult(streamId.toString(), 0, 2)),
+                    () -> assertThat(result.streamId()).isEqualTo(streamId.toString()),
+                    () -> assertThat(result.oldStreamVersion()).isEqualTo(0),
+                    () -> assertThat(result.newStreamVersion()).isEqualTo(2),
                     () -> assertThat(readNameEvents()).containsExactly(
                             new NameDefined("event-1", time, "name", "John"),
                             new NameWasChanged("event-2", time, "name", "Johan")

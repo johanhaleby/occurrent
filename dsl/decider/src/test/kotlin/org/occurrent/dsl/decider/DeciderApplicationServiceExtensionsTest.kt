@@ -31,7 +31,6 @@ import org.occurrent.domain.DomainEvent
 import org.occurrent.domain.Name
 import org.occurrent.domain.NameDefined
 import org.occurrent.domain.NameWasChanged
-import org.occurrent.eventstore.api.WriteResult
 import org.occurrent.eventstore.inmemory.InMemoryEventStore
 import java.net.URI
 import java.time.LocalDateTime
@@ -95,7 +94,9 @@ class DeciderApplicationServiceExtensionsTest {
                 val result = applicationService.execute(streamId, command, decider)
 
                 // Then
-                assertThat(result).isEqualTo(WriteResult(streamId.toString(), 0, 1))
+                assertThat(result.streamId()).isEqualTo(streamId.toString())
+                assertThat(result.oldStreamVersion()).isEqualTo(0)
+                assertThat(result.newStreamVersion()).isEqualTo(1)
             }
 
             @Test
@@ -109,7 +110,9 @@ class DeciderApplicationServiceExtensionsTest {
                 val result = applicationService.execute(streamId, commands = listOf(command1, command2), decider)
 
                 // Then
-                assertThat(result).isEqualTo(WriteResult(streamId.toString(), 0, 2))
+                assertThat(result.streamId()).isEqualTo(streamId.toString())
+                assertThat(result.oldStreamVersion()).isEqualTo(0)
+                assertThat(result.newStreamVersion()).isEqualTo(2)
             }
         }
 
@@ -127,7 +130,9 @@ class DeciderApplicationServiceExtensionsTest {
                 val result = applicationService.execute(streamId, command, decider)
 
                 // Then
-                assertThat(result).isEqualTo(WriteResult(streamId, 0, 1))
+                assertThat(result.streamId()).isEqualTo(streamId)
+                assertThat(result.oldStreamVersion()).isEqualTo(0)
+                assertThat(result.newStreamVersion()).isEqualTo(1)
             }
 
             @Test
@@ -141,7 +146,9 @@ class DeciderApplicationServiceExtensionsTest {
                 val result = applicationService.execute(streamId, commands = listOf(command1, command2), decider)
 
                 // Then
-                assertThat(result).isEqualTo(WriteResult(streamId, 0, 2))
+                assertThat(result.streamId()).isEqualTo(streamId)
+                assertThat(result.oldStreamVersion()).isEqualTo(0)
+                assertThat(result.newStreamVersion()).isEqualTo(2)
             }
         }
     }
@@ -442,7 +449,9 @@ class DeciderApplicationServiceExtensionsTest {
 
             // Then
             assertAll(
-                { assertThat(result).isEqualTo(WriteResult(streamId.toString(), 0, 1)) },
+                { assertThat(result.streamId()).isEqualTo(streamId.toString()) },
+                { assertThat(result.oldStreamVersion()).isEqualTo(0) },
+                { assertThat(result.newStreamVersion()).isEqualTo(1) },
                 { assertThat(eventStore.domainEvents()).containsOnly(NameDefined(command.commandId, command.time, command.userId, command.name)) },
             )
         }
