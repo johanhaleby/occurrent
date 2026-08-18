@@ -1,7 +1,7 @@
 schema_version: 1
 epic: brk
-revision: 3
-updated_at: 2026-08-18T05:18:00Z
+revision: 9
+updated_at: 2026-08-18T06:04:32Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -35,12 +35,14 @@ units:
     session: "uds:/tmp/cc-socks/33860.sock"
     deliverables:
       - {check: manual_approval, ref: "design gate closed by Johan's explicit word, via the orchestrator", met: false, evidence: null}
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 847, met: false, evidence: null}
       - {check: issue_closed, ref: 412, met: false, evidence: null}
     blocking_on: []
-    next_action: "Gate rulings relayed 2026-08-18T05:1xZ (binary-only binding, auto-config later as #846/U10, publish-as-module, CloudEventSink). Worker folds them, then pr-create + pr-fix + DELIVERY_RESULT. Expected-progress deadline 2026-08-18T06:20Z; past it, read the session tail"
-    last_meaningful_progress_at: 2026-08-18T05:18:00Z
+    next_action: "Worker re-seated on the fourth Copilot round (landed 06:01:35Z after its delivery; 3 current unresolved threads: AMQP 1.0 vs 0-9-1 SDK-writer gap, Kafka acks=0, DLX no-confirms). Its first DELIVERY_RESULT failed thread verification (claimed 7/7, actual 10 with 3 open) via the round race, caught by the sweep. On its re-delivery: ONE gate ask to Johan carrying the design-gate close plus the worker's PushObserver breaking-change escalation (three-valued routing outcome; subscription/push IS in the 0.33.0 tag, so released surface, recipe territory). New expected-progress deadline 2026-08-18T06:50Z"
+    last_meaningful_progress_at: 2026-08-18T06:04:32Z
     observed:
+      pr_847: {head: 118cdcb85c8fcf01ed8ecda16ff1b077b6d94ae5, branch: "brk/u1-adr-broker-architecture", rollup: "0fail DONE (prose-only, ci skip)", review: "FOUR Copilot rounds, fourth at 06:01:35Z post-delivery; threads 10 total 3 unresolved (isResolved-only count), all current", delivery_mirror: "PR comment 5324261505, attempt 1, outcome blocked", via: "GraphQL reviewThreads + gh pr view", at: 2026-08-18T06:04:32Z}
+      pushobserver_escalation: {claim: "routeReportingMatch boolean conflates four outcomes; bridge ack-safety needs DELIVERED/FILTERED/NOT_DELIVERABLE from the one routing evaluation", released: "subscription/push present in occurrent-0.33.0 tag, verified git ls-tree", call_site: "PushSubscriptionModel.java:146", via: "worker message + own greps", at: 2026-08-18T06:04:32Z}
       branch: {name: "brk/u1-adr-broker-architecture", head: "15737e7ba13afdae59a38bf15b850b0f018ae52d", via: "git ls-remote after the worker's gate message", at: 2026-08-18T05:18:00Z}
       session: {address: "uds:/tmp/cc-socks/33860.sock", via: "cross-session gate message carrying the U1 marker", at: 2026-08-18T05:18:00Z}
     assessment: "ADR number 0133 re-audited clean by the worker (max 0132). Prose-only diff, [ci skip] rule applies. Gate reached exactly as briefed: no prompt, decisions handed back, worker parked in the foreground."
