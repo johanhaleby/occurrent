@@ -23,9 +23,13 @@ import io.cloudevents.CloudEvent;
  * application that already has its own publisher wrapper replaces this and gets both the destination and the
  * delivery decision from its own code, instead of half of it staying here.
  * <p>
- * A shipped implementation publishes at least once. It waits for the broker to acknowledge the message and throws
- * if that acknowledgement times out, and a caller that republishes after a timeout may produce a duplicate. That
- * is the same guarantee every consumer of a {@link CloudEventForwarder} already relies on.
+ * A single {@code publish} call is not by itself an at-least-once guarantee. A shipped implementation waits for the
+ * broker to acknowledge the message and throws if that acknowledgement times out, so it never reports success for
+ * an event the broker never took, but a caller that only calls {@code publish} once and does nothing on failure can
+ * still lose that event. The at-least-once guarantee comes from pairing a sink that behaves this way with a caller
+ * that retries on failure, which is exactly what {@link CloudEventForwarder} does by not advancing its checkpoint
+ * until {@code publish} returns. A caller that republishes after a timeout, forwarder or otherwise, may produce a
+ * duplicate.
  */
 public interface CloudEventSink {
 
