@@ -1,7 +1,7 @@
 schema_version: 1
 epic: brk
-revision: 41
-updated_at: 2026-08-18T14:36:21Z
+revision: 43
+updated_at: 2026-08-18T14:48:51Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly. Gate-ask rulings 2026-08-18T~10:58Z: the ADR review loop STOPPED at ten rounds, Johan's own read of PR 847 is the closing review; #848 ADOPTED as U11 at Opus/high, blocking both consume bridges."
@@ -210,7 +210,7 @@ units:
     last_meaningful_progress_at: 2026-08-18T13:03:58Z
     observed:
       session: {id: local_186d111c-cf8b-40b2-af39-4e17d2d6b7b2, worktree: "wizardly-allen-e0b356", via: "transcript marker search on the opening prompt", at: 2026-08-18T12:38:36Z}
-      pr_850: {head: "18012e24d2aa3cceddb996f8e8b81f4a179b9e7f", branch: "brk/u11-push-routing-outcome", rollup: "0fail running (review-fold push after the green matrix)", review: "in the worker's loop, DELIVERY_RESULT owed", via: "monitor PR-DELTA", at: 2026-08-18T14:31:47Z}
+      pr_850: {head: "18012e24d2aa3cceddb996f8e8b81f4a179b9e7f", branch: "brk/u11-push-routing-outcome", rollup: "0fail DONE, matrix green on the fold head", review: "in the worker's loop, DELIVERY_RESULT owed", via: "monitor PR-DELTA", at: 2026-08-18T14:43:24Z}
     assessment: "Adopted at the 2026-08-18 gate ask, Opus/high chip by Johan's explicit tier choice (two non-breaking attempts raced on pause-then-resume, so the concurrency earns the tier). #848 milestoned 0.34.0 and labeled in-progress. Adversarial verify attacks the race claim before merge."
   U12:
     issue: 852
@@ -225,9 +225,10 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 852, met: false, evidence: null}
     blocking_on: []
-    next_action: "Phase 2 running under the REFINED ruling: eager refusal default naming the override in its message, opt-in config + OccurrentProperties property (both starters, reactor-consistency question echoed at the gate), chosen name flagged in DELIVERY_RESULT for Johan's rename window, migration guide leads with the property, both paths tested, plus the original obligations (mutation-proved restart test, comment fixes, composing-module runs). Deadline extended for the wider scope: 2026-08-18T16:10Z"
-    last_meaningful_progress_at: 2026-08-18T14:00:55Z
-    observed: {}
+    next_action: "Session stopped 14:46Z with branch pushed (3138126, three commits incl. the startWhenNoStartPositionCanBeRecorded override on BOTH durable models) but no PR and no message; resume sent 14:49Z naming the remainder (pr-create, loop, DELIVERY_RESULT with name flag + reactor reasoning). Observable proof: a PR or a reply; deadline 2026-08-18T15:20Z, then read the tail"
+    last_meaningful_progress_at: 2026-08-18T14:48:51Z
+    observed:
+      branch: {name: "brk/u12-durable-first-event", head: "313812695f033180c02b4d4de584493fa2ca0f38", commits: "refusal, changelog+upgrade-guide, override on both models", via: "git ls-remote + worktree log after the liveness sweep", at: 2026-08-18T14:48:51Z}
     assessment: "Adopted by Johan's word 2026-08-18T~14:00Z, reversing the deferral (decline-register entry retired). Sonnet/high chip, decision gate at orchestrator venue. Disjoint from U2 (broker) and U11 (push); changelog conflicts resolve by rebase, loser rebases."
   U9:
     issue: null
