@@ -1,7 +1,7 @@
 schema_version: 1
 epic: brk
-revision: 19
-updated_at: 2026-08-18T10:58:39Z
+revision: 21
+updated_at: 2026-08-18T12:16:30Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly. Gate-ask rulings 2026-08-18T~10:58Z: the ADR review loop STOPPED at ten rounds, Johan's own read of PR 847 is the closing review; #848 ADOPTED as U11 at Opus/high, blocking both consume bridges."
@@ -16,6 +16,22 @@ definition_of_done:
   - "#388 closed"
   - "Memory checkpointed, sessions archived at closeout, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
 pending_actions:
+  - id: act-003
+    type: dispatch-chip
+    target: "U11 chip task_9b414ed8, title ⌁[brk/U11#848] Three-valued push routing outcome · Opus/high"
+    expected: "chip visible to Johan; on start, worker session resolved by the ⌁[brk/U11] marker via transcript search"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-18T12:16:30Z
+  - id: act-002
+    type: dispatch-chip
+    target: "U2 chip task_2e833152, title ⌁[brk/U2#413] Broker API foundation module · Sonnet/high"
+    expected: "chip visible to Johan; on start, worker session resolved by the ⌁[brk/U2] marker via transcript search"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-18T12:16:30Z
   - id: act-001
     type: dispatch-chip
     target: "U1 chip task_6afd231e, title ⌁[brk/U1#412] Broker architecture ADR · Opus/high"
@@ -28,17 +44,17 @@ units:
   U1:
     issue: 412
     goal: "ADR 0133: broker architecture, seams (EventDestination, DestinationResolver, sinks), module split, cross-transport convention section; three open decisions through the orchestrator gate (message binding, Spring Boot auto-config scope, #414 publish-vs-example presented honestly)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "uds:/tmp/cc-socks/33860.sock"
+    session: local_6d2cff8f-dcf0-45fd-abc7-0a70177df2a7
     deliverables:
-      - {check: manual_approval, ref: "design gate closed by Johan's explicit word, via the orchestrator", met: false, evidence: null}
-      - {check: pr_merged, ref: 847, met: false, evidence: null}
-      - {check: issue_closed, ref: 412, met: false, evidence: null}
+      - {check: manual_approval, ref: "design gate closed by Johan's explicit word, via the orchestrator", met: true, evidence: "Johan's message 'close the gate' in the orchestrator session 2026-08-18T~12:05Z, after his read was designated the closing review at the 10:58Z gate ask"}
+      - {check: pr_merged, ref: 847, met: true, evidence: "squash 2948368c0, CAS pin 9c9b200 matched, ADR verified on main by git show, branch tip equalled pin before delete"}
+      - {check: issue_closed, ref: 412, met: true, evidence: "gh issue view state CLOSED post-merge 2026-08-18T12:05Z"}
     blocking_on: []
-    next_action: "Machine review loop CLOSED at ten rounds by Johan's ruling; attempt-3 verified (head 9c9b200, 17 threads 0 unresolved). Waiting on Johan's own read of PR 847, which is the design gate; on his explicit close, CAS merge pinned to the verified head with [ci skip] carried, then U2 dispatch in the same tick. Human-wait: no deadline, worker stood down"
+    next_action: "none; session archiving batches at closeout, worktree hungry-shtern-13eb45 held until then"
     last_meaningful_progress_at: 2026-08-18T10:58:39Z
     observed:
       pr_847: {head: 9c9b20087d823019f717441bb6294cf2fdbd5538, branch: "brk/u1-adr-broker-architecture", rollup: "0fail DONE (prose-only, ci skip)", review: "fourth push since the round-seven re-seat; attempt-3 block still owed", delivery_mirror: "PR comment 5324261505 at attempt 2, attempt-3 update owed", via: "monitor PR-DELTA", at: 2026-08-18T07:24:36Z}
@@ -60,10 +76,10 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 413, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch after U1's design gate closes and the ADR merges"
-    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    next_action: "Chip task_2e833152 awaits Johan's click (#413 claimed, comment 5327938857). On start: resolve session by the ⌁[brk/U2] marker, stamp the expected-progress deadline"
+    last_meaningful_progress_at: 2026-08-18T12:16:30Z
     observed: {}
-    assessment: "Sonnet/high chip. No kafka-clients version here (U5 owns it); testcontainers-bom already manages testcontainers-{rabbitmq,kafka}. No changelog entry (no user-visible capability without a transport)."
+    assessment: "Sonnet/high chip. No kafka-clients version here (U5 owns it); testcontainers-bom already manages testcontainers-{rabbitmq,kafka}. No changelog entry (no user-visible capability without a transport). Brief carries the merged ADR as binding text, catchAllDestination default, forwarder split, releasable-as-is."
   U3:
     issue: 414
     goal: "RabbitMQ publish: destination, topic-exchange resolver, CloudEvent + domain sinks, publisher confirms; own aggregator/BOM/excludeArtifacts entries; writes THE single broker changelog entry (Changes + Highlights teaser)"
@@ -188,8 +204,8 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 848, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch after U1's ADR merges; blocks U4 and U6"
-    last_meaningful_progress_at: 2026-08-18T10:58:39Z
+    next_action: "Chip task_9b414ed8 awaits Johan's click. On start: resolve session by the ⌁[brk/U11] marker, stamp the expected-progress deadline; adversarial verify attacks the stated interleaving invariant before merge"
+    last_meaningful_progress_at: 2026-08-18T12:16:30Z
     observed: {}
     assessment: "Adopted at the 2026-08-18 gate ask, Opus/high chip by Johan's explicit tier choice (two non-breaking attempts raced on pause-then-resume, so the concurrency earns the tier). #848 milestoned 0.34.0 and labeled in-progress. Adversarial verify attacks the race claim before merge."
   U9:
