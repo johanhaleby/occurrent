@@ -128,6 +128,24 @@ class AppliedAppendStoreTest {
     }
 
     @Test
+    void waitUntilApplied_rejects_an_exponential_backoff_whose_max_interval_is_zero_because_growth_would_clamp_the_interval_back_to_zero() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+
+        assertThat(catchThrowable(() -> store.waitUntilApplied("orders", AppendId.mint(), Duration.ofMillis(50), Backoff.exponential(Duration.ofMillis(25), Duration.ZERO, 2.0))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("initial and max intervals must be positive");
+    }
+
+    @Test
+    void waitUntilApplied_rejects_an_exponential_backoff_whose_multiplier_is_nan_because_that_also_collapses_the_interval_to_zero() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+
+        assertThat(catchThrowable(() -> store.waitUntilApplied("orders", AppendId.mint(), Duration.ofMillis(50), Backoff.exponential(Duration.ofMillis(25), Duration.ofMillis(250), Double.NaN))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("multiplier must be at least 1.0");
+    }
+
+    @Test
     void an_exponential_backoff_grows_the_interval_between_polls_and_stops_growing_at_its_max() {
         List<Long> pollGapsMillis = new ArrayList<>();
         long[] previousPoll = {System.nanoTime()};

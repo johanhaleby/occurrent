@@ -68,7 +68,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * decides how long a wait sleeps between polls that succeeded and simply found the append not yet applied.
  */
 @NullMarked
-class MongoAppliedAppendStore implements AppliedAppendStore {
+public class MongoAppliedAppendStore implements AppliedAppendStore {
 
     private static final String PROJECTION_ID = "projectionId";
     private static final String APPEND_ID = "appendId";
@@ -90,11 +90,11 @@ class MongoAppliedAppendStore implements AppliedAppendStore {
      * Retries a failing read or write with exponential backoff from 100 ms up to 2 seconds, the same default
      * {@code NativeMongoCheckpointStorage} uses, and polls a wait at {@link AppliedAppendStore#DEFAULT_POLL_BACKOFF}.
      */
-    MongoAppliedAppendStore(MongoOperations mongoOperations, String collection, Duration retention) {
+    public MongoAppliedAppendStore(MongoOperations mongoOperations, String collection, Duration retention) {
         this(mongoOperations, collection, retention, defaultRetryStrategy(), DEFAULT_POLL_BACKOFF);
     }
 
-    MongoAppliedAppendStore(MongoOperations mongoOperations, String collection, Duration retention, RetryStrategy retryStrategy, Backoff pollBackoff) {
+    public MongoAppliedAppendStore(MongoOperations mongoOperations, String collection, Duration retention, RetryStrategy retryStrategy, Backoff pollBackoff) {
         this.mongoOperations = requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collection = requireNonNull(collection, "collection cannot be null");
         this.retention = requireNonNull(retention, "retention cannot be null");

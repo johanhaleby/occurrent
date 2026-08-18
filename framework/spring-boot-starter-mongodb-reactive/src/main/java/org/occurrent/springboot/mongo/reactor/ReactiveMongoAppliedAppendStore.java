@@ -77,7 +77,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * its own {@link Retry}.
  */
 @NullMarked
-class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
+public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
 
     private static final String PROJECTION_ID = "projectionId";
     private static final String APPEND_ID = "appendId";
@@ -104,11 +104,11 @@ class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * against this default still resolves by its own deadline. Polls a wait at
      * {@link AppliedAppendStore#DEFAULT_POLL_BACKOFF}.
      */
-    ReactiveMongoAppliedAppendStore(ReactiveMongoOperations mongoOperations, String collection, Duration retention) {
+    public ReactiveMongoAppliedAppendStore(ReactiveMongoOperations mongoOperations, String collection, Duration retention) {
         this(mongoOperations, collection, retention, defaultRetry(), DEFAULT_POLL_BACKOFF);
     }
 
-    ReactiveMongoAppliedAppendStore(ReactiveMongoOperations mongoOperations, String collection, Duration retention, Retry retry, Backoff pollBackoff) {
+    public ReactiveMongoAppliedAppendStore(ReactiveMongoOperations mongoOperations, String collection, Duration retention, Retry retry, Backoff pollBackoff) {
         this.mongoOperations = requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collection = requireNonNull(collection, "collection cannot be null");
         this.retention = requireNonNull(retention, "retention cannot be null");
@@ -135,11 +135,15 @@ class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     public void recordApplied(String projectionId, AppendId appendId) {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(appendId, "appendId cannot be null");
+        // Mono.defer so a retried upsert builds a fresh Update, and with it a fresh new Date(), on every attempt.
+        // Built once outside a defer, a retry would resubscribe to the same upsert Mono and reuse the first
+        // attempt's timestamp, so a record that only succeeds after several retries would carry a recordedAt from
+        // well before the insert, shortening its actual time in the TTL index.
         Mono.fromRunnable(this::ensureIndexesOnce)
-                .then(mongoOperations.upsert(
+                .then(Mono.defer(() -> mongoOperations.upsert(
                         query(where(PROJECTION_ID).is(projectionId).and(APPEND_ID).is(appendId.value().toString())),
                         new Update().setOnInsert(RECORDED_AT, new Date()),
-                        collection))
+                        collection)))
                 .retryWhen(retry)
                 .block();
     }

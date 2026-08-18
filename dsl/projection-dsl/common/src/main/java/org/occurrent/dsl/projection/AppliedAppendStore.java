@@ -74,18 +74,21 @@ public interface AppliedAppendStore {
 
     /**
      * Rejects a {@code backoff} that a wait loop cannot use without becoming a busy loop against the store. This
-     * rejects {@link Backoff#none()}, and it also rejects an exponential backoff whose interval starts at zero or
-     * negative, or whose multiplier is below 1.0 and so shrinks the interval back to zero after enough polls. Shared
-     * by this interface's own wait loop and by every store's override, so the rule is enforced once rather than
-     * repeated per implementation.
+     * rejects {@link Backoff#none()}, and it also rejects an exponential backoff whose initial or max interval is
+     * zero or negative, or whose multiplier is below 1.0 (this also catches {@code NaN}, since every comparison
+     * against {@code NaN} except {@code !=} is false) and so shrinks the interval back to zero after enough polls.
+     * Shared by this interface's own wait loop and by every store's override, so the rule is enforced once rather
+     * than repeated per implementation.
      */
     static void rejectBusyLoopBackoff(Backoff backoff) {
         if (backoff instanceof Backoff.None) {
             throw new IllegalArgumentException("backoff cannot be Backoff.none(), a wait polls the store and needs a delay between polls. Use Backoff.fixed(..) or Backoff.exponential(..).");
         }
         if (backoff instanceof Backoff.Exponential exponential
-                && (exponential.initial.isZero() || exponential.initial.isNegative() || exponential.multiplier < 1.0)) {
-            throw new IllegalArgumentException("backoff's initial interval must be positive and its multiplier must be at least 1.0, an interval that never grows past zero is a busy loop on the store.");
+                && (exponential.initial.isZero() || exponential.initial.isNegative()
+                || exponential.max.isZero() || exponential.max.isNegative()
+                || !(exponential.multiplier >= 1.0))) {
+            throw new IllegalArgumentException("backoff's initial and max intervals must be positive and its multiplier must be at least 1.0, an interval that never grows past zero is a busy loop on the store.");
         }
     }
 
