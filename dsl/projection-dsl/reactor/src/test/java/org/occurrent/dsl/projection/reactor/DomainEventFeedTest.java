@@ -29,7 +29,9 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.CatchupThenLiveOptions;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -41,14 +43,17 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.occurrent.condition.Condition.eq;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class DomainEventFeedTest {
@@ -399,6 +404,133 @@ class DomainEventFeedTest {
                         .hasMessageContaining("buffer overflowed")
                         .hasMessageContaining("(cap 2)"))
                 .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void accept_cloud_event_matching_the_registered_filter_delivers_and_reports_delivered() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        feed.catchUpAll().block();
+
+        RoutingOutcome outcome = feed.accept(converter.toCloudEvent(new Counted("1"))).block();
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
+    void accept_cloud_event_not_matching_the_registered_filter_reports_filtered_and_is_never_decoded() {
+        AtomicInteger decodes = new AtomicInteger();
+        CloudEventConverter<Counted> converter = countingConverter(decodes);
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        feed.catchUpAll().block();
+        CloudEvent nonMatching = CloudEventBuilder.v1().withId("x").withSource(SOURCE).withType("SomethingElseHappened").build();
+
+        RoutingOutcome outcome = feed.accept(nonMatching).block();
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.FILTERED);
+        assertThat(repo).isEmpty();
+        assertThat(decodes.get()).as("a non-matching event is never decoded").isZero();
+    }
+
+    @Test
+    void accept_cloud_event_before_a_projection_is_registered_is_refused() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+
+        StepVerifier.create(feed.accept(converter.toCloudEvent(new Counted("1"))))
+                .expectErrorSatisfies(e -> assertThat(e)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("has no projection registered"))
+                .verify(Duration.ofSeconds(5));
+    }
+
+    @Test
+    void accept_cloud_event_uses_the_same_filter_the_projection_was_registered_with_not_a_second_one() {
+        // The live match and the replay share one filter, given once at register(..), so they can never disagree
+        // about which events are this projection's the way two independently configured filters could.
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        Function<Counted, Mono<Void>> fold = event -> Mono.fromRunnable(() -> repo.merge("counter", 1, Integer::sum));
+        feed.register("counter", fold, Filter.type(converter.getCloudEventType(Counted.class)));
+
+        RoutingOutcome delivered = feed.accept(converter.toCloudEvent(new Counted("1"))).block();
+        RoutingOutcome filtered = feed.accept(CloudEventBuilder.v1().withId("x").withSource(SOURCE).withType("SomethingElseHappened").build()).block();
+
+        assertThat(delivered).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(filtered).isEqualTo(RoutingOutcome.FILTERED);
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
+    void registering_with_a_payload_filter_and_no_data_field_reader_is_refused_at_register_not_on_the_first_event() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        Function<Counted, Mono<Void>> fold = event -> Mono.empty();
+
+        Throwable thrown = catchThrowable(() -> feed.register("counter", fold, Filter.data("amount", eq(42))));
+
+        assertThat(thrown).isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("DataFieldReader");
+        assertThat(feed.hasProjection()).as("the failed registration must not permanently reserve the id")
+                .isFalse();
+    }
+
+    @Test
+    void a_data_field_reader_supplied_to_the_feed_answers_a_payload_condition_on_the_live_path() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DataFieldReader reader = (cloudEvent, path) -> path.equals("amount") ? Optional.of(42) : Optional.empty();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId, null,
+                CatchupThenLiveOptions.defaults(), reader);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        Function<Counted, Mono<Void>> fold = event -> Mono.fromRunnable(() -> repo.merge("counter", 1, Integer::sum));
+        feed.register("counter", fold, Filter.data("amount", eq(42)));
+
+        RoutingOutcome outcome = feed.accept(converter.toCloudEvent(new Counted("1"))).block();
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
+    void accept_cloud_event_errors_when_the_live_matcher_itself_throws() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw new IllegalStateException("payload unreadable");
+        };
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId, null,
+                CatchupThenLiveOptions.defaults(), throwingReader);
+        Function<Counted, Mono<Void>> fold = event -> Mono.empty();
+        feed.register("counter", fold, Filter.data("amount", eq(42)));
+
+        StepVerifier.create(feed.accept(converter.toCloudEvent(new Counted("1"))))
+                .verifyErrorSatisfies(e -> assertThat(e).isInstanceOf(IllegalStateException.class).hasMessage("payload unreadable"));
+    }
+
+    private static CloudEventConverter<Counted> countingConverter(AtomicInteger decodes) {
+        CloudEventConverter<Counted> delegate = countedConverter();
+        return new CloudEventConverter<>() {
+            @Override
+            public CloudEvent toCloudEvent(Counted domainEvent) {
+                return delegate.toCloudEvent(domainEvent);
+            }
+
+            @Override
+            public Counted toDomainEvent(CloudEvent cloudEvent) {
+                decodes.incrementAndGet();
+                return delegate.toDomainEvent(cloudEvent);
+            }
+
+            @Override
+            public String getCloudEventType(Class<? extends Counted> type) {
+                return delegate.getCloudEventType(type);
+            }
+        };
     }
 
     private static Projection<Long, Counted, String> positionKeyedProjection() {

@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.projection.blocking;
 
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -26,13 +27,18 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.CatchupThenLiveOptions;
+import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.SubscriptionFilterMatcher;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.internal.SingleConsumerMessages;
 
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * The domain-event twin of {@code PushSubscriptionModel}: a register-only sink the application owns and feeds with
@@ -64,9 +70,12 @@ public final class DomainEventFeed<E> {
     private final Function<E, String> eventId;
     private final @Nullable CheckpointStorage catchupMarker;
     private final CatchupThenLiveOptions options;
+    private final DataFieldReader dataFieldReader;
     // The one projection registered on this feed, or null while it is free. Cleared by nothing today: a feed has no
-    // unregister, so this is only ever set once in practice, but reading it is what names the collision.
-    private final AtomicReference<@Nullable CatchupProjectionFeed<E>> feed = new AtomicReference<>();
+    // unregister, so this is only ever set once in practice, but reading it is what names the collision. Paired with
+    // its live matcher in one record, so the two are always set together. Two separate references could let a
+    // reader observe a feed with no matcher yet.
+    private final AtomicReference<@Nullable Registered<E>> feed = new AtomicReference<>();
 
     /**
      * @param reader          The store read used to replay history during the projection's catch-up.
@@ -87,11 +96,24 @@ public final class DomainEventFeed<E> {
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
                            Function<E, String> eventId, @Nullable CheckpointStorage catchupMarker,
                            CatchupThenLiveOptions options) {
+        this(reader, converter, eventId, catchupMarker, options, DataFieldReader.refusing());
+    }
+
+    /**
+     * As {@link #DomainEventFeed(PositionOrderedReader, CloudEventConverter, Function, CheckpointStorage, CatchupThenLiveOptions)},
+     * additionally answering a {@code data} payload condition on the replay filter given to {@link #register} by
+     * reading it through {@code dataFieldReader} instead of refusing it. Only {@link #accept(CloudEvent)} consults
+     * this, since that is the one entry point that evaluates the filter live rather than only during the replay.
+     */
+    public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter,
+                           Function<E, String> eventId, @Nullable CheckpointStorage catchupMarker,
+                           CatchupThenLiveOptions options, DataFieldReader dataFieldReader) {
         this.reader = Objects.requireNonNull(reader, "reader cannot be null");
         this.converter = Objects.requireNonNull(converter, "converter cannot be null");
         this.eventId = Objects.requireNonNull(eventId, "eventId cannot be null");
         this.catchupMarker = catchupMarker;
         this.options = Objects.requireNonNull(options, "options cannot be null");
+        this.dataFieldReader = Objects.requireNonNull(dataFieldReader, DataFieldReader.class.getSimpleName() + " cannot be null");
     }
 
     public DomainEventFeed(PositionOrderedReader reader, CloudEventConverter<E> converter, Function<E, String> eventId) {
@@ -114,18 +136,26 @@ public final class DomainEventFeed<E> {
     /**
      * Register the projection this feed drives, as an existing {@link MaterializedView} replaying stored events
      * matching {@code replayFilter}.
+     * <p>
+     * {@code replayFilter} is also what {@link #accept(CloudEvent)} matches live events against, wrapped as an
+     * {@link AgnosticSubscriptionFilter}. The one filter given here is the only one this feed ever holds, so the
+     * replay and the live path can never disagree about which events are this projection's. Building that matcher
+     * happens here, eagerly, so a {@code data} payload condition this feed has no {@link DataFieldReader} for is
+     * refused now rather than on the first live event.
      *
      * @throws IllegalArgumentException if a projection is already registered on this feed
      */
     public void register(String id, MaterializedView<E> view, Filter replayFilter) {
         Objects.requireNonNull(id, "id cannot be null");
-        // Built before the slot is claimed, so a registration that fails validation (an unpositioned reader, say)
-        // leaves the feed free rather than permanently taken by a projection that never existed.
+        // Built before the slot is claimed, so a registration that fails validation (an unpositioned reader, or an
+        // unreadable payload filter) leaves the feed free rather than permanently taken by a projection that never
+        // existed.
         CatchupProjectionFeed<E> registering = CatchupProjectionFeed.create(id, view, replayFilter, reader, converter, eventId, catchupMarker, options);
-        if (!feed.compareAndSet(null, registering)) {
-            CatchupProjectionFeed<E> existing = feed.get();
+        Predicate<CloudEvent> liveMatcher = SubscriptionFilterMatcher.matcherFor(AgnosticSubscriptionFilter.filter(replayFilter), dataFieldReader);
+        if (!feed.compareAndSet(null, new Registered<>(registering, liveMatcher))) {
+            Registered<E> existing = feed.get();
             throw new IllegalArgumentException(SingleConsumerMessages.singleConsumerOnly(
-                    "DomainEventFeed", "projection", existing == null ? "<unknown>" : existing.id(), id));
+                    "DomainEventFeed", "projection", existing == null ? "<unknown>" : existing.catchupFeed().id(), id));
         }
     }
 
@@ -148,7 +178,7 @@ public final class DomainEventFeed<E> {
      */
     public void accept(E event) {
         Objects.requireNonNull(event, "event cannot be null");
-        registeredProjection().accept(event);
+        registeredProjection().catchupFeed().accept(event);
     }
 
     /**
@@ -163,17 +193,58 @@ public final class DomainEventFeed<E> {
     public void accept(EventMetadata metadata, E event) {
         Objects.requireNonNull(metadata, "metadata cannot be null");
         Objects.requireNonNull(event, "event cannot be null");
-        registeredProjection().accept(metadata, event);
+        registeredProjection().catchupFeed().accept(metadata, event);
     }
 
-    // The one place the "nothing registered" refusal is spelled, so the two accept overloads and catchUpAll cannot
+    /**
+     * Feed a live event as a {@link CloudEvent} rather than an already-decoded domain event. This matches it against
+     * the {@link Filter} {@link #register} was called with, decodes it with this feed's {@link CloudEventConverter}
+     * only if it matches, delivers it, and reports which of the three {@link RoutingOutcome}s happened. Call this
+     * from a broker listener that has a CloudEvent to rebuild rather than a domain event and an
+     * {@link EventMetadata} already in hand, and acknowledge on {@link RoutingOutcome#DELIVERED} once this has
+     * returned normally, and on {@link RoutingOutcome#FILTERED}, where redelivering would loop forever since the
+     * event is simply not this projection's.
+     * <p>
+     * A non-matching event is never decoded, so a converter that only knows how to decode this projection's own
+     * event types never sees one it was not built for. {@link EventMetadata} for a matched event comes from
+     * {@link EventMetadata#from(CloudEvent)} on {@code cloudEvent} itself, the same way a replayed delivery's does.
+     * <p>
+     * This feed holds no filter of its own beyond the one {@link #register} was called with. The live match is
+     * always evaluated against that same filter, so the replay and the live path can never disagree about which
+     * events are this projection's. A filter with a {@code data} payload condition this feed has no
+     * {@link DataFieldReader} for was already refused at {@link #register}, so it cannot fail here.
+     *
+     * @throws IllegalStateException if no projection is registered on this feed, for the reason
+     *                               {@link #accept(Object)} gives. Refused rather than reported as
+     *                               {@link RoutingOutcome#NOT_DELIVERABLE}, since this feed, unlike a push
+     *                               subscription model, has no write path to protect and ADR 104 already refuses
+     *                               here for {@link #accept(Object)} and {@link #accept(EventMetadata, Object)}.
+     */
+    public RoutingOutcome accept(CloudEvent cloudEvent) {
+        Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
+        Registered<E> registered = registeredProjection();
+        if (!registered.liveMatcher().test(cloudEvent)) {
+            return RoutingOutcome.FILTERED;
+        }
+        E event = converter.toDomainEvent(cloudEvent);
+        registered.catchupFeed().accept(EventMetadata.from(cloudEvent), event);
+        return RoutingOutcome.DELIVERED;
+    }
+
+    // The one place the "nothing registered" refusal is spelled, so every accept overload and catchUpAll cannot
     // drift apart on it.
-    private CatchupProjectionFeed<E> registeredProjection() {
-        CatchupProjectionFeed<E> registered = feed.get();
+    private Registered<E> registeredProjection() {
+        Registered<E> registered = feed.get();
         if (registered == null) {
             throw new IllegalStateException(SingleConsumerMessages.noConsumerRegistered("DomainEventFeed", "projection"));
         }
         return registered;
+    }
+
+    // Pairs a registration with the live matcher built from the same Filter it was registered with, so the two are
+    // always set (and read) together. See the register(String, MaterializedView, Filter) javadoc for why there is
+    // only ever one filter here.
+    private record Registered<E>(CatchupProjectionFeed<E> catchupFeed, Predicate<CloudEvent> liveMatcher) {
     }
 
     /**
@@ -192,7 +263,7 @@ public final class DomainEventFeed<E> {
      *                               feed nobody registered on caught up "successfully" and then silently fed nothing.
      */
     public void catchUpAll() {
-        registeredProjection().catchUp();
+        registeredProjection().catchupFeed().catchUp();
     }
 
     /**
@@ -203,11 +274,11 @@ public final class DomainEventFeed<E> {
      */
     public void catchUp(String id) {
         Objects.requireNonNull(id, "id cannot be null");
-        CatchupProjectionFeed<E> registered = feed.get();
-        if (registered == null || !registered.id().equals(id)) {
+        Registered<E> registered = feed.get();
+        if (registered == null || !registered.catchupFeed().id().equals(id)) {
             throw new IllegalArgumentException("No projection with id '" + id + "' is registered on this feed.");
         }
-        registered.catchUp();
+        registered.catchupFeed().catchUp();
     }
 
     /**
@@ -220,11 +291,11 @@ public final class DomainEventFeed<E> {
      */
     public void goLive(String id) {
         Objects.requireNonNull(id, "id cannot be null");
-        CatchupProjectionFeed<E> registered = feed.get();
-        if (registered == null || !registered.id().equals(id)) {
+        Registered<E> registered = feed.get();
+        if (registered == null || !registered.catchupFeed().id().equals(id)) {
             throw new IllegalArgumentException("No projection with id '" + id + "' is registered on this feed.");
         }
-        registered.goLive();
+        registered.catchupFeed().goLive();
     }
 
     /**
@@ -237,9 +308,9 @@ public final class DomainEventFeed<E> {
      * {@code startupMode = BACKGROUND}.
      */
     public void stopCatchUp() {
-        CatchupProjectionFeed<E> registered = feed.get();
+        Registered<E> registered = feed.get();
         if (registered != null) {
-            registered.stopCatchUp();
+            registered.catchupFeed().stopCatchUp();
         }
     }
 }
