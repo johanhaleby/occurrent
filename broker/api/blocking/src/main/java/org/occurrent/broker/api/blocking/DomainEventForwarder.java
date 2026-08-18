@@ -42,9 +42,11 @@ import static java.util.Objects.requireNonNull;
  * than being derived. The id, source, subject, time and, unless the sink's own encoding matches what the store
  * holds, the data do not.
  * <p>
- * Publication is at least once the same way {@link CloudEventForwarder} publication is, but that guarantee holds
- * only for the {@link #forward(String)} and {@link #forward(String, SubscriptionFilter)} overloads, which leave
- * {@code startAt} at the subscription model's default and so read the checkpoint on every start, restart included.
+ * Publication is at least once the same way {@link CloudEventForwarder} publication is, provided the
+ * {@link DomainEventSink} holds to its own contract and does not return until it has confirmed delivery. That
+ * guarantee also holds only for the {@link #forward(String)} and {@link #forward(String, SubscriptionFilter)}
+ * overloads, which leave {@code startAt} at the subscription model's default and so read the checkpoint on every
+ * start, restart included.
  * The two overloads that take an explicit {@link StartAt} hand that decision to the caller instead, and
  * {@code DurableSubscriptionModel} only consults the checkpoint for its own default position, so a literal position
  * such as {@link StartAt#now()} restarts from there again after a crash rather than resuming, and whatever failed

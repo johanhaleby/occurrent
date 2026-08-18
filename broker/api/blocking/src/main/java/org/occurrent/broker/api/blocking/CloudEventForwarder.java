@@ -29,8 +29,9 @@ import static java.util.Objects.requireNonNull;
  * Takes a {@link DurableSubscriptionModel} rather than a bare subscription model so the checkpoint-after-success
  * guarantee is part of the type. {@code DurableSubscriptionModel} already persists the checkpoint only once its
  * action returns, and the action here is a call to the sink, so a sink that throws leaves the checkpoint where it
- * was and the event is published again on the next run. That makes publication at least once, which is the
- * guarantee to document rather than to try to improve.
+ * was and the event is published again on the next run. That makes publication at least once, provided the sink
+ * itself holds to its own contract and does not return until it has confirmed delivery, which is the guarantee to
+ * document rather than to try to improve.
  * <p>
  * That guarantee holds for the {@link #forward(String)} and {@link #forward(String, SubscriptionFilter)} overloads,
  * which leave {@code startAt} at the subscription model's default and so read the checkpoint on every start,

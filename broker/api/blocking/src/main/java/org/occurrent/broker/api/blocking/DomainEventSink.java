@@ -24,6 +24,11 @@ import org.occurrent.cloudevents.EventMetadata;
  * A shipped implementation is built from a {@link CloudEventSink} and a converter and delegates rather than
  * talking to the broker client itself, but this stays a plain interface with no such requirement, so an
  * application is free to implement it directly.
+ * <p>
+ * The same rule {@link CloudEventSink} states applies here. A {@code publish} call is not by itself an
+ * at-least-once guarantee, so an implementation must not return until it has confirmed the broker took the
+ * message, and must throw rather than report success when that cannot be established. {@link DomainEventForwarder}
+ * relies on exactly that to hold its own at-least-once guarantee.
  *
  * @param <E> The domain event type this sink publishes.
  */
