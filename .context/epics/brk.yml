@@ -1,7 +1,7 @@
 schema_version: 1
 epic: brk
-revision: 48
-updated_at: 2026-08-18T15:15:26Z
+revision: 59
+updated_at: 2026-08-18T18:23:11Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly. Gate-ask rulings 2026-08-18T~10:58Z: the ADR review loop STOPPED at ten rounds, Johan's own read of PR 847 is the closing review; #848 ADOPTED as U11 at Opus/high, blocking both consume bridges."
@@ -92,7 +92,7 @@ units:
       - {check: pr_merged, ref: 849, met: true, evidence: "squash 43af19f9f, CAS pin d70885e matched, tip==pin before branch delete; gate facts verified on the exact head incl. the 15:13 all-declines final round; adversarial verify ran (2 findings, both fixed pre-merge)"}
       - {check: issue_closed, ref: 413, met: true, evidence: "gh issue view state CLOSED post-merge 2026-08-18T15:14Z"}
     blocking_on: []
-    next_action: "none; session archiving batches at closeout. Main's matrix on 43af19f9f checked at the next sweep"
+    next_action: "none; session archiving batches at closeout. Main's matrix on 43af19f9f verified success (run created 15:15:09Z, completed, conclusion success)"
     last_meaningful_progress_at: 2026-08-18T15:15:26Z
     observed:
       session: {id: local_33cadfac-2b42-4785-ae48-44fca593953a, worktree: "mystifying-swanson-b2f576", via: "transcript marker search on the opening prompt", at: 2026-08-18T12:38:36Z}
@@ -100,19 +100,21 @@ units:
     assessment: "Sonnet/high chip. No kafka-clients version here (U5 owns it); testcontainers-bom already manages testcontainers-{rabbitmq,kafka}. No changelog entry (no user-visible capability without a transport). Brief carries the merged ADR as binding text, catchAllDestination default, forwarder split, releasable-as-is."
   U3:
     issue: 414
-    goal: "RabbitMQ publish: destination, topic-exchange resolver, CloudEvent + domain sinks, publisher confirms; own aggregator/BOM/excludeArtifacts entries; writes THE single broker changelog entry (Changes + Highlights teaser)"
-    phase: PLANNED
+    goal: "RabbitMQ publish: destination, topic-exchange resolver, CloudEvent + domain sinks, publisher confirms; own aggregator/BOM/excludeArtifacts entries; EDITS the broker changelog entry in place (authorship moved to U2 at the verify-pass correction)"
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U2]
-    session: null
+    session: local_60dca6d4-7ad1-4187-acb5-c816d2738ec8
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 414, met: false, evidence: null}
     blocking_on: []
-    next_action: "Chip task_dca9fcca awaits Johan's click (#414 claimed, comment 5330218539). On start: resolve session by marker, stamp the deadline"
-    last_meaningful_progress_at: 2026-08-18T15:15:26Z
-    observed: {}
+    next_action: "PR 856 open, worker iterating through its review loop (seven heads by 18:0x, currently 14602f0, matrix running). On DELIVERY_RESULT: merge gate + adversarial verify on the confirm-and-routed publish invariant. Deadline 2026-08-18T18:50Z"
+    last_meaningful_progress_at: 2026-08-18T18:10:01Z
+    observed:
+      session: {id: local_60dca6d4-7ad1-4187-acb5-c816d2738ec8, worktree: "intelligent-curie-e60812", via: "transcript marker search", at: 2026-08-18T16:41:24Z}
+      pr_856: {head: "14602f029ca1d18155ab9ccf016318f1b9def5e1", branch: "brk/u3-rabbitmq-publish", rollup: "0fail running", review: "in the worker's loop", via: "monitor PR-DELTA", at: 2026-08-18T18:10:01Z}
     assessment: "Sonnet/high chip. Establishes the publish-side shape U5 mirrors. Brief carries the merged ADR's 0-9-1 mapping, confirms + mandatory/basic.return, edit-the-changelog-entry rule, releasable-as-is."
   U4:
     issue: 415
@@ -213,36 +215,36 @@ units:
   U11:
     issue: 848
     goal: "The two consume-bridge prerequisites in subscription/push code, per ADR 0133 and #848 as corrected: three-valued PushObserver routing outcome (DELIVERED, FILTERED, NOT_DELIVERABLE from the one routing evaluation, replacing the boolean) with observer wiring per decision 1, and a live-match capability on DomainEventFeed per decision 5. UNRELEASED surface (PushObserver absent from the occurrent-0.33.0 tag, worker-verified and orchestrator-confirmed): no recipe, no migration guide, the existing pending changelog entry absorbs the outcome contract per ADR 133 decision 1"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U1]
     session: local_186d111c-cf8b-40b2-af39-4e17d2d6b7b2
     deliverables:
-      - {check: pr_merged, ref: 850, met: false, evidence: null}
-      - {check: issue_closed, ref: 848, met: false, evidence: null}
+      - {check: pr_merged, ref: 850, met: true, evidence: "squash bf99724, CAS pin 7f6224b matched, tip==pin before branch delete; adversarial verify findings all six closed (two fixes re-corrected by Copilot rounds); gate facts on the exact head; red shard was a Maven Central 429 confirmed against main"}
+      - {check: issue_closed, ref: 848, met: true, evidence: "gh issue view state CLOSED post-merge 2026-08-18T18:23Z"}
     blocking_on: []
-    next_action: "PR 850 open, matrix running (ci-wait). On DELIVERY_RESULT: merge gate four facts + the adversarial verify against the stated interleaving invariant, then CAS merge. Deadline 2026-08-18T14:30Z"
-    last_meaningful_progress_at: 2026-08-18T13:03:58Z
+    next_action: "none; session archiving batches at closeout. The stale memory-file line the suppressed finding flagged is corrected"
+    last_meaningful_progress_at: 2026-08-18T18:10:01Z
     observed:
       session: {id: local_186d111c-cf8b-40b2-af39-4e17d2d6b7b2, worktree: "wizardly-allen-e0b356", via: "transcript marker search on the opening prompt", at: 2026-08-18T12:38:36Z}
-      pr_850: {head: "c88bb745b1ac121703fe76f9481ac81d971d28ba", branch: "brk/u11-push-routing-outcome", rollup: "CONFLICTING after U2's changelog entry merged; rebase nudge sent 15:15Z, worker keeps both entries per brief", review: "in the worker's loop", via: "monitor PR-DELTA", at: 2026-08-18T15:15:26Z}
+      pr_850: {head: "7f6224b41a20229f706c3b053a1bf3e5075e8c59", branch: "brk/u11-push-routing-outcome", rollup: "0fail DONE after the resumed worker's third run: the shard failed twice then passed on the same head, so a severe flake or infrastructure, the worker's block should state its read", review: "DELIVERY_RESULT owed with all six finding outcomes plus the shard episode", via: "monitor PR-DELTA", at: 2026-08-18T18:22:13Z}
     assessment: "Adopted at the 2026-08-18 gate ask, Opus/high chip by Johan's explicit tier choice (two non-breaking attempts raced on pause-then-resume, so the concurrency earns the tier). #848 milestoned 0.34.0 and labeled in-progress. Adversarial verify attacks the race claim before merge."
   U12:
     issue: 852
     goal: "First-event loss in released occurrent-subscription-durable-blocking: when checkpoint storage starts empty and the wrapped model's globalCheckpoint() returns null, no checkpoint is ever persisted before the first successful delivery, so a crash re-evaluates now and loses the failed first event. Investigate, hand the fix-direction decision back through the orchestrator (refuse to start, durably pinned initial position, or a better option the evidence surfaces, reactor twin checked for the same defect), then implement the ruling with tests and the released-surface changelog entry"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: local_cbdf365c-b9df-48bd-b417-69e6e0936ba3
     deliverables:
       - {check: manual_approval, ref: "fix direction settled at the orchestrator gate before implementation lands (orchestrator ruling on precedent, then Johan's direct refinement)", met: true, evidence: "Candidate (a) ruled 2026-08-18T14:14Z on ADR 89:146 + shipped precedents; REFINED by Johan 2026-08-18T~14:33Z: refusal stays default, plus an opt-in override mirroring restartSubscriptionsOnChangeStreamHistoryLost at both the model-config and OccurrentProperties levels, so shared-Atlas apps keep a no-code-change path; relayed 14:36Z"}
-      - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: issue_closed, ref: 852, met: false, evidence: null}
+      - {check: pr_merged, ref: 854, met: true, evidence: "squash edd61341c, CAS pin 86c1b10 matched, tip==pin before branch delete; adversarial verify MERGE-SAFE; gate facts on the exact head incl. the prose-only-carry rule for the changelog-only final head; override name kept by Johan at the rename window"}
+      - {check: issue_closed, ref: 852, met: true, evidence: "gh issue view state CLOSED post-merge 2026-08-18T18:09Z"}
     blocking_on: []
-    next_action: "Alive and healthy per its 14:50Z reply: the observed stop was a foreground composing-module Maven sweep still running (durable + Mongo models + checkpoint storages + api/blocking + autoconfigure + starters, -am, Testcontainers). Already green: durable -am, 11 blocking refusal/override tests (4 mutation-proved failing against main), 4 reactor override tests; refined ruling implemented on BOTH stacks at 3138126. Then blocking-starter re-run, pr-create, loop, DELIVERY_RESULT. Quiet threshold for this workload is the sweep length; deadline 2026-08-18T15:50Z"
-    last_meaningful_progress_at: 2026-08-18T14:50:12Z
+    next_action: "none; session archiving batches at closeout. The false five-shard episode is recorded in lessons.md (monitor v8 fix). Phase DONE"
+    last_meaningful_progress_at: 2026-08-18T16:10:22Z
     observed:
       branch: {name: "brk/u12-durable-first-event", head: "313812695f033180c02b4d4de584493fa2ca0f38", commits: "refusal, changelog+upgrade-guide, override on both models", via: "git ls-remote + worktree log after the liveness sweep", at: 2026-08-18T14:48:51Z}
     assessment: "Adopted by Johan's word 2026-08-18T~14:00Z, reversing the deferral (decline-register entry retired). Sonnet/high chip, decision gate at orchestrator venue. Disjoint from U2 (broker) and U11 (push); changelog conflicts resolve by rebase, loser rebases."
@@ -260,4 +262,4 @@ units:
     next_action: "Run as orchestrator-integrated subagent rounds after U7 and U8"
     last_meaningful_progress_at: 2026-08-18T04:44:26Z
     observed: {}
-    assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation."
+    assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge)."

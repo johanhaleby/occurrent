@@ -386,6 +386,17 @@ public class OccurrentProperties {
         private @Nullable Boolean enabled;
 
         /**
+         * Whether a durable subscription that asks for the model default, with no checkpoint stored and a wrapped
+         * subscription model whose {@code globalCheckpoint()} cannot answer, starts anyway instead of being refused.
+         * The MongoDB subscription models cannot answer when the server refuses the {@code hostInfo} command, which
+         * shared MongoDB Atlas clusters do. Starting anyway means no start position is recorded before the first
+         * delivery, so a crash before the first checkpoint is saved starts over from wherever the feed has reached
+         * by then, and an event whose delivery failed before the crash is not redelivered. The default is
+         * {@code false}, which refuses such a subscription when it is created.
+         */
+        private boolean startWhenNoStartPositionCanBeRecorded = false;
+
+        /**
          * Tuning for the catch-up-then-live handover used by a push-fed projection's bootstrap.
          */
         private CatchupThenLiveProperties catchupThenLive = new CatchupThenLiveProperties();
@@ -407,6 +418,14 @@ public class OccurrentProperties {
 
         public void setCollection(@Nullable String collection) {
             this.collection = collection;
+        }
+
+        public boolean isStartWhenNoStartPositionCanBeRecorded() {
+            return startWhenNoStartPositionCanBeRecorded;
+        }
+
+        public void setStartWhenNoStartPositionCanBeRecorded(boolean startWhenNoStartPositionCanBeRecorded) {
+            this.startWhenNoStartPositionCanBeRecorded = startWhenNoStartPositionCanBeRecorded;
         }
 
         // The released getter/setter shape (isX(): boolean / setX(boolean)) is kept, unlike the two getters above,

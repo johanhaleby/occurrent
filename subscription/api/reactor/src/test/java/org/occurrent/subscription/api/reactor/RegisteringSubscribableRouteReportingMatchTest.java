@@ -23,6 +23,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -53,7 +54,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         RawConsumersOneModel model = new RawConsumersOneModel(throwingReader);
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> Mono.empty());
 
-        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, matched) -> {
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> {
                     throw shared;
                 }))
                 .verifyErrorSatisfies(error -> {
@@ -72,7 +73,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         RawConsumersOneModel model = new RawConsumersOneModel(throwingReader);
         model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> Mono.empty());
 
-        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, matched) -> {
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> {
                     throw observerFailure;
                 }))
                 .verifyErrorSatisfies(error -> {
@@ -94,7 +95,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
             super(Consumers.ONE, dataFieldReader);
         }
 
-        Mono<Void> acceptRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, Boolean> matchObserver) {
+        Mono<Void> acceptRaw(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
             return routeReportingMatch(cloudEvent, matchObserver);
         }
     }

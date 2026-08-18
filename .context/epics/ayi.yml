@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 19
-updated_at: 2026-08-18T13:25:00Z
+revision: 21
+updated_at: 2026-08-18T18:09:52Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -129,11 +129,11 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "PR 851 open, checks running (ci-wait). Worker owns the review rounds; on its delivery: four-fact gate, adversarial verify, CAS merge"
-    last_meaningful_progress_at: 2026-08-18T13:14:13Z
+    next_action: "JOHAN'S RULING 2026-08-18T~18:0xZ: round 9 on e4590e058 is the LAST round (one capped round). Merge if clean or only non-blockers per orchestrator triage with explicit outcomes; only a genuine blocker reopens, via Johan. Checks already green on e4590e058"
+    last_meaningful_progress_at: 2026-08-18T18:09:52Z
     observed:
       session: {id: local_c0323f10-77f7-4c75-a54f-4dfa869533c3, via: "worker's own marker message on start", at: 2026-08-18T11:16:00Z}
-      pr_851: {head: 168fe0d698787e0b13d9b69f0994f372866dfa56, branch: "ayi/u3-applied-append-store", rollup: "0fail running", review: "not yet arrived", via: "monitor PR-OPENED", at: 2026-08-18T13:14:13Z}
+      pr_851: {head: 56bcb7e205f0df9f6e0e931cd6b6c4a052f69895, branch: "ayi/u3-applied-append-store", rollup: "26/26 SUCCESS", threads: "8 total, 3 unresolved, all evidenced reasoned declines accepted by the orchestrator", review: "6 Copilot rounds, ~19 real findings fixed incl two ADR-conformance defects, round 6 body-verified clean except the one doc finding fixed on the final head, verdict carries by compare", verify: "adversarial pass CLAIM-FALSIFIED narrow: default wait leaks store failures, returned to worker; all Mongo, wiring, cross-instance claims CONFIRMED by execution", via: "gate reads 2026-08-18T16:4xZ", at: 2026-08-18T16:48:10Z}
     assessment: "Sonnet/high chip. Wait contract: non-null AppendId, absent-id case is type-guided by the Optional component. Gate-approved constructor-time indexing was REVERSED post-gate to lazy synchronized ensureIndexesOnce on first store call, accepted with derivation: 34 pre-existing mock-wired autoconfiguration tests encode constructors-do-no-IO, and lazy-once preserves single-ensure semantics. Property shape: fresh nested applied-append.{collection,retention,wait-backoff.*}, not the withdrawn precedent, reasoning journaled here. TTL retention-change handled via collMod on IndexOptionsConflict, mutation-verified against real Mongo error 85 on both stacks."
   U4:
     issue: 740

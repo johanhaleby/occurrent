@@ -59,8 +59,10 @@ import org.occurrent.subscription.api.blocking.*;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy.CompetingConsumerListener;
 import org.occurrent.subscription.blocking.competingconsumers.CompetingConsumerSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModelConfig;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CatchupSubscriptionModelConfig;
+import org.occurrent.subscription.util.predicate.EveryN;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoLeaseCompetingConsumerStrategy;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
@@ -259,7 +261,9 @@ public class OccurrentMongoAutoConfiguration<E> {
                 occurrentProperties.getSubscription().getCompetingConsumer()::isFenceCheckpoints);
         // Checkpoints after every event by default, see DurableSubscriptionModel javadoc for the EveryN.every(n)
         // throughput tradeoff if checkpoint write volume becomes a bottleneck.
-        DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage, writeVersionSource);
+        DurableSubscriptionModelConfig durableConfig = new DurableSubscriptionModelConfig(EveryN.everyEvent())
+                .startWhenNoStartPositionCanBeRecorded(occurrentProperties.getSubscription().isStartWhenNoStartPositionCanBeRecorded());
+        DurableSubscriptionModel durableSubscriptionModel = new DurableSubscriptionModel(mongoSubscriptionModel, storage, durableConfig, writeVersionSource);
         CatchupSubscriptionModelConfig catchupConfig = new CatchupSubscriptionModelConfig(useCheckpointStorage(storage, writeVersionSource)
                 .andPersistCheckpointDuringCatchupPhaseForEveryNEvents(1000));
         // DCB catch-up replays by position over the DCB event store. The DcbCriteria.all() is shared by every

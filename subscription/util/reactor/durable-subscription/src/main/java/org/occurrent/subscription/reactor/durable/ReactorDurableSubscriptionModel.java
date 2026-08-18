@@ -138,6 +138,9 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * that handle waiting instead, and the refusal comes out later, on the handle {@link #resumeSubscription(String)}
  * returns.
  * <p>
+ * {@link ReactorDurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turns the
+ * refusals above into a start without a recorded position, accepting the loss window it documents.
+ * <p>
  * Note that this implementation stores the checkpoint after _every_ action by default. If you have a lot of
  * events and duplication is not that much of a deal, consider changing this behavior by supplying an instance of
  * {@link ReactorDurableSubscriptionModelConfig}.
@@ -286,8 +289,10 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     // An empty answer is the unresolvable problem the wrapped model documents rather than a position, so it refuses
     // for the same reason. Cached, so the read runs once and every subscriber sees the same outcome.
     private Mono<Checkpoint> capturePositionNow(String subscriptionId) {
-        return subscription.globalCheckpoint()
-                .switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)))
+        Mono<Checkpoint> positionNow = config.startWhenNoStartPositionCanBeRecorded
+                ? subscription.globalCheckpoint()
+                : subscription.globalCheckpoint().switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)));
+        return positionNow
                 .doOnError(throwable -> log.warn("Could not read the current position while registering subscription {}. It is refused when it starts, unless by then a checkpoint is stored for it or its start position resolves to one of its own, either of which it starts from instead, so this failure alone does not refuse it", subscriptionId, throwable))
                 .cache();
     }
@@ -319,7 +324,11 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                                          "which would skip whatever was written while it waited. Starting it is what " +
                                          "releases the id, so register it again after that, or after " +
                                          "cancelSubscription(String), once the model can answer. Subscribing with a " +
-                                         "StartAt of your own records no position and carries no such guarantee.");
+                                         "StartAt of your own records no position and carries no such guarantee. To " +
+                                         "start anyway, accepting that loss window, configure " +
+                                         "ReactorDurableSubscriptionModelConfig.startWhenNoStartPositionCanBeRecorded(true), " +
+                                         "or set occurrent.subscription.start-when-no-start-position-can-be-recorded=true " +
+                                         "when using the Spring Boot starter.");
     }
 
     private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt,
@@ -424,19 +433,28 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
             // when the storage can. Reading storage comes first and on its own, so a stored checkpoint still governs
             // exactly as it always has even when positionAtRegistration cannot be read or the storage cannot compare,
             // which the onErrorResume and defaultIfEmpty below both fall back to. See ADR 130 and #771.
+            final Mono<StartAt> resolved;
             if (positionAtRegistration != null) {
-                return storage.read(subscriptionId)
+                resolved = storage.read(subscriptionId)
                         .flatMap(stored -> positionAtRegistration
                                 .onErrorResume(__ -> Mono.empty())
                                 .flatMap(checkpoint -> storage.resolveFirstCheckpointRace(subscriptionId, checkpoint))
                                 .defaultIfEmpty(stored))
                         .switchIfEmpty(Mono.defer(() -> positionAtRegistration.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint))))
                         .map(StartAt::checkpoint);
+            } else {
+                Mono<Checkpoint> seed = config.startWhenNoStartPositionCanBeRecorded
+                        ? subscription.globalCheckpoint()
+                        : subscription.globalCheckpoint().switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)));
+                resolved = storage.read(subscriptionId)
+                        .switchIfEmpty(Mono.defer(() -> seed.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint))))
+                        .map(StartAt::checkpoint);
             }
-            Mono<Checkpoint> seed = subscription.globalCheckpoint().switchIfEmpty(Mono.error(() -> positionSourceAnsweredNothing(subscriptionId)));
-            return storage.read(subscriptionId)
-                    .switchIfEmpty(Mono.defer(() -> seed.flatMap(checkpoint -> pinStartPosition(subscriptionId, checkpoint))))
-                    .map(StartAt::checkpoint);
+            // Empty here means nothing is stored and the position source answered nothing, which only the config
+            // override lets through (capturePositionNow and the seed above refuse it otherwise). The original
+            // default is what starts the subscription then, from wherever the feed is when it opens, with nothing
+            // recorded, the loss window the override accepts.
+            return config.startWhenNoStartPositionCanBeRecorded ? resolved.defaultIfEmpty(startAt) : resolved;
         } else if (startAt.isDynamic()) {
             StartAt nextStartAt = startAt.get(new SubscriptionModelContext(ReactorDurableSubscriptionModel.class));
             if (nextStartAt == null) {

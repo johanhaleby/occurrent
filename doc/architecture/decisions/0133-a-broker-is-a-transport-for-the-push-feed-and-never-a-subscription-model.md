@@ -637,3 +637,17 @@ reactor one returns a `Mono`. `EventDestination` and `DestinationResolver` are n
 and `SubscriptionFilter`, and `SubscriptionFilter` already lives in the stack-neutral `occurrent-subscription-core`. So
 putting them in a `-blocking` artifact is a cost this decision accepts for one artifact per broker today, and #418
 decides whether they move to a stack-neutral module when the reactor variants arrive.
+
+## Amendment (2026-08-18): a domain-level payload filter is refused on first live-match use, not at register(), and the refusal is permanent
+
+Decision 5 says a payload filter without a `DataFieldReader` "is refused at startup, which is what the subscribe path
+already does." [#848](https://github.com/johanhaleby/occurrent/issues/848) implementing the domain-level half of that
+found "startup" cannot mean `DomainEventFeed.register(..)` without breaking released code. That overload shipped in
+0.33.0 with no `DataFieldReader` dependency at all, since a payload condition on the replay filter has always been
+evaluated by the event store during the replay itself. Refusing it inside `register` would newly fail an existing
+caller that has never called `acceptCloudEvent`.
+
+The refusal happens on `acceptCloudEvent`'s first call instead, the first moment a filter is actually asked to answer
+live rather than during replay, and it is permanent for that registration from then on. The first call builds and
+caches an `UnreadableLiveFilterException`, and every later call throws that same instance without rebuilding the
+matcher, so a caller cannot retry its way past a configuration error that cannot change without a new registration.

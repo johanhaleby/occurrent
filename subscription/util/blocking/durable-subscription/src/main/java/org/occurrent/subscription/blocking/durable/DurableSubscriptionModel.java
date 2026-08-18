@@ -34,6 +34,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
@@ -49,6 +50,21 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * last delivered event on crash. Pass a {@link DurableSubscriptionModelConfig} with
  * {@link org.occurrent.subscription.util.predicate.EveryN#every(int)} to checkpoint less often, trading fewer
  * writes for events being re-delivered (must be handled idempotently) after a crash.
+ *
+ * <p>
+ * A subscription that asks for {@link StartAt#subscriptionModelDefault()} and has no checkpoint stored yet is
+ * recorded from the wrapped model's {@link CheckpointAwareSubscriptionModel#globalCheckpoint()} before anything
+ * is delivered, so a crash before the first checkpoint write resumes from the recorded position instead of
+ * starting over from wherever the feed has reached by then. A wrapped model that answers {@code null}, which is
+ * how it reports a problem it cannot resolve, refuses the subscription with {@link IllegalStateException} from
+ * {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)} rather than starting it without that promise.
+ * Nothing is registered for the id, so subscribe again once the model can answer. A subscription with a
+ * checkpoint already stored starts from that checkpoint and is never refused this way, and one subscribing with
+ * a {@link StartAt} of its own records no position and is never refused either. This is the same answer
+ * {@link ManualStartSubscriptionModel} gives for a {@code null} position source and the same one the reactor
+ * {@code ReactorDurableSubscriptionModel} gives for the same registration.
+ * {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)} turns the refusal into a
+ * start without a recorded position, accepting the loss window it documents.
  */
 @NullMarked
 public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
@@ -148,6 +164,19 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         this.writeVersionSource = writeVersionSource;
     }
 
+    /**
+     * Subscribe to events, persisting the checkpoint after each successful call to {@code action} per this
+     * model's {@link DurableSubscriptionModelConfig}.
+     *
+     * @throws IllegalStateException When {@code startAt} resolves to {@link StartAt#subscriptionModelDefault()},
+     *                               no checkpoint is stored for {@code subscriptionId}, and the wrapped model's
+     *                               {@link CheckpointAwareSubscriptionModel#globalCheckpoint()} answers
+     *                               {@code null}, which is how it reports a problem it cannot resolve. Nothing is
+     *                               registered for the id, so subscribe again once the model can answer, pass
+     *                               a {@link StartAt} of your own, which records no position and makes no resume
+     *                               promise, or configure
+     *                               {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)}.
+     */
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
@@ -204,12 +233,53 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         return version.isPresent() ? CheckpointWriteCondition.notOlderThan(version.getAsLong()) : CheckpointWriteCondition.any();
     }
 
+    // Runs on the subscriber's own thread before the wrapped model is handed anything, so the refusal reaches
+    // the caller. Thrown from inside the dynamic supplier it would surface on the wrapped model's own evaluation
+    // path instead, which NativeMongoSubscriptionModel runs under a retry wrapper that would re-evaluate forever
+    // and tell nobody. Answers the checkpoint it recorded, for the supplier's first evaluation, and null when
+    // something was stored already or the override let an unanswerable source through.
+    private @Nullable Checkpoint recordFirstPositionOrRefuse(String subscriptionId) {
+        Checkpoint checkpoint = storage.read(subscriptionId);
+        if (checkpoint != null) {
+            return null;
+        }
+        Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
+        if (globalCheckpoint == null) {
+            if (config.startWhenNoStartPositionCanBeRecorded) {
+                return null;
+            }
+            throw new IllegalStateException("The wrapped subscription model " + subscriptionModel.getClass().getName() +
+                                            " answered nothing when asked for the current position for subscription " +
+                                            subscriptionId + ", which is how it reports a problem it cannot resolve, and no " +
+                                            "checkpoint is stored for the subscription either. Starting it anyway would begin " +
+                                            "wherever the feed has reached, and a crash before the first checkpoint is saved " +
+                                            "would then start over from wherever the feed has reached by that time, silently " +
+                                            "skipping whatever was delivered and failed in between. The subscription is " +
+                                            "therefore refused rather than started, and nothing is registered for its id, so " +
+                                            "subscribe again once the model can answer. To start anyway, accepting that loss " +
+                                            "window, configure DurableSubscriptionModelConfig." +
+                                            "startWhenNoStartPositionCanBeRecorded(true), or set " +
+                                            "occurrent.subscription.start-when-no-start-position-can-be-recorded=true when " +
+                                            "using the Spring Boot starter. A subscription with a checkpoint already stored " +
+                                            "starts from that checkpoint and is never refused this way. Subscribing with a " +
+                                            "StartAt of your own records no position and makes no such promise.");
+        }
+        return storage.save(subscriptionId, globalCheckpoint, writeConditionFor(subscriptionId));
+    }
+
     @Nullable
     private StartAt generateStartAtPositionFrom(String subscriptionId, StartAt originalStartAt) {
         final StartAt startAtToUse;
         if (originalStartAt.isDefault()) {
+            // Consumed by the supplier's first evaluation, so the position recorded just now is not read back or,
+            // on a storage that answers reads from somewhere the write has not reached, saved a second time.
+            AtomicReference<@Nullable Checkpoint> recordedFirstPosition = new AtomicReference<>(recordFirstPositionOrRefuse(subscriptionId));
             StartAt startAtIfNoSubscriptionFound = StartAt.subscriptionModelDefault();
             startAtToUse = StartAt.dynamic(() -> {
+                Checkpoint recorded = recordedFirstPosition.getAndSet(null);
+                if (recorded != null) {
+                    return StartAt.checkpoint(recorded);
+                }
                 // Read inside the supplier so a retry picks up the latest checkpoint, not a stale one
                 Checkpoint checkpoint = storage.read(subscriptionId);
                 if (checkpoint == null) {

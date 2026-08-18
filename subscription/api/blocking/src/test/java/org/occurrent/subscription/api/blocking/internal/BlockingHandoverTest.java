@@ -25,6 +25,7 @@ import org.occurrent.subscription.internal.HandoverMessages;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -234,6 +235,50 @@ class BlockingHandoverTest {
             }
         } finally {
             pool.shutdown();
+        }
+    }
+
+    // tryReserve(..) answers null both for an already-delivered key and for a key another delivery is currently
+    // running under. Conflating those two would report the second, concurrent caller as delivered before the
+    // in-flight attempt had actually succeeded or failed.
+    @Test
+    void a_concurrent_delivery_of_the_same_key_already_in_flight_is_not_reported_as_delivered() throws Exception {
+        CountDownLatch firstStarted = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        BlockingHandover<String> handover = BlockingHandover.create(
+                payload -> {
+                    firstStarted.countDown();
+                    awaitLatch(releaseFirst);
+                    delivered.add(payload);
+                },
+                payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.catchUp(source(List.of(), true));
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Boolean> first = pool.submit(() -> handover.acceptReportingDelivery("A"));
+            awaitLatch(firstStarted);
+
+            boolean secondResult = handover.acceptReportingDelivery("A");
+            releaseFirst.countDown();
+
+            assertThat(first.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(secondResult).as("the concurrent duplicate must not be reported delivered while the "
+                            + "in-flight attempt for the same key has not itself succeeded yet")
+                    .isFalse();
+            assertThat(delivered).containsExactly("A");
+        } finally {
+            pool.shutdown();
+        }
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).as("latch reached within the timeout").isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
         }
     }
 
