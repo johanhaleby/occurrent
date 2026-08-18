@@ -59,7 +59,9 @@ class CloudEventForwarderTest {
 
         assertThatThrownBy(() -> wrappedModel.publish(event)).hasMessage("Simulated publish failure");
 
-        assertThat(checkpointStorage.read("subscription1")).isNull();
+        // Subscribing already recorded the wrapped model's start position; the failed publish must not move it
+        // past that.
+        assertThat(checkpointStorage.read("subscription1")).isEqualTo(GlobalCheckpoint.of(0));
     }
 
     @Test
