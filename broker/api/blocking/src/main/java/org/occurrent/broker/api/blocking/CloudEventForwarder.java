@@ -31,6 +31,14 @@ import static java.util.Objects.requireNonNull;
  * action returns, and the action here is a call to the sink, so a sink that throws leaves the checkpoint where it
  * was and the event is published again on the next run. That makes publication at least once, which is the
  * guarantee to document rather than to try to improve.
+ * <p>
+ * That guarantee holds for the {@link #forward(String)} and {@link #forward(String, SubscriptionFilter)} overloads,
+ * which leave {@code startAt} at the subscription model's default and so read the checkpoint on every start,
+ * restart included. The two overloads that take an explicit {@link StartAt} hand that decision to the caller
+ * instead, and {@code DurableSubscriptionModel} only consults the checkpoint for its own default position, so a
+ * literal position such as {@link StartAt#now()} restarts from there again after a crash rather than resuming, and
+ * whatever failed to publish just before the crash is skipped. Pass an explicit {@code startAt} only when the
+ * caller tracks its own resume position durably, or accept that restarting loses that guarantee.
  */
 public class CloudEventForwarder {
 
@@ -50,7 +58,8 @@ public class CloudEventForwarder {
     }
 
     /**
-     * Start forwarding at {@code startAt}, with no filter.
+     * Start forwarding at {@code startAt}, with no filter. See the class javadoc for what an explicit
+     * {@code startAt} costs on a restart.
      */
     public Subscription forward(String subscriptionId, StartAt startAt) {
         return subscriptionModel.subscribe(subscriptionId, startAt, sink::publish);
@@ -64,7 +73,8 @@ public class CloudEventForwarder {
     }
 
     /**
-     * Start forwarding only events matching {@code filter}, at {@code startAt}.
+     * Start forwarding only events matching {@code filter}, at {@code startAt}. See the class javadoc for what an
+     * explicit {@code startAt} costs on a restart.
      */
     public Subscription forward(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
         return subscriptionModel.subscribe(subscriptionId, filter, startAt, sink::publish);
