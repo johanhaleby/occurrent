@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 12
-updated_at: 2026-08-18T04:35:00Z
+revision: 13
+updated_at: 2026-08-18T06:35:00Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -96,11 +96,11 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
     session_note: "chip task_17de7750 started; worktree vigilant-wilson-c6862c, ListAgents send name vigilant-wilson-c6862c-7e, identity confirmed by the fleet marker in its opening prompt via transcript search"
-    next_action: "Worker rewoken 2026-08-18T04:3xZ to fix round 3's three suppressed prose findings (it stopped 19:32 without delivering, round 3 landed 19:38 unread). Then round 4, DELIVERY_RESULT, adversarial verify, CAS merge"
-    last_meaningful_progress_at: 2026-08-18T04:35:00Z
+    next_action: "Worker resumed 2026-08-18T06:3xZ after the host restart killed it mid-round-4. Round 4 owes two fixes: reactor assembly-time minting (inline thread, mint in Mono.defer per subscription) and @Nullable on getAppendId (suppressed). Then round 5, DELIVERY_RESULT, adversarial verify, CAS merge"
+    last_meaningful_progress_at: 2026-08-18T06:35:00Z
     observed:
       session: {id: local_0adf4d40-dfb7-4321-9d59-26638a9b0939, via: "transcript marker search, opening prompt carries the U2 marker", at: 2026-08-17T18:19:10Z}
-      pr_844: {head: 1bdaa1538db6bffa75e89b8398b2868c702b32c1, branch: "ayi/u2-append-id-stamping", rollup: "26/26 SUCCESS", threads: "9 total, 0 unresolved", review: "3 Copilot rounds, 9 inline findings all fixed and resolved, round 3 body hides 3 suppressed prose findings (migration-guide collision variant, recipe javadoc appendId2 vs appendId1, five-vs-six count), worker rewoken to fix", via: "gh reads 2026-08-18T04:3xZ", at: 2026-08-18T04:35:00Z}
+      pr_844: {head: ea53b0ee55288c28e2285d432adb75eb1157c4e3, branch: "ayi/u2-append-id-stamping", rollup: "26/26 SUCCESS", threads: "10 total, 1 unresolved (round 4's reactor finding)", review: "4 Copilot rounds, rounds 1-3 fully triaged (13 findings fixed incl 4 suppressed), round 4 owes the reactor per-subscription minting fix and the @Nullable suppressed fix", via: "gh reads 2026-08-18T06:2xZ", at: 2026-08-18T06:35:00Z}
     assessment: "Sonnet/high chip. Verification modules: DCB touched-module set plus tck, eventstore/inmemory, dsl/decider, application/service/blocking."
   U3:
     issue: 740
