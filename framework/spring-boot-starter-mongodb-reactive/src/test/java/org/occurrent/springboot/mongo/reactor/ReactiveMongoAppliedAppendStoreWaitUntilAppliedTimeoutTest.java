@@ -34,6 +34,7 @@ import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -105,6 +106,17 @@ class ReactiveMongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
 
         assertThat(applied).isFalse();
         assertThat(elapsed).isLessThan(timeout.plusSeconds(2));
+    }
+
+    @Test
+    void the_constructor_rejects_a_busy_loop_poll_backoff_instead_of_waiting_until_the_first_wait_to_fail() {
+        ReactiveMongoOperations mongoOperations = mock(ReactiveMongoOperations.class);
+
+        assertThatThrownBy(() ->
+                new ReactiveMongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7),
+                        Retry.backoff(5, Duration.ofMillis(100)).maxBackoff(Duration.ofSeconds(2)), Backoff.none())
+        ).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Backoff.none()");
     }
 
     @Test

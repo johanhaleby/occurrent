@@ -123,6 +123,17 @@ class MongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
     }
 
     @Test
+    void the_constructor_rejects_a_busy_loop_poll_backoff_instead_of_waiting_until_the_first_wait_to_fail() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+
+        assertThatThrownBy(() ->
+                new MongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7),
+                        RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), Backoff.none())
+        ).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Backoff.none()");
+    }
+
+    @Test
     void propagates_exception_when_finite_retry_attempts_exhausted() {
         MongoOperations mongoOperations = mock(MongoOperations.class);
         when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));

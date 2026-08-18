@@ -94,12 +94,18 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
         this(mongoOperations, collection, retention, defaultRetryStrategy(), DEFAULT_POLL_BACKOFF);
     }
 
+    /**
+     * @param pollBackoff rejected the same way {@link #waitUntilApplied(String, AppendId, Duration, Backoff)}
+     *                     rejects one, so a {@code pollBackoff} that would busy-loop the store fails here, when the
+     *                     bean is built, rather than at the first wait a caller happens to make.
+     */
     public MongoAppliedAppendStore(MongoOperations mongoOperations, String collection, Duration retention, RetryStrategy retryStrategy, Backoff pollBackoff) {
         this.mongoOperations = requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collection = requireNonNull(collection, "collection cannot be null");
         this.retention = requireNonNull(retention, "retention cannot be null");
         this.retryStrategy = requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
-        this.pollBackoff = requireNonNull(pollBackoff, "pollBackoff cannot be null");
+        AppliedAppendStore.rejectBusyLoopBackoff(requireNonNull(pollBackoff, "pollBackoff cannot be null"));
+        this.pollBackoff = pollBackoff;
     }
 
     /**
