@@ -49,6 +49,19 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  * last delivered event on crash. Pass a {@link DurableSubscriptionModelConfig} with
  * {@link org.occurrent.subscription.util.predicate.EveryN#every(int)} to checkpoint less often, trading fewer
  * writes for events being re-delivered (must be handled idempotently) after a crash.
+ *
+ * <p>
+ * A subscription that asks for {@link StartAt#subscriptionModelDefault()} and has no checkpoint stored yet is
+ * recorded from the wrapped model's {@link CheckpointAwareSubscriptionModel#globalCheckpoint()} before anything
+ * is delivered, so a crash before the first checkpoint write resumes from the recorded position instead of
+ * starting over from wherever the feed has reached by then. A wrapped model that answers {@code null}, which is
+ * how it reports a problem it cannot resolve, refuses the subscription with {@link IllegalStateException} from
+ * {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)} rather than starting it without that promise.
+ * Nothing is registered for the id, so subscribe again once the model can answer. A subscription with a
+ * checkpoint already stored starts from that checkpoint and is never refused this way, and one subscribing with
+ * a {@link StartAt} of its own records no position and is never refused either. This is the same answer
+ * {@link ManualStartSubscriptionModel} gives for a {@code null} position source and the same one the reactor
+ * {@code ReactorDurableSubscriptionModel} gives for the same registration.
  */
 @NullMarked
 public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
@@ -148,6 +161,18 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         this.writeVersionSource = writeVersionSource;
     }
 
+    /**
+     * Subscribe to events, persisting the checkpoint after each successful call to {@code action} per this
+     * model's {@link DurableSubscriptionModelConfig}.
+     *
+     * @throws IllegalStateException When {@code startAt} resolves to {@link StartAt#subscriptionModelDefault()},
+     *                               no checkpoint is stored for {@code subscriptionId}, and the wrapped model's
+     *                               {@link CheckpointAwareSubscriptionModel#globalCheckpoint()} answers
+     *                               {@code null}, which is how it reports a problem it cannot resolve. Nothing is
+     *                               registered for the id, so subscribe again once the model can answer, or pass
+     *                               a {@link StartAt} of your own, which records no position and makes no resume
+     *                               promise.
+     */
     @Override
     public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
@@ -204,10 +229,38 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         return version.isPresent() ? CheckpointWriteCondition.notOlderThan(version.getAsLong()) : CheckpointWriteCondition.any();
     }
 
+    // Runs on the subscriber's own thread before the wrapped model is handed anything, so the refusal reaches
+    // the caller. Thrown from inside the dynamic supplier it would surface on the wrapped model's own evaluation
+    // path instead, which NativeMongoSubscriptionModel runs under a retry wrapper that would re-evaluate forever
+    // and tell nobody. The supplier still does its own read, so a re-evaluation picks up the latest checkpoint.
+    private void recordFirstPositionOrRefuse(String subscriptionId) {
+        Checkpoint checkpoint = storage.read(subscriptionId);
+        if (checkpoint != null) {
+            return;
+        }
+        Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
+        if (globalCheckpoint == null) {
+            throw new IllegalStateException("The wrapped subscription model " + subscriptionModel.getClass().getName() +
+                                            " answered nothing when asked for the current position for subscription " +
+                                            subscriptionId + ", which is how it reports a problem it cannot resolve, and no " +
+                                            "checkpoint is stored for the subscription either. Starting it anyway would begin " +
+                                            "wherever the feed has reached, and a crash before the first checkpoint is saved " +
+                                            "would then start over from wherever the feed has reached by that time, silently " +
+                                            "skipping whatever was delivered and failed in between. The subscription is " +
+                                            "therefore refused rather than started, and nothing is registered for its id, so " +
+                                            "subscribe again once the model can answer. A subscription with a checkpoint " +
+                                            "already stored starts from that checkpoint and is never refused this way. " +
+                                            "Subscribing with a StartAt of your own records no position and makes no such " +
+                                            "promise.");
+        }
+        storage.save(subscriptionId, globalCheckpoint, writeConditionFor(subscriptionId));
+    }
+
     @Nullable
     private StartAt generateStartAtPositionFrom(String subscriptionId, StartAt originalStartAt) {
         final StartAt startAtToUse;
         if (originalStartAt.isDefault()) {
+            recordFirstPositionOrRefuse(subscriptionId);
             StartAt startAtIfNoSubscriptionFound = StartAt.subscriptionModelDefault();
             startAtToUse = StartAt.dynamic(() -> {
                 // Read inside the supplier so a retry picks up the latest checkpoint, not a stale one

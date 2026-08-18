@@ -161,18 +161,20 @@ class DurableSubscriptionModelFixture implements RestartableSubscriptionModelFix
      *     {@code generateStartAtPositionFrom} falls to its {@code else} branch and passes the caller's {@code StartAt}
      *     straight to the wrapped model unchanged, exactly as {@code NativeMongoSubscriptionModelFixture} already
      *     proves both of those work.</li>
-     *     <li>{@code SUBSCRIPTION_MODEL_DEFAULT} is rewritten into a {@code StartAt.dynamic(..)} that reads the
-     *     checkpoint storage; finding nothing for a subscription id it has never seen, it reads the wrapped model's
-     *     own {@code globalCheckpoint()}, saves that, and starts there instead. That still resolves to a real
-     *     position the wrapped model accepts, so this variant is delivered to as well, just not from wherever the
-     *     wrapped model's own default would have been.</li>
+     *     <li>{@code SUBSCRIPTION_MODEL_DEFAULT} makes {@code subscribe} read the checkpoint storage first, and for
+     *     a subscription id it has never seen it records the wrapped model's own {@code globalCheckpoint()} there
+     *     before anything else happens. The {@code StartAt.dynamic(..)} handed to the wrapped model then reads that
+     *     stored position back, which is a position the wrapped model accepts, so this variant is delivered
+     *     to as well, just not from wherever the wrapped model's own default would have been.</li>
      *     <li>{@code DYNAMIC} resolves (per {@link StartAtVariant#startAt}) to
      *     {@code StartAt.dynamic(StartAt::subscriptionModelDefault)}. {@code generateStartAtPositionFrom} calls it,
      *     gets back {@code subscriptionModelDefault()}, and recurses, landing in the same branch as
      *     {@code SUBSCRIPTION_MODEL_DEFAULT} above. Delivered for the same reason.</li>
      * </ul>
-     * This model refuses nothing, in the sense the suite means by refusal: no start position makes {@code subscribe}
-     * throw. A dynamic one resolving to {@code null} is the only case it treats specially, and even that is not a
+     * The one start position that can make {@code subscribe} throw, the model default when nothing is stored and the
+     * wrapped model's {@code globalCheckpoint()} answers {@code null}, never does so here, because
+     * {@code NativeMongoSubscriptionModel} over the local MongoDB this suite runs against always answers. A dynamic
+     * position resolving to {@code null} is the only case it treats specially, and even that is not a
      * refusal, it delegates the subscription to the wrapped model unchanged. That is how a caller opts a subscription
      * out of this wrapper rather than how it names a position the wrapper cannot honour, which is why
      * {@link StartAtVariant#DYNAMIC} deliberately does not build one.
