@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Six things are worth reading, two of them compile-time breaks. At compile time, if you use the flow saga's
+Seven things are worth reading, two of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, which most callers need to do nothing about. Read
@@ -19,7 +19,10 @@ ran as a side effect of building the descriptor at startup no longer runs at all
 [section 5](#5-a-descriptor-factorys-class-level-advice-no-longer-runs-at-startup).
 `WriteResult` and `DcbAppendResult` both gain a fourth component. Deconstructing either with a record pattern is
 a second compile-time break, and comparing either whole for equality fails silently at runtime instead. Read
-[section 6](#6-writeresult-and-dcbappendresult-gain-a-fourth-component-the-append-id).
+[section 6](#6-writeresult-and-dcbappendresult-gain-a-fourth-component-the-append-id). And if
+`DurableSubscriptionModel` wraps a MongoDB subscription model on a shared Atlas cluster, a fresh subscription that
+used to start without a recorded position is now refused at `subscribe(..)`. Read
+[section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -408,3 +411,32 @@ three bindings were named or typed. If a name called `appendId` is already bound
 enclosing scope, the recipe falls back to `appendId1`, then `appendId2`, and so on, so the added binding
 never collides with one that is already there. Run it the same way
 [section 4](#4-four-mongodb-only-keys-move-under-mongodb) does.
+
+## 7. `DurableSubscriptionModel` refuses a first subscription when no start position can be recorded
+
+`DurableSubscriptionModel.subscribe(..)` now throws `IllegalStateException` when the caller asks for
+`StartAt.subscriptionModelDefault()` (the default when no `StartAt` is given), no checkpoint is stored for the
+subscription id, and the wrapped model's `globalCheckpoint()` answers `null`. Both MongoDB subscription models
+answer `null` when the server refuses the `hostInfo` command, which shared MongoDB Atlas clusters (M0, Flex and
+similar tiers) do, so this is the setup that hits the refusal. On a server that permits `hostInfo`, and on a
+subscription that has run before, nothing changes.
+
+Up to 0.33.0 such a subscription started anyway, from wherever the feed happened to be, with nothing in checkpoint
+storage. It looked like it worked, and it did keep working as long as the very first delivery succeeded. A crash
+before the first checkpoint was saved started over from wherever the feed had reached by then, so an event whose
+delivery failed just before the crash was never seen again.
+
+The refusal replaces that quiet loss with an error at `subscribe(..)`, which for a Spring Boot application means
+at startup. Nothing is registered for the id, so subscribing again once the model can answer works.
+
+Two ways forward:
+
+* Run against a cluster that permits `hostInfo`, which on Atlas means a dedicated tier (M10 and up). The
+  subscription then records its start position before anything is delivered and resumes from it after a crash,
+  which is the promise `DurableSubscriptionModel` exists to make.
+* Subscribe with a `StartAt` of your own, `StartAt.now()` for example. That records no position and makes no
+  resume promise for the time before the first checkpoint is saved, which is exactly what the previous behavior
+  gave you, only now it is chosen in the caller's code instead of decided silently by what the server refuses.
+
+The blocking `ManualStartSubscriptionModel` and the reactor `ReactorDurableSubscriptionModel` have answered a
+`null` position source this way since 0.33.0. This change gives `DurableSubscriptionModel` the same answer.
