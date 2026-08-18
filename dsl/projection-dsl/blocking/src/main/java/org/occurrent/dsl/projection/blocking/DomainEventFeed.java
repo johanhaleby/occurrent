@@ -227,6 +227,13 @@ public final class DomainEventFeed<E> {
      * event arrives after {@link #stopCatchUp()} interrupted a replay still in flight. The catch-up-then-live engine
      * behind this feed drops such an event rather than delivering or buffering it, and this method reads that
      * signal back instead of assuming delivery from a normal return.
+     * <p>
+     * A matching event that arrives <em>before</em> a stop, while the catch-up is still buffering live events for
+     * the drain that follows the replay, still reports {@link RoutingOutcome#DELIVERED}, even though a stop right
+     * afterwards means that buffered event will not actually be folded by this attempt. That is the same contract
+     * the catch-up-then-live engine already keeps for {@link #accept(Object)}: nothing is lost, because the
+     * completion marker is never recorded for an interrupted attempt, so the next {@link #catchUpAll()} replays the
+     * whole history again, including this event, from the store rather than from the buffer.
      *
      * @throws IllegalStateException if no projection is registered on this feed, for the reason
      *                               {@link #accept(Object)} gives. Refused rather than reported as

@@ -236,6 +236,13 @@ public final class DomainEventFeed<E> {
      * engine behind this feed drops such an event rather than delivering or buffering it, and this method reads that
      * signal back instead of assuming delivery from a normal completion.
      * <p>
+     * A matching event that arrives <em>before</em> a stop, while the catch-up is still buffering live events for
+     * the drain that follows the replay, still completes with {@link RoutingOutcome#DELIVERED}, even though a stop
+     * right afterwards means that buffered event will not actually be folded by this attempt. That is the same
+     * contract the catch-up-then-live engine already keeps for {@link #accept(Object)}: nothing is lost, because
+     * the completion marker is never recorded for an interrupted attempt, so the next {@link #catchUpAll()}
+     * replays the whole history again, including this event, from the store rather than from the buffer.
+     * <p>
      * Fails with an {@link IllegalStateException} when no projection is registered, for the reason
      * {@link #accept(Object)} gives, rather than completing with {@link RoutingOutcome#NOT_DELIVERABLE}. This feed,
      * unlike a push subscription model, has no write path to protect, and ADR 104 already refuses here for
