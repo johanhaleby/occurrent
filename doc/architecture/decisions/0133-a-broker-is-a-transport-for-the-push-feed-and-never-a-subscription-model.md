@@ -95,22 +95,32 @@ So a CloudEvent bridge that only looked at whether `accept(...)` threw would ack
 states, before anything is registered, while the model is stopped, and while its subscription is paused. `route`
 returns normally in all three.
 
-**The bridge asks `isRunning(subscriptionId)` before it consumes, and it holds the `PushSubscriptionModel` rather than
-a bare `Pushable`.** `isRunning(String)` is the one accessor that answers all three states at once, because it is
-`running && registered && !paused`. `hasSubscriptions()` is not enough, since it stays true for a paused subscription
-and `route` skips exactly that registration. The bridge holds the model because neither accessor is reachable through
-`Pushable`. `hasSubscriptions()` is declared on `RegisteringSubscribable`, and the only capability a `Pushable` can be
-asked for is `IntrospectableSubscriptions`, which answers `subscriptionIds()` and whose empty result means the model
-cannot list its subscriptions rather than that it has none. A bridge cannot tell "not ready" from "cannot answer"
-through that, and this is a decision about not losing events, so it takes the type that can answer. The bridge knows
-which id to ask about because ADR 90 gives it exactly one.
+**The acknowledgement decision comes from a `PushObserver`, not from a check taken before the push.** A bridge
+attaches one, and `PushSubscriptionModel` reports through `routeReportingMatch`, which evaluates the sole
+registration's eligibility once and tells the observer that same answer before dispatching. The model not running, the
+sole subscription being paused, and nothing being registered all report `false`, exactly as `route` already treats
+them for dispatch.
 
-**One narrow window stays open, and it is named here rather than left implied.** Asking and then pushing is two steps,
-so a `stop()`, a `pauseSubscription` or a `cancelSubscription` landing between them still acknowledges into a model
-that drops the event. `AGENTS.md` says a narrow, documented loss window is still a loss, so this is a limit rather
-than a solved problem. It is small enough to accept here only because closing it needs the model to refuse, which ADR
-104 decided it must not do for `PushSubscriptionModel`. A bridge that wants to observe what happened attaches a
-`PushObserver`, which is told about every event and whether it matched.
+That shared evaluation is what makes this safe. A separate check taken before the push would be two steps, so a
+`stop()`, a `pauseSubscription` or a `cancelSubscription` landing between them would acknowledge into a model that
+then drops the event. The observer cannot disagree with the dispatch decision, because there is only one evaluation
+and both read it.
+
+So the bridge acknowledges when the observer reported `matched = true` and `accept(...)` returned normally, and when
+the observer reported `false` while the subscription was running, which means the filter genuinely did not match and
+redelivering would loop forever. It does not acknowledge otherwise.
+
+**The bridge therefore holds the `PushSubscriptionModel` rather than a bare `Pushable`.** The observer is a
+constructor argument on the model, and the readiness accessors are not reachable through `Pushable` either.
+`hasSubscriptions()` is declared on `RegisteringSubscribable`, and it would be the wrong question anyway because it
+stays true for a paused subscription while `route` skips exactly that registration. `isRunning(subscriptionId)` is
+the accessor that answers all three states at once, and the bridge uses it to decide when to start and stop consuming
+rather than to decide any single message. The bridge knows which id to ask about because ADR 90 gives it exactly one.
+
+What remains is that a stopped model drops live events, which ADR 85 decided and ADR 104 deliberately kept, on the
+grounds that a stop is an operator act with a `start()` on the other side. A bridge stops consuming when its
+subscription stops, so it does not feed a stopped model in the first place. This ADR inherits that decision rather
+than accepting a new loss of its own.
 
 The bridge feeds the live `PushSubscriptionModel`. When a subscription needs history first, `CatchupThenPushSubscriptionModel`
 composes in front of it and takes that model as a constructor argument, so it is not itself the push target and a
@@ -175,7 +185,18 @@ void publish(Iterable<CloudEvent> cloudEvents);
 `DomainEventSink<E>` has the same two methods over `E`, plus a `publish(EventMetadata, E)` overload that decision 4
 explains.
 
-All three live in `occurrent-broker-api-blocking`, which depends on `occurrent-subscription-core` for
+**A fourth type drives the publish side, and without it nothing calls a sink.** `CloudEventForwarder` runs one durable
+subscription out of the event store and hands each event to a `CloudEventSink`. `DomainEventForwarder<E>` uses the
+same subscription, decodes each CloudEvent once with the `CloudEventConverter` and hands the domain event to a
+`DomainEventSink<E>`, so an application plugging in its own publisher wrapper receives domain events and never touches
+CloudEvents. The forwarder decodes rather than the sink, which is what keeps that true.
+
+Publication is at-least-once and needs no new mechanism to be. `DurableSubscriptionModel` already advances the
+checkpoint only after the action returns, so a sink that throws leaves the checkpoint where it was and the event is
+published again on the next run. That is the guarantee to document rather than one to try to improve, and it is the
+same contract the consume side already works under.
+
+All of these live in `occurrent-broker-api-blocking`, which depends on `occurrent-subscription-core` for
 `SubscriptionFilter` and on the CloudEvents SDK, and on no broker client.
 
 ### 3. Both directions work at the CloudEvent level and at the domain level
@@ -239,15 +260,24 @@ It works for the event-type part of a filter and for nothing else, because the e
 the destination mapping knows about. A stream id, a data field, a time range and a DCB criteria are all invisible to
 the broker.
 
-So the subscription's own filter is what decides whether a received event reaches the handler, and **the bridge does
-not evaluate a filter of its own.** `RegisteringSubscribable.subscribe` already builds the predicate from the filter
-it was given and `route` applies it before calling the handler, so a bridge that filtered as well would need a second
-copy of the filter, configured separately from the subscription's. Two copies that nothing compares is the problem
-this ADR opened by describing, so it would be a poor thing to add while fixing it.
+Where that final decision is made differs between the two levels, and the difference is stated here because it is not
+obvious and getting it wrong delivers events a filter excluded.
 
-That leaves the bindings as the only thing derived from the filter, and they are derived from the same filter object
-the subscription was registered with. A bridge that wants to see what arrived and whether it matched attaches a
-`PushObserver`, which is told about every event either way and shares the dispatch decision rather than recomputing it.
+**At the CloudEvent level the bridge does not evaluate a filter of its own.** `RegisteringSubscribable.subscribe`
+already builds the predicate from the filter it was given and `route` applies it before calling the handler, so a
+bridge that filtered as well would need a second copy of the filter, configured separately from the subscription's.
+Two copies that nothing compares is the problem this ADR opened by describing.
+
+**At the domain level the bridge is the only thing that can decide, so it applies the filter itself.**
+`DomainEventFeed.accept(metadata, event)` hands the event to the registered projection unconditionally, and the
+`Filter` given to `register` reaches `CatchupProjectionFeed` as the replay filter, so it selects what the catch-up
+reads out of the event store and has no effect on the live path. A domain bridge that trusted a coarse binding would
+therefore deliver events the subscription excluded. This is not the duplicate filter refused above, because at this
+level there is no other evaluation to disagree with.
+
+That leaves the bindings derived from the same filter the consumer is configured with at both levels. A CloudEvent
+bridge that wants to see what arrived and whether it matched reads its `PushObserver`, which decision 1 already
+requires it to have.
 
 A filter whose type part cannot be derived returns an empty `Optional`, and a consumer that gets one binds the
 transport's own catch-all rather than a set of destinations. On RabbitMQ that is a `#` binding on the topic exchange,
@@ -262,7 +292,7 @@ entirely, which #415 already says has to stay possible.
 
 | Directory | Artifact | Contents |
 |---|---|---|
-| `broker/api/blocking` | `occurrent-broker-api-blocking` | `EventDestination`, `DestinationResolver`, `CloudEventSink`, `DomainEventSink`, the shared settings |
+| `broker/api/blocking` | `occurrent-broker-api-blocking` | `EventDestination`, `DestinationResolver`, `CloudEventSink`, `DomainEventSink`, `CloudEventForwarder`, `DomainEventForwarder`, the shared settings |
 | `broker/rabbitmq/blocking` | `occurrent-broker-rabbitmq-blocking` | `RabbitMqDestination`, resolver, sinks, bridges, both levels |
 | `broker/kafka/blocking` | `occurrent-broker-kafka-blocking` | `KafkaDestination`, resolver, sinks, bridges, both levels |
 
@@ -326,12 +356,16 @@ part is that it never plainly acknowledges the message, because that is the loss
 application's to configure, and #415 already requires it, since always requeueing keeps a message that fails every
 time in a redelivery loop forever and takes the operator's own policy away from them.
 
-So each bridge takes a failure policy with the same two choices under the same names, retry the message or route it to
-a holding destination that nobody consumes from, so an operator can look at what failed. RabbitMQ implements both
-through `basicNack`, with requeue for the first and without it for the second so the queue's configured dead-letter
-exchange takes over. Kafka has no per-message negative acknowledgement, so it implements the first by declining to
-commit the offset and seeking back to it, and the second by producing the record to a separate topic and then
-committing.
+So each bridge takes a `DeliveryFailurePolicy`, a shared enum in `occurrent-broker-api-blocking` rather than two
+transport enums that happen to line up, with two constants. `REDELIVER` puts the message back for another attempt.
+`PARK` routes it to a holding destination nobody consumes from, so an operator can look at what failed. Both bridges
+take it through a builder method named `onDeliveryFailure(DeliveryFailurePolicy)`, and `REDELIVER` is the default
+because it is the choice that cannot lose a message on a transient failure.
+
+RabbitMQ implements both through `basicNack`, with requeue for `REDELIVER` and without it for `PARK` so the queue's
+configured dead-letter exchange takes over. Kafka has no per-message negative acknowledgement, so it implements
+`REDELIVER` by declining to commit the offset and seeking back to it, and `PARK` by producing the record to a separate
+topic and then committing.
 
 That is the one place the two bridges genuinely differ in mechanism, and it is written down here so the Kafka one does
 not invent a third behaviour. What neither may do is commit or acknowledge after logging the failure.
