@@ -212,6 +212,15 @@ public final class CatchupProjectionFeed<E> {
         return handover.accept(new DeliveredEvent<>(metadata, event));
     }
 
+    // Package-private. Lets DomainEventFeed.acceptCloudEvent(CloudEvent) tell a genuinely dropped live event (this
+    // feed's replay was stopped) apart from one that was actually buffered or delivered, which
+    // ReactiveHandover.accept(..) alone cannot report through its Mono<Void> contract.
+    Mono<Boolean> acceptReportingDelivery(EventMetadata metadata, E event) {
+        Objects.requireNonNull(metadata, "metadata cannot be null");
+        Objects.requireNonNull(event, "event cannot be null");
+        return handover.acceptReportingDelivery(new DeliveredEvent<>(metadata, event));
+    }
+
     /**
      * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), record the
      * completion marker, then start delivering the live feed. The returned {@link Mono} completes when the replay and

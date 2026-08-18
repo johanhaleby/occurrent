@@ -18,6 +18,7 @@ package org.occurrent.subscription.push.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.RoutingOutcome;
 
 // Package-private on purpose. A member type nested in an interface is unconditionally public, so the singleton
 // backing PushObserver.noop() lives in a top-level class instead, where it can stay out of the public API.
@@ -30,6 +31,6 @@ final class PushObserverNoop implements PushObserver {
     }
 
     @Override
-    public void observe(CloudEvent cloudEvent, boolean matched) {
+    public void observe(CloudEvent cloudEvent, RoutingOutcome outcome) {
     }
 }

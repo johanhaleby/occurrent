@@ -21,6 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -275,13 +276,18 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
 
     /**
      * For a subclass declared {@link Consumers#ONE}: evaluate its at-most-one registration's eligibility exactly
-     * once, tell {@code matchObserver} the result, then dispatch that registration's handler if eligible.
+     * once, tell {@code matchObserver} the {@link RoutingOutcome}, then dispatch that registration's handler if the
+     * outcome is {@link RoutingOutcome#DELIVERED}.
      * <p>
      * Sharing one evaluation between the two, unlike a separate pre-check ahead of {@link #route(CloudEvent)}, means
      * the two can never disagree about whether the event matched, even for a matcher that is not a deterministic
-     * pure function of the event. The model not running, the sole subscription being paused, and the matcher itself
-     * throwing all report {@code false} to {@code matchObserver}, the same way {@link #route(CloudEvent)} already
-     * treats them for dispatch, and a throwing matcher's exception still propagates to the caller once
+     * pure function of the event, and means no lifecycle transition (a concurrent {@code stop()}, a
+     * {@code pauseSubscription} or a {@code resumeSubscription}) can land between the decision and the report. The
+     * model not running and the sole subscription being paused both report {@link RoutingOutcome#NOT_DELIVERABLE},
+     * the same way {@link #route(CloudEvent)} already treats them for dispatch. A filter that declines the event
+     * reports {@link RoutingOutcome#FILTERED}. The matcher itself throwing reports
+     * {@link RoutingOutcome#NOT_DELIVERABLE}, never {@link RoutingOutcome#FILTERED}, since a filter that failed to
+     * answer did not decline the event, and that throwing matcher's exception still propagates to the caller once
      * {@code matchObserver} has been told. If {@code matchObserver} itself then throws a {@link RuntimeException} or
      * an {@link Error} while being told, that failure is suppressed onto the matcher's original exception rather
      * than replacing it, so a badly behaved {@code matchObserver} can never change which exception, or whose, a
@@ -293,10 +299,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * makes this safe where restructuring {@link #route(CloudEvent)} itself would not be.
      *
      * @param cloudEvent    The event to route.
-     * @param matchObserver Told, once, whether this event was eligible, before its registration's handler (if any)
-     *                      runs.
+     * @param matchObserver Told, once, this event's {@link RoutingOutcome}, before its registration's handler (if
+     *                      any) runs.
      */
-    protected final void routeReportingMatch(CloudEvent cloudEvent, BiConsumer<CloudEvent, Boolean> matchObserver) {
+    protected final void routeReportingMatch(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         Objects.requireNonNull(matchObserver, "matchObserver cannot be null");
         if (consumers != Consumers.ONE) {
@@ -304,12 +310,19 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         }
         if (running) {
             for (Registration registration : registrations) {
+                // Paused is a lifecycle state, not a filter answer, so it is checked before the matcher runs at all.
+                // Reporting FILTERED here would tell the caller the event was this subscription's and it declined
+                // it, when in truth the filter was never asked.
+                if (pausedSubscriptions.contains(registration.id())) {
+                    matchObserver.accept(cloudEvent, RoutingOutcome.NOT_DELIVERABLE);
+                    return;
+                }
                 boolean eligible;
                 try {
-                    eligible = !pausedSubscriptions.contains(registration.id()) && registration.matcher().test(cloudEvent);
+                    eligible = registration.matcher().test(cloudEvent);
                 } catch (RuntimeException | AssertionError e) {
                     try {
-                        matchObserver.accept(cloudEvent, false);
+                        matchObserver.accept(cloudEvent, RoutingOutcome.NOT_DELIVERABLE);
                     } catch (RuntimeException | Error observerFailure) {
                         // Skip the instance itself. A shared exception object thrown by both the matcher and the
                         // observer would otherwise hit addSuppressed's self-suppression guard, an
@@ -321,14 +334,14 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     }
                     throw e;
                 }
-                matchObserver.accept(cloudEvent, eligible);
+                matchObserver.accept(cloudEvent, eligible ? RoutingOutcome.DELIVERED : RoutingOutcome.FILTERED);
                 if (eligible) {
                     registration.action().accept(cloudEvent);
                 }
                 return;
             }
         }
-        matchObserver.accept(cloudEvent, false);
+        matchObserver.accept(cloudEvent, RoutingOutcome.NOT_DELIVERABLE);
     }
 
     /**

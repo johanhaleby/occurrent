@@ -131,8 +131,9 @@ public final class ReactiveHandover<T> {
     private final BoundedIdCache deliveredIds;
     private final Sinks.Many<Item> liveSink;
     // Acks of live payloads buffered but not yet folded, so a catch-up failure fails them rather than leaving the
-    // caller's accept Monos hanging forever.
-    private final Set<MonoSink<Void>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
+    // caller's accept Monos hanging forever. The Boolean each carries is whether the payload was genuinely
+    // delivered, not just whether the ack completed without error, see acceptReportingDelivery(..).
+    private final Set<MonoSink<Boolean>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
     private volatile boolean stopped = false;
 
@@ -175,6 +176,21 @@ public final class ReactiveHandover<T> {
      * to choose, not this engine's (ADR 104).
      */
     public Mono<Void> accept(T payload) {
+        return acceptReportingDelivery(payload).then();
+    }
+
+    /**
+     * As {@link #accept(Object)}, additionally emitting whether the payload was genuinely handled (buffered for the
+     * replay to drain, delivered live, or already delivered by an earlier attempt) rather than silently dropped
+     * because a replay that would have drained it was stopped. A caller that acknowledges an externally sourced
+     * payload (a broker message, say) needs this to tell the two apart, since {@link #accept(Object)} completes
+     * normally either way.
+     *
+     * @return A {@link Mono} that completes with {@code false} only when this handover is stopped and the payload
+     *         was dropped rather than buffered or delivered, and {@code true} otherwise, including a de-duplicated
+     *         repeat of an already-delivered payload. Errors for the same reasons {@link #accept(Object)} does.
+     */
+    public Mono<Boolean> acceptReportingDelivery(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
         return Mono.create(ackSink -> {
             ackSink.onDispose(() -> pendingLiveAcks.remove(ackSink));
@@ -186,7 +202,7 @@ public final class ReactiveHandover<T> {
             if (stopped) {
                 // Dropped rather than buffered, and the ack completes rather than failing: the replay that would have
                 // drained this buffer was stopped, so nothing is coming to fold it. Dropped, not deferred (ADR 85).
-                ackSink.success();
+                ackSink.success(false);
                 return;
             }
             pendingLiveAcks.add(ackSink);
@@ -199,7 +215,7 @@ public final class ReactiveHandover<T> {
                 return;
             }
             if (stopped) {
-                ackSink.success();
+                ackSink.success(false);
                 return;
             }
             String key;
@@ -279,7 +295,7 @@ public final class ReactiveHandover<T> {
                         stopped = true;
                         abandonReplayWithoutMasking(source, replayOpen);
                         catchupDone.tryEmitValue(false);
-                        pendingLiveAcks.forEach(MonoSink::success);
+                        pendingLiveAcks.forEach(sink -> sink.success(false));
                         return;
                     }
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.
@@ -329,10 +345,10 @@ public final class ReactiveHandover<T> {
     // Serialized by concatMap within a phase, and the phases run sequentially, so the de-dup cache is touched by one
     // thread at a time. Those calls still land on different threads, so the cache does its own synchronization.
     private Mono<Void> deliver(Item item) {
-        MonoSink<Void> ack = item.ack();
+        MonoSink<Boolean> ack = item.ack();
         if (ack != null) {
             if (deliveredIds.contains(item.dedupKey())) {
-                ack.success();
+                ack.success(true);
                 return Mono.empty();
             }
             // Mono.defer so a synchronous throw from the fold becomes an onError signal onErrorResume can catch, rather
@@ -340,7 +356,7 @@ public final class ReactiveHandover<T> {
             return Mono.defer(item.deliver())
                     .doOnSuccess(v -> {
                         deliveredIds.add(item.dedupKey());
-                        ack.success();
+                        ack.success(true);
                     })
                     .onErrorResume(error -> {
                         ack.error(error);
@@ -371,8 +387,9 @@ public final class ReactiveHandover<T> {
         return key;
     }
 
-    // A replayed payload has a null ack; a live payload carries the MonoSink whose completion lets the caller
-    // acknowledge. The deliver supplier is bound at creation time, so Item needs no type parameter of its own.
-    private record Item(Supplier<Mono<Void>> deliver, String dedupKey, @Nullable MonoSink<Void> ack) {
+    // A replayed payload has a null ack; a live payload carries the MonoSink whose completion (with whether it was
+    // genuinely delivered) lets the caller acknowledge. The deliver supplier is bound at creation time, so Item
+    // needs no type parameter of its own.
+    private record Item(Supplier<Mono<Void>> deliver, String dedupKey, @Nullable MonoSink<Boolean> ack) {
     }
 }

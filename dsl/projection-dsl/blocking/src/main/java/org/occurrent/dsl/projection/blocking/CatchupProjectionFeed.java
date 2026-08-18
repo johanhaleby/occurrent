@@ -191,6 +191,15 @@ public final class CatchupProjectionFeed<E> {
         handover.accept(Delivered.live(metadata, event));
     }
 
+    // Package-private. Lets DomainEventFeed.acceptCloudEvent(CloudEvent) tell a genuinely dropped live event (this
+    // feed's replay was stopped) apart from one that was actually buffered or delivered, which
+    // BlockingHandover.accept(..) alone cannot report through its void contract.
+    boolean acceptReportingDelivery(EventMetadata metadata, E event) {
+        Objects.requireNonNull(metadata, "metadata cannot be null");
+        Objects.requireNonNull(event, "event cannot be null");
+        return handover.acceptReportingDelivery(Delivered.live(metadata, event));
+    }
+
     // Two routes on purpose. MaterializedView.update(E) and update(EventMetadata, E) are separate interface methods a
     // caller's view may implement differently, so an event fed without metadata must still take the one-argument route
     // rather than the metadata one carrying EventMetadata.empty(). A replayed delivery always has metadata, so it always
