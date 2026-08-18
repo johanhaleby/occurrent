@@ -27,7 +27,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * Drives stored events out of the event store into a {@link CloudEventSink}, one durable subscription at a time.
  * Takes a {@link DurableSubscriptionModel} rather than a bare subscription model so the checkpoint-after-success
- * guarantee is part of the type: {@code DurableSubscriptionModel} already persists the checkpoint only once its
+ * guarantee is part of the type. {@code DurableSubscriptionModel} already persists the checkpoint only once its
  * action returns, and the action here is a call to the sink, so a sink that throws leaves the checkpoint where it
  * was and the event is published again on the next run. That makes publication at least once, which is the
  * guarantee to document rather than to try to improve.
@@ -46,29 +46,27 @@ public class CloudEventForwarder {
      * Start forwarding at the subscription model's default start position, with no filter.
      */
     public Subscription forward(String subscriptionId) {
-        return forward(subscriptionId, null, StartAt.subscriptionModelDefault());
+        return subscriptionModel.subscribe(subscriptionId, sink::publish);
     }
 
     /**
      * Start forwarding at {@code startAt}, with no filter.
      */
     public Subscription forward(String subscriptionId, StartAt startAt) {
-        return forward(subscriptionId, null, startAt);
+        return subscriptionModel.subscribe(subscriptionId, startAt, sink::publish);
     }
 
     /**
      * Start forwarding only events matching {@code filter}, at the subscription model's default start position.
      */
     public Subscription forward(String subscriptionId, @Nullable SubscriptionFilter filter) {
-        return forward(subscriptionId, filter, StartAt.subscriptionModelDefault());
+        return subscriptionModel.subscribe(subscriptionId, filter, sink::publish);
     }
 
     /**
      * Start forwarding only events matching {@code filter}, at {@code startAt}.
      */
     public Subscription forward(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
-        requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         return subscriptionModel.subscribe(subscriptionId, filter, startAt, sink::publish);
     }
 }

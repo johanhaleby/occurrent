@@ -22,6 +22,8 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.subscription.CheckpointAwareCloudEvent;
 import org.occurrent.subscription.GlobalCheckpoint;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
@@ -70,6 +72,19 @@ class DomainEventForwarderTest {
                 .hasMessage("Simulated publish failure");
 
         assertThat(checkpointStorage.read("subscription1")).isNull();
+    }
+
+    @Test
+    void passes_the_subscription_id_filter_and_start_position_through_to_the_wrapped_subscription_model() {
+        SubscriptionFilter filter = new SubscriptionFilter() {
+        };
+        StartAt startAt = StartAt.now();
+
+        forwarder.forward("subscription1", filter, startAt);
+
+        assertThat(wrappedModel.lastSubscriptionId()).isEqualTo("subscription1");
+        assertThat(wrappedModel.lastFilter()).isSameAs(filter);
+        assertThat(wrappedModel.lastStartAt()).isSameAs(startAt);
     }
 
     private static CloudEvent checkpointAwareEvent(String data, long position) {

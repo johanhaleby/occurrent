@@ -25,6 +25,8 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 
+import java.util.function.Consumer;
+
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -56,33 +58,35 @@ public class DomainEventForwarder<E> {
      * Start forwarding at the subscription model's default start position, with no filter.
      */
     public Subscription forward(String subscriptionId) {
-        return forward(subscriptionId, null, StartAt.subscriptionModelDefault());
+        return subscriptionModel.subscribe(subscriptionId, decodeAndPublish());
     }
 
     /**
      * Start forwarding at {@code startAt}, with no filter.
      */
     public Subscription forward(String subscriptionId, StartAt startAt) {
-        return forward(subscriptionId, null, startAt);
+        return subscriptionModel.subscribe(subscriptionId, startAt, decodeAndPublish());
     }
 
     /**
      * Start forwarding only events matching {@code filter}, at the subscription model's default start position.
      */
     public Subscription forward(String subscriptionId, @Nullable SubscriptionFilter filter) {
-        return forward(subscriptionId, filter, StartAt.subscriptionModelDefault());
+        return subscriptionModel.subscribe(subscriptionId, filter, decodeAndPublish());
     }
 
     /**
      * Start forwarding only events matching {@code filter}, at {@code startAt}.
      */
     public Subscription forward(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
-        requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
-        return subscriptionModel.subscribe(subscriptionId, filter, startAt, cloudEvent -> {
+        return subscriptionModel.subscribe(subscriptionId, filter, startAt, decodeAndPublish());
+    }
+
+    private Consumer<CloudEvent> decodeAndPublish() {
+        return cloudEvent -> {
             E domainEvent = converter.toDomainEvent(cloudEvent);
             EventMetadata metadata = EventMetadata.from(cloudEvent);
             sink.publish(metadata, domainEvent);
-        });
+        };
     }
 }
