@@ -19,6 +19,7 @@ package org.occurrent.broker.api.blocking;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
@@ -34,7 +35,9 @@ import static java.util.Objects.requireNonNull;
  * channel, so a forwarder can be wrapped in a real {@link org.occurrent.subscription.blocking.durable.DurableSubscriptionModel}
  * and exercised without a broker, an event store, or an executor: {@link #publish(CloudEvent)} calls the registered
  * action synchronously, on the calling thread, so a test sees the checkpoint move (or not) before it makes its
- * assertions.
+ * assertions. {@link #globalCheckpoint()} answers {@link GlobalCheckpoint#of} {@code 0}, the position a real
+ * wrapped model reports for an empty stream, so {@code DurableSubscriptionModel} records that as the first
+ * position instead of refusing to start.
  */
 class FakeCheckpointAwareSubscriptionModel implements CheckpointAwareSubscriptionModel {
 
@@ -122,7 +125,7 @@ class FakeCheckpointAwareSubscriptionModel implements CheckpointAwareSubscriptio
     }
 
     @Override
-    public @Nullable Checkpoint globalCheckpoint() {
-        return null;
+    public Checkpoint globalCheckpoint() {
+        return GlobalCheckpoint.of(0);
     }
 }
