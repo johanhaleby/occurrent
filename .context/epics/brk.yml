@@ -1,0 +1,163 @@
+schema_version: 1
+epic: brk
+revision: 1
+updated_at: 2026-08-18T04:44:26Z
+updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
+baseline: {repo: johanhaleby/occurrent, branch: main}
+authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic rulings pending Johan's registration ask: release-train (0.34.0 waits on brk+ayi vs alternatives), plan approval (revision 2), fixpoint stopping rule, U1 dispatch. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
+milestone: 3
+registered_at: 2026-08-18T04:44:26Z
+definition_of_done:
+  - "#412-#417 and #419 closed via merged PRs; ADR 0133 merged after an explicitly closed design gate"
+  - "#421 held docs branch review-clean in occurrent-org.github.io, registered in the release merge order, rebased on its base, addedTags present, AGENTS.md:91 late-joiner check done, frozen for its release day per the release-train ruling"
+  - "U9 fixpoint converged under the stopping rule Johan sets at approval, plus its mechanical checklist green (mvn_local_snapshot.sh artifact proof for all publishable leaves, required-test-images.sh emits both broker images warning-free, shard-timing within budget on the last brk merge, cross-transport API symmetry check, #414 thinness re-check)"
+  - "Every merge to main was releasable as-is (no BOM/excludeArtifacts/modules entry ever referenced a not-yet-existing artifact)"
+  - "Main green on the last brk merge"
+  - "#388 closed"
+  - "Memory checkpointed, sessions archived at closeout, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
+pending_actions: []
+units:
+  U1:
+    issue: 412
+    goal: "ADR 0133: broker architecture, seams (EventDestination, DestinationResolver, sinks), module split, cross-transport convention section; three open decisions through the orchestrator gate (message binding, Spring Boot auto-config scope, #414 publish-vs-example presented honestly)"
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: manual_approval, ref: "design gate closed by Johan's explicit word, via the orchestrator", met: false, evidence: null}
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 412, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch on Johan's approval at the registration ask (Opus/high chip); claim #412 at dispatch; ADR 0133 carried as a resolved literal plus the cross-branch re-audit command"
+    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    observed: {}
+    assessment: "ADR number 0133 reserved (cross-branch scan 2026-08-18T04:3xZ: max 0132 on origin/*, ledger empty above). The reservation is a courtesy; adr-numbering CI on the merged checkout is the enforcing guard. Prose-only diff expected, so the [ci skip] marker rule applies."
+  U2:
+    issue: 413
+    goal: "occurrent-broker-api-blocking: forwarders, default resolver, fake-sink tests; inert-and-true scaffolding only (root modules entry, broker + broker/api aggregators, BOM + excludeArtifacts for what U2 itself creates, integration-tests.{rabbitmq,kafka}.version properties + required-test-images.sh greps, shard paths for the broker subtree)"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U1]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 413, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U1's design gate closes and the ADR merges"
+    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    observed: {}
+    assessment: "Sonnet/high chip. No kafka-clients version here (U5 owns it); testcontainers-bom already manages testcontainers-{rabbitmq,kafka}. No changelog entry (no user-visible capability without a transport)."
+  U3:
+    issue: 414
+    goal: "RabbitMQ publish: destination, topic-exchange resolver, CloudEvent + domain sinks, publisher confirms; own aggregator/BOM/excludeArtifacts entries; writes THE single broker changelog entry (Changes + Highlights teaser)"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U2]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 414, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U2 merges"
+    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    observed: {}
+    assessment: "Sonnet/high chip. Establishes the publish-side shape U5 mirrors. Rabbit container version comes from the U2-declared property."
+  U4:
+    issue: 415
+    goal: "RabbitMQ consume bridge into Pushable/DomainEventFeed, ack-after-success, nack on handler exception, topology from destinationsFor(filter) with explicit-config escape hatch, Testcontainers incl. redelivery-no-double-process; folds changelog"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U3]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 415, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U3 merges; parallel to U5/U6 track"
+    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    observed: {}
+    assessment: "Sonnet/high chip. @RabbitSaga maintainer comment on #415 is future-module inspiration, explicitly out of remit."
+  U5:
+    issue: 416
+    goal: "Kafka publish: KafkaDestination, topic-from-type-mapper + key-by-stream-id resolver, sinks, checkpoint-after-acked-send; owns the kafka-clients managed version; own aggregator/BOM/excludeArtifacts; folds changelog"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U2, U3]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 416, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U3 merges (publish shape established once, per the review's finding 8 disposition)"
+    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    observed: {}
+    assessment: "Sonnet/high chip. Mirrors U3's shape per the ADR convention section. Stream-id-keying tradeoff documented, never silent."
+  U6:
+    issue: 417
+    goal: "Kafka consume bridge: poll, reconstruct, Pushable.accept/DomainEventFeed, offset-commit-after-accept, topics from destinationsFor(filter), ordering caveats documented prominently; folds changelog"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U5]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 417, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U5 merges"
+    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    observed: {}
+    assessment: "Sonnet/high chip. @KafkaSaga comment is future-module inspiration, out of remit."
+  U7:
+    issue: 419
+    goal: "End-to-end example at example/broker (forwarder -> RabbitMQ -> bridge -> @Projection(source = PUSH)), both levels, Testcontainers proofs (catch-up overlap, no-loss, resume, EventMetadata round trip); example-pom/excludeArtifacts/shard-paths registrations; housekeeping fenced to removing the unused testcontainers-rabbitmq dependency line only; folds changelog"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U3, U4]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: issue_closed, ref: 419, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch after U4 merges"
+    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    observed: {}
+    assessment: "Sonnet/medium chip. May add a shard paths entry for its subtree to an EXISTING shard; no 11th shard; no touching other shards. application.yaml rabbitmq config and native module basicPublish are out of remit."
+  U8:
+    issue: 421
+    goal: "Held docs branch in occurrent-org.github.io: six mandated sub-topics incl. Kafka ordering; addedTags per new heading; merge-order registration; AGENTS.md:91 late-joiner check; news-post coordination with r34's docs/0.34.0-release-notes"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U3, U4, U5, U6, U7]
+    session: null
+    deliverables:
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: "held docs branch, base and name fixed at dispatch", met: false, evidence: null}
+      - {check: manual_approval, ref: "review-clean, registered in the release merge order, rebased, addedTags present, late-joiner check done", met: false, evidence: null}
+    blocking_on: []
+    next_action: "At dispatch: identify the held branch already documenting push subscriptions/domain event feeds (enumerate open PRs and branches, ls-remote + grep) and base U8 on it, never docs main"
+    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    observed: {}
+    assessment: "Sonnet/medium chip. Depends on both transport tracks because the mandated scope includes Kafka partitioning/ordering, wider than the issue's explicit #414/#415/#419 line, deliberate. Docs-repo merges are Johan's. Maintainer declined community offers pending modules; that hold dissolves once U7 lands."
+  U9:
+    issue: null
+    goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U7, U8]
+    session: null
+    deliverables:
+      - {check: manual_approval, ref: "fixpoint clean under the stopping rule Johan sets at approval, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
+    blocking_on: []
+    next_action: "Run as orchestrator-integrated subagent rounds after U7 and U8"
+    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    observed: {}
+    assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation."
