@@ -19,8 +19,7 @@ else
     echo "::warning::Could not read integration-tests.mongo.version from pom.xml, so the Mongo image is not mirrored and will come from Docker Hub." >&2
 fi
 
-# RabbitMQ. No shard starts one yet (the broker transport modules aren't built), but the property already
-# exists for them to read, so derive the image the same way as Mongo rather than waiting for the first user.
+# RabbitMQ. The misc shard starts one for broker/rabbitmq/blocking's tests, derived the same way as Mongo.
 rabbitmq_version=$(grep -oE '<integration-tests\.rabbitmq\.version>[^<]+' "$root/pom.xml" 2>/dev/null | sed 's/.*>//')
 if [ -n "$rabbitmq_version" ]; then
     echo "rabbitmq:$rabbitmq_version"

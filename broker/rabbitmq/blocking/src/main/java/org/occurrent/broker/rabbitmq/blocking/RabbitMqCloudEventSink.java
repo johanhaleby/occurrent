@@ -19,6 +19,7 @@ package org.occurrent.broker.rabbitmq.blocking;
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ShutdownSignalException;
 import io.cloudevents.CloudEvent;
 import org.occurrent.broker.api.blocking.CloudEventForwarder;
 import org.occurrent.broker.api.blocking.CloudEventSink;
@@ -148,6 +149,11 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         } catch (IOException e) {
             throw new RabbitMqPublishException("Failed to publish to exchange \"" + destination.exchange() +
                     "\" with routing key \"" + destination.routingKey() + "\"", e);
+        } catch (ShutdownSignalException e) {
+            // A dropped connection or channel surfaces here as an unchecked ShutdownSignalException, not as an
+            // IOException, so it needs its own catch to reach the retry strategy at all.
+            throw new RabbitMqPublishException("Channel or connection shut down while publishing to exchange \"" +
+                    destination.exchange() + "\" with routing key \"" + destination.routingKey() + "\"", e);
         } catch (TimeoutException e) {
             throw new RabbitMqPublishTimeoutException(acknowledgementTimeout, e);
         } catch (InterruptedException e) {
@@ -209,7 +215,10 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
 
         public RabbitMqCloudEventSink build() {
             try {
-                Channel channel = connection.createChannel();
+                // createChannel() returns null rather than throwing when no channel number is available, so
+                // openChannel()'s Optional is used instead of risking a bare NullPointerException out of confirmSelect().
+                Channel channel = connection.openChannel()
+                        .orElseThrow(() -> new RabbitMqPublishException("No RabbitMQ channel number was available to create a confirm-mode channel on"));
                 channel.confirmSelect();
                 return new RabbitMqCloudEventSink(channel, resolver, acknowledgementTimeout, retryStrategy);
             } catch (IOException e) {
