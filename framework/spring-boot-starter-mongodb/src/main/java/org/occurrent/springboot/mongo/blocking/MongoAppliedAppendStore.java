@@ -152,7 +152,10 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      * to this same deadline, exactly like a failing read, rather than throwing out of a method documented to never
      * throw.
      * A store that is still failing once the deadline arrives answers {@code false} instead of retrying past it, so
-     * the wait's own deadline check is what ends the wait.
+     * the wait's own deadline check is what ends the wait. A thread interrupted during a retry's backoff sleep also
+     * answers {@code false} here, the same as an interrupted poll sleep in the loop above it, rather than
+     * propagating the {@code RuntimeException} {@code RetryExecution} wraps that interrupt in. The interrupt flag
+     * itself is already restored by {@code RetryExecution}, this only decides what this method returns.
      */
     private boolean readOnceBoundedBy(String projectionId, AppendId appendId, long deadlineNanos) {
         Supplier<Boolean> read = () -> readOnce(projectionId, appendId);
@@ -160,7 +163,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
         try {
             return requireNonNull(executeWithRetry(read, notShutdownAndBeforeDeadline, retryStrategy).get());
         } catch (RuntimeException e) {
-            if (System.nanoTime() >= deadlineNanos) {
+            if (Thread.currentThread().isInterrupted() || System.nanoTime() >= deadlineNanos) {
                 return false;
             }
             throw e;

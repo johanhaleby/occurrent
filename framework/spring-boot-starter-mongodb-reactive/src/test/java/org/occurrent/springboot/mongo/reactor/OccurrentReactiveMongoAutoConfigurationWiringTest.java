@@ -29,6 +29,7 @@ import org.occurrent.application.service.reactor.ApplicationService;
 import org.occurrent.application.service.reactor.dcb.DcbApplicationService;
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
 import org.occurrent.dsl.dcb.reactor.DcbSubscriptions;
+import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
 import org.occurrent.dsl.subscription.reactor.StreamSubscriptions;
 import org.occurrent.eventstore.api.dcb.Tag;
@@ -36,6 +37,7 @@ import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
+import org.occurrent.retry.Backoff;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
@@ -55,6 +57,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Mono;
 
+import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
@@ -140,6 +143,49 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
             assertThat(context).doesNotHaveBean(DcbSubscriptions.class);
             assertThat(context).doesNotHaveBean(DcbDomainEventQueries.class);
         });
+    }
+
+    @Test
+    void applied_append_store_is_auto_configured_with_bound_properties() {
+        contextRunner()
+                .withPropertyValues(
+                        "occurrent.projection.applied-append.collection=appliedAppends-v2",
+                        "occurrent.projection.applied-append.retention=P1D",
+                        "occurrent.projection.applied-append.wait-backoff.initial=50ms",
+                        "occurrent.projection.applied-append.wait-backoff.max=500ms",
+                        "occurrent.projection.applied-append.wait-backoff.multiplier=3.0"
+                )
+                .run(context -> {
+                    assertThat(context).hasSingleBean(AppliedAppendStore.class);
+                    AppliedAppendStore store = context.getBean(AppliedAppendStore.class);
+                    assertThat(store).isInstanceOf(ReactiveMongoAppliedAppendStore.class);
+
+                    assertThat(getField(store, "collection", String.class)).isEqualTo("appliedAppends-v2");
+                    assertThat(getField(store, "retention", Duration.class)).isEqualTo(Duration.ofDays(1));
+                    Backoff.Exponential pollBackoff = getField(store, "pollBackoff", Backoff.Exponential.class);
+                    assertThat(pollBackoff.initial).isEqualTo(Duration.ofMillis(50));
+                    assertThat(pollBackoff.max).isEqualTo(Duration.ofMillis(500));
+                    assertThat(pollBackoff.multiplier).isEqualTo(3.0);
+                });
+    }
+
+    @Test
+    void custom_applied_append_store_is_not_replaced() {
+        AppliedAppendStore customStore = mock(AppliedAppendStore.class);
+
+        contextRunner()
+                .withBean(AppliedAppendStore.class, () -> customStore)
+                .run(context -> assertThat(context.getBean(AppliedAppendStore.class)).isSameAs(customStore));
+    }
+
+    private static <T> T getField(Object target, String fieldName, Class<T> type) {
+        try {
+            Field field = target.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return type.cast(field.get(target));
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Could not read field " + fieldName + " from " + target.getClass().getName(), e);
+        }
     }
 
     @Test

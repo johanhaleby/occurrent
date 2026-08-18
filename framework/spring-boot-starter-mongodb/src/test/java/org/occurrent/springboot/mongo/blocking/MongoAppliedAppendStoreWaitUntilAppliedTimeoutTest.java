@@ -30,6 +30,8 @@ import org.springframework.data.mongodb.core.query.Query;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -89,6 +91,35 @@ class MongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
         assertThat(applied).isFalse();
         assertThat(elapsed).isLessThan(timeout.plusSeconds(2));
         verify(indexOperations, atLeast(2)).ensureIndex(any());
+    }
+
+    @Test
+    void an_interrupted_retry_sleep_returns_false_and_restores_the_interrupt_flag_rather_than_throwing() throws InterruptedException {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
+        when(mongoOperations.exists(any(Query.class), anyString()))
+                .thenThrow(new RuntimeException("store outage"));
+        // A long retry backoff, so the interrupt below lands while a retry attempt is sleeping inside
+        // RetryExecution, not the outer poll sleep, which already handles interruption correctly on its own.
+        RetryStrategy slowRetry = RetryStrategy.exponentialBackoff(Duration.ofSeconds(5), Duration.ofSeconds(5), 1.0);
+        AppliedAppendStore store = new MongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7), slowRetry, Backoff.fixed(20));
+        CountDownLatch started = new CountDownLatch(1);
+        boolean[] result = new boolean[1];
+        boolean[] interruptedAfterwards = new boolean[1];
+        Thread waiter = new Thread(() -> {
+            started.countDown();
+            result[0] = store.waitUntilApplied("orders", AppendId.mint(), Duration.ofSeconds(30));
+            interruptedAfterwards[0] = Thread.currentThread().isInterrupted();
+        });
+        waiter.start();
+        started.await();
+        Thread.sleep(50);
+        waiter.interrupt();
+        waiter.join(TimeUnit.SECONDS.toMillis(5));
+
+        assertThat(waiter.isAlive()).isFalse();
+        assertThat(result[0]).isFalse();
+        assertThat(interruptedAfterwards[0]).isTrue();
     }
 
     @Test

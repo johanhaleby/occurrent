@@ -33,7 +33,9 @@ import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
+import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.retry.Backoff;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -53,6 +55,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.lang.reflect.Field;
 import java.net.URI;
+import java.time.Duration;
 import java.util.Date;
 import java.util.Set;
 import java.util.UUID;
@@ -102,6 +105,39 @@ class OccurrentMongoAutoConfigurationCharacterizationTest {
             assertThat(cloudEvent.getDataContentType()).isEqualTo("application/json");
             assertThat(converter.toDomainEvent(cloudEvent)).isEqualTo(event);
         });
+    }
+
+    @Test
+    void applied_append_store_is_auto_configured_with_bound_properties() {
+        contextRunner
+                .withPropertyValues(
+                        "occurrent.projection.applied-append.collection=appliedAppends-v2",
+                        "occurrent.projection.applied-append.retention=P1D",
+                        "occurrent.projection.applied-append.wait-backoff.initial=50ms",
+                        "occurrent.projection.applied-append.wait-backoff.max=500ms",
+                        "occurrent.projection.applied-append.wait-backoff.multiplier=3.0"
+                )
+                .run(context -> {
+                    assertThat(context).hasSingleBean(AppliedAppendStore.class);
+                    AppliedAppendStore store = context.getBean(AppliedAppendStore.class);
+                    assertThat(store).isInstanceOf(MongoAppliedAppendStore.class);
+
+                    assertThat(getField(store, "collection", String.class)).isEqualTo("appliedAppends-v2");
+                    assertThat(getField(store, "retention", Duration.class)).isEqualTo(Duration.ofDays(1));
+                    Backoff.Exponential pollBackoff = getField(store, "pollBackoff", Backoff.Exponential.class);
+                    assertThat(pollBackoff.initial).isEqualTo(Duration.ofMillis(50));
+                    assertThat(pollBackoff.max).isEqualTo(Duration.ofMillis(500));
+                    assertThat(pollBackoff.multiplier).isEqualTo(3.0);
+                });
+    }
+
+    @Test
+    void custom_applied_append_store_is_not_replaced() {
+        AppliedAppendStore customStore = mock(AppliedAppendStore.class);
+
+        contextRunner
+                .withBean(AppliedAppendStore.class, () -> customStore)
+                .run(context -> assertThat(context.getBean(AppliedAppendStore.class)).isSameAs(customStore));
     }
 
     @Test
