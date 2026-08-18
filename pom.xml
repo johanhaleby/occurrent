@@ -91,7 +91,7 @@
         <maven-javadoc-plugin.version>3.5.0</maven-javadoc-plugin.version>
         <integration-tests.mongo.version>8.0</integration-tests.mongo.version>
         <integration-tests.rabbitmq.version>4.1</integration-tests.rabbitmq.version>
-        <integration-tests.kafka.version>3.9</integration-tests.kafka.version>
+        <integration-tests.kafka.version>4.1.0</integration-tests.kafka.version>
     </properties>
 
 
