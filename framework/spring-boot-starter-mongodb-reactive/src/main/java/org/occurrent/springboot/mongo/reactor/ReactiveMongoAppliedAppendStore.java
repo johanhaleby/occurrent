@@ -189,10 +189,11 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * A read for {@link #waitUntilApplied(String, AppendId, Duration, Backoff)} whose retries stop once
      * {@code deadlineNanos} ({@link System#nanoTime()} scale) passes, rather than continuing on {@link #retry}'s own
      * schedule. Blocking on the retried read with the remaining duration as the block timeout is what stops the
-     * retries themselves at the deadline, not just the wait loop around them. {@link #retry}'s default is finite,
-     * so a sustained outage can also exhaust the retry itself well before the deadline. Either way the read answers
-     * {@code false} rather than throwing. A wait polls for "not applied yet", and its own deadline check, not the
-     * read's failure, is what ends it. This also covers a fresh store's index setup, since
+     * retries themselves at the deadline, not just the wait loop around them. The default {@link #retry} has no
+     * attempt limit, but a caller can supply a finite one, and a sustained outage then exhausts that retry well
+     * before the deadline too. Either way the read answers {@code false} rather than throwing. A wait polls for
+     * "not applied yet", and its own deadline check, not the read's failure, is what ends it. This also covers a
+     * fresh store's index setup, since
      * {@link #existsWithIndexesEnsured} runs it in the same chain as the read, retried and limited to the same
      * deadline.
      */
