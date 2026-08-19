@@ -88,15 +88,21 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <p>
  * A retriable failure, everything except that timeout, is retried under {@link Builder#retryStrategy(RetryStrategy)}
  * before a caller sees it, exponential backoff from 100 ms up to 2 seconds by default, only when Kafka itself
- * marked the failure retriable. A permanent failure, an unknown topic or an authorization error for example, is
- * never retried by the default, since ADR 133 asks this retry to guard against a transient failure and retrying a
- * permanent one without limit would keep {@link #publish(CloudEvent)} from ever returning. A retriable failure has
- * no such limit, the same choice {@code NativeMongoCheckpointStorage} makes for its own retried reads and writes,
- * so a persistent outage keeps {@link #publish(CloudEvent)} retrying for as long as it lasts, bounded by this
- * sink's own lifetime rather than by a count or the acknowledgement timeout, only by {@link #close()}. The retry
- * is also not a substitute for the acknowledgement wait, since a publish that was never acknowledged is not known
- * to have failed, only unresolved. Per ADR 133, an expired {@link KafkaPublishTimeoutException} is for the caller
- * to decide on rather than something this retry absorbs, so the default excludes it too.
+ * marked the failure retriable. A permanent failure, an invalid topic name or an authorization error for example,
+ * is never retried by the default, since ADR 133 asks this retry to guard against a transient failure and retrying
+ * a permanent one without limit would keep {@link #publish(CloudEvent)} from ever returning. Publishing to a topic
+ * that simply does not exist yet is not one of those permanent failures. Kafka itself marks
+ * {@code UnknownTopicOrPartitionException} retriable, on the assumption that metadata is still catching up or the
+ * broker will auto-create the topic, so this sink retries it under the same unbounded backoff as a transient
+ * failure. With broker-side auto-creation disabled and no topic ever created, that retry never stops on its own.
+ * A caller in that situation sees {@link #publish(CloudEvent)} block until something calls {@link #close()},
+ * rather than fail promptly. A retriable failure has no such limit, the same choice
+ * {@code NativeMongoCheckpointStorage} makes for its own retried reads and writes, so a persistent outage keeps
+ * {@link #publish(CloudEvent)} retrying for as long as it lasts, bounded by this sink's own lifetime rather than by
+ * a count or the acknowledgement timeout, only by {@link #close()}. The retry is also not a substitute for the
+ * acknowledgement wait, since a publish that was never acknowledged is not known to have failed, only unresolved.
+ * Per ADR 133, an expired {@link KafkaPublishTimeoutException} is for the caller to decide on rather than something
+ * this retry absorbs, so the default excludes it too.
  * <p>
  * Call {@link #close()} once the sink is no longer needed. It stops any in-flight {@link #publish(CloudEvent)}
  * retry loop from attempting again and closes the {@link Producer} this sink created and owns.
@@ -233,11 +239,13 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
          * external store, retrying a {@link KafkaPublishException} only when it is not
          * {@link KafkaPublishTimeoutException} (excluded per ADR 133) and its cause is an
          * {@code org.apache.kafka.common.errors.RetriableException}, Kafka's own marker for a failure the client
-         * itself considers worth retrying. A permanent failure such as an unknown topic, a record too large, or an
-         * authorization error is not retriable by that marker, and is never retried by this default, since ADR 133
-         * only asks this retry to guard against a transient failure and an unbounded retry of a failure that can
-         * never succeed would leave {@link #publish(CloudEvent)} retrying with nothing but {@link #close()} able
-         * to stop it. Passing a {@link RetryStrategy} here replaces that
+         * itself considers worth retrying. A permanent failure such as an invalid topic name, a record too large, or
+         * an authorization error is not retriable by that marker, and is never retried by this default, since ADR
+         * 133 only asks this retry to guard against a transient failure and an unbounded retry of a failure that
+         * can never succeed would leave {@link #publish(CloudEvent)} retrying with nothing but {@link #close()}
+         * able to stop it. A topic that simply does not exist yet is not one of those permanent failures. Kafka's
+         * own {@code RetriableException} marker covers it too. See the class javadoc above for what that means for
+         * a caller with broker-side auto-creation disabled. Passing a {@link RetryStrategy} here replaces that
          * predicate too, so a caller that wants a wider retry configures its own. It never substitutes for the
          * acknowledgement wait {@link #acknowledgementTimeout(Duration)} configures.
          */
