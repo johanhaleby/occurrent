@@ -41,7 +41,6 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.AppliedAppendRecordingRegistry;
-import org.occurrent.springboot.common.AsynchronousSubscribables;
 import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.OccurrentProperties.SubscriptionProperties.CatchupThenLiveProperties;
 import org.occurrent.springboot.common.OccurrentProperties;
@@ -53,10 +52,10 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
-import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.Logger;
@@ -261,25 +260,25 @@ class ProjectionAnnotationRegistrar {
     private record RecordingPhase(ReplayPhase phase, boolean registerWithPoll) {
     }
 
-    // The ReplayPhase for a projection fed by the asynchronous Subscribable this context resolves for event-store
-    // and DCB subscriptions, per ADR 132 decision 8: ReplayAwareSubscriptions.findIn(...) unwraps whatever wrapper
-    // chain sits in front of the catch-up model, the same lookup SagaAnnotationRegistrar already relies on for its
-    // timer gate. Empty means the composition cannot say, so it is treated as never replaying.
-    private RecordingPhase asynchronousSubscribablePhase(String id) {
-        Subscribable subscribable = AsynchronousSubscribables.resolve(applicationContext, Subscribable.class, RegisteringSubscribable.class);
-        Optional<ReplayAwareSubscriptions> replayAware = ReplayAwareSubscriptions.findIn(subscribable);
+    // The ReplayPhase for a projection fed by capability, the same model instance the caller's subscription actually
+    // runs on, per ADR 132 decision 8: ReplayAwareSubscriptions.findIn(...) unwraps whatever wrapper chain sits in
+    // front of the catch-up model, the same lookup SagaAnnotationRegistrar already relies on for its timer gate.
+    // Empty means the composition cannot say, so it is treated as never replaying.
+    private RecordingPhase asynchronousSubscribablePhase(String id, SubscriptionModelCapability capability) {
+        Optional<ReplayAwareSubscriptions> replayAware = ReplayAwareSubscriptions.findIn(capability);
         ReplayPhase phase = replayAware.<ReplayPhase>map(r -> () -> r.isCatchingUp(id)).orElseGet(ReplayPhase::neverReplays);
         return new RecordingPhase(phase, replayAware.isPresent());
     }
 
     // Wraps materializedView in the applied-append recorder when the annotation asks for it, resolving the phase
-    // through the asynchronous Subscribable this context resolves for event-store and DCB subscriptions. Returns
-    // materializedView unchanged when recording is off.
-    private <E> MaterializedView<E> wrapForRecordingIfNeeded(org.occurrent.annotation.Projection annotation, String id, MaterializedView<E> materializedView) {
+    // from capability, which must be the same model instance the caller's own subscription actually runs on rather
+    // than an independently resolved bean of the same type, since a context can have more than one and the two
+    // could disagree about which is replaying. Returns materializedView unchanged when recording is off.
+    private <E> MaterializedView<E> wrapForRecordingIfNeeded(org.occurrent.annotation.Projection annotation, String id, MaterializedView<E> materializedView, SubscriptionModelCapability capability) {
         if (!annotation.recordAppliedAppends()) {
             return materializedView;
         }
-        RecordingPhase recording = asynchronousSubscribablePhase(id);
+        RecordingPhase recording = asynchronousSubscribablePhase(id, capability);
         return wrapForRecording(annotation, id, materializedView, recording.phase(), recording.registerWithPoll());
     }
 
@@ -429,18 +428,27 @@ class ProjectionAnnotationRegistrar {
 
         if (descriptor instanceof DcbProjection<?, ?, ?> raw) {
             DcbProjection<S, E, ID> dcbProjection = (DcbProjection<S, E, ID>) raw;
-            MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolveStoreView(annotation, method, dcbProjection.projection(), id));
+            // Resolved once, in the same place it always was, before any subscription bean: a raw return type with
+            // no store bean has to fail here regardless of which subscription bean this projection would go on to need.
+            MaterializedView<E> resolvedView = resolveStoreView(annotation, method, dcbProjection.projection(), id);
             if (synchronous) {
                 // The synchronous subscription model is capability-neutral and applies no DCB criteria, so a DCB
                 // projection receives every synchronously dispatched event and the fold no-ops on unhandled types.
+                // recordAppliedAppends is refused earlier whenever mode = SYNCHRONOUS, so wrapForRecordingIfNeeded
+                // is always a no-op here, but resolving the bean first still keeps this path shaped like the one
+                // below rather than a special case that happens to be safe only by that refusal holding.
                 Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
+                MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, synchronousSubscriptions.getSubscriptionModel());
                 synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(Filter.all()), StartAt.subscriptionModelDefault(), false, (metadata, event) -> {
                     materializedView.update(metadata, event);
                     return Unit.INSTANCE;
                 });
                 return;
             }
+            // Resolved before wrapping the view, so the recording phase (when recordAppliedAppends is set) comes
+            // from the exact model this subscription runs on, not an independently resolved bean of the same type.
             DcbSubscriptions<E> dcbSubscriptions = applicationContext.getBean(DcbSubscriptions.class);
+            MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, dcbSubscriptions.subscriptionModel());
             DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
             boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
             startPositionSupport.applyStartupWorkarounds();
@@ -450,28 +458,42 @@ class ProjectionAnnotationRegistrar {
             }
         } else if (descriptor instanceof Projection<?, ?, ?> raw) {
             Projection<S, E, ID> projection = (Projection<S, E, ID>) raw;
-            MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolveStoreView(annotation, method, projection, id));
+            // Resolved once, in the same place it always was, before any subscription bean: a raw return type with
+            // no store bean has to fail here regardless of which subscription bean this projection would go on to need.
+            MaterializedView<E> resolvedView = resolveStoreView(annotation, method, projection, id);
             Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
-            Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-                materializedView.update(metadata, event);
-                return Unit.INSTANCE;
-            };
             boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
             if (synchronous) {
+                // recordAppliedAppends is refused earlier whenever mode = SYNCHRONOUS, so wrapForRecordingIfNeeded
+                // is always a no-op here, for the same reason the DCB branch above resolves the bean first anyway.
                 Subscriptions<E> synchronousSubscriptions = applicationContext.getBean(OccurrentBlockingBeanNames.SYNCHRONOUS_SUBSCRIPTION_DSL_BEAN_NAME, Subscriptions.class);
-                synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), StartAt.subscriptionModelDefault(), false, consumer);
+                MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, synchronousSubscriptions.getSubscriptionModel());
+                synchronousSubscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), StartAt.subscriptionModelDefault(), false, (metadata, event) -> {
+                    materializedView.update(metadata, event);
+                    return Unit.INSTANCE;
+                });
                 return;
             }
             StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
             boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
             boolean waitUntilStarted = SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext) && SubscriptionAnnotations.shouldWaitUntilStarted(replaysHistory, annotation.startupMode());
             startPositionSupport.applyStartupWorkarounds();
+            // Resolved before wrapping the view, so the recording phase (when recordAppliedAppends is set) comes
+            // from the exact model this subscription runs on, not an independently resolved bean of the same type.
             if (stream) {
                 StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
-                streamSubscriptions.subscribe(id, filter(eventFilter), startAt, waitUntilStarted, consumer);
+                MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, streamSubscriptions.getSubscriptionModel());
+                streamSubscriptions.subscribe(id, filter(eventFilter), startAt, waitUntilStarted, (metadata, event) -> {
+                    materializedView.update(metadata, event);
+                    return Unit.INSTANCE;
+                });
             } else {
                 Subscriptions<E> subscriptions = applicationContext.getBean(Subscriptions.class);
-                subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, waitUntilStarted, consumer);
+                MaterializedView<E> materializedView = wrapForRecordingIfNeeded(annotation, id, resolvedView, subscriptions.getSubscriptionModel());
+                subscriptions.subscribe(id, AgnosticSubscriptionFilter.filter(eventFilter), startAt, waitUntilStarted, (metadata, event) -> {
+                    materializedView.update(metadata, event);
+                    return Unit.INSTANCE;
+                });
             }
         } else {
             throw new IllegalArgumentException("@Projection '%s' method %s#%s must return a Projection or DcbProjection, but returned %s.".formatted(id, bean.getClass().getName(), method.getName(), descriptor.getClass().getName()));
