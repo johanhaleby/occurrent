@@ -1475,3 +1475,11 @@ During ayi/U4 (2026-08-18) the implementation subagent spawned a `fork`-type sub
 ## A subagent unit needs its agent id in the state file's session field
 
 Under Unattended the dispatch vehicle is a subagent, which has an agent id but no session id, so the obvious thing is to leave `session: null`. Then `epic-state.py derive` computes READY for a unit that is actually running and reports DRIFT against the stored RUNNING, because "has an owner" is exactly what the session field encodes. Write the agent id there (`session: "subagent <agentId>"`). It also buys the recovery path: a restarted orchestrator can resume that agent by id, which is how ayi/U4 survived a host restart mid-invariant-pass with its worktree intact.
+
+## A green ack test can be vacuous on RabbitMQ (brk/U4, 2026-08-19)
+
+RabbitMQ's ready-message count EXCLUDES deliveries outstanding on a consumer, so the count drops to zero the moment a bridge receives a message, before any acknowledgement. Every assertion shaped as "the queue is empty, therefore the message was acknowledged" therefore passes even when `basicAck` is never called. Five tests across two bridge classes shared that one premise, so the DELIVERED ack, the FILTERED ack and the PARK ack-after-confirm all looked proven and were not. Three adversarial verify passes checked test integrity and missed it, because the tests are structurally real (live broker, real assertions) and only the broker semantics make them vacuous.
+
+The distinguishing move is to close the consumer first, since channel closure requeues an outstanding delivery: an acknowledged message stays gone, an unacknowledged one comes back. The general rule this is an instance of: when a test asserts an ABSENCE, ask what else produces that absence. And the mutation test that catches it is to delete the acknowledgement itself rather than the behaviour around it.
+
+Assertions in the opposite direction, that a message COMES BACK, are unaffected, which is why the not-acknowledged tests from earlier rounds may be sound while the acknowledged ones are not.
