@@ -81,9 +81,10 @@ class AppendIdEmptyAppendContractTest {
                 .as("there is nothing to wait on, and the type forces that decision onto the caller before any wait is attempted")
                 .isInstanceOf(NoSuchElementException.class);
 
-        // waitUntilApplied itself has no overload that accepts an absent id: it takes a non-null AppendId, never an
-        // Optional, so this line simply cannot be written for an empty append without unwrapping first (proven by
-        // this file compiling at all: there is no waitUntilApplied(String, Optional<AppendId>, Duration) overload).
+        // waitUntilApplied itself takes a non-null AppendId, never an Optional, so a caller holding only
+        // Optional<AppendId> has to unwrap it before this line can even be written. The assertion below checks the
+        // runtime half of that contract, a null that still reaches this method is rejected outright rather than
+        // treated as "never applies".
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         assertThatThrownBy(() -> store.waitUntilApplied("orders", null, Duration.ofMillis(50)))
                 .as("waitUntilApplied rejects a null append id outright rather than silently never applying")

@@ -178,6 +178,13 @@ class RecordingMaterializedViewMembershipInversionTest {
                     // applied, A's event has not committed yet, so nothing else has been recorded. A position-based
                     // watermark would have called this "applied up to B's position", wrongly including A's lower one.
                     assertThat(recordedInOrder).as("only B's append should be recorded while A is still paused before commit").containsExactly(appendIdB);
+                    // A's own append id is not known yet (uncommitted inside A's still-paused transaction, so it
+                    // cannot be read from anywhere outside it), which is why this cannot call hasApplied with A's
+                    // real id directly. A fresh, unrelated id stands in to exercise the read path itself rather than
+                    // relying only on the recordApplied spy above: hasApplied is a plain membership lookup against
+                    // the same set recordApplied writes to, so an id nothing has recorded for answers false, exactly
+                    // as A's real id must until its own commit reaches this projection.
+                    assertThat(appliedAppendStore.hasApplied(PROJECTION_ID, AppendId.mint())).isFalse();
 
                     // Release A: it commits last, with the lower position.
                     release.countDown();
