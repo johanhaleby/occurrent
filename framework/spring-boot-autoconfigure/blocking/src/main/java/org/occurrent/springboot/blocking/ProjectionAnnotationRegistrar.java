@@ -117,12 +117,19 @@ class ProjectionAnnotationRegistrar {
     // catch-up itself and the whole history would replay into a closing store.
     private volatile boolean closing = false;
 
-    // The applied-append recording poll's pacing (ADR 132 decision 7), and the scheduler that runs it. Both created
-    // lazily on the first recordAppliedAppends = true projection, so an application that never uses the feature pays
-    // for neither. One scheduler for every recording projection in this context, stopped in close(), with a thread
-    // per busy projection so one projection's stuck clear() cannot starve another's poll (see where it is built).
+    // The applied-append recording poll's pacing (ADR 132 decision 7), the timer that fires each projection's due
+    // tick, and the executor that actually runs one. All three created lazily on the first recordAppliedAppends =
+    // true projection, so an application that never uses the feature pays for none of them. Split in two because
+    // AppliedAppendStore's default retry is unbounded (a stuck clear() can run for a long time): a single small
+    // timer keeps every projection's schedule on time regardless of what is currently blocked, and each fired tick
+    // runs on its own virtual thread, so a stuck clear costs one cheap unmounted thread rather than a pooled
+    // platform thread this registrar would otherwise have to size for the whole registration count.
+    // recordingLock guards all three fields' initialization together with close()'s shutdown of the two executors,
+    // since a manually started push projection can register concurrently with another one, or with close() itself.
+    private final Object recordingLock = new Object();
     private @Nullable AppliedAppendRecordingRegistry recordingRegistry;
     private @Nullable ScheduledExecutorService recordingPollScheduler;
+    private @Nullable ExecutorService recordingTickExecutor;
 
     private record DomainFeedCatchUp(String id, DomainEventFeed<?> feed, boolean waitUntilStarted) {
     }
@@ -141,11 +148,19 @@ class ProjectionAnnotationRegistrar {
     // Stop every catch-up this registrar started or created a model for, waiting for any replay still in flight to
     // unwind, so no replay thread survives the context that owns the store it is folding into.
     void close() {
-        closing = true;
         // Stopped before the push models: a poll tick still in flight when shutdownNow() is called is interrupted,
-        // and there is no in-flight replay of its own to wait for the way the push models below have.
-        if (recordingPollScheduler != null) {
-            recordingPollScheduler.shutdownNow();
+        // and there is no in-flight replay of its own to wait for the way the push models below have. Setting
+        // closing and shutting down share recordingLock with scheduleRecordingPoll's own use of it below, so a
+        // registration racing this either creates the executors before this sees them (and this shuts down what it
+        // just created) or sees closing already set (and creates nothing this would have to know about).
+        synchronized (recordingLock) {
+            closing = true;
+            if (recordingPollScheduler != null) {
+                recordingPollScheduler.shutdownNow();
+            }
+            if (recordingTickExecutor != null) {
+                recordingTickExecutor.shutdownNow();
+            }
         }
         // The models first, because their shutdown is what stops a push replay and so releases the watcher joined
         // below. Each model waits for its own replays, so this can take that long again before the join starts.
@@ -282,49 +297,55 @@ class ProjectionAnnotationRegistrar {
         return store;
     }
 
-    private synchronized AppliedAppendRecordingRegistry recordingRegistry() {
-        if (recordingRegistry == null) {
-            OccurrentProperties.ProjectionProperties.AppliedAppendProperties.ReplayPollProperties pollProperties =
-                    applicationContext.getBean(OccurrentProperties.class).getProjection().getAppliedAppend().getReplayPoll();
-            recordingRegistry = new AppliedAppendRecordingRegistry(pollProperties.getInitial(), pollProperties.getMax(), pollProperties.getMultiplier());
+    private AppliedAppendRecordingRegistry recordingRegistry() {
+        synchronized (recordingLock) {
+            if (recordingRegistry == null) {
+                OccurrentProperties.ProjectionProperties.AppliedAppendProperties.ReplayPollProperties pollProperties =
+                        applicationContext.getBean(OccurrentProperties.class).getProjection().getAppliedAppend().getReplayPoll();
+                recordingRegistry = new AppliedAppendRecordingRegistry(pollProperties.getInitial(), pollProperties.getMax(), pollProperties.getMultiplier());
+            }
+            return recordingRegistry;
         }
-        return recordingRegistry;
-    }
-
-    private synchronized ScheduledExecutorService recordingPollScheduler() {
-        if (recordingPollScheduler == null) {
-            // A single shared worker would let one projection's stuck clear() (AppliedAppendStore's default retry is
-            // unbounded, decision 7) occupy the only thread and starve every other registered projection's poll.
-            // Grows a thread per busy projection instead, up to the registration count (there is never more
-            // concurrent work than that), and reclaims an idle one after 60 seconds.
-            ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(Integer.MAX_VALUE, daemonThreadFactory("occurrent-applied-append-poll"));
-            executor.setKeepAliveTime(60, TimeUnit.SECONDS);
-            executor.allowCoreThreadTimeOut(true);
-            recordingPollScheduler = executor;
-        }
-        return recordingPollScheduler;
     }
 
     // Self-rescheduling: each tick asks the registry how long until the projection is next due (an interval the
     // tick itself may have just changed) and schedules exactly one more tick at that delay, rather than running a
     // shared fixed-rate loop that wakes up for every registered projection whether or not it is due.
+    //
+    // The closing check, both executors' lazy creation, and the actual schedule() call all share recordingLock with
+    // close()'s own shutdown, for the same reason the reactor registrar's equivalent method does: checking closing
+    // or creating an executor outside that lock leaves a window where an executor created after close() ran is
+    // never shut down.
     private void scheduleRecordingPoll(String id) {
-        if (closing) {
-            return;
-        }
-        ScheduledExecutorService scheduler = recordingPollScheduler();
         AppliedAppendRecordingRegistry registry = recordingRegistry();
-        scheduler.schedule(() -> {
+        synchronized (recordingLock) {
             if (closing) {
                 return;
             }
-            try {
-                registry.tick(id);
-            } catch (RuntimeException e) {
-                log.error("The applied-append recording poll for projection '{}' failed. It will be retried at the next tick.", id, e);
+            // Timing only, kept deliberately small. This thread never runs a tick itself, only fires the moment one
+            // is due and hands it to recordingTickExecutor, so a stuck clear() on one projection never delays
+            // another's timer.
+            if (recordingPollScheduler == null) {
+                recordingPollScheduler = Executors.newSingleThreadScheduledExecutor(daemonThreadFactory("occurrent-applied-append-poll-timer"));
             }
-            scheduleRecordingPoll(id);
-        }, registry.dueInNanos(id), TimeUnit.NANOSECONDS);
+            // Where a fired tick actually runs. A platform-thread pool sized for the registration count would either
+            // sit near-idle most of the time (every healthy projection's clear returns fast) or, sized down, let one
+            // stuck clear (AppliedAppendStore's default retry is unbounded, decision 7) queue up every other
+            // projection's tick behind it. Virtual threads sidestep both, cheap enough to hand out one per fired
+            // tick, so a stuck clear occupies only its own and every other projection's tick still runs on time.
+            if (recordingTickExecutor == null) {
+                recordingTickExecutor = Executors.newVirtualThreadPerTaskExecutor();
+            }
+            ExecutorService tickExecutor = recordingTickExecutor;
+            recordingPollScheduler.schedule(() -> tickExecutor.execute(() -> {
+                try {
+                    registry.tick(id);
+                } catch (RuntimeException e) {
+                    log.error("The applied-append recording poll for projection '{}' failed. It will be retried at the next tick.", id, e);
+                }
+                scheduleRecordingPoll(id);
+            }), registry.dueInNanos(id), TimeUnit.NANOSECONDS);
+        }
     }
 
     private static ThreadFactory daemonThreadFactory(String namePrefix) {

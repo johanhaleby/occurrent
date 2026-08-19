@@ -20,6 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
+import org.occurrent.dsl.projection.AppliedAppendRecorder;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.MaterializedViewOptions;
@@ -287,6 +288,13 @@ public final class Projections {
      * {@code update} alone. If {@code update} is itself {@link ReactiveReplayAware}, wrap the delegate (not the
      * result of this call) with your own replay-aware behaviour first, since the returned update forwards to
      * whatever {@code update} was when this was called.
+     * <p>
+     * The Spring Boot starter's own scheduled poll (ADR 132 decision 7) is what still retries a clear when a replay
+     * delivered no matching event to retry it from, by asking {@code phase} on a schedule and calling the returned
+     * update's {@link AppliedAppendRecorder#replayObserved()} or {@link AppliedAppendRecorder#retryPendingClear()}
+     * accordingly. Calling this factory directly does not install that poll. Run the same schedule yourself, or
+     * accept the residual. Without it, a clear a replay left owed only retries once a live delivery reaches this
+     * projection.
      */
     public static <E> RecordingReactiveUpdate<E> recordingAppliedAppends(BiFunction<EventMetadata, E, Mono<Void>> update, String projectionId, AppliedAppendStore store, ReplayPhase phase) {
         requireNonNull(update, "update cannot be null");

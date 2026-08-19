@@ -206,12 +206,16 @@ class ProjectionAnnotationRegistrar {
             if (synchronous) {
                 throw new IllegalArgumentException("@Projection '%s' returns a DcbProjection with mode = SYNCHRONOUS, which the reactive stack does not support in this version. Use mode = ASYNC for a DCB read model, or an agnostic Projection for synchronous read-your-writes.".formatted(id));
             }
-            ReactiveDcbProjectionRunner<E> runner = ReactiveDcbProjectionRunner.create(applicationContext.getBean(FluxSubscriptionModel.class), converter);
+            FluxSubscriptionModel fluxSubscriptionModel = applicationContext.getBean(FluxSubscriptionModel.class);
+            ReactiveDcbProjectionRunner<E> runner = ReactiveDcbProjectionRunner.create(fluxSubscriptionModel, converter);
             boolean replaysHistory = annotation.startAtGlobalPosition() >= 0 || annotation.startAt() == org.occurrent.annotation.StartPosition.BEGINNING;
             DcbStartAt startAt = startPositionSupport.generateDcbStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
             startPositionSupport.applyStartupWorkarounds();
+            // Resolved from fluxSubscriptionModel itself, not from an independently looked-up Subscribable bean: a
+            // DCB-only composition is not required to expose one at all, and a context with more than one would let
+            // the two lookups disagree about which model the phase actually describes.
             ReplayPhaseResolution recordingResolution = annotation.recordAppliedAppends()
-                    ? resolveEventStorePhase(id, AsynchronousSubscribables.resolve(applicationContext, Subscribable.class, RegisteringSubscribable.class))
+                    ? resolveEventStorePhase(id, fluxSubscriptionModel instanceof Subscribable subscribable ? subscribable : null)
                     : null;
             var subscription = projectDcb(runner, id, annotation, dcbProjection, resolveStore(annotation, id), startAt, recordingResolution);
             if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
@@ -313,8 +317,9 @@ class ProjectionAnnotationRegistrar {
     // capability lookup is a plain instanceof, not a wrapper-chain walk, so nothing else can see further in). Falling
     // back to neverReplays() when both come up empty cannot tell "this composition genuinely never replays" from "it
     // replays but nothing here can see it", so it warns rather than silently choosing the optimistic reading (ADR 132
-    // decision 2).
-    private ReplayPhaseResolution resolveEventStorePhase(String id, Subscribable subscribable) {
+    // decision 2). subscribable is null for a DCB composition whose FluxSubscriptionModel bean does not also
+    // implement Subscribable, treated the same as one that does but answers empty.
+    private ReplayPhaseResolution resolveEventStorePhase(String id, @Nullable Subscribable subscribable) {
         ComposedReplayPhase holder = applicationContext.getBeanProvider(ComposedReplayPhase.class).getIfAvailable();
         Optional<ReplayPhase> composed = holder == null ? Optional.empty() : holder.forSubscription(id);
         if (composed.isPresent()) {
@@ -324,7 +329,7 @@ class ProjectionAnnotationRegistrar {
             // never report true would only cost a tick every interval for an answer that cannot change.
             return new ReplayPhaseResolution(phase, phase != ReplayPhase.neverReplays());
         }
-        Optional<ReplayAwareSubscriptions> direct = subscribable.capability(ReplayAwareSubscriptions.class);
+        Optional<ReplayAwareSubscriptions> direct = subscribable == null ? Optional.empty() : subscribable.capability(ReplayAwareSubscriptions.class);
         if (direct.isPresent()) {
             ReplayAwareSubscriptions replayAware = direct.get();
             return new ReplayPhaseResolution(() -> replayAware.isCatchingUp(id), true);
@@ -333,7 +338,7 @@ class ProjectionAnnotationRegistrar {
                         "whether it is replaying. The default reactive Mongo composition does not have this problem; a " +
                         "custom or third-party Subscribable can. Recording proceeds as though this projection never " +
                         "replays: a genuine replay would record straight through it, with no automatic clear afterwards.",
-                id, subscribable.getClass().getName());
+                id, subscribable == null ? "none" : subscribable.getClass().getName());
         return new ReplayPhaseResolution(ReplayPhase.neverReplays(), false);
     }
 

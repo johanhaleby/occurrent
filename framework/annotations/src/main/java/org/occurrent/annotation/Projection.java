@@ -215,6 +215,11 @@ public @interface Projection {
      * what happens to previously recorded appends after a replay, depends on the composition; see ADR 132 decisions
      * 6 through 9. Configure the store's retention, the wait's poll pacing, and this feature's own replay-detection
      * poll under {@code occurrent.projection.applied-append}.
+     * <p>
+     * Recording happens after the first handled event that carries an append id, not after every event the append
+     * wrote. An append whose events this projection handles across several deliveries can therefore have
+     * {@code hasApplied}/{@code waitUntilApplied} answer {@code true} while some of those deliveries are still
+     * unapplied. See ADR 132 decision 10 for why, and for the delay's three different sizes.
      */
     boolean recordAppliedAppends() default false;
 }
