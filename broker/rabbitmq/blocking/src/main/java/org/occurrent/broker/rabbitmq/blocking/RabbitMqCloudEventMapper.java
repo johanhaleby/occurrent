@@ -60,9 +60,10 @@ public final class RabbitMqCloudEventMapper {
     private static final String DATA_CONTENT_TYPE_ATTRIBUTE = "datacontenttype";
 
     /**
-     * Fixed by choosing {@link SpecVersion#V1} in {@link #toCloudEvent(BasicProperties, byte[])} rather than read
-     * back from the header, since a {@link CloudEventBuilder} takes the spec version at construction and has no
-     * method to set it afterwards.
+     * Read back from the header in {@link #toCloudEvent(BasicProperties, byte[])} to pick the
+     * {@link CloudEventBuilder}, since a builder takes its spec version at construction and has no method to set it
+     * afterwards. Never passed to {@link CloudEventBuilder#withContextAttribute(String, String)} itself, since the
+     * builder already fixes it.
      */
     private static final String SPEC_VERSION_ATTRIBUTE = "specversion";
 
@@ -137,13 +138,19 @@ public final class RabbitMqCloudEventMapper {
      * binary extension is not un-Base64-decoded back to {@code byte[]}, for the same reason: nothing on the message
      * says which headers were encoded that way, so a caller reading such an extension gets the Base64 text rather
      * than the original bytes.
+     * <p>
+     * Rebuilds under whatever {@link SpecVersion} the {@value #HEADER_PREFIX}{@value #SPEC_VERSION_ATTRIBUTE} header
+     * names, {@link SpecVersion#V1} only when that header is absent, rather than always rebuilding as {@code V1}.
+     * {@link #toBasicProperties(CloudEvent, Map)} writes whatever spec version the event it was given actually has,
+     * so a {@code V03} event's own attributes, {@code schemaurl} rather than {@code dataschema} among them, only
+     * round trip correctly when this reads that same version back instead of coercing every message to {@code V1}.
      */
     public static CloudEvent toCloudEvent(BasicProperties properties, byte[] body) {
         requireNonNull(properties, "properties cannot be null");
         requireNonNull(body, "body cannot be null");
 
-        CloudEventBuilder builder = CloudEventBuilder.fromSpecVersion(SpecVersion.V1);
         Map<String, Object> headers = properties.getHeaders();
+        CloudEventBuilder builder = CloudEventBuilder.fromSpecVersion(specVersionOf(headers));
         if (headers != null) {
             for (Map.Entry<String, Object> header : headers.entrySet()) {
                 String key = header.getKey();
@@ -168,5 +175,18 @@ public final class RabbitMqCloudEventMapper {
             builder.withData(BytesCloudEventData.wrap(body));
         }
         return builder.build();
+    }
+
+    /**
+     * The {@link SpecVersion} the {@value #HEADER_PREFIX}{@value #SPEC_VERSION_ATTRIBUTE} header names, or
+     * {@link SpecVersion#V1} when {@code headers} is {@code null} or carries no such header, for a message this
+     * mapper never wrote.
+     */
+    private static SpecVersion specVersionOf(Map<String, Object> headers) {
+        if (headers == null) {
+            return SpecVersion.V1;
+        }
+        Object value = headers.get(HEADER_PREFIX + SPEC_VERSION_ATTRIBUTE);
+        return value == null ? SpecVersion.V1 : SpecVersion.parse(value.toString());
     }
 }

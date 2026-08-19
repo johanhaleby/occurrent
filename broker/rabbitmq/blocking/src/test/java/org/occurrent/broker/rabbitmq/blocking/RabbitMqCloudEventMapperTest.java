@@ -18,6 +18,7 @@ package org.occurrent.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.SpecVersion;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 
@@ -165,6 +166,22 @@ class RabbitMqCloudEventMapperTest {
         CloudEvent rebuilt = RabbitMqCloudEventMapper.toCloudEvent(properties, RabbitMqCloudEventMapper.toBody(original));
 
         assertThat(rebuilt.getData()).isNull();
+    }
+
+    @Test
+    void toCloudEvent_rebuilds_under_the_spec_version_the_message_was_written_with_rather_than_always_v1() {
+        CloudEvent original = CloudEventBuilder.v03()
+                .withId("id-1")
+                .withSource(URI.create("urn:test"))
+                .withType("t")
+                .withSchemaUrl(URI.create("urn:schema-v03"))
+                .build();
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(original, Map.of());
+
+        CloudEvent rebuilt = RabbitMqCloudEventMapper.toCloudEvent(properties, RabbitMqCloudEventMapper.toBody(original));
+
+        assertThat(rebuilt.getSpecVersion()).isEqualTo(SpecVersion.V03);
+        assertThat(rebuilt.getDataSchema()).isEqualTo(URI.create("urn:schema-v03"));
     }
 
     @Test

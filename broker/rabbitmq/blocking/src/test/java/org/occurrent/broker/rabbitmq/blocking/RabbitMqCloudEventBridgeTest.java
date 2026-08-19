@@ -29,6 +29,7 @@ import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -171,6 +172,44 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
             GetResponse parked = adminChannel.basicGet(parkingQueue, true);
             assertThat(parked).isNotNull();
             assertThat(parked.getProps().getHeaders().get("cloudEvents_id")).hasToString("id-1");
+        }
+    }
+
+    /**
+     * A message with no {@code cloudEvents_} headers at all cannot become a {@link CloudEvent}, since
+     * {@link CloudEventBuilder#build()} requires an id, a source and a type. {@link DeliveryFailurePolicy#PARK}
+     * still applies to it rather than always redelivering: the bridge parks the delivery's own raw properties and
+     * body unchanged, since there is no {@link CloudEvent} to republish through the ordinary parking path.
+     */
+    @Test
+    void an_undecodable_message_is_parked_with_its_raw_bytes_and_the_original_is_acknowledged_once_confirmed() throws Exception {
+        String queue = declareAndBindQueue("malformed");
+        String parkingQueue = adminChannel.queueDeclare().getQueue();
+        adminChannel.queueBind(parkingQueue, exchange, "parked");
+        RabbitMqDestination parkingDestination = RabbitMqDestination.of(exchange, "parked");
+
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        model.subscribe("sub", cloudEvent -> {
+        });
+
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, outcomeChannel, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(parkingDestination)
+                .build()) {
+            BasicProperties malformedProperties = new BasicProperties.Builder().contentType("text/plain").build();
+            byte[] malformedBody = "not a cloud event".getBytes(StandardCharsets.UTF_8);
+            adminChannel.basicPublish(exchange, "malformed", malformedProperties, malformedBody);
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(parkingQueue)).isEqualTo(1));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
+
+            GetResponse parked = adminChannel.basicGet(parkingQueue, true);
+            assertThat(parked).isNotNull();
+            assertThat(parked.getBody()).isEqualTo(malformedBody);
+            assertThat(parked.getProps().getContentType()).isEqualTo("text/plain");
         }
     }
 

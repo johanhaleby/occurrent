@@ -187,9 +187,8 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         try {
             cloudEvent = RabbitMqCloudEventMapper.toCloudEvent(delivery.getProperties(), delivery.getBody());
         } catch (RuntimeException e) {
-            log.warn("Failed to rebuild a CloudEvent from a message on queue \"{}\". Redelivering it regardless of " +
-                    "the configured DeliveryFailurePolicy, since there is nothing to park.", queue, e);
-            failureAction.redeliverRegardlessOfPolicy(deliveryTag);
+            log.warn("Failed to rebuild a CloudEvent from a message on queue \"{}\".", queue, e);
+            failureAction.applyToUndecodable(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
         }
 
@@ -375,11 +374,26 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             if (declareTopology && bindings == null && resolver == null) {
                 throw new IllegalStateException("A resolver(...), or explicit bindings(...), is required unless declareTopology(false) is set");
             }
+            if (deliveryFailurePolicy == DeliveryFailurePolicy.PARK && parkingDestination == null) {
+                throw new IllegalStateException("A parkingDestination is required when onDeliveryFailure(PARK) is set");
+            }
+            // Validated above, before opening anything: a failure past this point has a channel (and, under PARK, a
+            // parking sink) already open, so every later failure path in this method closes what it opened rather
+            // than leaking it.
             Channel channel = openChannel(connection);
-            RabbitMqDeliveryFailureAction failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log);
-            RabbitMqDomainEventBridge<E> bridge = new RabbitMqDomainEventBridge<>(feed, channel, queue, prefetchCount, pollInterval, failureAction);
-            bridge.start(this);
-            return bridge;
+            RabbitMqDeliveryFailureAction failureAction = null;
+            try {
+                failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log);
+                RabbitMqDomainEventBridge<E> bridge = new RabbitMqDomainEventBridge<>(feed, channel, queue, prefetchCount, pollInterval, failureAction);
+                bridge.start(this);
+                return bridge;
+            } catch (RuntimeException e) {
+                closeQuietly(channel);
+                if (failureAction != null) {
+                    failureAction.close();
+                }
+                throw e;
+            }
         }
 
         private static Channel openChannel(Connection connection) {
@@ -388,6 +402,16 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                         .orElseThrow(() -> new RabbitMqBridgeException("No RabbitMQ channel number was available to create the bridge's channel on"));
             } catch (IOException e) {
                 throw new RabbitMqBridgeException("Failed to create the bridge's RabbitMQ channel", e);
+            }
+        }
+
+        // Best effort: build() is already failing for another reason by the time this runs, so a failure here is
+        // logged rather than allowed to replace the failure the caller actually asked about.
+        private static void closeQuietly(Channel channel) {
+            try {
+                channel.close();
+            } catch (IOException | ShutdownSignalException | TimeoutException e) {
+                log.warn("Failed to close the bridge's channel while unwinding a failed build().", e);
             }
         }
     }

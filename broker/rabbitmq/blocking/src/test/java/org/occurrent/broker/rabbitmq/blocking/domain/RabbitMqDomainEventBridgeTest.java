@@ -149,6 +149,44 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
     }
 
     /**
+     * A message with no {@code cloudEvents_} headers at all cannot become a {@link CloudEvent}, since
+     * {@link CloudEventBuilder#build()} requires an id, a source and a type. {@link DeliveryFailurePolicy#PARK}
+     * still applies to it rather than always redelivering: the bridge parks the delivery's own raw properties and
+     * body unchanged, since there is no {@link CloudEvent} to republish through the ordinary parking path.
+     */
+    @Test
+    void an_undecodable_message_is_parked_with_its_raw_bytes_and_the_original_is_acknowledged_once_confirmed() throws Exception {
+        String queue = declareAndBindQueue("malformed");
+        String parkingQueue = adminChannel.queueDeclare().getQueue();
+        adminChannel.queueBind(parkingQueue, exchange, "parked");
+        RabbitMqDestination parkingDestination = RabbitMqDestination.of(exchange, "parked");
+
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> {
+        }, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = RabbitMqDomainEventBridge.builder(connection(), feed, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(parkingDestination)
+                .build()) {
+            BasicProperties malformedProperties = new BasicProperties.Builder().contentType("text/plain").build();
+            byte[] malformedBody = "not a cloud event".getBytes(StandardCharsets.UTF_8);
+            adminChannel.basicPublish(exchange, "malformed", malformedProperties, malformedBody);
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(parkingQueue)).isEqualTo(1));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
+
+            GetResponse parked = adminChannel.basicGet(parkingQueue, true);
+            assertThat(parked).isNotNull();
+            assertThat(parked.getBody()).isEqualTo(malformedBody);
+            assertThat(parked.getProps().getContentType()).isEqualTo("text/plain");
+        }
+    }
+
+    /**
      * The permanent stop UnreadableLiveFilterException requires: a data payload filter with no DataFieldReader is
      * refused live, the bridge stops itself rather than redelivering into the same permanent failure, and, per
      * UnreadableLiveFilterException's own javadoc, the triggering delivery is never acknowledged and never
