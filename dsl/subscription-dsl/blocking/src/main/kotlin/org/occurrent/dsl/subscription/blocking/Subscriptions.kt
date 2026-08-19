@@ -72,7 +72,12 @@ fun <E : Any> subscriptions(subscriptionModel: Subscribable, cloudEventConverter
     Subscriptions(subscriptionModel, cloudEventConverter).apply(block)
 }
 
-open class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<E>) {
+/**
+ * @property subscriptionModel The model every `subscribe` call here runs on, exposed for a caller that needs to
+ * check it for a capability, such as [org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions], rather than
+ * resolving a possibly different bean of the same type from elsewhere.
+ */
+open class StreamSubscriptions<E : Any>(val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<E>) {
 
     /**
      * Derives a stable default subscription id from the cloud event type that [cloudEventConverter] maps [type] to.
@@ -194,8 +199,12 @@ open class StreamSubscriptions<E : Any>(private val subscriptionModel: Subscriba
  * [AgnosticSubscriptionFilter] instead of a [StreamSubscriptionFilter], so on a store with both the `STREAM` and
  * `DCB` capabilities it delivers both stream-written and DCB-appended events, filtered only by event type. Use
  * [StreamSubscriptions] or `DcbSubscriptions` when a subscription should be scoped to a single capability.
+ *
+ * @property subscriptionModel The model every `subscribe` call here runs on, exposed for a caller that needs to
+ * check it for a capability, such as [org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions], rather than
+ * resolving a possibly different bean of the same type from elsewhere.
  */
-class Subscriptions<E : Any>(private val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<E>) {
+class Subscriptions<E : Any>(val subscriptionModel: Subscribable, private val cloudEventConverter: CloudEventConverter<E>) {
 
     /**
      * Derives a stable default subscription id from the cloud event type that [cloudEventConverter] maps [type] to.

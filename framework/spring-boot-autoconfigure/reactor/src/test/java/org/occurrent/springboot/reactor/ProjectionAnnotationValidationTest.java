@@ -94,6 +94,26 @@ class ProjectionAnnotationValidationTest {
         });
     }
 
+    @Test
+    void record_applied_appends_with_no_applied_append_store_bean_fails_fast() {
+        runner.withUserConfiguration(RecordAppliedAppendsConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("sets recordAppliedAppends = true, but no AppliedAppendStore bean exists");
+        });
+    }
+
+    @Test
+    void record_applied_appends_combined_with_synchronous_mode_fails_fast() {
+        runner.withUserConfiguration(RecordAppliedAppendsSynchronousConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot combine recordAppliedAppends = true with mode = SYNCHRONOUS");
+        });
+    }
+
     private static org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> countProjection() {
         return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
                 .id(event -> "k")
@@ -201,6 +221,48 @@ class ProjectionAnnotationValidationTest {
 
     static class PushCatchupNoneStartupModeProjection {
         @Projection(id = "push-none-startup-mode-reactive", source = Source.PUSH, catchup = Catchup.NONE, startupMode = StartupMode.BACKGROUND)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class RecordAppliedAppendsConfiguration {
+        // The registrar's recordAppliedAppends refusal fires before any Subscribable is resolved, but the scan
+        // itself does not run at all without one present (see EventStoreCatchupConfiguration above).
+        @Bean
+        Subscribable subscribable() {
+            return mock(Subscribable.class);
+        }
+
+        @Bean
+        RecordAppliedAppendsProjection recordAppliedAppendsProjection() {
+            return new RecordAppliedAppendsProjection();
+        }
+    }
+
+    static class RecordAppliedAppendsProjection {
+        @Projection(id = "record-applied-appends-no-store-reactive", recordAppliedAppends = true)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class RecordAppliedAppendsSynchronousConfiguration {
+        @Bean
+        Subscribable subscribable() {
+            return mock(Subscribable.class);
+        }
+
+        @Bean
+        RecordAppliedAppendsSynchronousProjection recordAppliedAppendsSynchronousProjection() {
+            return new RecordAppliedAppendsSynchronousProjection();
+        }
+    }
+
+    static class RecordAppliedAppendsSynchronousProjection {
+        @Projection(id = "record-applied-appends-sync-reactive", recordAppliedAppends = true, mode = Mode.SYNCHRONOUS)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return countProjection();
         }

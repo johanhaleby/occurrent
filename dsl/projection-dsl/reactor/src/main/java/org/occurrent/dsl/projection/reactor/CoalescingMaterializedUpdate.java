@@ -52,7 +52,7 @@ import java.util.function.BiFunction;
  * call, even though the calls themselves never run concurrently.
  */
 @NullMarked
-final class CoalescingMaterializedUpdate<S extends @Nullable Object, E, ID> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAware {
+final class CoalescingMaterializedUpdate<S extends @Nullable Object, E, ID> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAware, SkippableUpdate<E> {
 
     private final View<S, E> view;
     private final ViewStateRepository<S, ID> repository;
@@ -74,13 +74,18 @@ final class CoalescingMaterializedUpdate<S extends @Nullable Object, E, ID> impl
 
     @Override
     public Mono<Void> apply(EventMetadata metadata, E event) {
-        return Mono.<Void>fromRunnable(() -> foldOnCallingThread(metadata, event)).subscribeOn(Schedulers.boundedElastic());
+        return applyReportingWhetherApplied(metadata, event).then();
     }
 
-    private void foldOnCallingThread(EventMetadata metadata, E event) {
+    @Override
+    public Mono<Boolean> applyReportingWhetherApplied(EventMetadata metadata, E event) {
+        return Mono.fromCallable(() -> foldOnCallingThread(metadata, event)).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    private boolean foldOnCallingThread(EventMetadata metadata, E event) {
         @Nullable ID id = resolveId.apply(metadata, event);
         if (id == null) {
-            return;
+            return false;
         }
         Map<ID, List<Buffered<E>>> toFlush = null;
         boolean writeThrough = false;
@@ -101,6 +106,7 @@ final class CoalescingMaterializedUpdate<S extends @Nullable Object, E, ID> impl
             S currentState = repository.findById(id).orElse(view.initialState());
             repository.save(id, view.evolve(currentState, metadata, event));
         }
+        return true;
     }
 
     // replayStarted() and replayAbandoned() are plain signals ReactiveHandover calls inline, never Mono-wrapped or

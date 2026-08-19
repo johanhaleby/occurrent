@@ -58,12 +58,24 @@ import static java.util.Objects.requireNonNull;
 @NullMarked
 public final class DcbSubscriptions<E> {
 
+    private final SubscriptionModel rawSubscriptionModel;
     private final DcbSubscriptionModel subscriptionModel;
     private final CloudEventConverter<E> cloudEventConverter;
 
     public DcbSubscriptions(SubscriptionModel subscriptionModel, CloudEventConverter<E> cloudEventConverter) {
-        this.subscriptionModel = DcbSubscriptionModel.from(requireNonNull(subscriptionModel, SubscriptionModel.class.getSimpleName() + " cannot be null"));
+        this.rawSubscriptionModel = requireNonNull(subscriptionModel, SubscriptionModel.class.getSimpleName() + " cannot be null");
+        this.subscriptionModel = DcbSubscriptionModel.from(this.rawSubscriptionModel);
         this.cloudEventConverter = requireNonNull(cloudEventConverter, CloudEventConverter.class.getSimpleName() + " cannot be null");
+    }
+
+    /**
+     * The model this instance was built from, before {@link DcbSubscriptionModel#from} adapted it. Its own capability
+     * lookup does not forward through that adapter, so a caller checking for a capability, such as
+     * {@link org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions}, needs this rather than a possibly
+     * different bean of the same type resolved from elsewhere.
+     */
+    public SubscriptionModel subscriptionModel() {
+        return rawSubscriptionModel;
     }
 
     /**
