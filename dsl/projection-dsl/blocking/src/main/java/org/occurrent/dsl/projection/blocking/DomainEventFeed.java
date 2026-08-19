@@ -259,6 +259,13 @@ public final class DomainEventFeed<E> {
      * registration whose events are not in the local store, where a buffered-then-lost event has nothing to replay
      * it back from, and this feed has no way to know in advance which kind of registration it is fielding an event
      * for, so it answers the same way for all three.
+     * <p>
+     * {@link #isReadyForLiveDelivery()} is read before this event is handed to the underlying handover, not after.
+     * A concurrent {@link #goLive(String)} can claim and start folding this exact event the instant it lands in the
+     * buffer, so reading readiness afterward could observe that claim as already live before the fold it depends on
+     * has actually completed, reporting {@link RoutingOutcome#DELIVERED} for a copy the caller then acknowledges
+     * away before it is provably safe. Reading it first is conservative instead, at the cost of an occasional extra
+     * redelivery a de-dup key absorbs for free.
      *
      * @throws IllegalStateException if no projection is registered on this feed, for the reason
      *                               {@link #accept(Object)} gives. Refused rather than reported as
@@ -287,10 +294,9 @@ public final class DomainEventFeed<E> {
         }
         E event = converter.toDomainEvent(cloudEvent);
         CatchupProjectionFeed<E> catchupFeed = registered.catchupFeed();
-        boolean delivered = catchupFeed.acceptReportingDelivery(EventMetadata.from(cloudEvent), event);
-        // Checked after accepting, not before. This only ever turns a true delivered into NOT_DELIVERABLE, never
-        // the other way around, so reading the freshest state here never masks the unsafe case as DELIVERED.
+        // Checked before accepting, not after. See this method's own javadoc for why the order matters.
         boolean readyForLiveDelivery = catchupFeed.isReadyForLiveDelivery();
+        boolean delivered = catchupFeed.acceptReportingDelivery(EventMetadata.from(cloudEvent), event);
         return delivered && readyForLiveDelivery ? RoutingOutcome.DELIVERED : RoutingOutcome.NOT_DELIVERABLE;
     }
 
