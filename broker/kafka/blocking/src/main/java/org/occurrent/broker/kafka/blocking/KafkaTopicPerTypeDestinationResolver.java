@@ -42,19 +42,23 @@ import static java.util.Objects.requireNonNull;
  * message by the event's {@code streamid} extension when the event has one, and leaves the key {@code null}
  * otherwise, since an event published through {@code DomainEventSink.publish(E)} has no stream identity at all to
  * key by. This is not a default to accept without reading what it costs. Kafka only orders messages within one
- * partition, so keying by stream id puts every event of one stream on the same partition and therefore in order
- * relative to each other, at the cost of that one stream's throughput being capped by whatever one partition can
- * do, and of every other stream sharing the topic being ordered only within itself, never against it. The
- * alternative this resolver actually offers by falling back to it, a {@code null} key, spreads records across
- * every partition instead and lets the topic's full partition count carry the throughput, at the cost of giving up
- * ordering entirely, even within one stream. A single fixed key used for every message is neither alternative and
- * is not what a caller wanting spread should reach for. Kafka hashes one key to exactly one partition, so a fixed
- * key sends every message to that same partition, trading the whole topic's throughput away for a global order
- * across every stream, which is a narrower guarantee than stream-id keying already gives and a worse throughput
- * cost than either alternative above. Occurrent picks stream-id keying as the shipped default because a
- * projection or saga reading one stream is the common case this library is built around, but this is a topology
- * choice your deployment makes, not a fact about Kafka, and an application that wants a different tradeoff
- * replaces this resolver with one of its own.
+ * partition of one topic, and this resolver puts every cloud event type on its own topic, so stream-id keying
+ * orders one stream's events of one type against each other, at the cost of that stream-and-type pair's throughput
+ * being capped by whatever one partition can do, and of every other stream sharing the topic being ordered only
+ * within itself, never against it. It does not order a stream's events across types, since two types of the same
+ * stream go to two different topics and were never on the same partition to begin with. A projection or saga
+ * reading a stream that carries only one event type gets full ordering this way. One reading a stream that mixes
+ * several types does not, and has to tolerate or otherwise account for that, since this resolver's topology cannot
+ * deliver it. The alternative this resolver actually offers by falling back to it, a {@code null} key, spreads
+ * records across every partition instead and lets the topic's full partition count carry the throughput, at the
+ * cost of giving up ordering entirely, even within one stream and type. A single fixed key used for every message
+ * is neither alternative and is not what a caller wanting spread should reach for. Kafka hashes one key to exactly
+ * one partition, so a fixed key sends every message on one topic, meaning every stream's events of that one type,
+ * to the same partition, trading that topic's throughput away for order across every stream of that one type,
+ * still not across types. Occurrent picks stream-id keying as the shipped default because a projection or saga
+ * reading one single-typed stream is the common case this library is built around, but this is a topology choice
+ * your deployment makes, not a fact about Kafka, and an application whose streams mix event types it needs ordered
+ * against each other, or that wants a different tradeoff altogether, replaces this resolver with one of its own.
  * <p>
  * Both {@link #destinationFor(CloudEvent)} and {@link #destinationsFor(SubscriptionFilter)} round-trip the cloud
  * event type through {@code topicMapper}, {@code getCloudEventType(getDomainEventType(type))}, rather than trusting
