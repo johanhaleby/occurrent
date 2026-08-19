@@ -27,7 +27,10 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 
 import java.net.URI;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -43,7 +46,8 @@ import static org.mockito.Mockito.when;
  * A confirm wait that ends without a definite answer, by timeout or by interruption, abandons its publish on the
  * channel rather than resolving it, so these two recovery paths are exercised directly against a mocked
  * {@link Channel} and {@link Connection} instead of a real broker, which has no way to force either outcome on
- * demand.
+ * demand. The same setup also forces a persistent-but-retriable nack on demand, which a real broker cannot either,
+ * to prove {@link RabbitMqCloudEventSink#close()} stops a retry loop that would otherwise keep going forever.
  */
 class RabbitMqCloudEventSinkChannelRetirementTest {
 
@@ -112,6 +116,44 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
                         .as("the failed replacement should not replace the timeout the caller actually asked about")
                         .hasSize(1)
                         .allMatch(RabbitMqPublishException.class::isInstance));
+    }
+
+    @Test
+    void close_stops_a_publish_that_is_still_retrying_a_persistent_but_retriable_nack() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        // A nack on every attempt, with no cause the default retry predicate excludes, is retried forever by
+        // design once the attempt cap is gone, so only close() can end it.
+        when(channel.waitForConfirms(anyLong())).thenReturn(false);
+
+        RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection, resolver).build();
+
+        AtomicReference<Throwable> caught = new AtomicReference<>();
+        CountDownLatch publishReturned = new CountDownLatch(1);
+        Thread publishing = new Thread(() -> {
+            try {
+                sink.publish(orderPlaced());
+            } catch (Throwable e) {
+                caught.set(e);
+            } finally {
+                publishReturned.countDown();
+            }
+        });
+        publishing.start();
+
+        // Let a real retry happen before asking the sink to stop, so this proves an in-flight retry is aborted
+        // rather than a first attempt that never got the chance to retry at all.
+        verify(channel, timeout(2000).atLeast(2)).waitForConfirms(anyLong());
+
+        sink.close();
+
+        assertThat(publishReturned.await(5, TimeUnit.SECONDS))
+                .as("publish should stop once close() is called instead of retrying the nack forever")
+                .isTrue();
+        assertThat(caught.get()).isInstanceOf(RabbitMqPublishException.class);
+
+        publishing.join(5000);
     }
 
     private static CloudEvent orderPlaced() {

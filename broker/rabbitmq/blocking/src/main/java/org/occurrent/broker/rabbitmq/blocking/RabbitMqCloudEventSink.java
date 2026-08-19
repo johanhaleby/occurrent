@@ -31,6 +31,7 @@ import java.time.Duration;
 import java.util.concurrent.TimeoutException;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * Publishes a {@link CloudEvent} to RabbitMQ, in the CloudEvents binary content mode
@@ -59,12 +60,14 @@ import static java.util.Objects.requireNonNull;
  * {@link Channel}.
  * <p>
  * A transient failure is retried under {@link Builder#retryStrategy(RetryStrategy)} before a caller sees it,
- * exponential backoff from 100 ms up to 2 seconds by default. The retry is not a substitute for the acknowledgement
- * wait, since a publish that was never acknowledged is not known to have failed, only unresolved. Per ADR 133, an
- * expired {@link RabbitMqPublishTimeoutException} is for the caller to decide on rather than something this retry
- * absorbs, so the default excludes it, along with {@link RabbitMqUnroutableEventException}, a channel this client
- * has already closed, an interrupted wait, and an unrecognised cloud event type from the resolver, none of which a
- * retry can turn into success.
+ * exponential backoff from 100 ms up to 2 seconds by default and no cap on the number of attempts. The retry is not
+ * a substitute for the acknowledgement wait, since a publish that was never acknowledged is not known to have
+ * failed, only unresolved. Per ADR 133, an expired {@link RabbitMqPublishTimeoutException} is for the caller to
+ * decide on rather than something this retry absorbs, so the default excludes it, along with
+ * {@link RabbitMqUnroutableEventException}, a channel this client has already closed, an interrupted wait, and an
+ * unrecognised cloud event type from the resolver, none of which a retry can turn into success. What stops an
+ * uncapped retry from outliving its caller is {@link #close()}, not a limit on attempts. Once called, the attempt
+ * already in flight is the last one, and {@link #publish(CloudEvent)} returns by throwing rather than retrying again.
  * <p>
  * Call {@link #close()} once the sink is no longer needed. It closes the {@link Channel} this sink created, not the
  * {@link Connection} it was given, since the connection may be shared with other channels the caller still owns.
@@ -74,6 +77,7 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
     private final DestinationResolver<RabbitMqDestination> resolver;
     private final RetryStrategy retryStrategy;
     private final RabbitMqConfirmPublisher publisher;
+    private volatile boolean shutdown;
 
     private RabbitMqCloudEventSink(DestinationResolver<RabbitMqDestination> resolver, RetryStrategy retryStrategy, RabbitMqConfirmPublisher publisher) {
         this.resolver = resolver;
@@ -93,7 +97,11 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
     @Override
     public void publish(CloudEvent cloudEvent) {
         requireNonNull(cloudEvent, "cloudEvent cannot be null");
-        retryStrategy.execute(() -> publishOnce(cloudEvent));
+        // executeWithRetry, not retryStrategy.execute: the latter hardcodes a shutdown predicate that never trips,
+        // so a persistent-but-retriable failure would retry forever with no way for close() to cut it short. The
+        // attempt count itself stays uncapped by design, the same choice NativeMongoCheckpointStorage makes for the
+        // same reason, but a retry started before close() is called must not outlive this sink.
+        executeWithRetry(() -> publishOnce(cloudEvent), __ -> !shutdown, retryStrategy).run();
     }
 
     private void publishOnce(CloudEvent cloudEvent) {
@@ -104,10 +112,14 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
     }
 
     /**
-     * Closes the {@link Channel} this sink created. Does not close the {@link Connection} it was built from.
+     * Closes the {@link Channel} this sink created. Does not close the {@link Connection} it was built from. Also
+     * stops a {@link #publish(CloudEvent)} call that is still retrying a persistent-but-retriable failure on another
+     * thread, once its in-flight attempt finishes, rather than leaving it to retry indefinitely behind a shutdown
+     * that is waiting for it.
      */
     @Override
     public void close() throws IOException, TimeoutException {
+        shutdown = true;
         publisher.close();
     }
 
@@ -123,11 +135,14 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         }
 
         /**
-         * How long {@link #publish(CloudEvent)} waits for the broker's publisher confirm before failing with
-         * {@link RabbitMqPublishTimeoutException}. Five seconds by default. This is a timeout, not a switch.
-         * There is deliberately no way to publish without waiting for it, for the reason {@link CloudEventSink}'s
-         * javadoc gives, so a duration that truncates to zero or fewer milliseconds is refused rather than accepted
-         * and read by the RabbitMQ client as "wait indefinitely".
+         * How long a single attempt of {@link #publish(CloudEvent)} waits for the broker's publisher confirm before
+         * failing that attempt with {@link RabbitMqPublishTimeoutException}. Five seconds by default. This bounds
+         * one confirm wait, not the call as a whole, since a failed attempt that {@link #retryStrategy(RetryStrategy)}
+         * retries is followed by another wait of up to this same duration, and {@link #publish(CloudEvent)} itself is
+         * bounded only by how long the sink stays open, not by this timeout. This is a timeout, not a switch. There
+         * is deliberately no way to publish without waiting for it, for the reason {@link CloudEventSink}'s javadoc
+         * gives, so a duration that truncates to zero or fewer milliseconds is refused rather than accepted and read
+         * by the RabbitMQ client as "wait indefinitely".
          */
         public Builder acknowledgementTimeout(Duration acknowledgementTimeout) {
             requireNonNull(acknowledgementTimeout, "acknowledgementTimeout cannot be null");
