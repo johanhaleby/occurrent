@@ -146,15 +146,20 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     }
 
     // Coarse lifecycle control, per the class javadoc: consumes only once a projection is registered, checked on a
-    // fixed poll rather than on every message, and never resumes once permanentlyStopped is set.
+    // fixed poll rather than on every message, and never resumes once permanentlyStopped is set. permanentlyStopped
+    // is read here under consumeLock, the same lock stopPermanently() sets it under, rather than checked once
+    // before acquiring the lock: a poll that read the flag as false, then blocked on the lock while
+    // stopPermanently() ran and cancelled the consumer, would otherwise restart the very consumer that permanent
+    // stop just cancelled once the lock finally freed, feeding a live event straight back into the same permanently
+    // refused filter this exists to stop redelivering into.
     private void reconcileConsumption() {
-        if (permanentlyStopped) {
-            return;
-        }
         try {
-            boolean shouldConsume = feed.hasProjection();
             consumeLock.lock();
             try {
+                if (permanentlyStopped) {
+                    return;
+                }
+                boolean shouldConsume = feed.hasProjection();
                 if (shouldConsume && consumerTag == null) {
                     consumerTag = consumeChannel.basicConsume(queue, false, this::handleDelivery, this::handleCancel);
                 } else if (!shouldConsume && consumerTag != null) {
@@ -224,9 +229,12 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     // UnreadableLiveFilterException's own javadoc ("must never acknowledge and redeliver the event that triggered
     // it expecting a different answer").
     private void stopPermanently() {
-        permanentlyStopped = true;
         consumeLock.lock();
         try {
+            // Set under the same lock reconcileConsumption() now reads it under, so the two can never interleave:
+            // whichever of this method and a concurrent poll acquires the lock first fully decides the consumer's
+            // fate before the other even reads the flag.
+            permanentlyStopped = true;
             if (consumerTag != null) {
                 try {
                     consumeChannel.basicCancel(consumerTag);

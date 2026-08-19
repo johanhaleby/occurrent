@@ -35,9 +35,15 @@ import static java.util.Objects.requireNonNull;
  * What a consume-side bridge does with a delivery it will not acknowledge, per ADR 133 decision 7. Shared between
  * {@link RabbitMqCloudEventBridge} and {@code RabbitMqDomainEventBridge} rather than written twice, since both apply
  * exactly the same sequence: {@link DeliveryFailurePolicy#REDELIVER} negatively acknowledges the original with
- * requeue, and {@link DeliveryFailurePolicy#PARK} republishes the original to a parking destination, waits for that
- * publish's own confirm, and only then acknowledges the original. Neither branch ever acknowledges the original
- * directly on the failure path; that is the one thing this class exists to make impossible to get wrong twice.
+ * requeue, and {@link DeliveryFailurePolicy#PARK} republishes the original to a parking destination through a
+ * {@link RabbitMqConfirmPublisher}, waits for that publish's own confirm, and only then acknowledges the original.
+ * Neither branch ever acknowledges the original directly on the failure path; that is the one thing this class
+ * exists to make impossible to get wrong twice.
+ * <p>
+ * {@link #applyToUndecodable(long, BasicProperties, byte[])} covers a message {@link RabbitMqCloudEventMapper#toCloudEvent(BasicProperties, byte[])}
+ * could not turn into a {@link CloudEvent} at all. It shares the exact same {@link RabbitMqConfirmPublisher} as
+ * {@link #apply(long, CloudEvent)}, publishing the delivery's own raw {@code properties} and {@code body} to the
+ * parking destination unchanged rather than a rebuilt {@link CloudEvent}, since none exists to rebuild.
  * <p>
  * A failed parking publish (the parking exchange unavailable, its own confirm timing out, a {@code basic.return}
  * because nothing is bound to the parking routing key, ...) negatively acknowledges the original with requeue
@@ -46,123 +52,63 @@ import static java.util.Objects.requireNonNull;
  * see, and RabbitMQ's own dead-lettering is never used for this, per ADR 133 decision 7: it can discard the message
  * outright with no matching dead-letter exchange, and even with one it republishes without publisher confirms.
  * <p>
- * {@link #applyToUndecodable(long, BasicProperties, byte[])} covers a message {@link RabbitMqCloudEventMapper#toCloudEvent(BasicProperties, byte[])}
- * could not turn into a {@link CloudEvent} at all, so there is nothing to hand {@link #apply(long, CloudEvent)}. It
- * still honours {@link DeliveryFailurePolicy#PARK} rather than always redelivering, publishing the delivery's own
- * raw {@code properties} and {@code body} to the parking destination unchanged, since no {@link CloudEvent} exists
- * to republish through the ordinary {@link RabbitMqCloudEventSink}-backed path.
- * <p>
  * {@link AutoCloseable} so a bridge can own exactly one of these and close it, rather than separately tracking and
- * closing the parking sink (and, under {@code PARK}, the raw parking channel) it may have built.
+ * closing the parking publisher it may have built.
  */
 public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
 
     /**
-     * How long {@link #applyToUndecodable(long, BasicProperties, byte[])} waits for the raw parking publish's
-     * confirm. Fixed rather than configurable, since this path exists for a message so malformed it could not be
-     * decoded at all, a rare case that does not need its own tunable.
+     * How long a park publish waits for its confirm. Fixed rather than configurable, matching
+     * {@link RabbitMqCloudEventSink}'s own default, since a failure policy is a coarse operational choice that does
+     * not need its own tunable separate from the sink's.
      */
-    private static final Duration RAW_PARK_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration PARK_ACKNOWLEDGEMENT_TIMEOUT = Duration.ofSeconds(5);
 
     private final Channel consumeChannel;
     private final DeliveryFailurePolicy policy;
-    private final @Nullable RabbitMqCloudEventSink parkingSink;
-    private final @Nullable Channel rawParkChannel;
+    private final @Nullable RabbitMqConfirmPublisher parkingPublisher;
     private final @Nullable RabbitMqDestination parkingDestination;
     private final Logger log;
 
-    // Guards a raw park publish and the wait that follows it, since both share rawParkMessageReturned and this
-    // class makes no promise that its caller will not raise a bridge's prefetch above one, letting two undecodable
-    // deliveries reach applyToUndecodable at once.
-    private final Object rawParkLock = new Object();
-    private volatile boolean rawParkMessageReturned;
-
     /**
-     * @param consumeChannel    The channel the failing delivery arrived on. Acknowledgement and negative
-     *                          acknowledgement must happen on this exact channel.
-     * @param policy            What to do with a delivery nothing consumed.
-     * @param parkingSink       Publishes a rebuilt {@link CloudEvent} to the parking destination. Required when
-     *                          {@code policy} is {@link DeliveryFailurePolicy#PARK}, otherwise ignored.
-     * @param rawParkChannel    A confirm-mode channel this action publishes an undecodable delivery's raw bytes
-     *                          through. Required together with {@code parkingDestination} when {@code policy} is
-     *                          {@link DeliveryFailurePolicy#PARK}, otherwise ignored.
-     * @param parkingDestination The exchange and routing key {@code rawParkChannel} publishes to.
+     * @param consumeChannel   The channel the failing delivery arrived on. Acknowledgement and negative
+     *                         acknowledgement must happen on this exact channel.
+     * @param policy           What to do with a delivery nothing consumed.
+     * @param parkingPublisher Publishes to the parking destination. Required when {@code policy} is
+     *                         {@link DeliveryFailurePolicy#PARK}, otherwise ignored.
+     * @param parkingDestination The exchange and routing key {@code parkingPublisher} publishes to. Required
+     *                         together with {@code parkingPublisher} when {@code policy} is {@code PARK}.
      */
-    public RabbitMqDeliveryFailureAction(Channel consumeChannel, DeliveryFailurePolicy policy, @Nullable RabbitMqCloudEventSink parkingSink,
-                                          @Nullable Channel rawParkChannel, @Nullable RabbitMqDestination parkingDestination, Logger log) {
+    public RabbitMqDeliveryFailureAction(Channel consumeChannel, DeliveryFailurePolicy policy, @Nullable RabbitMqConfirmPublisher parkingPublisher,
+                                          @Nullable RabbitMqDestination parkingDestination, Logger log) {
         this.consumeChannel = requireNonNull(consumeChannel, "consumeChannel cannot be null");
         this.policy = requireNonNull(policy, DeliveryFailurePolicy.class.getSimpleName() + " cannot be null");
-        this.parkingSink = parkingSink;
-        this.rawParkChannel = rawParkChannel;
+        this.parkingPublisher = parkingPublisher;
         this.parkingDestination = parkingDestination;
         this.log = requireNonNull(log, "log cannot be null");
-        if (policy == DeliveryFailurePolicy.PARK && (parkingSink == null || rawParkChannel == null || parkingDestination == null)) {
-            throw new IllegalArgumentException("A parking sink, a raw park channel and a parkingDestination are all required when the policy is PARK");
-        }
-        if (rawParkChannel != null) {
-            rawParkChannel.addReturnListener(returned -> rawParkMessageReturned = true);
+        if (policy == DeliveryFailurePolicy.PARK && (parkingPublisher == null || parkingDestination == null)) {
+            throw new IllegalArgumentException("A parkingPublisher and a parkingDestination are both required when the policy is PARK");
         }
     }
 
     /**
-     * Builds the action for {@code policy}, and the {@link RabbitMqCloudEventSink} plus raw parking {@link Channel}
-     * it parks through when {@code policy} is {@link DeliveryFailurePolicy#PARK} and {@code parkingDestination} is
-     * given. Refuses when {@code policy} is {@code PARK} and {@code parkingDestination} is {@code null}, the same
-     * requirement {@link org.occurrent.broker.api.blocking.DeliveryFailurePolicy#PARK}'s own javadoc states. Both
-     * parking paths publish to {@code parkingDestination} alone, regardless of the event's own type, since parking
-     * is not a routing decision.
+     * Builds the action for {@code policy}, and the {@link RabbitMqConfirmPublisher} it parks through when
+     * {@code policy} is {@link DeliveryFailurePolicy#PARK} and {@code parkingDestination} is given. Refuses when
+     * {@code policy} is {@code PARK} and {@code parkingDestination} is {@code null}, the same requirement
+     * {@link org.occurrent.broker.api.blocking.DeliveryFailurePolicy#PARK}'s own javadoc states. No parking resource
+     * is opened at all when {@code policy} is not {@code PARK}, even if {@code parkingDestination} happens to be
+     * given anyway, since nothing would ever publish through it.
      */
     public static RabbitMqDeliveryFailureAction create(Connection connection, Channel consumeChannel, DeliveryFailurePolicy policy,
                                                          @Nullable RabbitMqDestination parkingDestination, Logger log) {
         if (policy == DeliveryFailurePolicy.PARK && parkingDestination == null) {
             throw new IllegalStateException("A parkingDestination is required when onDeliveryFailure(PARK) is set");
         }
-        if (parkingDestination == null) {
-            return new RabbitMqDeliveryFailureAction(consumeChannel, policy, null, null, null, log);
+        if (policy != DeliveryFailurePolicy.PARK) {
+            return new RabbitMqDeliveryFailureAction(consumeChannel, policy, null, null, log);
         }
-        // Unwound in the catch below on any later failure, so a parking sink already built here (which owns its
-        // own channel) is never left open behind a create() that ends up throwing.
-        RabbitMqCloudEventSink parkingSink = RabbitMqCloudEventSink.builder(connection, new SingleDestinationResolver(parkingDestination)).build();
-        Channel rawParkChannel = null;
-        try {
-            rawParkChannel = openRawParkChannel(connection);
-            return new RabbitMqDeliveryFailureAction(consumeChannel, policy, parkingSink, rawParkChannel, parkingDestination, log);
-        } catch (RuntimeException e) {
-            closeQuietly(parkingSink, log);
-            if (rawParkChannel != null) {
-                closeQuietly(rawParkChannel, log);
-            }
-            throw e;
-        }
-    }
-
-    private static Channel openRawParkChannel(Connection connection) {
-        try {
-            Channel channel = connection.openChannel()
-                    .orElseThrow(() -> new RabbitMqBridgeException("No RabbitMQ channel number was available to create the raw parking channel on"));
-            channel.confirmSelect();
-            return channel;
-        } catch (IOException e) {
-            throw new RabbitMqBridgeException("Failed to create the raw parking confirm-mode channel", e);
-        }
-    }
-
-    // Best effort, unwinding a partially built create(): a failure closing one already-acquired resource is logged
-    // rather than allowed to replace the failure the caller is already unwinding for.
-    private static void closeQuietly(RabbitMqCloudEventSink parkingSink, Logger log) {
-        try {
-            parkingSink.close();
-        } catch (IOException | TimeoutException e) {
-            log.warn("Failed to close the parking sink cleanly while unwinding a failed create().", e);
-        }
-    }
-
-    private static void closeQuietly(Channel channel, Logger log) {
-        try {
-            channel.close();
-        } catch (IOException | ShutdownSignalException | TimeoutException e) {
-            log.warn("Failed to close the raw parking channel cleanly while unwinding a failed create().", e);
-        }
+        RabbitMqConfirmPublisher parkingPublisher = new RabbitMqConfirmPublisher(connection, PARK_ACKNOWLEDGEMENT_TIMEOUT);
+        return new RabbitMqDeliveryFailureAction(consumeChannel, policy, parkingPublisher, parkingDestination, log);
     }
 
     /**
@@ -176,14 +122,10 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
             redeliver(deliveryTag);
             return;
         }
-        try {
-            requireNonNull(parkingSink).publish(cloudEvent);
-        } catch (RuntimeException e) {
-            log.warn("Failed to park a delivery nothing consumed. Redelivering it instead of losing it.", e);
-            redeliver(deliveryTag);
-            return;
-        }
-        ack(deliveryTag);
+        RabbitMqDestination destination = requireNonNull(parkingDestination);
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers());
+        byte[] body = RabbitMqCloudEventMapper.toBody(cloudEvent);
+        park(deliveryTag, properties, body);
     }
 
     /**
@@ -191,8 +133,8 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      * {@link RabbitMqCloudEventMapper#toCloudEvent(BasicProperties, byte[])} could not rebuild as a {@link CloudEvent}
      * at all. {@link DeliveryFailurePolicy#REDELIVER} behaves exactly as {@link #apply(long, CloudEvent)}.
      * {@link DeliveryFailurePolicy#PARK} publishes {@code properties} and {@code body} to the parking destination
-     * unchanged, with confirms and {@code mandatory} routing exactly as {@link RabbitMqCloudEventSink} publishes,
-     * and acknowledges the original only once that publish is confirmed and not returned as unroutable. Never
+     * unchanged, through the same {@link RabbitMqConfirmPublisher} {@link #apply(long, CloudEvent)} uses, and
+     * acknowledges the original only once that publish is confirmed and not returned as unroutable. Never
      * acknowledges {@code deliveryTag} directly.
      */
     public void applyToUndecodable(long deliveryTag, BasicProperties properties, byte[] body) {
@@ -202,47 +144,19 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
             redeliver(deliveryTag);
             return;
         }
-        if (parkRaw(properties, body)) {
-            ack(deliveryTag);
-        } else {
-            redeliver(deliveryTag);
-        }
+        park(deliveryTag, properties, body);
     }
 
-    private boolean parkRaw(BasicProperties properties, byte[] body) {
-        Channel channel = requireNonNull(rawParkChannel);
+    private void park(long deliveryTag, BasicProperties properties, byte[] body) {
         RabbitMqDestination destination = requireNonNull(parkingDestination);
-        synchronized (rawParkLock) {
-            rawParkMessageReturned = false;
-            try {
-                channel.basicPublish(destination.exchange(), destination.routingKey(), true, properties, body);
-                boolean confirmed = channel.waitForConfirms(RAW_PARK_TIMEOUT.toMillis());
-                if (!confirmed) {
-                    log.warn("Raw parking publish to exchange \"{}\" with routing key \"{}\" was not confirmed. Redelivering the original instead of losing it.",
-                            destination.exchange(), destination.routingKey());
-                    return false;
-                }
-                if (rawParkMessageReturned) {
-                    log.warn("Raw parking publish to exchange \"{}\" with routing key \"{}\" was returned as unroutable. Redelivering the original instead of losing it.",
-                            destination.exchange(), destination.routingKey());
-                    return false;
-                }
-                return true;
-            } catch (IOException | ShutdownSignalException e) {
-                // ShutdownSignalException is unchecked and covers exactly the failure a missing or misconfigured
-                // parking exchange produces, the broker closing this channel with a protocol error rather than
-                // basicPublish throwing a checked IOException, so it is caught here on the same footing as one.
-                log.warn("Failed to publish an undecodable delivery to the parking destination. Redelivering it instead of losing it.", e);
-                return false;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("Interrupted while waiting for the raw parking publish's confirm. Redelivering the original instead of losing it.", e);
-                return false;
-            } catch (TimeoutException e) {
-                log.warn("Timed out waiting for the raw parking publish's confirm. Redelivering the original instead of losing it.", e);
-                return false;
-            }
+        try {
+            requireNonNull(parkingPublisher).publish(destination.exchange(), destination.routingKey(), properties, body);
+        } catch (RuntimeException e) {
+            log.warn("Failed to park a delivery nothing consumed. Redelivering it instead of losing it.", e);
+            redeliver(deliveryTag);
+            return;
         }
+        ack(deliveryTag);
     }
 
     /**
@@ -266,18 +180,18 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
     }
 
     /**
-     * Closes the parking sink and the raw parking channel this action built, if {@link DeliveryFailurePolicy#PARK}
-     * was configured. Does not touch {@code consumeChannel}, which the bridge that owns it closes itself. Best
-     * effort: a failure closing either is logged rather than thrown, since it happens during teardown with nothing
-     * left to hand it to.
+     * Closes the parking publisher this action built, if {@link DeliveryFailurePolicy#PARK} was configured. Does
+     * not touch {@code consumeChannel}, which the bridge that owns it closes itself. Best effort, a failure closing
+     * it is logged rather than thrown, since it happens during teardown with nothing left to hand it to.
      */
     @Override
     public void close() {
-        if (parkingSink != null) {
-            closeQuietly(parkingSink, log);
-        }
-        if (rawParkChannel != null) {
-            closeQuietly(rawParkChannel, log);
+        if (parkingPublisher != null) {
+            try {
+                parkingPublisher.close();
+            } catch (IOException | ShutdownSignalException | TimeoutException e) {
+                log.warn("Failed to close the parking publisher cleanly during shutdown.", e);
+            }
         }
     }
 }

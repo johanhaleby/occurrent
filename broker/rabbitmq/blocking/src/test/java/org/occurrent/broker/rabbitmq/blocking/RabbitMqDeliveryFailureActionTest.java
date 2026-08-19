@@ -19,63 +19,58 @@ package org.occurrent.broker.rabbitmq.blocking;
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
-import com.rabbitmq.client.ShutdownSignalException;
 import org.junit.jupiter.api.Test;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.slf4j.LoggerFactory;
 
-import java.util.Optional;
-
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
- * Unit tests for {@link RabbitMqDeliveryFailureAction} against mocked RabbitMQ client types, for the two failures
- * a real broker has no way to force on demand: a partially built {@link #create} unwinding what it already opened,
- * and a raw parking publish failing with an unchecked {@link ShutdownSignalException} rather than a checked
- * {@link java.io.IOException}.
+ * Unit tests for {@link RabbitMqDeliveryFailureAction} against mocked RabbitMQ client types and a mocked
+ * {@link RabbitMqConfirmPublisher}, for behaviour a real broker has no way to force on demand. Confirm-publish
+ * correctness itself, retirement on timeout and the confirmSelect-failure cleanup, lives in
+ * {@link RabbitMqConfirmPublisherTest} now that both parking paths share one implementation of it.
  */
 class RabbitMqDeliveryFailureActionTest {
 
+    /**
+     * {@link DeliveryFailurePolicy#REDELIVER} never publishes anywhere, so {@code create(...)} must not open a
+     * parking channel at all, even when a {@code parkingDestination} happens to be supplied alongside it. Opening
+     * one anyway would waste a channel nothing will ever use, and could fail startup for a resource the bridge
+     * never needed.
+     */
     @Test
-    void create_closes_the_parking_sink_it_already_built_when_the_raw_parking_channel_fails_to_open() throws Exception {
+    void create_opens_no_parking_resources_when_the_policy_is_REDELIVER_even_with_a_parkingDestination_given() {
         Connection connection = mock(Connection.class);
-        Channel sinkChannel = mock(Channel.class);
         Channel consumeChannel = mock(Channel.class);
-        // The parking sink's own channel opens first and succeeds, the raw parking channel is the one that fails.
-        when(connection.openChannel()).thenReturn(Optional.of(sinkChannel)).thenReturn(Optional.empty());
         RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey");
 
-        assertThatThrownBy(() -> RabbitMqDeliveryFailureAction.create(connection, consumeChannel, DeliveryFailurePolicy.PARK,
-                parkingDestination, LoggerFactory.getLogger(getClass())))
-                .isInstanceOf(RabbitMqBridgeException.class);
+        RabbitMqDeliveryFailureAction.create(connection, consumeChannel, DeliveryFailurePolicy.REDELIVER,
+                parkingDestination, LoggerFactory.getLogger(getClass()));
 
-        verify(sinkChannel).close();
+        verifyNoInteractions(connection);
     }
 
     /**
-     * The regression case ADR 133's bridges caught for {@link java.io.IOException} but not for the unchecked
-     * {@link ShutdownSignalException} the broker closing this channel over a missing parking exchange actually
-     * raises. Proven directly against {@link RabbitMqDeliveryFailureAction#applyToUndecodable}, since forcing that
-     * exact broker behaviour on demand needs a real, deliberately broken exchange, which the mock stands in for.
+     * A failed parking publish, for any reason the shared {@link RabbitMqConfirmPublisher} reports as a
+     * {@link RuntimeException}, redelivers the original instead of losing it or letting the exception escape
+     * {@code applyToUndecodable}.
      */
     @Test
-    void applyToUndecodable_redelivers_instead_of_propagating_when_the_raw_parking_publish_throws_a_shutdownSignalException() throws Exception {
+    void applyToUndecodable_redelivers_when_the_parking_publisher_throws() throws Exception {
         Channel consumeChannel = mock(Channel.class);
-        Channel rawParkChannel = mock(Channel.class);
-        RabbitMqCloudEventSink parkingSink = mock(RabbitMqCloudEventSink.class);
-        doThrow(new ShutdownSignalException(true, false, null, null))
-                .when(rawParkChannel).basicPublish(any(), any(), anyBoolean(), any(), any());
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
         RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey");
-        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK, parkingSink,
-                rawParkChannel, parkingDestination, LoggerFactory.getLogger(getClass()));
+        doThrow(new RabbitMqPublishException("publish failed"))
+                .when(parkingPublisher).publish("exchange", "routingKey", new BasicProperties(), new byte[0]);
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK,
+                parkingPublisher, parkingDestination, LoggerFactory.getLogger(getClass()));
 
         action.applyToUndecodable(42L, new BasicProperties(), new byte[0]);
 
