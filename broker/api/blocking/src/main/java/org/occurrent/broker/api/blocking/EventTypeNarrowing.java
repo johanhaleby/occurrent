@@ -21,6 +21,8 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.HashSet;
 import java.util.List;
@@ -48,6 +50,8 @@ import java.util.stream.Collectors;
  */
 public final class EventTypeNarrowing {
 
+    private static final Logger log = LoggerFactory.getLogger(EventTypeNarrowing.class);
+
     private EventTypeNarrowing() {
     }
 
@@ -57,11 +61,16 @@ public final class EventTypeNarrowing {
      * absent means "could not narrow, bind everything", empty would wrongly mean "narrows to nothing".
      */
     public static Optional<Set<String>> narrow(SubscriptionFilter subscriptionFilter) {
-        return switch (subscriptionFilter) {
+        Optional<Set<String>> narrowed = switch (subscriptionFilter) {
             case AgnosticSubscriptionFilter(Filter filter) -> typesIn(filter);
             case StreamSubscriptionFilter(Filter filter) -> typesIn(filter);
             default -> Optional.empty();
         };
+        if (narrowed.isPresent() && narrowed.get().isEmpty()) {
+            log.warn("Filter {} narrowed to no event types at all, which almost always means it can never match an event. Binding to every event type instead of none, since a binding this narrow would silently deliver nothing.", subscriptionFilter);
+            return Optional.empty();
+        }
+        return narrowed;
     }
 
     private static Optional<Set<String>> typesIn(Filter filter) {

@@ -31,6 +31,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.URI;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -46,13 +47,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link KafkaCloudEventSink#publish(CloudEvent)}'s retry loop and {@link KafkaCloudEventSink#close()}'s
- * cancellation of it, exercised against a mocked {@link Producer} rather than a real broker, since forcing a
- * {@link NotEnoughReplicasException} that resolves itself needs a multi-broker cluster a single Testcontainers
- * node cannot model, and forcing one that never resolves needs a producer whose failure never stops, which a real
- * broker cannot promise either. {@link KafkaCloudEventSink}'s constructor is private, on purpose, so this file
- * reaches it through reflection instead of adding a method production code in the same package could call by
- * mistake, the same reason {@code RabbitMqCloudEventSinkChannelRetirementTest} mocks a {@code Connection} and a
+ * {@link KafkaCloudEventSink#publish(CloudEvent)}'s acknowledgement wait, its retry loop, and
+ * {@link KafkaCloudEventSink#close()}'s cancellation of the retry loop, exercised against a mocked {@link Producer}
+ * rather than a real broker. A real broker cannot prove the acknowledgement wait deterministically either, since an
+ * integration test can only poll for the message to arrive after {@code publish} returns, which a fire-and-forget
+ * {@code publish} that never waited at all would also pass, because the message would still turn up during the poll
+ * window. Forcing a {@link NotEnoughReplicasException} that resolves itself needs a multi-broker cluster a single
+ * Testcontainers node cannot model, and forcing one that never resolves needs a producer whose failure never stops,
+ * which a real broker cannot promise either. {@link KafkaCloudEventSink}'s constructor is private, on purpose, so
+ * this file reaches it through reflection instead of adding a method production code in the same package could call
+ * by mistake, the same reason {@code RabbitMqCloudEventSinkChannelRetirementTest} mocks a {@code Connection} and a
  * {@code Channel} instead of running its own broker.
  */
 class KafkaCloudEventSinkRetryTest {
@@ -83,6 +87,30 @@ class KafkaCloudEventSinkRetryTest {
 
     private static Throwable unwrap(ReflectiveOperationException e) {
         return e instanceof InvocationTargetException invocationTargetException ? invocationTargetException.getTargetException() : e;
+    }
+
+    @Test
+    void publish_stays_blocked_until_the_broker_acknowledges_the_send() throws Exception {
+        Producer<String, byte[]> producer = mock(Producer.class);
+        CompletableFuture<RecordMetadata> acknowledgement = new CompletableFuture<>();
+        when(producer.send(any())).thenReturn(acknowledgement);
+
+        KafkaCloudEventSink sink = sinkForTesting(producer, resolver, Duration.ofSeconds(5), defaultRetryStrategyForTesting());
+
+        Thread publishing = new Thread(() -> sink.publish(orderPlaced("id-1")));
+        publishing.start();
+        publishing.join(Duration.ofMillis(300).toMillis());
+
+        assertThat(publishing.isAlive())
+                .as("publish should still be waiting on the acknowledgement future, which has not completed yet")
+                .isTrue();
+
+        acknowledgement.complete(new RecordMetadata(new TopicPartition("test-topic", 0), 0L, 0, 0L, 0, 0));
+        publishing.join(Duration.ofSeconds(5).toMillis());
+
+        assertThat(publishing.isAlive())
+                .as("publish should have returned promptly once the future completed")
+                .isFalse();
     }
 
     @Test

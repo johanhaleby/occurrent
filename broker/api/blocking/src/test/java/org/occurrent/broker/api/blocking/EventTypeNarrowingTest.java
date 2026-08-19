@@ -22,6 +22,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -36,6 +37,7 @@ class EventTypeNarrowingTest {
 
     private static final String EVENT_A_TYPE = "com.example.EventA";
     private static final String EVENT_B_TYPE = "com.example.EventB";
+    private static final String EVENT_C_TYPE = "com.example.EventC";
 
     @Test
     void an_equality_type_filter_resolves_to_a_single_type() {
@@ -90,6 +92,25 @@ class EventTypeNarrowingTest {
         Optional<Set<String>> types = EventTypeNarrowing.narrow(filter);
 
         assertThat(types).contains(Set.of(EVENT_A_TYPE));
+    }
+
+    @Test
+    void an_in_condition_with_no_values_cannot_narrow() {
+        SubscriptionFilter filter = AgnosticSubscriptionFilter.filter(Filter.type(Condition.in(List.of())));
+
+        Optional<Set<String>> types = EventTypeNarrowing.narrow(filter);
+
+        assertThat(types).isEmpty();
+    }
+
+    @Test
+    void an_and_of_two_type_filters_with_no_type_in_common_cannot_narrow() {
+        SubscriptionFilter filter = AgnosticSubscriptionFilter.filter(
+                Filter.type(Condition.in(EVENT_A_TYPE, EVENT_B_TYPE)).and(Filter.type(EVENT_C_TYPE)));
+
+        Optional<Set<String>> types = EventTypeNarrowing.narrow(filter);
+
+        assertThat(types).isEmpty();
     }
 
     @Test

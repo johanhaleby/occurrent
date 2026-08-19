@@ -74,6 +74,11 @@
             <artifactId>jspecify</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- EventTypeNarrowing logs a warning through this directly, and nothing else in the module pulls it in. -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
 
         <!-- Test -->
         <dependency>
