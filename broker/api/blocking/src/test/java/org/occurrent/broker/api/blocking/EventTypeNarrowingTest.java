@@ -16,11 +16,19 @@
 
 package org.occurrent.broker.api.blocking;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Optional;
@@ -114,6 +122,17 @@ class EventTypeNarrowingTest {
     }
 
     @Test
+    void an_or_of_two_disjoint_ands_cannot_narrow() {
+        SubscriptionFilter filter = AgnosticSubscriptionFilter.filter(
+                Filter.type(EVENT_A_TYPE).and(Filter.type(EVENT_B_TYPE))
+                        .or(Filter.type(EVENT_B_TYPE).and(Filter.type(EVENT_C_TYPE))));
+
+        Optional<Set<String>> types = EventTypeNarrowing.narrow(filter);
+
+        assertThat(types).isEmpty();
+    }
+
+    @Test
     void a_filter_on_an_unrelated_field_cannot_narrow() {
         SubscriptionFilter filter = AgnosticSubscriptionFilter.filter(Filter.subject("some-subject"));
 
@@ -130,5 +149,60 @@ class EventTypeNarrowingTest {
         Optional<Set<String>> types = EventTypeNarrowing.narrow(filter);
 
         assertThat(types).isEmpty();
+    }
+
+    /**
+     * {@link EventTypeNarrowing#narrow(SubscriptionFilter)} is only ever called from a resolver's
+     * {@code destinationsFor(SubscriptionFilter)}, never from {@code destinationFor(CloudEvent)}, so the warning
+     * below fires once per subscription a consumer resolves destinations for, never once per published event.
+     */
+    @Nested
+    class WarnLogging {
+
+        private ListAppender<ILoggingEvent> appender;
+        private ch.qos.logback.classic.Logger logger;
+
+        @BeforeEach
+        void attachAppender() {
+            LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+            logger = context.getLogger(EventTypeNarrowing.class);
+            appender = new ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+        }
+
+        @AfterEach
+        void detachAppender() {
+            logger.detachAppender(appender);
+        }
+
+        @Test
+        void warns_and_names_the_filter_when_it_narrows_to_no_event_types() {
+            SubscriptionFilter filter = AgnosticSubscriptionFilter.filter(Filter.type(Condition.in(List.of())));
+
+            EventTypeNarrowing.narrow(filter);
+
+            assertThat(appender.list)
+                    .filteredOn(event -> event.getLevel() == Level.WARN)
+                    .anySatisfy(event -> assertThat(event.getFormattedMessage()).contains(filter.toString()));
+        }
+
+        @Test
+        void does_not_warn_when_a_filter_narrows_normally() {
+            SubscriptionFilter filter = AgnosticSubscriptionFilter.filter(Filter.type(EVENT_A_TYPE));
+
+            EventTypeNarrowing.narrow(filter);
+
+            assertThat(appender.list).noneSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.WARN));
+        }
+
+        @Test
+        void does_not_warn_when_a_filter_cannot_narrow_for_an_unrelated_reason() {
+            SubscriptionFilter filter = AgnosticSubscriptionFilter.filter(Filter.subject("some-subject"));
+
+            EventTypeNarrowing.narrow(filter);
+
+            assertThat(appender.list).noneSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.WARN));
+        }
     }
 }

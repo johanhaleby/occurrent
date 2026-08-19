@@ -61,15 +61,6 @@
             <artifactId>occurrent-cloudevents-extension</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- Used internally to walk a SubscriptionFilter's type conditions when narrowing bindings in
-             DestinationResolver#destinationsFor. Not part of this module's own public API, but declared directly
-             rather than relied on as a transitive of occurrent-subscription-core, the same discipline
-             occurrent-broker-api-blocking applies to its own direct imports. -->
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-filter</artifactId>
-            <version>${project.version}</version>
-        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-retry</artifactId>
@@ -118,6 +109,16 @@
         </dependency>
 
         <!-- Test -->
+        <!-- The walk that once lived here moved into EventTypeNarrowing's own module, so nothing in this
+             module's main code touches Filter or Condition any more. RabbitMqTopicExchangeDestinationResolverTest
+             still builds Filter/Condition instances directly to exercise that resolver's destinationsFor, so this
+             stays a test-scope dependency rather than being dropped. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-filter</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-cloudevent-type-mapper-reflection</artifactId>
