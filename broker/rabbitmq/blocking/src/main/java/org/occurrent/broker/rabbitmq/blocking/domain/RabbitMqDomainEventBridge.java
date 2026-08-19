@@ -77,19 +77,31 @@ import static java.util.Objects.requireNonNull;
  * <strong>Coarse lifecycle.</strong> A background poll, {@link Builder#pollInterval(Duration)} apart (one second by
  * default), reads {@link DomainEventFeed#hasProjection()} and {@link DomainEventFeed#isReadyForLiveDelivery()} and
  * starts or cancels this bridge's own AMQP consumer to match, consuming only once a projection is registered and its
- * catch-up-then-live transition has actually started. This exists for the same reason {@link RabbitMqCloudEventBridge}
- * polls {@code isRunning(...)}. Without the registration half, a message arriving before the application registers
- * its projection would hit {@code acceptCloudEvent(...)}'s {@link IllegalStateException} refusal on every delivery,
- * and under {@link DeliveryFailurePolicy#REDELIVER} that is an instant requeue-and-redeliver loop, not a wait.
- * Without the readiness half, a message arriving after registration but before the application calls
- * {@code catchUpAll()}/{@code catchUp(...)} or {@code goLive(...)} would only ever buffer with nothing behind it,
- * which {@code acceptCloudEvent(...)} answers with {@link RoutingOutcome#NOT_DELIVERABLE} rather than
+ * catch-up-then-live transition has actually reached live, not merely started. This exists for the same reason
+ * {@link RabbitMqCloudEventBridge} polls {@code isRunning(...)}. Without the registration half, a message arriving
+ * before the application registers its projection would hit {@code acceptCloudEvent(...)}'s
+ * {@link IllegalStateException} refusal on every delivery, and under {@link DeliveryFailurePolicy#REDELIVER} that is
+ * an instant requeue-and-redeliver loop, not a wait. Without the readiness half, a message arriving before the
+ * application calls {@code catchUpAll()}/{@code catchUp(...)} or {@code goLive(...)}, or while a
+ * {@code catchUpAll()}/{@code catchUp(...)} replay is still actively running, would only ever buffer with nothing
+ * behind it, which {@code acceptCloudEvent(...)} answers with {@link RoutingOutcome#NOT_DELIVERABLE} rather than
  * {@link RoutingOutcome#DELIVERED} for exactly that reason (see its own javadoc), and under
  * {@link DeliveryFailurePolicy#REDELIVER} that is the same instant requeue-and-redeliver loop, this time against a
- * buffer that never drains until the application calls one of those. Feeding {@code acceptCloudEvent(...)} can still
- * throw {@link IllegalStateException} despite the poll, for the narrow race where the check ran just before the one
+ * buffer that never drains until live is actually reached. Feeding {@code acceptCloudEvent(...)} can still throw
+ * {@link IllegalStateException} despite the poll, for the narrow race where the check ran just before the one
  * registration this feed ever accepts. That case, unlike {@link UnreadableLiveFilterException}, applies the
  * configured {@link DeliveryFailurePolicy} like any other failure, since it is transient rather than permanent.
+ * <p>
+ * <strong>This bridge consumes nothing for the entire duration of a replay</strong>, which for a large event store
+ * can be minutes, not the instant {@code catchUpAll()}/{@code catchUp(...)} is called. A message published during
+ * that window queues up on the broker rather than being pulled off and held here, since nothing is consuming it
+ * yet. That is harmless on the durable, unbounded queue this bridge declares by default when
+ * {@link Builder#declareTopology(boolean) declareTopology(false)} is not set. Nothing there expires and nothing
+ * is dropped for space, so every message is still on it once the replay reaches live. It stops being harmless the
+ * moment the queue itself carries a bound, an {@code x-max-length} with a drop-oldest overflow policy, or an
+ * {@code x-message-ttl}. Either can discard a message queued during a long replay before this bridge ever gets to
+ * consume it, a consequence of that queue policy, not of anything this bridge does. Size a bound or a TTL against
+ * how long a replay can run, or leave the queue unbounded, before pointing this bridge at it.
  */
 public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
 
