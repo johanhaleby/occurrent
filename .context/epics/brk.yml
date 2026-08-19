@@ -166,7 +166,8 @@ units:
     last_meaningful_progress_at: 2026-08-19T06:5xZ
     observed:
       dispatch: {vehicle: "worktree subagent (Sonnet), act-007", claim: "comment 5337604969 + in-progress label read back", at: 2026-08-19T04:49:00Z}
-      pr_862: {head: "8770120d9", branch: "brk/u5-kafka-publish", rollup: "fresh matrix expected at this head", review: "Copilot requested via GraphQL", via: "worker delivery stop", at: 2026-08-19T06:5xZ}
+      pr_862: {head: "e15a30adc", branch: "brk/u5-kafka-publish", rollup: "green at the pre-rebase head 98fa4c1a3, fresh run at e15a30adc", review: "Copilot restarting against the rebased head", via: "worker rebase stop", at: 2026-08-19T08:3xZ}
+      rebase_860: {cause: "ayi merged bb6b5495e touching changelog.md, both brk PRs went CONFLICTING at once", resolution: "all three changelog entries kept intact, nothing dropped or folded together", verification: "full root reactor build plus the module suite twice plus the shard-coverage script reverified, since 860 also touched dsl/projection-dsl and the autoconfigure modules", at: 2026-08-19T08:3xZ}
     assessment: "Sonnet worktree subagent per Unattended terms. Mirrors U3's shape per the ADR convention section. Stream-id-keying tradeoff documented, never silent."
   U6:
     issue: 417
