@@ -114,6 +114,70 @@ class RabbitMqCloudEventMapperTest {
         assertThat(RabbitMqCloudEventMapper.toBody(minimalCloudEvent())).isEmpty();
     }
 
+    @Test
+    void toCloudEvent_rebuilds_every_context_attribute_and_extension_from_a_previously_written_message() {
+        CloudEvent original = CloudEventBuilder.v1()
+                .withId("id-1")
+                .withSource(URI.create("urn:test"))
+                .withType("com.acme.OrderPlaced")
+                .withSubject("subject-1")
+                .withTime(OffsetDateTime.parse("2026-08-18T10:00:00Z"))
+                .withDataSchema(URI.create("urn:schema"))
+                .withDataContentType("application/json")
+                .withData("{\"a\":1}".getBytes(StandardCharsets.UTF_8))
+                .withExtension("streamid", "stream-1")
+                .withExtension("streamversion", 3L)
+                .build();
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(original, Map.of());
+        byte[] body = RabbitMqCloudEventMapper.toBody(original);
+
+        CloudEvent rebuilt = RabbitMqCloudEventMapper.toCloudEvent(properties, body);
+
+        assertThat(rebuilt.getId()).isEqualTo("id-1");
+        assertThat(rebuilt.getSource()).isEqualTo(URI.create("urn:test"));
+        assertThat(rebuilt.getType()).isEqualTo("com.acme.OrderPlaced");
+        assertThat(rebuilt.getSubject()).isEqualTo("subject-1");
+        assertThat(rebuilt.getTime()).isEqualTo(OffsetDateTime.parse("2026-08-18T10:00:00Z"));
+        assertThat(rebuilt.getDataSchema()).isEqualTo(URI.create("urn:schema"));
+        assertThat(rebuilt.getDataContentType()).isEqualTo("application/json");
+        assertThat(rebuilt.getData().toBytes()).isEqualTo("{\"a\":1}".getBytes(StandardCharsets.UTF_8));
+        assertThat(rebuilt.getExtension("streamid")).isEqualTo("stream-1");
+        // A Number extension comes back as a String, since a header carries no richer typing to recover it from.
+        // EventMetadata.getStreamVersion() already accepts a String for exactly this reason.
+        assertThat(rebuilt.getExtension("streamversion")).isEqualTo("3");
+    }
+
+    @Test
+    void toCloudEvent_does_not_set_a_data_content_type_when_the_message_carried_none() {
+        CloudEvent original = minimalCloudEvent();
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(original, Map.of());
+
+        CloudEvent rebuilt = RabbitMqCloudEventMapper.toCloudEvent(properties, RabbitMqCloudEventMapper.toBody(original));
+
+        assertThat(rebuilt.getDataContentType()).isNull();
+    }
+
+    @Test
+    void toCloudEvent_leaves_data_null_for_an_empty_body() {
+        CloudEvent original = minimalCloudEvent();
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(original, Map.of());
+
+        CloudEvent rebuilt = RabbitMqCloudEventMapper.toCloudEvent(properties, RabbitMqCloudEventMapper.toBody(original));
+
+        assertThat(rebuilt.getData()).isNull();
+    }
+
+    @Test
+    void toCloudEvent_ignores_a_header_outside_the_cloudEvents_prefix_namespace() {
+        CloudEvent original = minimalCloudEvent();
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(original, Map.of("tenant", "acme"));
+
+        CloudEvent rebuilt = RabbitMqCloudEventMapper.toCloudEvent(properties, RabbitMqCloudEventMapper.toBody(original));
+
+        assertThat(rebuilt.getExtensionNames()).doesNotContain("tenant");
+        assertThat(rebuilt.getAttributeNames()).doesNotContain("tenant");
+    }
+
     private static CloudEvent minimalCloudEvent() {
         return CloudEventBuilder.v1().withId("id").withSource(URI.create("urn:test")).withType("t").build();
     }
