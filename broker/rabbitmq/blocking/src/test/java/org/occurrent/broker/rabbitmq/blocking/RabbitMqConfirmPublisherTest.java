@@ -20,6 +20,7 @@ import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -84,6 +85,31 @@ class RabbitMqConfirmPublisherTest {
         publisher.publish("exchange", "routingKey", properties, body);
 
         verify(channel).basicPublish(eq("exchange"), eq("routingKey"), eq(true), any(BasicProperties.class), eq(body));
+    }
+
+    /**
+     * This publisher needs its own per-publish token to match a {@code basic.return} (which carries no delivery tag)
+     * back to the publish it belongs to, but that token used to be written into the AMQP {@code correlationId}
+     * property itself, overwriting whatever the caller put there. The parking path in
+     * {@link RabbitMqDeliveryFailureAction} republishes a delivery's own original properties through this publisher,
+     * so an application {@code correlationId} on the most-likely-to-be-traced messages, the ones nothing could
+     * decode, was lost on exactly the path an operator most needs it. The token now lives in its own header instead.
+     */
+    @Test
+    void publish_preserves_a_caller_supplied_correlationId_instead_of_overwriting_it_with_its_own_return_matching_token() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        when(channel.waitForConfirms(anyLong())).thenReturn(true);
+        RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, Duration.ofSeconds(5));
+        byte[] body = "raw body".getBytes(StandardCharsets.UTF_8);
+        BasicProperties properties = new BasicProperties.Builder().correlationId("application-correlation-id").build();
+
+        publisher.publish("exchange", "routingKey", properties, body);
+
+        ArgumentCaptor<BasicProperties> published = ArgumentCaptor.forClass(BasicProperties.class);
+        verify(channel).basicPublish(eq("exchange"), eq("routingKey"), eq(true), published.capture(), eq(body));
+        assertThat(published.getValue().getCorrelationId()).isEqualTo("application-correlation-id");
     }
 
     /**

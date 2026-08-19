@@ -228,6 +228,28 @@ public final class BlockingHandover<T> {
     }
 
     /**
+     * Whether a live payload fed right now would actually be delivered, immediately and synchronously, rather than
+     * buffered against a replay's own drain, refused outright, or silently dropped. True only once
+     * {@link #catchUp(Source)} has reached live. False before that, whether {@link #catchUp(Source)} has never been
+     * called, is still replaying, or was stopped mid-replay by {@link Source#keepReplaying()}, and false forever
+     * after a {@link #catchUp(Source)} attempt has thrown, since the failure it records is never cleared, not even
+     * by a later {@link #catchUp(Source)} call that itself reaches live.
+     * <p>
+     * The one fact this deliberately does not answer is whether a currently buffering payload is safe against a
+     * crash. It is, while an actual replay is what will drain that buffer, since nothing is recorded complete until
+     * after the drain and a crash simply replays the same history again. This method reads {@code false} for that
+     * case anyway, the same as it does before anything has started, because this handover keeps no separate record
+     * of "a replay is in flight" for it to report, only whether it is live and whether it has permanently failed.
+     * A caller that means to distinguish a store-backed buffer from one with nothing behind it needs its own signal
+     * for that, this is not it.
+     */
+    public boolean isReadyForLiveDelivery() {
+        synchronized (lock) {
+            return live && catchUpFailure == null;
+        }
+    }
+
+    /**
      * Run the one-time catch-up: replay the source's history (unless already caught up), then drain the buffered live
      * payloads and go live, then mark the catch-up complete.
      *

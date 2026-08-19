@@ -81,19 +81,6 @@ public final class CatchupProjectionFeed<E> {
     private final BlockingHandover<Delivered<E>> handover;
     // Read by the replay once per event, so stopCatchUp() takes effect at the next event rather than at the end.
     private volatile boolean stopped = false;
-    // Answers whether a live event fed right now is backed by something that survives a crash. catchUp() sets it
-    // at the top, before its replay starts, because a still-buffered event ahead of that replay is safe either
-    // way. A crash re-runs the whole replay from the store. goLive() has no store behind it, so it sets this only
-    // after its drain returns, once the handover is actually live and a fold is synchronous. Before either method
-    // has run, a live event only buffers in memory with no source to replay it back, so this must read false
-    // there. Not one-shot. catchUp() also clears it again on every way its own attempt can fail to reach live,
-    // whether handover.catchUp(..) throws (isAlreadyCaughtUp(), replayStarted(), a replayed event's decode,
-    // replayCompleted(), the buffered drain or markCaughtUp()) or returns false (stopCatchUp() abandoned a replay
-    // still in flight), since the handover accepts no live delivery either way until a later catchUp() call
-    // revives it, and that later call sets this true again the same way the first one did. goLive() can only fail
-    // by throwing, and only ever sets this true after its call returns, so a throw there already leaves it false
-    // with no extra handling needed.
-    private volatile boolean readyForLiveDelivery = false;
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -231,10 +218,11 @@ public final class CatchupProjectionFeed<E> {
         return id;
     }
 
-    // Package-private. Lets DomainEventFeed.acceptCloudEvent(CloudEvent) and DomainEventFeed.isReadyForLiveDelivery()
-    // read the flag catchUp() and goLive() set. See the field's own javadoc for what it answers.
+    // Package-private. Delegates to the handover instead of tracking a second copy of its own live/failed state,
+    // since every past attempt at keeping that copy in sync found another way it could drift from the original.
+    // See BlockingHandover.isReadyForLiveDelivery()'s own javadoc for exactly what this answers.
     boolean isReadyForLiveDelivery() {
-        return readyForLiveDelivery;
+        return handover.isReadyForLiveDelivery();
     }
 
     /**
@@ -246,71 +234,53 @@ public final class CatchupProjectionFeed<E> {
      * {@link #stopCatchUp()} to bring it back down.
      */
     public void catchUp() {
-        // Set before anything below buffers or delivers a single event for this call, so isReadyForLiveDelivery()
-        // reads true for the whole call, replay included, not only once it returns.
-        readyForLiveDelivery = true;
         // Cleared here rather than only in the handover, so a feed stopped once can catch up again instead of
         // stopping instantly on the first replayed event.
         stopped = false;
-        boolean caughtUp;
-        try {
-            caughtUp = handover.catchUp(new BlockingHandover.Source<>() {
-                @Override
-                public boolean isAlreadyCaughtUp() {
-                    return CatchupProjectionFeed.this.isAlreadyCaughtUp();
-                }
+        handover.catchUp(new BlockingHandover.Source<>() {
+            @Override
+            public boolean isAlreadyCaughtUp() {
+                return CatchupProjectionFeed.this.isAlreadyCaughtUp();
+            }
 
-                @Override
-                public Stream<Delivered<E>> replay() {
-                    return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
-                            // Replay decodes CloudEvents, so metadata is available here (unlike the live accept(E) path).
-                            .map(cloudEvent -> Delivered.replayed(EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent)));
-                }
+            @Override
+            public Stream<Delivered<E>> replay() {
+                return reader.readInPositionOrder(replayFilter, PositionRange.fromBeginning())
+                        // Replay decodes CloudEvents, so metadata is available here (unlike the live accept(E) path).
+                        .map(cloudEvent -> Delivered.replayed(EventMetadata.from(cloudEvent), converter.toDomainEvent(cloudEvent)));
+            }
 
-                @Override
-                public boolean keepReplaying() {
-                    return !stopped;
-                }
+            @Override
+            public boolean keepReplaying() {
+                return !stopped;
+            }
 
-                @Override
-                public void markCaughtUp() {
-                    CatchupProjectionFeed.this.markCaughtUp();
-                }
+            @Override
+            public void markCaughtUp() {
+                CatchupProjectionFeed.this.markCaughtUp();
+            }
 
-                @Override
-                public void replayStarted() {
-                    if (view instanceof ReplayAware replayAware) {
-                        replayAware.replayStarted();
-                    }
+            @Override
+            public void replayStarted() {
+                if (view instanceof ReplayAware replayAware) {
+                    replayAware.replayStarted();
                 }
+            }
 
-                @Override
-                public void replayCompleted() {
-                    if (view instanceof ReplayAware replayAware) {
-                        replayAware.replayCompleted();
-                    }
+            @Override
+            public void replayCompleted() {
+                if (view instanceof ReplayAware replayAware) {
+                    replayAware.replayCompleted();
                 }
+            }
 
-                @Override
-                public void replayAbandoned() {
-                    if (view instanceof ReplayAware replayAware) {
-                        replayAware.replayAbandoned();
-                    }
+            @Override
+            public void replayAbandoned() {
+                if (view instanceof ReplayAware replayAware) {
+                    replayAware.replayAbandoned();
                 }
-            });
-        } catch (RuntimeException | Error e) {
-            // Every exceptional exit from handover.catchUp(..) leaves it unable to accept a live delivery, a
-            // terminal catchUpFailure recorded for the whole handover, whether isAlreadyCaughtUp(), replayStarted(),
-            // a replayed event's own decode, replayCompleted(), the buffered drain or markCaughtUp() is what threw.
-            // One catch around the whole call covers all of those instead of a special case per throw site.
-            readyForLiveDelivery = false;
-            throw e;
-        }
-        if (!caughtUp) {
-            // stopCatchUp() abandoned a replay still in flight. handover.catchUp(..) returns false rather than
-            // throwing, and the handover drops live deliveries until a later catchUp() call revives it.
-            readyForLiveDelivery = false;
-        }
+            }
+        });
     }
 
     /**
@@ -340,11 +310,6 @@ public final class CatchupProjectionFeed<E> {
                 throw new AssertionError("isAlreadyCaughtUp() is true, so nothing here was caught up to mark.");
             }
         });
-        // Set after the drain above returns, not before it, unlike catchUp()'s early flip. This path has no store
-        // behind it, so a live event that only reaches the buffer while the drain is still running has nothing to
-        // survive a crash on. Once this line runs the handover is live, so a fold from here on is synchronous and
-        // isReadyForLiveDelivery() stays honest.
-        readyForLiveDelivery = true;
     }
 
     /**

@@ -176,16 +176,16 @@ public final class DomainEventFeed<E> {
 
     /**
      * Whether the registered projection can safely be fed a live event right now, so a listener can gate its own
-     * consumption on more than just {@link #hasProjection()}. Becomes {@code true} once
-     * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has actually started, and, for
-     * {@code catchUp}, goes back to {@code false} whenever that attempt fails to reach live, whether
-     * {@link #stopCatchUp()} abandoned a replay still in flight or the attempt threw for any other reason, until a
-     * later {@code catchUp} call revives it. A live event fed through {@link #acceptCloudEvent(CloudEvent)} while
-     * this answers {@code false} only ever buffers in memory with nothing behind it to replay, or is dropped
-     * outright, and {@link #acceptCloudEvent(CloudEvent)}'s own javadoc covers what it reports for both.
-     * {@code false} for an unregistered feed, the same as {@link #hasProjection()} rather than the
-     * {@link IllegalStateException} {@link #accept(Object)} throws, so a listener can check both together before
-     * it has anything registered at all.
+     * consumption on more than just {@link #hasProjection()}. Delegates to the underlying catch-up-then-live
+     * handover rather than tracking this separately, so it is {@code true} only once
+     * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has actually reached live,
+     * {@code false} while either is still replaying or buffering ahead of its own drain, and {@code false} forever
+     * once either has thrown, since that failure is permanent and a later call reaching live does not clear it. A
+     * live event fed through {@link #acceptCloudEvent(CloudEvent)} while this answers {@code false} only ever
+     * buffers, or is dropped outright, and {@link #acceptCloudEvent(CloudEvent)}'s own javadoc covers what it
+     * reports for both. {@code false} for an unregistered feed, the same as {@link #hasProjection()} rather than
+     * the {@link IllegalStateException} {@link #accept(Object)} throws, so a listener can check both together
+     * before it has anything registered at all.
      */
     public boolean isReadyForLiveDelivery() {
         Registered<E> registered = feed.get();
@@ -246,27 +246,19 @@ public final class DomainEventFeed<E> {
      * Whichever of the two this first call produces, a working matcher or the refusal below, is then cached and
      * reused for every call after that against the same registration, rather than rebuilt each time.
      * <p>
-     * Reports {@link RoutingOutcome#NOT_DELIVERABLE} rather than {@link RoutingOutcome#DELIVERED} when a matching
-     * event arrives after {@link #stopCatchUp()} interrupted a replay still in flight. The catch-up-then-live engine
-     * behind this feed drops such an event rather than delivering or buffering it, and this method reads that
-     * signal back instead of assuming delivery from a normal return.
-     * <p>
-     * A matching event that arrives <em>before</em> a stop, while the catch-up is still buffering live events for
-     * the drain that follows the replay, still reports {@link RoutingOutcome#DELIVERED}, even though a stop right
-     * afterwards means that buffered event will not actually be folded by this attempt. That is the same contract
-     * the catch-up-then-live engine already keeps for {@link #accept(Object)}: nothing is lost, because the
-     * completion marker is never recorded for an interrupted attempt, so the next {@link #catchUpAll()} replays the
-     * whole history again, including this event, from the store rather than from the buffer.
-     * <p>
-     * That reasoning holds only while a replay backs the buffer. A matching event that arrives before
-     * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has been called at all also only
-     * buffers, exactly like the case above, but this registration may turn out to use {@link #goLive(String)},
-     * which never replays because its own javadoc says the events are not in the local store to begin with. A crash
-     * before that call loses such a buffered event for good, so this reports {@link RoutingOutcome#NOT_DELIVERABLE}
-     * for it instead, the same outcome an event dropped by {@link #stopCatchUp()} gets, and for the same reason. The
-     * filter accepted it, but nothing durable is going to redeliver it if this attempt does not fold it. Once either
-     * method has started, buffering is store-backed again and reports {@link RoutingOutcome#DELIVERED}. See
-     * {@link #isReadyForLiveDelivery()}.
+     * Reports {@link RoutingOutcome#NOT_DELIVERABLE} rather than {@link RoutingOutcome#DELIVERED} for a matching
+     * event that only reaches the buffer, not the view, whatever the reason. {@link #isReadyForLiveDelivery()} is
+     * what decides this, and it answers only whether the underlying handover is live right now, not whether a
+     * buffered event happens to be safe because an actual replay backs it. That covers an event fed before
+     * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has been called at all, one fed
+     * while a replay is still running and buffering ahead of its own drain, and one fed after
+     * {@link #stopCatchUp()} interrupted a replay in flight. None of those three lose the event, since the
+     * catch-up-then-live engine still folds a buffered one once its drain runs, or a later {@link #catchUpAll()}
+     * replays it again from the store if the attempt that buffered it never reaches a drain at all, but this method
+     * does not try to tell a safe case apart from an unsafe one. {@link #goLive(String)} exists precisely for a
+     * registration whose events are not in the local store, where a buffered-then-lost event has nothing to replay
+     * it back from, and this feed has no way to know in advance which kind of registration it is fielding an event
+     * for, so it answers the same way for all three.
      *
      * @throws IllegalStateException if no projection is registered on this feed, for the reason
      *                               {@link #accept(Object)} gives. Refused rather than reported as

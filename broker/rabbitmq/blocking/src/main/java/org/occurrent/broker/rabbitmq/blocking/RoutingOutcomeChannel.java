@@ -33,7 +33,9 @@ import static java.util.Objects.requireNonNull;
  * <pre>{@code
  * RoutingOutcomeChannel channel = new RoutingOutcomeChannel();
  * PushSubscriptionModel model = new PushSubscriptionModel(dataFieldReader, channel);
- * RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, channel, resolver, queue).build();
+ * RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, model, channel, queue)
+ *         .resolver(resolver)
+ *         .build();
  * }</pre>
  * <p>
  * and the bridge reads the outcome of the {@code accept(...)} call it just made off the same instance, rather than

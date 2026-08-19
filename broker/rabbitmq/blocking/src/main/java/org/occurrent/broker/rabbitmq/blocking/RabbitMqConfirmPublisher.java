@@ -25,6 +25,7 @@ import org.jspecify.annotations.Nullable;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -38,7 +39,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * it so a caller with an already-built {@link BasicProperties} and body, the consume-side parking path in
  * {@link RabbitMqDeliveryFailureAction}, publishes through the exact same machinery instead of a second, weaker copy
  * of it. That second copy is what round after round of review found new resource-lifecycle defects in, since it
- * never had this class's channel retirement, its confirmSelect-failure cleanup, or its correlationId-based return
+ * never had this class's channel retirement, its confirmSelect-failure cleanup, or its own token-based return
  * tracking, and each fix only patched the one symptom found that round rather than closing the gap with the sink's
  * own proven implementation. There is exactly one implementation of a confirmed publish now, used by both.
  * <p>
@@ -49,8 +50,12 @@ import java.util.concurrent.locks.ReentrantLock;
  * would otherwise look like success. A publish that times out waiting for the confirm, or is abandoned to an
  * interrupted wait, is left outstanding on the broker's side of that channel, so this publisher retires the channel
  * and opens a fresh one underneath it, and a later publish is never kept waiting on an abandoned one or blamed for
- * its eventual nack. Each publish carries its own random {@code correlationId}, so a {@code basic.return} is matched
- * to the publish it belongs to and never to a different one.
+ * its eventual nack. Each publish carries its own random token in a dedicated header ({@link #RETURN_TOKEN_HEADER}),
+ * so a {@code basic.return} is matched to the publish it belongs to and never to a different one. That token is
+ * deliberately not the AMQP {@code correlationId} property. The parking path in {@link RabbitMqDeliveryFailureAction}
+ * republishes a delivery's own original properties through this same publisher, and a caller-supplied
+ * {@code correlationId} in those properties survives untouched instead of being overwritten with this class's own
+ * internal, disposable one.
  * <p>
  * Publishes on one instance are serialized on its channel, and {@link #close()} shares that same serialization,
  * so a close racing a timed-out publish's channel retirement can never close the channel this publisher is about
@@ -61,23 +66,29 @@ import java.util.concurrent.locks.ReentrantLock;
 final class RabbitMqConfirmPublisher implements AutoCloseable {
 
     /**
-     * Caps {@link #returnedCorrelationIds}. A publish that never removes its own correlationId, one whose
-     * acknowledgement timed out and was later returned anyway, would otherwise grow that set forever under
-     * repeated timeouts. Publishes are serialized on this publisher's channel, so at most one correlationId is
-     * genuinely in flight at a time, well inside this cap, and the oldest entries are evicted first when it is
-     * exceeded.
+     * Caps {@link #returnedTokens}. A publish that never removes its own token, one whose acknowledgement timed out
+     * and was later returned anyway, would otherwise grow that set forever under repeated timeouts. Publishes are
+     * serialized on this publisher's channel, so at most one token is genuinely in flight at a time, well inside
+     * this cap, and the oldest entries are evicted first when it is exceeded.
      */
-    private static final int MAX_TRACKED_RETURNED_CORRELATION_IDS = 10_000;
+    private static final int MAX_TRACKED_RETURNED_TOKENS = 10_000;
+
+    /**
+     * The header this publisher's own internal per-publish token travels in, so it never collides with or overwrites
+     * a caller-supplied AMQP {@code correlationId}. Namespaced under {@code x-occurrent-} since {@code x-} is the
+     * established AMQP convention for a broker or client extension header, never an application's own.
+     */
+    private static final String RETURN_TOKEN_HEADER = "x-occurrent-rabbitmq-confirm-publisher-return-token";
 
     private final Connection connection;
     private volatile Channel channel;
     private final Duration acknowledgementTimeout;
     private final Lock publishLock = new ReentrantLock();
-    private final Set<String> returnedCorrelationIds = Collections.synchronizedSet(Collections.newSetFromMap(
+    private final Set<String> returnedTokens = Collections.synchronizedSet(Collections.newSetFromMap(
             new LinkedHashMap<String, Boolean>() {
                 @Override
                 protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
-                    return size() > MAX_TRACKED_RETURNED_CORRELATION_IDS;
+                    return size() > MAX_TRACKED_RETURNED_TOKENS;
                 }
             }));
 
@@ -90,9 +101,13 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
 
     private void installReturnListener(Channel channel) {
         channel.addReturnListener(returned -> {
-            String correlationId = returned.getProperties().getCorrelationId();
-            if (correlationId != null) {
-                returnedCorrelationIds.add(correlationId);
+            Map<String, Object> headers = returned.getProperties().getHeaders();
+            Object token = headers == null ? null : headers.get(RETURN_TOKEN_HEADER);
+            // toString() rather than a cast. A header value read back off the wire is a
+            // com.rabbitmq.client.LongString for a string-valued header, not a java.lang.String (the same gotcha
+            // RabbitMqCloudEventMapper.toCloudEvent(BasicProperties, byte[]) already documents and works around).
+            if (token != null) {
+                returnedTokens.add(token.toString());
             }
         });
     }
@@ -122,14 +137,18 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
     /**
      * Publishes {@code body} with {@code properties} to {@code exchange} with routing key {@code routingKey}, not
      * returning until the broker has both confirmed and routed it. {@code properties} is copied with a fresh
-     * correlationId generated for this call, so a value the caller already set there is not reused across a retry
-     * of the same properties instance.
+     * internal token added to its headers under {@link #RETURN_TOKEN_HEADER}, generated for this call, so a
+     * {@code basic.return} for it is never confused with one for a different publish. Every other property,
+     * including a caller-supplied {@code correlationId}, passes through unchanged.
      */
     void publish(String exchange, String routingKey, BasicProperties properties, byte[] body) {
-        // basic.return carries no delivery tag, so this internal correlationId is the only way to tell which
-        // publish a return belongs to.
-        String correlationId = UUID.randomUUID().toString();
-        BasicProperties correlated = properties.builder().correlationId(correlationId).build();
+        // basic.return carries no delivery tag, so this internal token is the only way to tell which publish a
+        // return belongs to. Kept out of the correlationId property so a caller-supplied one, republished unchanged
+        // by the parking path in RabbitMqDeliveryFailureAction, is never overwritten by it.
+        String token = UUID.randomUUID().toString();
+        Map<String, Object> headers = properties.getHeaders() == null ? new HashMap<>() : new HashMap<>(properties.getHeaders());
+        headers.put(RETURN_TOKEN_HEADER, token);
+        BasicProperties correlated = properties.builder().headers(headers).build();
 
         publishLock.lock();
         try {
@@ -142,7 +161,7 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
                 throw new RabbitMqPublishException("Broker sent a negative acknowledgement for a publish to exchange \"" +
                         exchange + "\" with routing key \"" + routingKey + "\"");
             }
-            if (returnedCorrelationIds.remove(correlationId)) {
+            if (returnedTokens.remove(token)) {
                 throw new RabbitMqUnroutableEventException(exchange, routingKey);
             }
         } catch (IOException e) {

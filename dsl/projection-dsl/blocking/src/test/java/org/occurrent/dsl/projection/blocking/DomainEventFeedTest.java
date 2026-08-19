@@ -451,11 +451,13 @@ class DomainEventFeedTest {
     }
 
     /**
-     * The busy-loop class already closed once at the {@code hasProjection()} gate, reopened by a one-shot
-     * {@code isReadyForLiveDelivery()}. A stop mid-replay leaves the handover dropping every live delivery until a
-     * later catch-up revives it, so a bridge polling only {@code hasProjection() && isReadyForLiveDelivery()} would
-     * otherwise keep consuming and nack-requeue every message in a hot loop. Readiness has to go false for the
-     * stopped interval, and true again once a later catch-up actually starts.
+     * The busy-loop class round 8 first closed for a stopped replay, now proven against the delegating
+     * {@code BlockingHandover.isReadyForLiveDelivery()} (round 11) rather than a separately tracked flag. A stop
+     * mid-replay leaves the handover dropping every live delivery until a later catch-up revives it, so a bridge
+     * polling {@code hasProjection() && isReadyForLiveDelivery()} must not keep consuming and nack-requeue every
+     * message in a hot loop for that whole interval. Readiness reads false for the entire replay, running or
+     * stopped, since the delegating handover is not live until its drain actually runs, not only for the stopped
+     * half round 8's own flag distinguished.
      */
     @Test
     void a_stop_mid_replay_clears_readiness_until_a_later_catch_up_revives_it() throws InterruptedException {
@@ -473,7 +475,7 @@ class DomainEventFeedTest {
         Thread replay = new Thread(feed::catchUpAll);
         replay.start();
         parked.await();
-        assertThat(feed.isReadyForLiveDelivery()).as("catchUp() already flipped this true before the replay parked").isTrue();
+        assertThat(feed.isReadyForLiveDelivery()).as("the replay is still running, not yet live").isFalse();
 
         feed.stopCatchUp();
         proceed.countDown();
@@ -483,7 +485,7 @@ class DomainEventFeedTest {
         assertThat(feed.isReadyForLiveDelivery()).as("the stop abandoned the replay, so nothing is ready to receive a live event").isFalse();
 
         feed.catchUpAll();
-        assertThat(feed.isReadyForLiveDelivery()).as("a later catch-up revives it the same way the first one did").isTrue();
+        assertThat(feed.isReadyForLiveDelivery()).as("a later catch-up that reaches live revives it").isTrue();
     }
 
     /**
@@ -942,14 +944,18 @@ class DomainEventFeedTest {
     }
 
     /**
-     * The narrower race a round-6 sequential test could not reach: {@code goLive()} used to flip
-     * {@code isReadyForLiveDelivery()} true before draining the buffer it inherited, not after, so a poll running on
-     * another thread could see it as safe to consume while an event fed ahead of {@code goLive()} was still only
-     * sitting in that buffer. A projection whose fold blocks proves the window is now closed, since the flag has to
-     * stay false for as long as the drain that would fold a crash-vulnerable event is still running.
+     * Round 8 had {@code goLive()} flip its own one-shot flag true only after draining the buffer it inherited, to
+     * close a window where a poll on another thread could see it as safe to consume while an event fed ahead of
+     * {@code goLive()} was still only sitting in that buffer. The round-11 delegate reports {@code true} earlier
+     * than that, as soon as {@code BlockingHandover} claims the buffer under its own lock and marks itself live,
+     * before the claimed items are actually folded outside that lock. That is safe rather than a reopened window.
+     * The claim (under lock, {@code tryReserve}) and the fold (outside it, {@code deliverOutsideLock}) are exactly
+     * the same split a concurrent live {@code accept(Object)} already uses (the handover's own class javadoc, #588),
+     * so a live event racing this drain either matches the same de-dup key and is dropped as already in flight, or
+     * matches a different key and is delivered independently. Nothing is left buffered-but-reported-ready.
      */
     @Test
-    void go_live_is_not_ready_for_live_delivery_until_its_drain_of_the_inherited_buffer_completes() throws InterruptedException {
+    void go_live_reports_ready_once_its_drain_claims_the_buffer_even_while_an_inherited_items_fold_is_still_running() throws InterruptedException {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
@@ -965,15 +971,16 @@ class DomainEventFeedTest {
                 })
                 .build();
         feed.register("counter", blockingProjection, ViewStateRepository.create(repo::get, repo::put));
-        // Buffered ahead of goLive(), since it is not registered as ready yet, exactly the crash-vulnerable state
-        // this event would be left in if goLive() reported ready before draining it.
+        // Buffered ahead of goLive(), since it is not registered as ready yet.
         feed.accept(new Counted("1"));
 
         Thread goLive = new Thread(() -> feed.goLive("counter"));
         goLive.start();
         awaitUninterruptibly(foldEntered);
 
-        assertThat(feed.isReadyForLiveDelivery()).as("the drain is still folding the inherited buffer").isFalse();
+        assertThat(feed.isReadyForLiveDelivery()).as("the drain already claimed the buffer and marked itself live, "
+                        + "even though this claimed item's own fold is still running")
+                .isTrue();
 
         releaseFold.countDown();
         goLive.join(TimeUnit.SECONDS.toMillis(5));
@@ -1015,11 +1022,18 @@ class DomainEventFeedTest {
         assertThat(repo.get("counter")).isEqualTo(1);
     }
 
+    /**
+     * The counterpart to the test above, and the one place round 6 through 8's finer distinction is genuinely lost
+     * by the round-11 delegate. An event fed while {@code catchUpAll()} is still replaying is buffered ahead of a
+     * replay actually in flight and backed by the store, so a crash cannot lose it, yet {@code isReadyForLiveDelivery()}
+     * now reads {@code false} for it anyway, the same as the crash-vulnerable case above, because {@code BlockingHandover}
+     * keeps no record of "a replay is in flight" for the delegate to report. The event is still not lost. The replay's
+     * own drain folds it once caught up, and a redelivery the caller issues on the NOT_DELIVERABLE outcome matches
+     * the same de-dup key and is recognized as already delivered. The cost is an extra redelivery round trip, not
+     * data loss, which is the trade the round-11 ruling accepted in exchange for deleting the shadow-copy flag.
+     */
     @Test
-    void accept_cloud_event_still_reports_delivered_for_an_event_buffered_while_a_catch_up_replay_is_in_flight() {
-        // The counterpart to the test above: once catchUpAll() has started, a still-buffered event is buffered
-        // ahead of a replay actually in flight, backed by the store, so it must keep reporting DELIVERED exactly as
-        // it always has.
+    void accept_cloud_event_reports_not_deliverable_for_an_event_buffered_while_a_catch_up_replay_is_in_flight_but_still_folds_it_once() {
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s", counterConverter().toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
         CountDownLatch parked = new CountDownLatch(1);
@@ -1033,11 +1047,12 @@ class DomainEventFeedTest {
         Thread replay = new Thread(feed::catchUpAll);
         replay.start();
         awaitUninterruptibly(parked);
-        assertThat(feed.isReadyForLiveDelivery()).as("catchUp() marks this before the replay itself starts").isTrue();
+        assertThat(feed.isReadyForLiveDelivery()).as("the replay is still running, not yet live").isFalse();
 
         RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live")));
 
-        assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(outcome).as("not ready yet, even though the in-flight replay will end up folding this event")
+                .isEqualTo(RoutingOutcome.NOT_DELIVERABLE);
 
         proceed.countDown();
         try {
@@ -1047,7 +1062,8 @@ class DomainEventFeedTest {
             throw new RuntimeException(e);
         }
         assertThat(replay.isAlive()).isFalse();
-        // The two replayed events plus the one buffered mid-replay: three folds in total.
+        // The two replayed events plus the one buffered mid-replay fold to three, so the event was not lost despite
+        // the NOT_DELIVERABLE outcome above.
         assertThat(repo.get("counter")).isEqualTo(3);
     }
 
