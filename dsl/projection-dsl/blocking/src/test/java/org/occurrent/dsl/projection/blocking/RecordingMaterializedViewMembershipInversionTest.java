@@ -225,8 +225,12 @@ class RecordingMaterializedViewMembershipInversionTest {
         return new AppliedAppendStore() {
             @Override
             public void recordApplied(String projectionId, AppendId appendId) {
-                delegate.recordApplied(projectionId, appendId);
+                // recordedInOrder updates before the delegate, not after: this test polls hasApplied() (reading the
+                // delegate) and then immediately asserts recordedInOrder, on a different thread. Updating the list
+                // first, in program order before the delegate write a waiter can observe, means a waiter that has
+                // just seen hasApplied() turn true is guaranteed to see this list entry too.
                 recordedInOrder.add(appendId);
+                delegate.recordApplied(projectionId, appendId);
             }
 
             @Override

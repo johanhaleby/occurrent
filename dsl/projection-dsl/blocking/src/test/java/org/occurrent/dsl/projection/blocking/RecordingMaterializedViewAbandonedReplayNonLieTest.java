@@ -41,6 +41,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -98,7 +99,17 @@ class RecordingMaterializedViewAbandonedReplayNonLieTest {
         CatchupProjectionFeed<Ticked> feed = CatchupProjectionFeed.create(
                 PROJECTION_ID, recording, org.occurrent.filter.Filter.all(), store, converter, Ticked::eventId, marker);
 
-        Thread replay = new Thread(feed::catchUp);
+        // Captured rather than left to escape the thread uncaught: JUnit never sees an exception a background
+        // thread throws, so without this a genuine regression that crashes the replay would leave the state and
+        // membership assertions below unexercised and still passing, for the wrong reason.
+        AtomicReference<Throwable> replayFailure = new AtomicReference<>();
+        Thread replay = new Thread(() -> {
+            try {
+                feed.catchUp();
+            } catch (Throwable t) {
+                replayFailure.set(t);
+            }
+        });
         replay.start();
         try {
             // Bounded rather than a bare await(): a regression that stops the replay from ever reaching the second
@@ -116,6 +127,7 @@ class RecordingMaterializedViewAbandonedReplayNonLieTest {
         replay.join(TimeUnit.SECONDS.toMillis(5));
 
         assertThat(replay.isAlive()).as("the replay thread is still running after its bounded join").isFalse();
+        assertThat(replayFailure.get()).as("the replay thread threw instead of abandoning cleanly").isNull();
         // Nothing was flushed to the read model...
         assertThat(state.get("a")).isNull();
         assertThat(state.get("b")).isNull();
