@@ -162,10 +162,11 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 416, met: false, evidence: null}
     blocking_on: []
-    next_action: "Plan APPROVED 2026-08-19T05:1xZ after verifying conventions against ADR 133 decision 7; topic-per-type resolver CONFIRMED on the epic plan's own words (topic-from-type-mapper). Two corrections: acks=all is SET explicitly when producerConfig omits it, not left to the client default (plus the refusal on an explicit lower value); KafkaPublishTimeoutException reserved for the expired acknowledgementTimeout (future get), Kafka's own TimeoutException maps to KafkaPublishException as retryable transient, and the timeout test warms metadata then stops the container instead of cold-unreachable (send blocks in max.block.ms otherwise and the wrong type surfaces). Worker implementing; next stop is the delivery protocol"
-    last_meaningful_progress_at: 2026-08-19T04:49:00Z
+    next_action: "PR 862 open, head 8770120d9 after the shard-coverage fix (broker/kafka/blocking registered in the misc shard beside the other broker modules; first head's second failure was the known Maven Central 429 in the dsl shard, diagnosed by the orchestrator, no worker round spent). Both plan-gate corrections implemented (acks=all set when absent, timeout exception mapping split with the warm-then-stop test). Worker parked on the foreground-wait rule: CI and Copilot pending at 8770120d9, mirror live. MERGE-GATE WATCH ITEM: KafkaCloudEventSinkAcknowledgementTimeoutTest is locally flaky under Colima (port-forward race on a fresh container's first use, reproduced with a bare KafkaProducer independent of sink code); if it flakes on CI, judge with the time-correlated-cause lesson, not rerun-survival alone"
+    last_meaningful_progress_at: 2026-08-19T06:5xZ
     observed:
       dispatch: {vehicle: "worktree subagent (Sonnet), act-007", claim: "comment 5337604969 + in-progress label read back", at: 2026-08-19T04:49:00Z}
+      pr_862: {head: "8770120d9", branch: "brk/u5-kafka-publish", rollup: "fresh matrix expected at this head", review: "Copilot requested via GraphQL", via: "worker delivery stop", at: 2026-08-19T06:5xZ}
     assessment: "Sonnet worktree subagent per Unattended terms. Mirrors U3's shape per the ADR convention section. Stream-id-keying tradeoff documented, never silent."
   U6:
     issue: 417
