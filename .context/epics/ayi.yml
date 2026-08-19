@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 26
-updated_at: 2026-08-19T03:34:50Z
+revision: 27
+updated_at: 2026-08-19T05:30:52Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -154,7 +154,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "INVARIANT PASS ordered 2026-08-19T03:34Z after rounds 5-7 each found the phase-source-vs-executing-model mismatch in a new composition variant: worker enumerates every registration path against the one invariant (phase from the same model instance that executes the subscription, else neverReplays plus WARN) in a single pass, plus both teardown-await races and three doc corrections. Then the U3 cap precedent applies: one final round, merge on clean or triaged non-blockers, a genuine blocker queues for Johan"
+    next_action: "Final slice returned 2026-08-19T05:30Z from the adversarial verify (invariant CONFIRMED on every path by execution; capped round was clean on the final head): fix the replay clear storm with a per-episode latch, scope the PR body's WARN sentence to the reactor stack (code follows ADR decision 8, prose overclaimed), two javadoc notes. Then merge WITHOUT a new Copilot round per the cap ruling, my verify covers the delta"
     last_meaningful_progress_at: 2026-08-18T20:17:44Z
     observed:
       plan: {path: "scratchpad/u4-approved-plan.md in the session scratchpad", approved: 2026-08-18T19:00:00Z, at: 2026-08-18T19:05:00Z}
