@@ -42,6 +42,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * Publishes a {@link CloudEvent} to Kafka, in the CloudEvents binary content mode
@@ -61,15 +62,15 @@ import static java.util.Objects.requireNonNull;
  * {@code key.serializer} and {@code value.serializer}, since this sink's wire format is fixed by
  * {@code KafkaMessageFactory}'s binary writer rather than left to the caller's configuration.
  * <p>
- * An acknowledgement timeout, five seconds by default, bounds the whole of {@link #publish(CloudEvent)}, not only
- * the wait on the send's {@link Future}. {@link Builder#build()} forces Kafka's own {@code max.block.ms} down to
- * this same timeout, so a {@code send} that needs a fresh view of the cluster, most often because the broker was
- * reachable when this producer last used it and has since gone away, cannot block on its own for up to Kafka's
- * default of a minute before the acknowledgement wait even begins. Either failure, {@code send} itself giving up on
- * the cluster or the broker never acknowledging a record it already accepted, fails the same way, with
- * {@link KafkaPublishTimeoutException} rather than blocking forever on a broker that never answers, and
- * {@link Builder#acknowledgementTimeout(Duration)} is not offered as something that can be turned off, for the same
- * reason {@link CloudEventSink}'s own javadoc gives.
+ * An acknowledgement timeout, five seconds by default, bounds one attempt inside {@link #publish(CloudEvent)}, the
+ * send itself and the wait for the broker's acknowledgement alike, not the call as a whole, see below for what
+ * bounds that instead. {@link Builder#build()} forces Kafka's own {@code max.block.ms} down to this same timeout,
+ * so a {@code send} that needs a fresh view of the cluster, most often because the broker was reachable when this
+ * producer last used it and has since gone away, cannot block on its own for up to Kafka's default of a minute
+ * before the acknowledgement wait even begins. Either failure inside that one attempt, {@code send} itself giving
+ * up on the cluster or the broker never acknowledging a record it already accepted, is reported the same way, with
+ * {@link KafkaPublishTimeoutException}, and {@link Builder#acknowledgementTimeout(Duration)} is not offered as
+ * something that can be turned off, for the same reason {@link CloudEventSink}'s own javadoc gives.
  * <p>
  * Unlike a RabbitMQ channel, sending on this sink's {@link Producer} needs no external serialization and an
  * abandoned wait needs no client-side cleanup. {@code KafkaProducer.send} and the {@link Future} it returns are
@@ -81,17 +82,20 @@ import static java.util.Objects.requireNonNull;
  * under {@code acks=all} already means the record was written to the partition leader and replicated, so there is
  * no equivalent of {@code RabbitMqUnroutableEventException} here.
  * <p>
- * A transient failure is retried under {@link Builder#retryStrategy(RetryStrategy)} before a caller sees it,
- * exponential backoff from 100 ms up to 2 seconds by default, only when Kafka itself marked the failure retriable.
- * A permanent failure, an unknown topic or an authorization error for example, is never retried by the default,
- * since ADR 133 asks this retry to guard against a transient failure and retrying a permanent one without limit
- * would keep {@link #publish(CloudEvent)} from ever returning. The retry is also not a substitute for the
- * acknowledgement wait, since a publish that was never acknowledged is not known to have failed, only unresolved.
- * Per ADR 133, an expired {@link KafkaPublishTimeoutException} is for the caller to decide on rather than
- * something this retry absorbs, so the default excludes it too.
+ * A retriable failure, everything except that timeout, is retried under {@link Builder#retryStrategy(RetryStrategy)}
+ * before a caller sees it, exponential backoff from 100 ms up to 2 seconds by default, only when Kafka itself
+ * marked the failure retriable. A permanent failure, an unknown topic or an authorization error for example, is
+ * never retried by the default, since ADR 133 asks this retry to guard against a transient failure and retrying a
+ * permanent one without limit would keep {@link #publish(CloudEvent)} from ever returning. A retriable failure has
+ * no such limit, the same choice {@code NativeMongoCheckpointStorage} makes for its own retried reads and writes,
+ * so a persistent outage keeps {@link #publish(CloudEvent)} retrying for as long as it lasts, bounded by this
+ * sink's own lifetime rather than by a count or the acknowledgement timeout, only by {@link #close()}. The retry
+ * is also not a substitute for the acknowledgement wait, since a publish that was never acknowledged is not known
+ * to have failed, only unresolved. Per ADR 133, an expired {@link KafkaPublishTimeoutException} is for the caller
+ * to decide on rather than something this retry absorbs, so the default excludes it too.
  * <p>
- * Call {@link #close()} once the sink is no longer needed. It closes the {@link Producer} this sink created and
- * owns.
+ * Call {@link #close()} once the sink is no longer needed. It stops any in-flight {@link #publish(CloudEvent)}
+ * retry loop from attempting again and closes the {@link Producer} this sink created and owns.
  */
 public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable {
 
@@ -102,11 +106,22 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
     private final Duration acknowledgementTimeout;
     private final RetryStrategy retryStrategy;
 
+    private volatile boolean shutdown = false;
+
     private KafkaCloudEventSink(Producer<String, byte[]> producer, DestinationResolver<KafkaDestination> resolver, Duration acknowledgementTimeout, RetryStrategy retryStrategy) {
         this.producer = producer;
         this.resolver = resolver;
         this.acknowledgementTimeout = acknowledgementTimeout;
         this.retryStrategy = retryStrategy;
+    }
+
+    /**
+     * Package-private constructor for tests. {@link Builder#build()} is the only public way to get a
+     * {@link Producer} into this sink, and it always builds a real {@link KafkaProducer} from a config map, so a
+     * test that needs a mocked {@link Producer} to force a specific failure or count attempts has no other way in.
+     */
+    static KafkaCloudEventSink forTesting(Producer<String, byte[]> producer, DestinationResolver<KafkaDestination> resolver, Duration acknowledgementTimeout, RetryStrategy retryStrategy) {
+        return new KafkaCloudEventSink(producer, resolver, acknowledgementTimeout, retryStrategy);
     }
 
     /**
@@ -125,7 +140,7 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
     @Override
     public void publish(CloudEvent cloudEvent) {
         requireNonNull(cloudEvent, "cloudEvent cannot be null");
-        retryStrategy.execute(() -> publishOnce(cloudEvent));
+        executeWithRetry(() -> publishOnce(cloudEvent), __ -> !shutdown, retryStrategy).run();
     }
 
     private void publishOnce(CloudEvent cloudEvent) {
@@ -175,13 +190,17 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
     }
 
     /**
-     * Closes the {@link Producer} this sink created and owns, waiting up to {@value #CLOSE_TIMEOUT_SECONDS} seconds
-     * for any outstanding send to finish. {@code Producer#close()} with no argument waits indefinitely instead, and
-     * an outstanding send to a broker that has gone away can otherwise hold this call open far longer than a caller
-     * closing this sink down would expect.
+     * Stops any in-flight {@link #publish(CloudEvent)} retry loop from attempting again, the same way
+     * {@code NativeMongoCheckpointStorage} stops its own retried operations on shutdown, then closes the
+     * {@link Producer} this sink created and owns, waiting up to {@value #CLOSE_TIMEOUT_SECONDS} seconds for any
+     * outstanding send to finish. {@code Producer#close()} with no argument waits indefinitely instead, and an
+     * outstanding send to a broker that has gone away can otherwise hold this call open far longer than a caller
+     * closing this sink down would expect. Setting the shutdown flag first does not interrupt a retry attempt
+     * already in progress, only the next one, the same limit that template accepts.
      */
     @Override
     public void close() {
+        shutdown = true;
         producer.close(Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS));
     }
 
@@ -242,6 +261,14 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
          * is always forced down to {@link #acknowledgementTimeout(Duration)}, regardless of what {@code producerConfig}
          * says, so a {@code send} that needs a fresh view of the cluster is bounded by the same timeout as the
          * acknowledgement wait rather than by Kafka's own unrelated default of a minute.
+         * <p>
+         * The {@code acks} check reads {@code producerConfig}'s value through {@code toString()}, since Kafka's own
+         * convention for this config is a string ({@code "0"}, {@code "1"}, {@code "all"}, {@code "-1"}), so an
+         * {@code Integer} or {@code Long} of {@code -1} passes this check without being caught as a weaker setting
+         * would be. That case still fails, just later and less specifically, when {@link KafkaProducer}'s own
+         * config validation refuses a non-string value for a string-typed key. It does not fail silently either
+         * way, so this is accepted rather than adding a second, stricter type check for a value shape Kafka's own
+         * documentation never asks a caller to use.
          */
         public KafkaCloudEventSink build() {
             Map<String, Object> config = new HashMap<>(producerConfig);
@@ -263,7 +290,12 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
             return "all".equals(acks) || "-1".equals(acks);
         }
 
-        private static RetryStrategy defaultRetryStrategy() {
+        /**
+         * Package-private, not private, so a test can build the exact same default a caller who never calls
+         * {@link #retryStrategy(RetryStrategy)} gets, rather than duplicating this predicate and risking it
+         * drifting from the real one.
+         */
+        static RetryStrategy defaultRetryStrategy() {
             return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)
                     .retryIf(throwable -> throwable instanceof KafkaPublishException publishException
                             && !(publishException instanceof KafkaPublishTimeoutException)
