@@ -144,7 +144,7 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 415, met: false, evidence: null}
     blocking_on: []
-    next_action: "Worker at the plan gate: first stop must be a PLAN ⌁[brk/U4#415] block, orchestrator approves or corrects on resume. Brief carries U11's per-surface DELIVERED caveat, stop-not-retry on UnreadableLiveFilterException, reuse of U3's 0-9-1 mapper, catchAllDestination default, changelog edit-in-place with keep-both rebase rule vs U5"
+    next_action: "Plan APPROVED 2026-08-19T05:0xZ with four corrections after verifying its claims against origin/main (ADR 133 decisions 1 and 6, RoutingOutcome javadoc): keep the isRunning poller (ADR-prescribed, the skip alternative would feed a stopped model); domain bridge gates consumption on hasProjection() via the same coarse poll instead of a hot nack-requeue spin, IllegalStateException stays the race fallback; UnreadableLiveFilterException stop leaves the in-flight delivery unacked, javadoc plus test; never-CatchupThenPush javadoc line and a real-model handler-exception propagation test. ThreadLocal outcome capture approved. Worker implementing; next stop is the delivery protocol"
     last_meaningful_progress_at: 2026-08-19T04:49:00Z
     observed:
       dispatch: {vehicle: "worktree subagent (Sonnet), act-006", claim: "comment 5337604731 + in-progress label read back", at: 2026-08-19T04:49:00Z}
@@ -161,7 +161,7 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 416, met: false, evidence: null}
     blocking_on: []
-    next_action: "Worker at the plan gate: first stop must be a PLAN ⌁[brk/U5#416] block, orchestrator approves or corrects on resume. Brief carries U3's module as the shape template with divergence needing written reasons, kafka-clients version ownership, checkpoint-after-acked-send with acks=all, changelog edit-in-place with keep-both rebase rule vs U4"
+    next_action: "Plan APPROVED 2026-08-19T05:1xZ after verifying conventions against ADR 133 decision 7; topic-per-type resolver CONFIRMED on the epic plan's own words (topic-from-type-mapper). Two corrections: acks=all is SET explicitly when producerConfig omits it, not left to the client default (plus the refusal on an explicit lower value); KafkaPublishTimeoutException reserved for the expired acknowledgementTimeout (future get), Kafka's own TimeoutException maps to KafkaPublishException as retryable transient, and the timeout test warms metadata then stops the container instead of cold-unreachable (send blocks in max.block.ms otherwise and the wrong type surfaces). Worker implementing; next stop is the delivery protocol"
     last_meaningful_progress_at: 2026-08-19T04:49:00Z
     observed:
       dispatch: {vehicle: "worktree subagent (Sonnet), act-007", claim: "comment 5337604969 + in-progress label read back", at: 2026-08-19T04:49:00Z}
