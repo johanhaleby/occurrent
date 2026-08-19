@@ -144,10 +144,11 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 415, met: false, evidence: null}
     blocking_on: []
-    next_action: "Plan APPROVED 2026-08-19T05:0xZ with four corrections after verifying its claims against origin/main (ADR 133 decisions 1 and 6, RoutingOutcome javadoc): keep the isRunning poller (ADR-prescribed, the skip alternative would feed a stopped model); domain bridge gates consumption on hasProjection() via the same coarse poll instead of a hot nack-requeue spin, IllegalStateException stays the race fallback; UnreadableLiveFilterException stop leaves the in-flight delivery unacked, javadoc plus test; never-CatchupThenPush javadoc line and a real-model handler-exception propagation test. ThreadLocal outcome capture approved. Worker implementing; next stop is the delivery protocol"
+    next_action: "PR 861 open at c2204580 with all four plan-gate corrections implemented (both bridges, mapper reverse direction, coarse poll gating isRunning/hasProjection, never-ack on the UnreadableLiveFilterException stop, 15 new tests with 6 mutation-tested, changelog edited in place with #415 added to Resolves). Worker parked on the foreground-wait rule: CI pending, Copilot requested via GraphQL and confirmed in reviewRequests, mirror comment 5337966486 live. On CI completion or review landing: resume the worker for the review loop; merge gate plus adversarial verify after its delivery verdict. New supporting surface (RabbitMqTopology, SingleDestinationResolver, RabbitMqBridgeException) noted for the verify pass"
     last_meaningful_progress_at: 2026-08-19T04:49:00Z
     observed:
       dispatch: {vehicle: "worktree subagent (Sonnet), act-006", claim: "comment 5337604731 + in-progress label read back", at: 2026-08-19T04:49:00Z}
+      pr_861: {head: "c2204580998d057beb703aa5d8853aa3446b1987", branch: "brk/u4-rabbitmq-consume", rollup: "0fail running", review: "in the worker's loop", via: "monitor PR-DELTA", at: 2026-08-19T05:4xZ}
     assessment: "Sonnet worktree subagent per Unattended terms. @RabbitSaga maintainer comment on #415 is future-module inspiration, explicitly out of remit."
   U5:
     issue: 416
