@@ -69,6 +69,41 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
         }
     }
 
+    /**
+     * The domain bridge's own copy of {@code RabbitMqCloudEventBridgeTest}'s numeric-extension round-trip test.
+     * Both bridges share {@code RabbitMqCloudEventMapper}, so the fix covers both, but this exact class of bug, a
+     * rebuilt CloudEvent losing the type a live filter needs to match it, has bitten this bridge twice already, so
+     * it gets its own direct proof rather than relying on the CloudEvent bridge's coverage alone.
+     */
+    @Test
+    void a_numeric_extension_survives_the_broker_round_trip_so_a_stream_version_filter_still_matches_it() throws Exception {
+        String queue = declareAndBindQueue(TestOrderPlaced.class.getName());
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()).and(Filter.streamVersion(Condition.eq(3L))));
+        feed.goLive("proj");
+
+        try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = RabbitMqDomainEventBridge.builder(connection(), feed, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .build()) {
+            CloudEvent cloudEvent = CloudEventBuilder.v1()
+                    .withId("id-1")
+                    .withSource(URI.create("urn:test"))
+                    .withType(TestOrderPlaced.class.getName())
+                    .withDataContentType("text/plain")
+                    .withData("order-1".getBytes(StandardCharsets.UTF_8))
+                    .withExtension("streamid", "stream-1")
+                    .withExtension("streamversion", 3L)
+                    .build();
+            BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, Map.of());
+            adminChannel.basicPublish(exchange, TestOrderPlaced.class.getName(), properties, RabbitMqCloudEventMapper.toBody(cloudEvent));
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
+        }
+    }
+
     @Test
     void the_bridge_does_not_consume_before_a_projection_is_registered_then_starts_once_one_is() throws Exception {
         String queue = declareAndBindQueue(TestOrderPlaced.class.getName());

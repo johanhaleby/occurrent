@@ -28,6 +28,7 @@ import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.MaterializedView;
+import org.occurrent.dsl.view.ReplayAware;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
@@ -35,8 +36,11 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.CatchupThenLiveOptions;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.UnreadableLiveFilterException;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.net.URI;
@@ -480,6 +484,164 @@ class DomainEventFeedTest {
 
         feed.catchUpAll();
         assertThat(feed.isReadyForLiveDelivery()).as("a later catch-up revives it the same way the first one did").isTrue();
+    }
+
+    /**
+     * The invariant round 8 only closed for one exit out of {@code catchUp()}: a replay stopped mid-flight. Copilot,
+     * and separately an adversarial verifier with a sharper reproduction ({@code replayStarted()} itself throwing,
+     * before {@code BlockingHandover} ever marks a replay open), both found the same defect one layer out.
+     * {@code handover.catchUp(..)} can fail before, during or after the replay in several distinct ways, and every
+     * one of them leaves the handover refusing every later delivery. {@code isReadyForLiveDelivery()} must read
+     * false after every one of them, not only the one this suite happened to cover first, so this asserts the
+     * invariant against four different failure sources rather than pinning the fix to a single throw site.
+     */
+    @Test
+    void catch_up_clears_readiness_on_every_distinct_way_it_can_fail_to_reach_live() {
+        // 1. isAlreadyCaughtUp() throws, before any replay is even attempted.
+        InMemoryEventStore store1 = new InMemoryEventStore();
+        DomainEventFeed<Counted> feed1 = new DomainEventFeed<>(store1, counterConverter(), Counted::eventId, throwingOnExistsCheckpointStorage());
+        feed1.register("counter", projection(), ViewStateRepository.create(new ConcurrentHashMap<String, Integer>()::get, (id, s) -> {
+        }));
+        assertThat(catchThrowable(feed1::catchUpAll)).isNotNull();
+        assertThat(feed1.isReadyForLiveDelivery()).as("isAlreadyCaughtUp() threw before any replay started").isFalse();
+
+        // 2. replayStarted() throws, the moment BlockingHandover tells the view a replay is beginning, before it
+        // ever marks the replay open. A plain per-throw-site fix inside replayAbandoned() cannot see this one,
+        // since replayAbandoned() itself is never called for it.
+        InMemoryEventStore store2 = new InMemoryEventStore();
+        DomainEventFeed<Counted> feed2 = new DomainEventFeed<>(store2, counterConverter(), Counted::eventId);
+        feed2.register("counter", viewThatThrowsOnReplayStarted(), Filter.type(counterConverter().getCloudEventType(Counted.class)));
+        assertThat(catchThrowable(feed2::catchUpAll)).isNotNull();
+        assertThat(feed2.isReadyForLiveDelivery()).as("replayStarted() threw before the replay was ever marked open").isFalse();
+
+        // 3. A replayed event's own decode throws, mid-replay.
+        InMemoryEventStore store3 = new InMemoryEventStore();
+        store3.write("s", counterConverter().toCloudEvents(List.of(new Counted("1"))));
+        CloudEventConverter<Counted> throwingConverter = new CloudEventConverter<>() {
+            @Override
+            public CloudEvent toCloudEvent(Counted domainEvent) {
+                return counterConverter().toCloudEvent(domainEvent);
+            }
+
+            @Override
+            public Counted toDomainEvent(CloudEvent cloudEvent) {
+                throw new IllegalStateException("decode boom");
+            }
+
+            @Override
+            public String getCloudEventType(Class<? extends Counted> type) {
+                return counterConverter().getCloudEventType(type);
+            }
+        };
+        DomainEventFeed<Counted> feed3 = new DomainEventFeed<>(store3, throwingConverter, Counted::eventId);
+        feed3.register("counter", projection(), ViewStateRepository.create(new ConcurrentHashMap<String, Integer>()::get, (id, s) -> {
+        }));
+        assertThat(catchThrowable(feed3::catchUpAll)).isNotNull();
+        assertThat(feed3.isReadyForLiveDelivery()).as("the replayed event's own decode threw mid-replay").isFalse();
+
+        // 4. markCaughtUp() throws, after the (empty) replay and the buffered drain both succeeded.
+        InMemoryEventStore store4 = new InMemoryEventStore();
+        DomainEventFeed<Counted> feed4 = new DomainEventFeed<>(store4, counterConverter(), Counted::eventId, throwingOnSaveCheckpointStorage());
+        feed4.register("counter", projection(), ViewStateRepository.create(new ConcurrentHashMap<String, Integer>()::get, (id, s) -> {
+        }));
+        assertThat(catchThrowable(feed4::catchUpAll)).isNotNull();
+        assertThat(feed4.isReadyForLiveDelivery()).as("markCaughtUp() threw after the replay and the drain both succeeded").isFalse();
+
+        // 5. The buffered drain itself throws. A live event fed ahead of catchUpAll() folds successfully nowhere
+        // near a replay (the store is empty), only when the drain the empty replay's shortcut still runs delivers it.
+        InMemoryEventStore store5 = new InMemoryEventStore();
+        DomainEventFeed<Counted> feed5 = new DomainEventFeed<>(store5, counterConverter(), Counted::eventId);
+        MaterializedView<Counted> throwingView = event -> {
+            throw new IllegalStateException("drain boom");
+        };
+        feed5.register("counter", throwingView, Filter.type(counterConverter().getCloudEventType(Counted.class)));
+        feed5.accept(new Counted("buffered"));
+        assertThat(catchThrowable(feed5::catchUpAll)).isNotNull();
+        assertThat(feed5.isReadyForLiveDelivery()).as("the buffered live event's own fold threw during the drain").isFalse();
+    }
+
+    private static CheckpointStorage throwingOnExistsCheckpointStorage() {
+        return new CheckpointStorage() {
+            @Override
+            public Checkpoint read(String subscriptionId) {
+                throw new AssertionError("read should not be called in this scenario");
+            }
+
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                throw new AssertionError("save should not be called in this scenario");
+            }
+
+            @Override
+            public void delete(String subscriptionId) {
+                throw new AssertionError("delete should not be called in this scenario");
+            }
+
+            @Override
+            public boolean exists(String subscriptionId) {
+                throw new IllegalStateException("exists boom");
+            }
+
+            @Override
+            public java.util.OptionalLong writeVersion(String subscriptionId) {
+                throw new AssertionError("writeVersion should not be called in this scenario");
+            }
+        };
+    }
+
+    private static CheckpointStorage throwingOnSaveCheckpointStorage() {
+        return new CheckpointStorage() {
+            @Override
+            public Checkpoint read(String subscriptionId) {
+                throw new AssertionError("read should not be called in this scenario");
+            }
+
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                throw new IllegalStateException("save boom");
+            }
+
+            @Override
+            public void delete(String subscriptionId) {
+                throw new AssertionError("delete should not be called in this scenario");
+            }
+
+            @Override
+            public boolean exists(String subscriptionId) {
+                return false;
+            }
+
+            @Override
+            public java.util.OptionalLong writeVersion(String subscriptionId) {
+                throw new AssertionError("writeVersion should not be called in this scenario");
+            }
+        };
+    }
+
+    private static MaterializedView<Counted> viewThatThrowsOnReplayStarted() {
+        class ThrowingView implements MaterializedView<Counted>, ReplayAware {
+            @Override
+            public void update(Counted event) {
+                // Never reached in this scenario. replayStarted() throws before any event is folded.
+            }
+
+            @Override
+            public void replayStarted() {
+                throw new IllegalStateException("replayStarted boom");
+            }
+
+            @Override
+            public void replayCompleted() {
+                throw new AssertionError("replayCompleted should not be called in this scenario");
+            }
+
+            @Override
+            public void replayAbandoned() {
+                throw new AssertionError("replayAbandoned should not be called in this scenario, " +
+                        "since replayStarted() throwing must leave the replay never marked open");
+            }
+        }
+        return new ThrowingView();
     }
 
     private static CloudEventConverter<Counted> parkingConverter(AtomicInteger converted, CountDownLatch parked, CountDownLatch proceed) {

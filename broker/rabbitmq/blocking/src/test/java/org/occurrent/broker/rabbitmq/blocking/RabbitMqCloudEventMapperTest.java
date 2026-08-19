@@ -29,6 +29,7 @@ import java.util.Base64;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RabbitMqCloudEventMapperTest {
 
@@ -201,6 +202,36 @@ class RabbitMqCloudEventMapperTest {
 
         assertThat(rebuilt.getExtensionNames()).doesNotContain("tenant");
         assertThat(rebuilt.getAttributeNames()).doesNotContain("tenant");
+    }
+
+    /**
+     * {@code streamversion} and {@code position} are restored as a {@code Long}, which means parsing one that is
+     * not actually numeric throws rather than silently keeping it a String. A message this mapper never wrote (a
+     * corrupted header, or one from a producer that does not follow this mapping) can carry either. The bridges
+     * already route any {@link RuntimeException} out of {@code toCloudEvent} to their undecodable-message path
+     * rather than acking or crashing on it, so this only has to prove the throw itself, not the bridge behaviour.
+     */
+    @Test
+    void toCloudEvent_throws_on_a_non_numeric_streamversion_or_position_header_rather_than_silently_keeping_it_a_string() {
+        BasicProperties streamversionProperties = new BasicProperties.Builder()
+                .headers(Map.of(
+                        "cloudEvents_id", "id-1",
+                        "cloudEvents_source", "urn:test",
+                        "cloudEvents_type", "t",
+                        "cloudEvents_streamversion", "not-a-number"))
+                .build();
+        assertThatThrownBy(() -> RabbitMqCloudEventMapper.toCloudEvent(streamversionProperties, new byte[0]))
+                .isInstanceOf(NumberFormatException.class);
+
+        BasicProperties positionProperties = new BasicProperties.Builder()
+                .headers(Map.of(
+                        "cloudEvents_id", "id-1",
+                        "cloudEvents_source", "urn:test",
+                        "cloudEvents_type", "t",
+                        "cloudEvents_position", "not-a-number"))
+                .build();
+        assertThatThrownBy(() -> RabbitMqCloudEventMapper.toCloudEvent(positionProperties, new byte[0]))
+                .isInstanceOf(NumberFormatException.class);
     }
 
     private static CloudEvent minimalCloudEvent() {
