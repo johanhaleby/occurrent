@@ -180,6 +180,37 @@ class BlockingHandoverTest {
         assertThat(thrownByAccept.getCause()).isSameAs(replayFailure);
     }
 
+    /**
+     * The direct case for the accessor {@code CatchupProjectionFeed} and {@code DomainEventFeed} delegate to. Covers
+     * all three states it distinguishes, not yet live, live, and permanently failed. The failure half matters most.
+     * A later catch-up that itself reaches live must not revive a handover an earlier failure already poisoned, and
+     * that is exactly what the round-11 delegation exists to get right.
+     */
+    @Test
+    void is_ready_for_live_delivery_is_false_before_catch_up_true_once_live_and_false_forever_after_a_failure() {
+        BlockingHandover<String> handover = handover(new ArrayList<>());
+
+        assertThat(handover.isReadyForLiveDelivery()).as("nothing has run yet").isFalse();
+
+        handover.catchUp(source(List.of("R1"), false));
+        assertThat(handover.isReadyForLiveDelivery()).as("the catch-up reached live").isTrue();
+
+        RuntimeException replayFailure = new RuntimeException("replay boom");
+        FakeSource failingSource = source(List.of(), false);
+        failingSource.replayFailure = replayFailure;
+        Throwable thrown = catchThrowable(() -> handover.catchUp(failingSource));
+        assertThat(thrown).isSameAs(replayFailure);
+
+        assertThat(handover.isReadyForLiveDelivery()).as("a failed catch-up leaves this permanently false, even "
+                        + "though an earlier attempt had reached live")
+                .isFalse();
+
+        handover.catchUp(source(List.of("R2"), false));
+        assertThat(handover.isReadyForLiveDelivery()).as("a later catch-up reaching live does not clear an earlier "
+                        + "failure, since catchUpFailure is recorded once and never cleared")
+                .isFalse();
+    }
+
     @Test
     void accept_and_catch_up_reject_null_arguments_eagerly() {
         BlockingHandover<String> handover = handover(new ArrayList<>());

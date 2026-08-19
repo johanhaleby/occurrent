@@ -28,16 +28,10 @@ import org.occurrent.retry.RetryStrategy;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * Publishes a {@link CloudEvent} to RabbitMQ, in the CloudEvents binary content mode
@@ -66,118 +60,29 @@ import static java.util.Objects.requireNonNull;
  * {@link Channel}.
  * <p>
  * A transient failure is retried under {@link Builder#retryStrategy(RetryStrategy)} before a caller sees it,
- * exponential backoff from 100 ms up to 2 seconds by default. The retry is not a substitute for the acknowledgement
- * wait, since a publish that was never acknowledged is not known to have failed, only unresolved. Per ADR 133, an
- * expired {@link RabbitMqPublishTimeoutException} is for the caller to decide on rather than something this retry
- * absorbs, so the default excludes it, along with {@link RabbitMqUnroutableEventException}, a channel this client
- * has already closed, an interrupted wait, and an unrecognised cloud event type from the resolver, none of which a
- * retry can turn into success.
+ * exponential backoff from 100 ms up to 2 seconds by default and no cap on the number of attempts. The retry is not
+ * a substitute for the acknowledgement wait, since a publish that was never acknowledged is not known to have
+ * failed, only unresolved. Per ADR 133, an expired {@link RabbitMqPublishTimeoutException} is for the caller to
+ * decide on rather than something this retry absorbs, so the default excludes it, along with
+ * {@link RabbitMqUnroutableEventException}, a channel this client has already closed, an interrupted wait, and an
+ * unrecognised cloud event type from the resolver, none of which a retry can turn into success. What stops an
+ * uncapped retry from outliving its caller is {@link #close()}, not a limit on attempts. Once called, the attempt
+ * already in flight is the last one, and {@link #publish(CloudEvent)} returns by throwing rather than retrying again.
  * <p>
  * Call {@link #close()} once the sink is no longer needed. It closes the {@link Channel} this sink created, not the
  * {@link Connection} it was given, since the connection may be shared with other channels the caller still owns.
  */
 public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseable {
 
-    /**
-     * Caps {@link #returnedCorrelationIds}. A publish that never removes its own correlationId, one whose
-     * acknowledgement timed out and was later returned anyway, would otherwise grow that set forever under
-     * repeated timeouts. Publishes are serialized on this sink's channel, so at most one correlationId is genuinely
-     * in flight at a time, well inside this cap, and the oldest entries are evicted first when it is exceeded.
-     */
-    private static final int MAX_TRACKED_RETURNED_CORRELATION_IDS = 10_000;
-
-    private final Connection connection;
-    private volatile Channel channel;
     private final DestinationResolver<RabbitMqDestination> resolver;
-    private final Duration acknowledgementTimeout;
     private final RetryStrategy retryStrategy;
-    private final Lock publishLock = new ReentrantLock();
-    private final Set<String> returnedCorrelationIds = Collections.synchronizedSet(Collections.newSetFromMap(
-            new LinkedHashMap<String, Boolean>() {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
-                    return size() > MAX_TRACKED_RETURNED_CORRELATION_IDS;
-                }
-            }));
+    private final RabbitMqConfirmPublisher publisher;
+    private volatile boolean shutdown;
 
-    private RabbitMqCloudEventSink(Connection connection, Channel channel, DestinationResolver<RabbitMqDestination> resolver, Duration acknowledgementTimeout, RetryStrategy retryStrategy) {
-        this.connection = connection;
-        this.channel = channel;
+    private RabbitMqCloudEventSink(DestinationResolver<RabbitMqDestination> resolver, RetryStrategy retryStrategy, RabbitMqConfirmPublisher publisher) {
         this.resolver = resolver;
-        this.acknowledgementTimeout = acknowledgementTimeout;
         this.retryStrategy = retryStrategy;
-        installReturnListener(channel);
-    }
-
-    private void installReturnListener(Channel channel) {
-        channel.addReturnListener(returned -> {
-            String correlationId = returned.getProperties().getCorrelationId();
-            if (correlationId != null) {
-                returnedCorrelationIds.add(correlationId);
-            }
-        });
-    }
-
-    private static Channel openConfirmChannel(Connection connection) {
-        try {
-            // createChannel() returns null rather than throwing when no channel number is available, so
-            // openChannel()'s Optional is used instead of risking a bare NullPointerException out of confirmSelect().
-            Channel channel = connection.openChannel()
-                    .orElseThrow(() -> new RabbitMqPublishException("No RabbitMQ channel number was available to create a confirm-mode channel on"));
-            channel.confirmSelect();
-            return channel;
-        } catch (IOException e) {
-            throw new RabbitMqPublishException("Failed to create a confirm-mode RabbitMQ channel", e);
-        } catch (ShutdownSignalException e) {
-            // openChannel() throws this unchecked, not as an IOException, when the connection is itself already
-            // closed. Wrapped the same way as every other RabbitMQ client failure here, so retireChannelPreserving
-            // recognises it as this sink's own failure type rather than letting it replace the primary failure
-            // it belongs on.
-            throw new RabbitMqPublishException("Failed to create a confirm-mode RabbitMQ channel because the connection is shut down", e);
-        }
-    }
-
-    // Called under publishLock, after waitForConfirms has ended without confirming or denying the publish, by
-    // timeout or by interruption. The RabbitMQ client leaves that publish's delivery tag outstanding on the channel
-    // forever, so a later publish on the same channel would wait on it too and could inherit its eventual nack.
-    // Retiring the channel and opening a fresh one keeps that abandoned publish's outcome from ever being
-    // attributed to a later, unrelated one.
-    //
-    // The old channel's close runs on its own thread rather than this one. Channel#close() sends the close
-    // handshake and then blocks, waiting up to the RabbitMQ client's own fixed ten second RPC timeout for the
-    // reply, a wait acknowledgementTimeout does not govern, so waiting for it here would let a slow broker stall
-    // this publish call by far more than the timeout it was configured with. The replacement is opened without
-    // waiting for that close to finish, which can occasionally race a connection with no spare channel number to
-    // hand out until the old one's number is actually freed, a case openConfirmChannel already turns into a clear
-    // failure rather than a hang.
-    private void retireChannel() {
-        Channel retiring = channel;
-        Thread.ofVirtual().start(() -> closeQuietly(retiring));
-        Channel replacement = openConfirmChannel(connection);
-        installReturnListener(replacement);
-        channel = replacement;
-    }
-
-    // A failure to reopen the channel here is attached to primaryFailure as suppressed rather than thrown in its
-    // place, so the caller of this publish still sees the failure it actually asked about (a timeout or an
-    // interruption), not this secondary one. If reopening fails, the channel field is left pointing at the channel
-    // this call just retired, whose close is still running on its own thread, so a publish after this one either
-    // fails fast on it or waits on the same outstanding confirm it already would have without this retirement.
-    private void retireChannelPreserving(Throwable primaryFailure) {
-        try {
-            retireChannel();
-        } catch (RabbitMqPublishException retireFailure) {
-            primaryFailure.addSuppressed(retireFailure);
-        }
-    }
-
-    private static void closeQuietly(Channel channel) {
-        try {
-            channel.close();
-        } catch (IOException | TimeoutException | RuntimeException ignored) {
-            // Best effort. This channel already failed to confirm a publish in time, so any error closing it is
-            // discarded along with the channel itself.
-        }
+        this.publisher = publisher;
     }
 
     /**
@@ -192,62 +97,38 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
     @Override
     public void publish(CloudEvent cloudEvent) {
         requireNonNull(cloudEvent, "cloudEvent cannot be null");
-        retryStrategy.execute(() -> publishOnce(cloudEvent));
+        // executeWithRetry, not retryStrategy.execute: the latter hardcodes a shutdown predicate that never trips,
+        // so a persistent-but-retriable failure would retry forever with no way for close() to cut it short. The
+        // attempt count itself stays uncapped by design, the same choice NativeMongoCheckpointStorage makes for the
+        // same reason, but a retry started before close() is called must not outlive this sink.
+        executeWithRetry(() -> publishOnce(cloudEvent), __ -> !shutdown, retryStrategy).run();
     }
 
     private void publishOnce(CloudEvent cloudEvent) {
         RabbitMqDestination destination = resolver.destinationFor(cloudEvent);
-        // basic.return carries no delivery tag, so this internal correlationId is the only way to tell which
-        // publish a return belongs to. It is not part of the CloudEvent mapping and carries no other meaning.
-        String correlationId = UUID.randomUUID().toString();
-        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers())
-                .builder().correlationId(correlationId).build();
+        // Body computed once and passed into toBasicProperties(..., byte[]) rather than calling the two-argument
+        // overload, so cloudEvent's lazily-serializing data is not serialized a second time on this publish.
         byte[] body = RabbitMqCloudEventMapper.toBody(cloudEvent);
-
-        publishLock.lock();
-        try {
-            channel.basicPublish(destination.exchange(), destination.routingKey(), true, properties, body);
-            // waitForConfirms, not waitForConfirmsOrDie: the latter closes this sink's own long-lived channel on a
-            // nack or a timeout, which would fail every later publish on it too. A nack is reported through the
-            // boolean return instead.
-            boolean acknowledged = channel.waitForConfirms(acknowledgementTimeout.toMillis());
-            if (!acknowledged) {
-                throw new RabbitMqPublishException("Broker sent a negative acknowledgement for a publish to exchange \"" +
-                        destination.exchange() + "\" with routing key \"" + destination.routingKey() + "\"");
-            }
-            if (returnedCorrelationIds.remove(correlationId)) {
-                throw new RabbitMqUnroutableEventException(destination.exchange(), destination.routingKey());
-            }
-        } catch (IOException e) {
-            throw new RabbitMqPublishException("Failed to publish to exchange \"" + destination.exchange() +
-                    "\" with routing key \"" + destination.routingKey() + "\"", e);
-        } catch (ShutdownSignalException e) {
-            // A dropped connection or channel surfaces here as an unchecked ShutdownSignalException, not as an
-            // IOException, so it needs its own catch to reach the retry strategy at all.
-            throw new RabbitMqPublishException("Channel or connection shut down while publishing to exchange \"" +
-                    destination.exchange() + "\" with routing key \"" + destination.routingKey() + "\"", e);
-        } catch (TimeoutException e) {
-            RabbitMqPublishTimeoutException timeoutException = new RabbitMqPublishTimeoutException(acknowledgementTimeout, e);
-            retireChannelPreserving(timeoutException);
-            throw timeoutException;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            // The unconfirmed publish is abandoned here too, exactly as it is on a confirm-wait timeout, so a later
-            // publish on this channel must not be left to wait on it or be failed by its eventual nack.
-            RabbitMqPublishException interruptedException = new RabbitMqPublishException("Interrupted while waiting for a RabbitMQ publisher confirm", e);
-            retireChannelPreserving(interruptedException);
-            throw interruptedException;
-        } finally {
-            publishLock.unlock();
-        }
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers(), body);
+        publisher.publish(destination.exchange(), destination.routingKey(), properties, body);
     }
 
     /**
-     * Closes the {@link Channel} this sink created. Does not close the {@link Connection} it was built from.
+     * Closes the {@link Channel} this sink created. Does not close the {@link Connection} it was built from. Also
+     * stops a {@link #publish(CloudEvent)} call that is still retrying a persistent-but-retriable failure on another
+     * thread, rather than leaving it to retry indefinitely behind a shutdown that is waiting for it, but not the
+     * instant this is called. The shutdown flag this sets is only read the next time a failed attempt decides
+     * whether to retry, and that decision happens before the backoff sleep for it, not after, so a
+     * {@link #close()} landing during that sleep still waits out the full delay and then runs one more attempt
+     * against the now-closed publisher before that attempt's own failure finally reads the flag and stops the
+     * retry. With the default backoff, capped at two seconds, that is a couple of seconds. A caller-supplied
+     * {@link Builder#retryStrategy(RetryStrategy)} with a longer backoff delays this by that much instead, since
+     * nothing here interrupts a sleep already in progress.
      */
     @Override
     public void close() throws IOException, TimeoutException {
-        channel.close();
+        shutdown = true;
+        publisher.close();
     }
 
     public static final class Builder {
@@ -262,11 +143,14 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         }
 
         /**
-         * How long {@link #publish(CloudEvent)} waits for the broker's publisher confirm before failing with
-         * {@link RabbitMqPublishTimeoutException}. Five seconds by default. This is a timeout, not a switch.
-         * There is deliberately no way to publish without waiting for it, for the reason {@link CloudEventSink}'s
-         * javadoc gives, so a duration that truncates to zero or fewer milliseconds is refused rather than accepted
-         * and read by the RabbitMQ client as "wait indefinitely".
+         * How long a single attempt of {@link #publish(CloudEvent)} waits for the broker's publisher confirm before
+         * failing that attempt with {@link RabbitMqPublishTimeoutException}. Five seconds by default. This bounds
+         * one confirm wait, not the call as a whole, since a failed attempt that {@link #retryStrategy(RetryStrategy)}
+         * retries is followed by another wait of up to this same duration, and {@link #publish(CloudEvent)} itself is
+         * bounded only by how long the sink stays open, not by this timeout. This is a timeout, not a switch. There
+         * is deliberately no way to publish without waiting for it, for the reason {@link CloudEventSink}'s javadoc
+         * gives, so a duration that truncates to zero or fewer milliseconds is refused rather than accepted and read
+         * by the RabbitMQ client as "wait indefinitely".
          */
         public Builder acknowledgementTimeout(Duration acknowledgementTimeout) {
             requireNonNull(acknowledgementTimeout, "acknowledgementTimeout cannot be null");
@@ -292,8 +176,8 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
         }
 
         public RabbitMqCloudEventSink build() {
-            Channel channel = openConfirmChannel(connection);
-            return new RabbitMqCloudEventSink(connection, channel, resolver, acknowledgementTimeout, retryStrategy);
+            RabbitMqConfirmPublisher publisher = new RabbitMqConfirmPublisher(connection, acknowledgementTimeout);
+            return new RabbitMqCloudEventSink(resolver, retryStrategy, publisher);
         }
 
         /**

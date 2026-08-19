@@ -218,6 +218,13 @@ public final class CatchupProjectionFeed<E> {
         return id;
     }
 
+    // Package-private. Delegates to the handover instead of tracking a second copy of its own live/failed state,
+    // since every past attempt at keeping that copy in sync found another way it could drift from the original.
+    // See BlockingHandover.isReadyForLiveDelivery()'s own javadoc for exactly what this answers.
+    boolean isReadyForLiveDelivery() {
+        return handover.isReadyForLiveDelivery();
+    }
+
     /**
      * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), then drain
      * the buffered live events and go live. Skipped if the catch-up marker already records completion. Call this once,

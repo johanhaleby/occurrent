@@ -175,6 +175,24 @@ public final class DomainEventFeed<E> {
     }
 
     /**
+     * Whether the registered projection can safely be fed a live event right now, so a listener can gate its own
+     * consumption on more than just {@link #hasProjection()}. Delegates to the underlying catch-up-then-live
+     * handover rather than tracking this separately, so it is {@code true} only once
+     * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has actually reached live,
+     * {@code false} while either is still replaying or buffering ahead of its own drain, and {@code false} forever
+     * once either has thrown, since that failure is permanent and a later call reaching live does not clear it. A
+     * live event fed through {@link #acceptCloudEvent(CloudEvent)} while this answers {@code false} only ever
+     * buffers, or is dropped outright, and {@link #acceptCloudEvent(CloudEvent)}'s own javadoc covers what it
+     * reports for both. {@code false} for an unregistered feed, the same as {@link #hasProjection()} rather than
+     * the {@link IllegalStateException} {@link #accept(Object)} throws, so a listener can check both together
+     * before it has anything registered at all.
+     */
+    public boolean isReadyForLiveDelivery() {
+        Registered<E> registered = feed.get();
+        return registered != null && registered.catchupFeed().isReadyForLiveDelivery();
+    }
+
+    /**
      * Feed a live domain event to the registered projection, on the calling thread. Call this from the broker
      * listener, acknowledging the message only once it returns. An exception from the projection propagates.
      *
@@ -228,17 +246,26 @@ public final class DomainEventFeed<E> {
      * Whichever of the two this first call produces, a working matcher or the refusal below, is then cached and
      * reused for every call after that against the same registration, rather than rebuilt each time.
      * <p>
-     * Reports {@link RoutingOutcome#NOT_DELIVERABLE} rather than {@link RoutingOutcome#DELIVERED} when a matching
-     * event arrives after {@link #stopCatchUp()} interrupted a replay still in flight. The catch-up-then-live engine
-     * behind this feed drops such an event rather than delivering or buffering it, and this method reads that
-     * signal back instead of assuming delivery from a normal return.
+     * Reports {@link RoutingOutcome#NOT_DELIVERABLE} rather than {@link RoutingOutcome#DELIVERED} for a matching
+     * event that only reaches the buffer, not the view, whatever the reason. {@link #isReadyForLiveDelivery()} is
+     * what decides this, and it answers only whether the underlying handover is live right now, not whether a
+     * buffered event happens to be safe because an actual replay backs it. That covers an event fed before
+     * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has been called at all, one fed
+     * while a replay is still running and buffering ahead of its own drain, and one fed after
+     * {@link #stopCatchUp()} interrupted a replay in flight. None of those three lose the event, since the
+     * catch-up-then-live engine still folds a buffered one once its drain runs, or a later {@link #catchUpAll()}
+     * replays it again from the store if the attempt that buffered it never reaches a drain at all, but this method
+     * does not try to tell a safe case apart from an unsafe one. {@link #goLive(String)} exists precisely for a
+     * registration whose events are not in the local store, where a buffered-then-lost event has nothing to replay
+     * it back from, and this feed has no way to know in advance which kind of registration it is fielding an event
+     * for, so it answers the same way for all three.
      * <p>
-     * A matching event that arrives <em>before</em> a stop, while the catch-up is still buffering live events for
-     * the drain that follows the replay, still reports {@link RoutingOutcome#DELIVERED}, even though a stop right
-     * afterwards means that buffered event will not actually be folded by this attempt. That is the same contract
-     * the catch-up-then-live engine already keeps for {@link #accept(Object)}: nothing is lost, because the
-     * completion marker is never recorded for an interrupted attempt, so the next {@link #catchUpAll()} replays the
-     * whole history again, including this event, from the store rather than from the buffer.
+     * {@link #isReadyForLiveDelivery()} is read before this event is handed to the underlying handover, not after.
+     * A concurrent {@link #goLive(String)} can claim and start folding this exact event the instant it lands in the
+     * buffer, so reading readiness afterward could observe that claim as already live before the fold it depends on
+     * has actually completed, reporting {@link RoutingOutcome#DELIVERED} for a copy the caller then acknowledges
+     * away before it is provably safe. Reading it first is conservative instead, at the cost of an occasional extra
+     * redelivery a de-dup key absorbs for free.
      *
      * @throws IllegalStateException if no projection is registered on this feed, for the reason
      *                               {@link #accept(Object)} gives. Refused rather than reported as
@@ -266,8 +293,11 @@ public final class DomainEventFeed<E> {
             return RoutingOutcome.FILTERED;
         }
         E event = converter.toDomainEvent(cloudEvent);
-        boolean delivered = registered.catchupFeed().acceptReportingDelivery(EventMetadata.from(cloudEvent), event);
-        return delivered ? RoutingOutcome.DELIVERED : RoutingOutcome.NOT_DELIVERABLE;
+        CatchupProjectionFeed<E> catchupFeed = registered.catchupFeed();
+        // Checked before accepting, not after. See this method's own javadoc for why the order matters.
+        boolean readyForLiveDelivery = catchupFeed.isReadyForLiveDelivery();
+        boolean delivered = catchupFeed.acceptReportingDelivery(EventMetadata.from(cloudEvent), event);
+        return delivered && readyForLiveDelivery ? RoutingOutcome.DELIVERED : RoutingOutcome.NOT_DELIVERABLE;
     }
 
     // The one place the "nothing registered" refusal is spelled, so every accept overload and catchUpAll cannot
