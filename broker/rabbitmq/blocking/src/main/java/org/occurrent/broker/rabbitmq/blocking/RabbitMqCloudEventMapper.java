@@ -22,10 +22,12 @@ import io.cloudevents.CloudEventData;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import io.cloudevents.core.data.BytesCloudEventData;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 
@@ -44,10 +46,10 @@ import static java.util.Objects.requireNonNull;
  * Every message is published persistent, since a transient one a broker restart discards would otherwise still
  * count as delivered once {@link RabbitMqCloudEventSink} sees its publisher confirm.
  * <p>
- * {@link #toCloudEvent(BasicProperties, byte[])} rebuilds every attribute and extension as a {@link String}, whatever
- * type it started as, since AMQP headers carry no richer typing to recover it from. This is not a new limitation, it
- * is the same one a CloudEvent already has after a JSON round trip, which is why {@code EventMetadata.getStreamVersion()}
- * and {@code EventMetadata.getPosition()} already accept a {@code String} as well as a {@code Number}.
+ * {@link #toCloudEvent(BasicProperties, byte[])} rebuilds every attribute and extension as a {@link String},
+ * since AMQP headers carry no richer typing to recover it from, except the two extensions
+ * {@link OccurrentCloudEventExtension} itself defines a type for, {@code streamversion} and {@code position}, which
+ * come back the {@code Long} that type already is. See its own javadoc, and ADR 133's amendment, for the reasoning.
  */
 public final class RabbitMqCloudEventMapper {
 
@@ -72,6 +74,13 @@ public final class RabbitMqCloudEventMapper {
      * publisher confirm, so every message this mapper writes asks to survive one instead.
      */
     private static final int PERSISTENT_DELIVERY_MODE = 2;
+
+    /**
+     * The extensions {@link #toCloudEvent(BasicProperties, byte[])} rebuilds as a {@code Long} rather than leaving
+     * a {@link String}, since {@link OccurrentCloudEventExtension} defines both as one. See ADR 133's amendment.
+     */
+    private static final Set<String> NUMERIC_OCCURRENT_EXTENSIONS = Set.of(
+            OccurrentCloudEventExtension.STREAM_VERSION, OccurrentCloudEventExtension.POSITION);
 
     private RabbitMqCloudEventMapper() {
     }
@@ -134,10 +143,15 @@ public final class RabbitMqCloudEventMapper {
      * application header on the destination the sink or the bridge was built with) is not part of the mapping and is
      * ignored here, exactly as {@link RabbitMqDestination}'s reserved-prefix check assumes.
      * <p>
-     * Every rebuilt attribute and extension is a {@link String}, since that is what a header actually carries. A
-     * binary extension is not un-Base64-decoded back to {@code byte[]}, for the same reason: nothing on the message
-     * says which headers were encoded that way, so a caller reading such an extension gets the Base64 text rather
-     * than the original bytes.
+     * Every rebuilt attribute and extension is a {@link String}, since that is what a header actually carries,
+     * except {@code streamversion} and {@code position}, which come back the {@code Long} that
+     * {@link OccurrentCloudEventExtension} itself defines them as. Occurrent owns those two names and knows their
+     * type, so restoring it here does not guess at anything, and a filter such as {@code Filter.streamVersion(...)}
+     * still matches after the round trip instead of comparing a restored {@code String} against the {@code Long} a
+     * filter operand actually is. Every other extension, application-defined ones included, stays a {@code String}
+     * exactly as before, since this mapper has no way to know what type it should be. See ADR 133's amendment. A
+     * binary extension is not un-Base64-decoded back to {@code byte[]} either, for the same not-knowable-here
+     * reason, so a caller reading one gets the Base64 text rather than the original bytes.
      * <p>
      * Rebuilds under whatever {@link SpecVersion} the {@value #HEADER_PREFIX}{@value #SPEC_VERSION_ATTRIBUTE} header
      * names, {@link SpecVersion#V1} only when that header is absent, rather than always rebuilding as {@code V1}.
@@ -164,7 +178,14 @@ public final class RabbitMqCloudEventMapper {
                 }
                 // toString() rather than a cast: a header value read back off the wire is a
                 // com.rabbitmq.client.LongString for a string-valued header, not a java.lang.String.
-                builder.withContextAttribute(attributeName, value.toString());
+                String stringValue = value.toString();
+                if (NUMERIC_OCCURRENT_EXTENSIONS.contains(attributeName)) {
+                    // Occurrent owns this extension name and defines it as a Long, so restore that type here
+                    // instead of leaving a Filter on it comparing a String to a Number and never matching.
+                    builder.withContextAttribute(attributeName, Long.parseLong(stringValue));
+                } else {
+                    builder.withContextAttribute(attributeName, stringValue);
+                }
             }
         }
         String contentType = properties.getContentType();

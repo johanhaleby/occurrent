@@ -651,3 +651,28 @@ The refusal happens on `acceptCloudEvent`'s first call instead, the first moment
 live rather than during replay, and it is permanent for that registration from then on. The first call builds and
 caches an `UnreadableLiveFilterException`, and every later call throws that same instance without rebuilding the
 matcher, so a caller cannot retry its way past a configuration error that cannot change without a new registration.
+
+## Amendment (2026-08-19): a rebuilt CloudEvent restores the type of the extensions Occurrent itself owns, not every extension
+
+Decision 4 and decision 7 say a CloudEvent attribute is a string-valued AMQP header, and give the reason. Kafka's
+binary binding writes headers as strings too, so a richer type would only work on one transport and the two would
+end up disagreeing about which events a filter matches. `RabbitMqCloudEventMapper.toCloudEvent` followed that to the
+letter and rebuilt every attribute and extension, without exception, as a `java.lang.String`.
+
+That took the string-only rule further than decision 7 actually asks for, and the consequence went undocumented.
+`ConditionMatcher.valuesEqual` compares two `Number`s by value, but falls back to `Objects.equals` for anything else,
+and its own comment names this exact case. A rebuilt `streamversion` header comes back as the string `"3"`, so
+`Filter.streamVersion(eq(3))`, whose operand is a `Long`, evaluates through `Objects.equals("3", 3L)` instead of by
+value, and never matches. On the broker consume bridges (#415), a live match that should have succeeded instead
+reports `RoutingOutcome.FILTERED`, and both bridges acknowledge a `FILTERED` delivery. An event a filter should have
+accepted is acknowledged and discarded rather than delivered. That is silent event loss, not a cosmetic type wobble.
+
+`toCloudEvent` now restores `streamversion` and `position` as the `Long` `OccurrentCloudEventExtension` itself
+defines them as, since Occurrent owns those two extension names and knows their types. `streamid` and `appendid`
+stay `String`, since that is what they already are. Any other extension, one an application defined, stays a
+`String` too, since this mapper has no way to know what type it should be.
+
+The wire format itself is unchanged. Headers are still `Map<String, String>`, exactly as decision 7 requires, and
+RabbitMQ still cannot preserve a type Kafka's binary binding would flatten to a string anyway. Only the read side of
+the mapping changed. `toCloudEvent` was discarding type information Occurrent already has, the two extension names
+it defines as numbers, for no reason connected to the wire format at all.

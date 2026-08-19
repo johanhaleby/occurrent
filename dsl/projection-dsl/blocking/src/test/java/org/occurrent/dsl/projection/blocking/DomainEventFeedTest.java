@@ -446,6 +446,42 @@ class DomainEventFeedTest {
         assertThat(repo.get("counter")).isEqualTo(3);
     }
 
+    /**
+     * The busy-loop class already closed once at the {@code hasProjection()} gate, reopened by a one-shot
+     * {@code isReadyForLiveDelivery()}. A stop mid-replay leaves the handover dropping every live delivery until a
+     * later catch-up revives it, so a bridge polling only {@code hasProjection() && isReadyForLiveDelivery()} would
+     * otherwise keep consuming and nack-requeue every message in a hot loop. Readiness has to go false for the
+     * stopped interval, and true again once a later catch-up actually starts.
+     */
+    @Test
+    void a_stop_mid_replay_clears_readiness_until_a_later_catch_up_revives_it() throws InterruptedException {
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s", counterConverter().toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+
+        CountDownLatch parked = new CountDownLatch(1);
+        CountDownLatch proceed = new CountDownLatch(1);
+        AtomicInteger converted = new AtomicInteger();
+        CloudEventConverter<Counted> converter = parkingConverter(converted, parked, proceed);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+
+        Thread replay = new Thread(feed::catchUpAll);
+        replay.start();
+        parked.await();
+        assertThat(feed.isReadyForLiveDelivery()).as("catchUp() already flipped this true before the replay parked").isTrue();
+
+        feed.stopCatchUp();
+        proceed.countDown();
+        replay.join(TimeUnit.SECONDS.toMillis(5));
+        assertThat(replay.isAlive()).isFalse();
+
+        assertThat(feed.isReadyForLiveDelivery()).as("the stop abandoned the replay, so nothing is ready to receive a live event").isFalse();
+
+        feed.catchUpAll();
+        assertThat(feed.isReadyForLiveDelivery()).as("a later catch-up revives it the same way the first one did").isTrue();
+    }
+
     private static CloudEventConverter<Counted> parkingConverter(AtomicInteger converted, CountDownLatch parked, CountDownLatch proceed) {
         CloudEventConverter<Counted> delegate = counterConverter();
         return new CloudEventConverter<>() {

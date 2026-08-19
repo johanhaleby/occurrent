@@ -132,6 +132,7 @@ class RabbitMqCloudEventMapperTest {
                 .withData("{\"a\":1}".getBytes(StandardCharsets.UTF_8))
                 .withExtension("streamid", "stream-1")
                 .withExtension("streamversion", 3L)
+                .withExtension("customcount", 7L)
                 .build();
         BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(original, Map.of());
         byte[] body = RabbitMqCloudEventMapper.toBody(original);
@@ -147,9 +148,12 @@ class RabbitMqCloudEventMapperTest {
         assertThat(rebuilt.getDataContentType()).isEqualTo("application/json");
         assertThat(rebuilt.getData().toBytes()).isEqualTo("{\"a\":1}".getBytes(StandardCharsets.UTF_8));
         assertThat(rebuilt.getExtension("streamid")).isEqualTo("stream-1");
-        // A Number extension comes back as a String, since a header carries no richer typing to recover it from.
-        // EventMetadata.getStreamVersion() already accepts a String for exactly this reason.
-        assertThat(rebuilt.getExtension("streamversion")).isEqualTo("3");
+        // Occurrent owns streamversion and defines it as a Long, so this comes back that type, not a String, per
+        // ADR 133's amendment.
+        assertThat(rebuilt.getExtension("streamversion")).isEqualTo(3L);
+        // An extension Occurrent does not define, unlike streamversion above, still comes back a String, since
+        // this mapper has no way to know it was ever a Number.
+        assertThat(rebuilt.getExtension("customcount")).isEqualTo("7");
     }
 
     @Test

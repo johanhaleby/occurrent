@@ -52,8 +52,10 @@ import java.util.concurrent.locks.ReentrantLock;
  * its eventual nack. Each publish carries its own random {@code correlationId}, so a {@code basic.return} is matched
  * to the publish it belongs to and never to a different one.
  * <p>
- * Publishes on one instance are serialized on its channel. Call {@link #close()} once no longer needed. It closes
- * the {@link Channel} this publisher created, not the {@link Connection} it was given, since the connection may be
+ * Publishes on one instance are serialized on its channel, and {@link #close()} shares that same serialization,
+ * so a close racing a timed-out publish's channel retirement can never close the channel this publisher is about
+ * to replace while missing the replacement itself. Call {@link #close()} once no longer needed. It closes the
+ * {@link Channel} this publisher created, not the {@link Connection} it was given, since the connection may be
  * shared with other channels the caller still owns.
  */
 final class RabbitMqConfirmPublisher implements AutoCloseable {
@@ -219,6 +221,15 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
      */
     @Override
     public void close() throws IOException, TimeoutException {
-        channel.close();
+        // Shares publishLock with publish()/retireChannel() rather than reading the channel field on its own,
+        // since retireChannel() reassigns that field in more than one step (retire the old one, open a new one,
+        // assign it), and a close landing in the middle of that would close whichever channel it read and then
+        // never see the one retireChannel() goes on to assign.
+        publishLock.lock();
+        try {
+            channel.close();
+        } finally {
+            publishLock.unlock();
+        }
     }
 }

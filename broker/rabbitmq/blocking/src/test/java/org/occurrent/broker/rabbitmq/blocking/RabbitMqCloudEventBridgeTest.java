@@ -23,6 +23,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.StreamSubscriptionFilter;
@@ -82,6 +83,39 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
             assertThat(handled).isEmpty();
+        }
+    }
+
+    /**
+     * The silent-loss case ADR 133's amendment on {@code RabbitMqCloudEventMapper} exists to prevent. A
+     * {@code streamversion} extension used to come back off the wire as the String {@code "3"}, so
+     * {@code Filter.streamVersion(eq(3))}, whose operand is a {@code Long}, never matched it. The bridge then
+     * acknowledged the FILTERED delivery, discarding an event the filter should have accepted.
+     */
+    @Test
+    void a_numeric_extension_survives_the_broker_round_trip_so_a_numeric_filter_still_matches_it() throws Exception {
+        String queue = declareAndBindQueue(OrderPlaced.class.getName());
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", StreamSubscriptionFilter.filter(Filter.streamVersion(Condition.eq(3L))), cloudEvent -> handled.add(cloudEvent));
+
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, outcomeChannel, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .build()) {
+            CloudEvent cloudEvent = CloudEventBuilder.v1()
+                    .withId("id-1")
+                    .withSource(URI.create("urn:test"))
+                    .withType(OrderPlaced.class.getName())
+                    .withExtension("streamid", "stream-1")
+                    .withExtension("streamversion", 3L)
+                    .build();
+            BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, Map.of());
+            adminChannel.basicPublish(exchange, OrderPlaced.class.getName(), properties, RabbitMqCloudEventMapper.toBody(cloudEvent));
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
         }
     }
 

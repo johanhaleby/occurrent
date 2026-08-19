@@ -81,12 +81,15 @@ public final class CatchupProjectionFeed<E> {
     private final BlockingHandover<Delivered<E>> handover;
     // Read by the replay once per event, so stopCatchUp() takes effect at the next event rather than at the end.
     private volatile boolean stopped = false;
-    // Set once, never cleared again, the same one-shot shape as hasProjection(). Answers whether a live event fed
-    // right now is backed by something that survives a crash. catchUp() sets it at the top, before its replay
-    // starts, because a still-buffered event ahead of that replay is safe either way. A crash re-runs the whole
-    // replay from the store. goLive() has no store behind it, so it sets this only after its drain returns, once
-    // the handover is actually live and a fold is synchronous. Before either method has run, a live event only
-    // buffers in memory with no source to replay it back, so this must read false there.
+    // Answers whether a live event fed right now is backed by something that survives a crash. catchUp() sets it
+    // at the top, before its replay starts, because a still-buffered event ahead of that replay is safe either
+    // way. A crash re-runs the whole replay from the store. goLive() has no store behind it, so it sets this only
+    // after its drain returns, once the handover is actually live and a fold is synchronous. Before either method
+    // has run, a live event only buffers in memory with no source to replay it back, so this must read false
+    // there. Not one-shot. A stop that abandons a replay mid-flight clears it again (see catchUp()'s
+    // replayAbandoned()), since the handover then drops live deliveries until a later catchUp() revives it, and
+    // that later call sets it true again the same way the first one did. goLive() can never be stopped mid-flight,
+    // since it has no replay loop to interrupt, so this reset only ever applies to catchUp().
     private volatile boolean readyForLiveDelivery = false;
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
@@ -285,6 +288,12 @@ public final class CatchupProjectionFeed<E> {
 
             @Override
             public void replayAbandoned() {
+                // A stop mid-replay leaves the handover dropping live deliveries until a later catchUp() revives
+                // it, so readiness has to go false here too, not just at the handover level. Without this the
+                // bridge's poll keeps consuming on a feed that drops everything it is handed, nacking and
+                // requeuing the same message in a busy loop. A later catchUp() call sets it true again, at its own
+                // top, same as this one did.
+                readyForLiveDelivery = false;
                 if (view instanceof ReplayAware replayAware) {
                     replayAware.replayAbandoned();
                 }

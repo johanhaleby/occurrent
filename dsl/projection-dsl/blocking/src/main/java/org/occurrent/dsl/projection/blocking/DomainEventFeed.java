@@ -175,11 +175,14 @@ public final class DomainEventFeed<E> {
     }
 
     /**
-     * Whether the registered projection has actually started {@link #catchUpAll()}/{@link #catchUp(String)} or
-     * {@link #goLive(String)}, so a listener can gate its own consumption on more than just {@link #hasProjection()}.
-     * A live event fed through {@link #acceptCloudEvent(CloudEvent)} before either has been called only ever
-     * buffers in memory with nothing behind it to replay, whichever of the two this registration turns out to use,
-     * and {@link #acceptCloudEvent(CloudEvent)}'s own javadoc covers what it reports there. {@code false} for an
+     * Whether the registered projection can safely be fed a live event right now, so a listener can gate its own
+     * consumption on more than just {@link #hasProjection()}. Becomes {@code true} once
+     * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has actually started, and, for
+     * {@code catchUp}, goes back to {@code false} if {@link #stopCatchUp()} abandons that replay before it
+     * finishes, until a later {@code catchUp} call revives it. A live event fed through
+     * {@link #acceptCloudEvent(CloudEvent)} while this answers {@code false} only ever buffers in memory with
+     * nothing behind it to replay, or is dropped outright by a stopped replay, and
+     * {@link #acceptCloudEvent(CloudEvent)}'s own javadoc covers what it reports for both. {@code false} for an
      * unregistered feed, the same as {@link #hasProjection()} rather than the {@link IllegalStateException}
      * {@link #accept(Object)} throws, so a listener can check both together before it has anything registered at
      * all.
