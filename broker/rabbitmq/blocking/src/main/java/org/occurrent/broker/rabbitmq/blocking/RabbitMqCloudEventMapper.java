@@ -96,15 +96,18 @@ public final class RabbitMqCloudEventMapper {
     }
 
     /**
-     * The {@link BasicProperties} for {@code cloudEvent}, carrying every one of its attributes as a
-     * {@value #HEADER_PREFIX}-prefixed header (string-valued), its content type as {@link BasicProperties#getContentType()},
-     * and {@code applicationHeaders} alongside them. Also carries the {@value #EMPTY_DATA_ATTRIBUTE} marker header
-     * when {@code cloudEvent}'s data is present but empty, so {@link #toCloudEvent(BasicProperties, byte[])} can
-     * rebuild that distinctly from data that was never there at all. See that method's own javadoc.
+     * As {@link #toBasicProperties(CloudEvent, Map)}, for a caller that already computed {@code cloudEvent}'s body
+     * through {@link #toBody(CloudEvent)} and wants to reuse those bytes rather than have this method call
+     * {@link CloudEventData#toBytes()} a second time. Occurrent's own converters hand back a lazily-serializing
+     * {@code PojoCloudEventData}, so calling {@code toBytes()} twice on the same publish serializes the domain
+     * event twice. {@link RabbitMqCloudEventSink} and {@link RabbitMqDeliveryFailureAction} both publish through
+     * this overload for that reason. {@code body} must be exactly what {@link #toBody(CloudEvent)} would have
+     * returned for the same {@code cloudEvent}, since this method trusts it rather than recomputing it.
      */
-    public static BasicProperties toBasicProperties(CloudEvent cloudEvent, Map<String, String> applicationHeaders) {
+    public static BasicProperties toBasicProperties(CloudEvent cloudEvent, Map<String, String> applicationHeaders, byte[] body) {
         requireNonNull(cloudEvent, "cloudEvent cannot be null");
         requireNonNull(applicationHeaders, "applicationHeaders cannot be null");
+        requireNonNull(body, "body cannot be null");
 
         Map<String, Object> headers = new LinkedHashMap<>(applicationHeaders);
         for (String attributeName : cloudEvent.getAttributeNames()) {
@@ -122,8 +125,7 @@ public final class RabbitMqCloudEventMapper {
                 headers.put(HEADER_PREFIX + extensionName, encodeExtensionValue(value));
             }
         }
-        CloudEventData data = cloudEvent.getData();
-        if (data != null && data.toBytes().length == 0) {
+        if (cloudEvent.getData() != null && body.length == 0) {
             headers.put(HEADER_PREFIX + EMPTY_DATA_ATTRIBUTE, "true");
         }
 
@@ -132,6 +134,21 @@ public final class RabbitMqCloudEventMapper {
                 .headers(headers)
                 .deliveryMode(PERSISTENT_DELIVERY_MODE)
                 .build();
+    }
+
+    /**
+     * The {@link BasicProperties} for {@code cloudEvent}, carrying every one of its attributes as a
+     * {@value #HEADER_PREFIX}-prefixed header (string-valued), its content type as {@link BasicProperties#getContentType()},
+     * and {@code applicationHeaders} alongside them. Also carries the {@value #EMPTY_DATA_ATTRIBUTE} marker header
+     * when {@code cloudEvent}'s data is present but empty, so {@link #toCloudEvent(BasicProperties, byte[])} can
+     * rebuild that distinctly from data that was never there at all. See that method's own javadoc.
+     * <p>
+     * Calls {@link #toBody(CloudEvent)} internally to decide the marker header above, so a caller that also needs
+     * the body should call {@link #toBasicProperties(CloudEvent, Map, byte[])} instead and pass it in, rather than
+     * have {@code cloudEvent}'s data serialized a second time computing it here.
+     */
+    public static BasicProperties toBasicProperties(CloudEvent cloudEvent, Map<String, String> applicationHeaders) {
+        return toBasicProperties(cloudEvent, applicationHeaders, toBody(cloudEvent));
     }
 
     /**

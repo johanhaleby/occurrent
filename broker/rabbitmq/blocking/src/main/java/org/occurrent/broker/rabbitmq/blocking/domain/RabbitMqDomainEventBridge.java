@@ -365,7 +365,11 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
 
         /**
          * The destination {@link DeliveryFailurePolicy#PARK} publishes a failed delivery to. Required when
-         * {@link #onDeliveryFailure(DeliveryFailurePolicy)} is {@code PARK}, refused otherwise.
+         * {@link #onDeliveryFailure(DeliveryFailurePolicy)} is {@code PARK} ({@link #build()} refuses otherwise).
+         * Given without {@code PARK}, this is accepted but unused, not refused, the same choice
+         * {@link RabbitMqDeliveryFailureAction#create(Connection, Channel, DeliveryFailurePolicy, RabbitMqDestination, Logger)}
+         * makes and documents, so switching {@link #onDeliveryFailure} back to {@code REDELIVER} in application
+         * config never has to strip this call out along with it.
          */
         public Builder<E> parkingDestination(RabbitMqDestination parkingDestination) {
             this.parkingDestination = requireNonNull(parkingDestination, "parkingDestination cannot be null");

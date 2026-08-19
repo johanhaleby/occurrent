@@ -106,8 +106,10 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
 
     private void publishOnce(CloudEvent cloudEvent) {
         RabbitMqDestination destination = resolver.destinationFor(cloudEvent);
-        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers());
+        // Body computed once and passed into toBasicProperties(..., byte[]) rather than calling the two-argument
+        // overload, so cloudEvent's lazily-serializing data is not serialized a second time on this publish.
         byte[] body = RabbitMqCloudEventMapper.toBody(cloudEvent);
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers(), body);
         publisher.publish(destination.exchange(), destination.routingKey(), properties, body);
     }
 

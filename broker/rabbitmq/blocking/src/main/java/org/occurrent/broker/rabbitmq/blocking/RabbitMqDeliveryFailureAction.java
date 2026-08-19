@@ -123,8 +123,10 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
             return;
         }
         RabbitMqDestination destination = requireNonNull(parkingDestination);
-        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers());
+        // Body computed once and passed into toBasicProperties(..., byte[]) rather than calling the two-argument
+        // overload, so cloudEvent's lazily-serializing data is not serialized a second time on this park.
         byte[] body = RabbitMqCloudEventMapper.toBody(cloudEvent);
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers(), body);
         park(deliveryTag, properties, body);
     }
 

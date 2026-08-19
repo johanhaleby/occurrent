@@ -495,7 +495,7 @@ class DomainEventFeedTest {
      * {@code handover.catchUp(..)} can fail before, during or after the replay in several distinct ways, and every
      * one of them leaves the handover refusing every later delivery. {@code isReadyForLiveDelivery()} must read
      * false after every one of them, not only the one this suite happened to cover first, so this asserts the
-     * invariant against four different failure sources rather than pinning the fix to a single throw site.
+     * invariant against five different failure sources rather than pinning the fix to a single throw site.
      */
     @Test
     void catch_up_clears_readiness_on_every_distinct_way_it_can_fail_to_reach_live() {

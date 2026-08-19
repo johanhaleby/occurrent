@@ -18,6 +18,7 @@ package org.occurrent.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.AMQP.BasicProperties;
 import io.cloudevents.CloudEvent;
+import io.cloudevents.CloudEventData;
 import io.cloudevents.SpecVersion;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -114,6 +116,42 @@ class RabbitMqCloudEventMapperTest {
     @Test
     void toBody_returns_an_empty_array_when_the_event_has_no_data() {
         assertThat(RabbitMqCloudEventMapper.toBody(minimalCloudEvent())).isEmpty();
+    }
+
+    /**
+     * Occurrent's own converters hand back a lazily-serializing {@code PojoCloudEventData}, so calling
+     * {@link io.cloudevents.CloudEventData#toBytes()} a second time on the same publish serializes the domain
+     * event a second time. {@link RabbitMqCloudEventMapper#toBasicProperties(CloudEvent, Map, byte[])} exists so a
+     * caller that already computed the body through {@link RabbitMqCloudEventMapper#toBody(CloudEvent)} can pass
+     * those bytes in and have this method reuse them for its empty-data marker check, rather than call
+     * {@code toBytes()} again itself.
+     */
+    @Test
+    void toBasicProperties_with_a_precomputed_body_does_not_serialize_the_data_a_second_time() {
+        AtomicInteger toBytesCalls = new AtomicInteger();
+        byte[] data = "{}".getBytes(StandardCharsets.UTF_8);
+        CloudEventData countingData = new CloudEventData() {
+            @Override
+            public byte[] toBytes() {
+                toBytesCalls.incrementAndGet();
+                return data;
+            }
+        };
+        CloudEvent cloudEvent = CloudEventBuilder.v1()
+                .withId("id-1")
+                .withSource(URI.create("urn:test"))
+                .withType("t")
+                .withData("application/json", countingData)
+                .build();
+
+        byte[] body = RabbitMqCloudEventMapper.toBody(cloudEvent);
+        assertThat(toBytesCalls).as("toBody(..) itself calls toBytes() exactly once").hasValue(1);
+
+        RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, Map.of(), body);
+
+        assertThat(toBytesCalls).as("toBasicProperties(..., byte[]) must reuse the given body instead of calling "
+                        + "CloudEventData.toBytes() again")
+                .hasValue(1);
     }
 
     // This round trip stays in the JVM, so properties.getHeaders() already holds plain java.lang.String values.
