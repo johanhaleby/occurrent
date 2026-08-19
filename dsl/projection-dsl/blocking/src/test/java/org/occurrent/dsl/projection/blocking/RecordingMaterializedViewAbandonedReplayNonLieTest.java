@@ -100,12 +100,22 @@ class RecordingMaterializedViewAbandonedReplayNonLieTest {
 
         Thread replay = new Thread(feed::catchUp);
         replay.start();
-        parked.await();
-        feed.stopCatchUp();
-        proceed.countDown();
+        try {
+            // Bounded rather than a bare await(): a regression that stops the replay from ever reaching the second
+            // event would otherwise hang this latch, and with it the whole Maven fork, forever. A bounded wait turns
+            // that regression into the test failure it should be instead of an unexplained CI timeout.
+            assertThat(parked.await(20, TimeUnit.SECONDS))
+                    .as("the replay never reached its second event, so it never parked for this test to abandon it")
+                    .isTrue();
+            feed.stopCatchUp();
+        } finally {
+            // Released unconditionally, including when the await above times out or stopCatchUp() throws, so the
+            // parked replay thread can never outlive this test method regardless of what failed.
+            proceed.countDown();
+        }
         replay.join(TimeUnit.SECONDS.toMillis(5));
 
-        assertThat(replay.isAlive()).isFalse();
+        assertThat(replay.isAlive()).as("the replay thread is still running after its bounded join").isFalse();
         // Nothing was flushed to the read model...
         assertThat(state.get("a")).isNull();
         assertThat(state.get("b")).isNull();

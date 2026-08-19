@@ -76,9 +76,11 @@ class ProjectionAnnotationRecordAppliedAppendsCrossInstanceMongoTest {
     @Test
     void a_wait_on_one_instance_observes_an_append_recorded_by_the_recording_projection_running_on_another() {
         String databaseName = "record-applied-appends-cross-instance";
-        ConfigurableApplicationContext instanceA = SpringApplication.run(RecordingProjectionApplication.class, bootArgs(databaseName, "instance-a"));
-        ConfigurableApplicationContext instanceB = SpringApplication.run(ReaderOnlyApplication.class, bootArgs(databaseName, "instance-b"));
-        try {
+        // try-with-resources rather than a single try/finally with two manual close() calls: if instance B's boot
+        // throws, execution never reaches a finally guarding both, and instance A would leak its Mongo client and
+        // subscription threads. Each resource here closes independently of whether an earlier one failed to open.
+        try (ConfigurableApplicationContext instanceA = SpringApplication.run(RecordingProjectionApplication.class, bootArgs(databaseName, "instance-a"));
+             ConfigurableApplicationContext instanceB = SpringApplication.run(ReaderOnlyApplication.class, bootArgs(databaseName, "instance-b"))) {
             EventStore eventStore = instanceA.getBean(EventStore.class);
             CloudEventConverter<TestEvent> converter = instanceA.getBean(CloudEventConverter.class);
             AppliedAppendStore storeOnA = instanceA.getBean(AppliedAppendStore.class);
@@ -95,9 +97,6 @@ class ProjectionAnnotationRecordAppliedAppendsCrossInstanceMongoTest {
             assertThat(storeOnB.waitUntilApplied("recording-counter", appendId, Duration.ofSeconds(20)))
                     .as("the membership record is store-backed, so a wait on a different node/process sees it too")
                     .isTrue();
-        } finally {
-            instanceA.close();
-            instanceB.close();
         }
     }
 

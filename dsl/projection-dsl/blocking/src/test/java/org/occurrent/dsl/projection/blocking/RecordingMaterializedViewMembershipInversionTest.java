@@ -132,7 +132,7 @@ class RecordingMaterializedViewMembershipInversionTest {
         List<EventMetadata> deliveryOrder = new CopyOnWriteArrayList<>();
         Subscription observerSubscription = observerModel.subscribe("observer", StartAt.now(),
                 cloudEvent -> deliveryOrder.add(EventMetadata.from(cloudEvent)));
-        observerSubscription.waitUntilStarted();
+        assertThat(observerSubscription.waitUntilStarted(Duration.ofSeconds(20))).as("the observer subscription never started").isTrue();
 
         // The recording projection under test: a real RecordingMaterializedView over a real live subscription, the
         // shipped production path (Projections.recordingAppliedAppends), never a hand-rolled record call.
@@ -152,11 +152,11 @@ class RecordingMaterializedViewMembershipInversionTest {
         MaterializedView<Ticked> recordingView = Projections.recordingAppliedAppends(view, PROJECTION_ID, observedStore, ReplayPhase.neverReplays());
         ProjectionRunner<Ticked> runner = ProjectionRunner.stream(recorderModel, converter);
         Subscription recordingSubscription = runner.project(PROJECTION_ID, projection, recordingView, StartAt.now());
-        recordingSubscription.waitUntilStarted();
+        assertThat(recordingSubscription.waitUntilStarted(Duration.ofSeconds(20))).as("the recording subscription never started").isTrue();
 
+        Thread appender = new Thread(() -> writerAStore.write("stream-a", List.of(converter.toCloudEvent(new Ticked("a")))), "writer-a");
         try {
             // A starts writing and pauses, its position already reserved.
-            Thread appender = new Thread(() -> writerAStore.write("stream-a", List.of(converter.toCloudEvent(new Ticked("a")))), "writer-a");
             appender.start();
             assertThat(reserved.await(30, TimeUnit.SECONDS)).as("writer A did not reach its paused transaction").isTrue();
 
@@ -198,8 +198,18 @@ class RecordingMaterializedViewMembershipInversionTest {
             assertThat(requireNonNull(aMetadata.getPosition())).as("but A's reserved position is lower than B's")
                     .isLessThan(requireNonNull(bMetadata.getPosition()));
         } finally {
-            recorderModel.stop();
-            observerModel.stop();
+            // release unconditionally, not just after the happy path: if an assertion above throws before
+            // release.countDown() runs, writer A stays parked on its latch forever, and this join would hang the
+            // whole Maven fork rather than let the failure surface. CountDownLatch.countDown() is a no-op once the
+            // count has already reached zero, so releasing twice on the happy path is harmless.
+            release.countDown();
+            appender.join(TimeUnit.SECONDS.toMillis(30));
+            recorderModel.shutdown();
+            observerModel.shutdown();
+            recorderClient.close();
+            observerClient.close();
+            writerAClient.close();
+            writerBClient.close();
         }
     }
 

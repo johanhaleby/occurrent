@@ -93,25 +93,30 @@ class WriteToDeliveryAppendIdFidelityTest {
         ReactorMongoEventStore eventStore = new ReactorMongoEventStore(mongoTemplate, config);
         ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(mongoTemplate, collection, TimeRepresentation.RFC_3339_STRING);
 
-        LinkedBlockingQueue<EventMetadata> delivered = new LinkedBlockingQueue<>();
-        Subscription subscription = subscriptionModel.subscribe("fidelity-reactor", StartAt.now(),
-                cloudEvent -> Mono.fromRunnable(() -> delivered.add(EventMetadata.from(cloudEvent))));
-        subscription.waitUntilStarted().block(Duration.ofSeconds(20));
+        try {
+            LinkedBlockingQueue<EventMetadata> delivered = new LinkedBlockingQueue<>();
+            Subscription subscription = subscriptionModel.subscribe("fidelity-reactor", StartAt.now(),
+                    cloudEvent -> Mono.fromRunnable(() -> delivered.add(EventMetadata.from(cloudEvent))));
+            subscription.waitUntilStarted().block(Duration.ofSeconds(20));
 
-        WriteResult result = eventStore.write("stream-1", Flux.just(
-                        v1().withId(UUID.randomUUID().toString())
-                                .withSource(SOURCE)
-                                .withType("Ticked")
-                                .withTime(OffsetDateTime.now())
-                                .withData("{}".getBytes(UTF_8))
-                                .build()))
-                .block(Duration.ofSeconds(20));
-        AppendId writtenAppendId = requireNonNull(result).appendId().orElseThrow();
+            WriteResult result = eventStore.write("stream-1", Flux.just(
+                            v1().withId(UUID.randomUUID().toString())
+                                    .withSource(SOURCE)
+                                    .withType("Ticked")
+                                    .withTime(OffsetDateTime.now())
+                                    .withData("{}".getBytes(UTF_8))
+                                    .build()))
+                    .block(Duration.ofSeconds(20));
+            AppendId writtenAppendId = requireNonNull(result).appendId().orElseThrow();
 
-        EventMetadata delivery = delivered.poll(20, java.util.concurrent.TimeUnit.SECONDS);
+            EventMetadata delivery = delivered.poll(20, java.util.concurrent.TimeUnit.SECONDS);
 
-        assertThat(delivery).as("event was never delivered to the live subscriber").isNotNull();
-        assertThat(requireNonNull(delivery).getAppendId()).as("EventMetadata.getAppendId() must be the raw string form of the written AppendId").isEqualTo(writtenAppendId.toString());
-        assertThat(AppendId.from(delivery)).as("and parses back to the exact same identity").contains(writtenAppendId);
+            assertThat(delivery).as("event was never delivered to the live subscriber").isNotNull();
+            assertThat(requireNonNull(delivery).getAppendId()).as("EventMetadata.getAppendId() must be the raw string form of the written AppendId").isEqualTo(writtenAppendId.toString());
+            assertThat(AppendId.from(delivery)).as("and parses back to the exact same identity").contains(writtenAppendId);
+        } finally {
+            subscriptionModel.shutdown();
+            mongoClient.close();
+        }
     }
 }

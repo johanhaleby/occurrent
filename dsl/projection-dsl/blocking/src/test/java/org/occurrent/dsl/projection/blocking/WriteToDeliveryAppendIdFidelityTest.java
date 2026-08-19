@@ -45,6 +45,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
 import java.net.URI;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -94,23 +95,28 @@ class WriteToDeliveryAppendIdFidelityTest {
         SpringMongoEventStore eventStore = new SpringMongoEventStore(mongoTemplate, config);
         SpringMongoSubscriptionModel subscriptionModel = new SpringMongoSubscriptionModel(mongoTemplate, collection, TimeRepresentation.RFC_3339_STRING);
 
-        BlockingQueue<EventMetadata> delivered = new ArrayBlockingQueue<>(1);
-        Subscription subscription = subscriptionModel.subscribe("fidelity", StartAt.now(),
-                cloudEvent -> delivered.add(EventMetadata.from(cloudEvent)));
-        subscription.waitUntilStarted();
+        try {
+            BlockingQueue<EventMetadata> delivered = new ArrayBlockingQueue<>(1);
+            Subscription subscription = subscriptionModel.subscribe("fidelity", StartAt.now(),
+                    cloudEvent -> delivered.add(EventMetadata.from(cloudEvent)));
+            assertThat(subscription.waitUntilStarted(Duration.ofSeconds(20))).as("the subscription never started").isTrue();
 
-        WriteResult result = eventStore.write("stream-1", List.of(
-                v1().withId(UUID.randomUUID().toString())
-                        .withSource(SOURCE)
-                        .withType("Ticked")
-                        .withTime(OffsetDateTime.now())
-                        .withData("{}".getBytes(UTF_8))
-                        .build()));
-        AppendId writtenAppendId = result.appendId().orElseThrow();
+            WriteResult result = eventStore.write("stream-1", List.of(
+                    v1().withId(UUID.randomUUID().toString())
+                            .withSource(SOURCE)
+                            .withType("Ticked")
+                            .withTime(OffsetDateTime.now())
+                            .withData("{}".getBytes(UTF_8))
+                            .build()));
+            AppendId writtenAppendId = result.appendId().orElseThrow();
 
-        EventMetadata delivery = delivered.poll(20, TimeUnit.SECONDS);
-        assertThat(delivery).as("event was never delivered to the live subscriber").isNotNull();
-        assertThat(delivery.getAppendId()).as("EventMetadata.getAppendId() must be the raw string form of the written AppendId").isEqualTo(writtenAppendId.toString());
-        assertThat(AppendId.from(delivery)).as("and parses back to the exact same identity").contains(writtenAppendId);
+            EventMetadata delivery = delivered.poll(20, TimeUnit.SECONDS);
+            assertThat(delivery).as("event was never delivered to the live subscriber").isNotNull();
+            assertThat(delivery.getAppendId()).as("EventMetadata.getAppendId() must be the raw string form of the written AppendId").isEqualTo(writtenAppendId.toString());
+            assertThat(AppendId.from(delivery)).as("and parses back to the exact same identity").contains(writtenAppendId);
+        } finally {
+            subscriptionModel.shutdown();
+            mongoClient.close();
+        }
     }
 }
