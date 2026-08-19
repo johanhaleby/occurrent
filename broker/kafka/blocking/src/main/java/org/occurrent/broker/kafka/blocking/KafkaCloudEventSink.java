@@ -79,8 +79,12 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * blamed for a later, unrelated publish the way an outstanding RabbitMQ publisher confirm does. Kafka's client is
  * also its own proof of routing, unlike RabbitMQ's publisher confirms, which say only that the broker took the
  * message and need a separate {@code basic.return} check to know it was routed anywhere. A Kafka acknowledgement
- * under {@code acks=all} already means the record was written to the partition leader and replicated, so there is
- * no equivalent of {@code RabbitMqUnroutableEventException} here.
+ * under {@code acks=all} means the record was accepted by every replica currently in the in-sync set, which is the
+ * leader alone on a topic with replication factor 1 or under {@code min.insync.replicas=1}, so how much durability
+ * that acknowledgement actually buys still depends on the topic's own replication and the broker's own
+ * configuration, not on anything this sink does. What {@code acks=all} does settle, regardless of that
+ * configuration, is that there is no equivalent of {@code RabbitMqUnroutableEventException} here, since Kafka has
+ * no separate routing step an acknowledged write can still fail at the way an unbound RabbitMQ routing key can.
  * <p>
  * A retriable failure, everything except that timeout, is retried under {@link Builder#retryStrategy(RetryStrategy)}
  * before a caller sees it, exponential backoff from 100 ms up to 2 seconds by default, only when Kafka itself
@@ -113,15 +117,6 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
         this.resolver = resolver;
         this.acknowledgementTimeout = acknowledgementTimeout;
         this.retryStrategy = retryStrategy;
-    }
-
-    /**
-     * Package-private constructor for tests. {@link Builder#build()} is the only public way to get a
-     * {@link Producer} into this sink, and it always builds a real {@link KafkaProducer} from a config map, so a
-     * test that needs a mocked {@link Producer} to force a specific failure or count attempts has no other way in.
-     */
-    static KafkaCloudEventSink forTesting(Producer<String, byte[]> producer, DestinationResolver<KafkaDestination> resolver, Duration acknowledgementTimeout, RetryStrategy retryStrategy) {
-        return new KafkaCloudEventSink(producer, resolver, acknowledgementTimeout, retryStrategy);
     }
 
     /**
@@ -240,8 +235,9 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
          * {@code org.apache.kafka.common.errors.RetriableException}, Kafka's own marker for a failure the client
          * itself considers worth retrying. A permanent failure such as an unknown topic, a record too large, or an
          * authorization error is not retriable by that marker, and is never retried by this default, since ADR 133
-         * only asks this retry to guard against a transient failure and an unbounded retry of a permanent one would
-         * never let {@link #publish(CloudEvent)} return. Passing a {@link RetryStrategy} here replaces that
+         * only asks this retry to guard against a transient failure and an unbounded retry of a failure that can
+         * never succeed would leave {@link #publish(CloudEvent)} retrying with nothing but {@link #close()} able
+         * to stop it. Passing a {@link RetryStrategy} here replaces that
          * predicate too, so a caller that wants a wider retry configures its own. It never substitutes for the
          * acknowledgement wait {@link #acknowledgementTimeout(Duration)} configures.
          */
@@ -291,11 +287,13 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
         }
 
         /**
-         * Package-private, not private, so a test can build the exact same default a caller who never calls
+         * Private. A test that needs the exact default a caller who never calls
          * {@link #retryStrategy(RetryStrategy)} gets, rather than duplicating this predicate and risking it
-         * drifting from the real one.
+         * drifting from the real one, reaches it through reflection, the same way it reaches this class's own
+         * private constructor to inject a mocked {@link Producer}. Package-private would let a future class in
+         * this package call either method by mistake, so neither is exposed that way.
          */
-        static RetryStrategy defaultRetryStrategy() {
+        private static RetryStrategy defaultRetryStrategy() {
             return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)
                     .retryIf(throwable -> throwable instanceof KafkaPublishException publishException
                             && !(publishException instanceof KafkaPublishTimeoutException)

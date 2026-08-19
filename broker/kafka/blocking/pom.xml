@@ -62,15 +62,6 @@
             <artifactId>occurrent-cloudevents-extension</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- Used internally to walk a SubscriptionFilter's type conditions when narrowing bindings in
-             DestinationResolver#destinationsFor. Not part of this module's own public API, but declared directly
-             rather than relied on as a transitive of occurrent-subscription-core, the same discipline
-             occurrent-broker-api-blocking applies to its own direct imports. -->
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-filter</artifactId>
-            <version>${project.version}</version>
-        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-retry</artifactId>

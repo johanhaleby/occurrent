@@ -19,14 +19,9 @@ package org.occurrent.broker.rabbitmq.blocking;
 import io.cloudevents.CloudEvent;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DestinationResolver;
-import org.occurrent.condition.Condition;
-import org.occurrent.filter.Filter;
-import org.occurrent.subscription.AgnosticSubscriptionFilter;
-import org.occurrent.subscription.StreamSubscriptionFilter;
+import org.occurrent.broker.api.blocking.EventTypeNarrowing;
 import org.occurrent.subscription.SubscriptionFilter;
 
-import java.util.HashSet;
-import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -74,18 +69,14 @@ public final class RabbitMqTopicExchangeDestinationResolver implements Destinati
     }
 
     /**
-     * Works for {@link AgnosticSubscriptionFilter} and {@link StreamSubscriptionFilter}, both of which wrap a plain
-     * {@link Filter}, and only for the part of that {@link Filter} that constrains {@value Filter#TYPE} by equality
-     * or membership. Anything else, an {@link org.occurrent.subscription.DcbSubscriptionFilter}, a custom
-     * {@link SubscriptionFilter}, a {@link Filter} on a different field, an {@code OR} branch that leaves one
-     * alternative unconstrained, a range or negation condition on {@value Filter#TYPE}, resolves to
-     * {@link Optional#empty()} rather than a guess, exactly as {@link DestinationResolver#destinationsFor(SubscriptionFilter)}
-     * requires.
+     * The event-type narrowing {@link EventTypeNarrowing#narrow(SubscriptionFilter)} derives, one routing key per
+     * type it finds, or {@link Optional#empty()} when {@code filter} cannot be narrowed, exactly as
+     * {@link DestinationResolver#destinationsFor(SubscriptionFilter)} requires.
      */
     @Override
     public Optional<Set<RabbitMqDestination>> destinationsFor(SubscriptionFilter filter) {
         requireNonNull(filter, "filter cannot be null");
-        return typesFrom(filter).map(types -> types.stream()
+        return EventTypeNarrowing.narrow(filter).map(types -> types.stream()
                 .map(this::canonicalRoutingKey)
                 .map(routingKey -> RabbitMqDestination.of(exchange, routingKey))
                 .collect(Collectors.toUnmodifiableSet()));
@@ -101,76 +92,5 @@ public final class RabbitMqTopicExchangeDestinationResolver implements Destinati
         CloudEventTypeMapper<T> mapper = (CloudEventTypeMapper<T>) typeMapper;
         Class<T> domainEventType = mapper.<T>getDomainEventType(cloudEventType);
         return mapper.getCloudEventType(domainEventType);
-    }
-
-    // ---------------------------------------------------------------------------------------------------------
-    // Filter-tree walk: the event-type part of a SubscriptionFilter, and nothing else.
-    // ---------------------------------------------------------------------------------------------------------
-
-    private static Optional<Set<String>> typesFrom(SubscriptionFilter subscriptionFilter) {
-        return switch (subscriptionFilter) {
-            case AgnosticSubscriptionFilter(Filter filter) -> typesIn(filter);
-            case StreamSubscriptionFilter(Filter filter) -> typesIn(filter);
-            default -> Optional.empty();
-        };
-    }
-
-    private static Optional<Set<String>> typesIn(Filter filter) {
-        return switch (filter) {
-            case Filter.SingleConditionFilter(String fieldName, Condition<?> condition) when Filter.TYPE.equals(fieldName) -> valuesIn(condition);
-            case Filter.SingleConditionFilter ignored -> Optional.empty();
-            case Filter.CompositionFilter(Filter.CompositionOperator operator, List<Filter> filters) -> switch (operator) {
-                case AND -> intersectWhatNarrows(filters);
-                case OR -> unionOnlyIfEveryBranchResolves(filters);
-            };
-            case Filter.All ignored -> Optional.empty();
-            case Filter.CapabilityFilter ignored -> Optional.empty();
-        };
-    }
-
-    private static Optional<Set<String>> valuesIn(Condition<?> condition) {
-        return switch (condition) {
-            case Condition.SingleOperandCondition(var name, var operand, var ignored) when name == Condition.SingleOperandConditionName.EQ ->
-                    Optional.of(Set.of(operand.toString()));
-            case Condition.InOperandCondition(var operand, var ignored) ->
-                    Optional.of(operand.stream().map(Object::toString).collect(Collectors.toUnmodifiableSet()));
-            default -> Optional.empty();
-        };
-    }
-
-    /**
-     * An {@code AND} is narrower than any single one of its conjuncts, so the intersection of whichever conjuncts
-     * resolve is still a safe (over-inclusive at worst) binding set. Resolves to {@link Optional#empty()} only when
-     * none of the conjuncts constrain {@value Filter#TYPE} at all.
-     */
-    private static Optional<Set<String>> intersectWhatNarrows(List<Filter> filters) {
-        Set<String> intersection = null;
-        for (Filter filter : filters) {
-            Optional<Set<String>> resolved = typesIn(filter);
-            if (resolved.isPresent()) {
-                if (intersection == null) {
-                    intersection = new HashSet<>(resolved.get());
-                } else {
-                    intersection.retainAll(resolved.get());
-                }
-            }
-        }
-        return intersection == null ? Optional.empty() : Optional.of(Set.copyOf(intersection));
-    }
-
-    /**
-     * An {@code OR} only narrows when every branch does, since an unconstrained branch could match a type none of
-     * the other branches' destinations would carry.
-     */
-    private static Optional<Set<String>> unionOnlyIfEveryBranchResolves(List<Filter> filters) {
-        Set<String> union = new HashSet<>();
-        for (Filter filter : filters) {
-            Optional<Set<String>> resolved = typesIn(filter);
-            if (resolved.isEmpty()) {
-                return Optional.empty();
-            }
-            union.addAll(resolved.get());
-        }
-        return Optional.of(Set.copyOf(union));
     }
 }

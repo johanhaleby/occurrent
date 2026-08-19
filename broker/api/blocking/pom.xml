@@ -34,6 +34,13 @@
             <artifactId>occurrent-subscription-core</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Filter and Condition appear directly in EventTypeNarrowing's own public API and its filter-tree walk,
+             so it's declared rather than left to arrive transitively through occurrent-subscription-core. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-filter</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <!-- Subscription appears directly in this module's own public API (the return type of every forward(...)
              method), so it's declared rather than left to arrive transitively through the durable module below. -->
         <dependency>

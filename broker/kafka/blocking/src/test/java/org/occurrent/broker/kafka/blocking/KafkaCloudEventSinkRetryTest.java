@@ -23,7 +23,12 @@ import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.NotEnoughReplicasException;
 import org.junit.jupiter.api.Test;
+import org.occurrent.broker.api.blocking.DestinationResolver;
+import org.occurrent.retry.RetryStrategy;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.URI;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -45,14 +50,40 @@ import static org.mockito.Mockito.when;
  * cancellation of it, exercised against a mocked {@link Producer} rather than a real broker, since forcing a
  * {@link NotEnoughReplicasException} that resolves itself needs a multi-broker cluster a single Testcontainers
  * node cannot model, and forcing one that never resolves needs a producer whose failure never stops, which a real
- * broker cannot promise either. {@link KafkaCloudEventSink#forTesting} is the package-private constructor this
- * file uses to inject the mock, the same reason {@code RabbitMqCloudEventSinkChannelRetirementTest} mocks a
- * {@code Connection} and a {@code Channel} instead of running its own broker.
+ * broker cannot promise either. {@link KafkaCloudEventSink}'s constructor is private, on purpose, so this file
+ * reaches it through reflection instead of adding a method production code in the same package could call by
+ * mistake, the same reason {@code RabbitMqCloudEventSinkChannelRetirementTest} mocks a {@code Connection} and a
+ * {@code Channel} instead of running its own broker.
  */
 class KafkaCloudEventSinkRetryTest {
 
     private final KafkaDestination destination = KafkaDestination.of("test-topic");
     private final KafkaCloudEventSinkTest.FixedDestinationResolver resolver = new KafkaCloudEventSinkTest.FixedDestinationResolver(destination);
+
+    private static KafkaCloudEventSink sinkForTesting(Producer<String, byte[]> producer, DestinationResolver<KafkaDestination> resolver, Duration acknowledgementTimeout, RetryStrategy retryStrategy) {
+        try {
+            Constructor<KafkaCloudEventSink> constructor = KafkaCloudEventSink.class.getDeclaredConstructor(
+                    Producer.class, DestinationResolver.class, Duration.class, RetryStrategy.class);
+            constructor.setAccessible(true);
+            return constructor.newInstance(producer, resolver, acknowledgementTimeout, retryStrategy);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Could not construct " + KafkaCloudEventSink.class.getSimpleName() + " for testing", unwrap(e));
+        }
+    }
+
+    private static RetryStrategy defaultRetryStrategyForTesting() {
+        try {
+            Method method = KafkaCloudEventSink.Builder.class.getDeclaredMethod("defaultRetryStrategy");
+            method.setAccessible(true);
+            return (RetryStrategy) method.invoke(null);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Could not read the default retry strategy for testing", unwrap(e));
+        }
+    }
+
+    private static Throwable unwrap(ReflectiveOperationException e) {
+        return e instanceof InvocationTargetException invocationTargetException ? invocationTargetException.getTargetException() : e;
+    }
 
     @Test
     void a_retriable_failure_is_retried_and_publish_eventually_succeeds() throws Exception {
@@ -70,7 +101,7 @@ class KafkaCloudEventSinkRetryTest {
 
         when(producer.send(any())).thenReturn(failingFuture, succeedingFuture);
 
-        KafkaCloudEventSink sink = KafkaCloudEventSink.forTesting(producer, resolver, Duration.ofSeconds(5), KafkaCloudEventSink.Builder.defaultRetryStrategy());
+        KafkaCloudEventSink sink = sinkForTesting(producer, resolver, Duration.ofSeconds(5), defaultRetryStrategyForTesting());
 
         sink.publish(orderPlaced("id-1"));
 
@@ -94,7 +125,7 @@ class KafkaCloudEventSinkRetryTest {
             return alwaysFailingFuture;
         });
 
-        KafkaCloudEventSink sink = KafkaCloudEventSink.forTesting(producer, resolver, Duration.ofSeconds(5), KafkaCloudEventSink.Builder.defaultRetryStrategy());
+        KafkaCloudEventSink sink = sinkForTesting(producer, resolver, Duration.ofSeconds(5), defaultRetryStrategyForTesting());
 
         Thread publishing = new Thread(() -> {
             try {
@@ -125,9 +156,9 @@ class KafkaCloudEventSinkRetryTest {
     }
 
     @Test
-    void forTesting_producer_that_never_gets_used_is_still_closed_by_close() {
+    void a_producer_that_never_gets_used_is_still_closed_by_close() {
         Producer<String, byte[]> producer = mock(Producer.class);
-        KafkaCloudEventSink sink = KafkaCloudEventSink.forTesting(producer, resolver, Duration.ofSeconds(5), KafkaCloudEventSink.Builder.defaultRetryStrategy());
+        KafkaCloudEventSink sink = sinkForTesting(producer, resolver, Duration.ofSeconds(5), defaultRetryStrategyForTesting());
 
         sink.close();
 
