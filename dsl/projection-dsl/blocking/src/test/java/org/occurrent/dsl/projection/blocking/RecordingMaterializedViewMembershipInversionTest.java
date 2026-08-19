@@ -107,109 +107,117 @@ class RecordingMaterializedViewMembershipInversionTest {
         CountDownLatch reserved = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
 
-        // Writer A: paused right after its position is reserved (reservation happens outside the transaction, ADR
-        // 84), before its transaction commits.
-        MongoClient writerAClient = MongoClients.create(connectionString);
-        MongoTemplate writerATemplate = new MongoTemplate(writerAClient, requireNonNull(connectionString.getDatabase()));
-        PausingTransactionTemplate pausingTx = new PausingTransactionTemplate(
-                new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(writerAClient, requireNonNull(connectionString.getDatabase()))),
-                reserved, release);
-        SpringMongoEventStore writerAStore = newEventStore(writerATemplate, pausingTx, collection);
+        // All four clients are try-with-resources, so a failure anywhere below (including a subscription that never
+        // starts) still closes every one of them, rather than leaking whichever were already open at that point.
+        try (MongoClient writerAClient = MongoClients.create(connectionString);
+             MongoClient writerBClient = MongoClients.create(connectionString);
+             MongoClient observerClient = MongoClients.create(connectionString);
+             MongoClient recorderClient = MongoClients.create(connectionString)) {
 
-        // Writer B: a plain store over the same collection, commits fully and immediately.
-        MongoClient writerBClient = MongoClients.create(connectionString);
-        MongoTemplate writerBTemplate = new MongoTemplate(writerBClient, requireNonNull(connectionString.getDatabase()));
-        SpringMongoEventStore writerBStore = newEventStore(writerBTemplate,
-                new TransactionTemplate(new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(writerBClient, requireNonNull(connectionString.getDatabase())))),
-                collection);
+            // Writer A: paused right after its position is reserved (reservation happens outside the transaction,
+            // ADR 84), before its transaction commits.
+            MongoTemplate writerATemplate = new MongoTemplate(writerAClient, requireNonNull(connectionString.getDatabase()));
+            PausingTransactionTemplate pausingTx = new PausingTransactionTemplate(
+                    new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(writerAClient, requireNonNull(connectionString.getDatabase()))),
+                    reserved, release);
+            SpringMongoEventStore writerAStore = newEventStore(writerATemplate, pausingTx, collection);
 
-        // A raw, side-channel subscription (independent of the recording wrapper under test) that records the real
-        // delivery order and the real position of every event, proving the inversion genuinely happened rather than
-        // being assumed.
-        MongoClient observerClient = MongoClients.create(connectionString);
-        MongoTemplate observerTemplate = new MongoTemplate(observerClient, requireNonNull(connectionString.getDatabase()));
-        SpringMongoSubscriptionModel observerModel = new SpringMongoSubscriptionModel(observerTemplate, collection, TimeRepresentation.RFC_3339_STRING);
-        List<EventMetadata> deliveryOrder = new CopyOnWriteArrayList<>();
-        Subscription observerSubscription = observerModel.subscribe("observer", StartAt.now(),
-                cloudEvent -> deliveryOrder.add(EventMetadata.from(cloudEvent)));
-        assertThat(observerSubscription.waitUntilStarted(Duration.ofSeconds(20))).as("the observer subscription never started").isTrue();
+            // Writer B: a plain store over the same collection, commits fully and immediately.
+            MongoTemplate writerBTemplate = new MongoTemplate(writerBClient, requireNonNull(connectionString.getDatabase()));
+            SpringMongoEventStore writerBStore = newEventStore(writerBTemplate,
+                    new TransactionTemplate(new MongoTransactionManager(new SimpleMongoClientDatabaseFactory(writerBClient, requireNonNull(connectionString.getDatabase())))),
+                    collection);
 
-        // The recording projection under test: a real RecordingMaterializedView over a real live subscription, the
-        // shipped production path (Projections.recordingAppliedAppends), never a hand-rolled record call.
-        MongoClient recorderClient = MongoClients.create(connectionString);
-        MongoTemplate recorderTemplate = new MongoTemplate(recorderClient, requireNonNull(connectionString.getDatabase()));
-        SpringMongoSubscriptionModel recorderModel = new SpringMongoSubscriptionModel(recorderTemplate, collection, TimeRepresentation.RFC_3339_STRING);
-        CloudEventConverter<Ticked> converter = new JacksonCloudEventConverter<>(new ObjectMapper(), SOURCE);
-        ConcurrentHashMap<String, Integer> state = new ConcurrentHashMap<>();
-        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(state::get, state::put);
-        Projection<Integer, Ticked, String> projection = Projection.<Integer, Ticked>singletonBuilder(0)
-                .on(Ticked.class, (count, event) -> count + 1)
-                .build();
-        AppliedAppendStore appliedAppendStore = AppliedAppendStore.inMemory();
-        List<AppendId> recordedInOrder = new CopyOnWriteArrayList<>();
-        AppliedAppendStore observedStore = recordingSpy(appliedAppendStore, recordedInOrder);
-        MaterializedView<Ticked> view = Projections.materializedView(projection, repository, PROJECTION_ID);
-        MaterializedView<Ticked> recordingView = Projections.recordingAppliedAppends(view, PROJECTION_ID, observedStore, ReplayPhase.neverReplays());
-        ProjectionRunner<Ticked> runner = ProjectionRunner.stream(recorderModel, converter);
-        Subscription recordingSubscription = runner.project(PROJECTION_ID, projection, recordingView, StartAt.now());
-        assertThat(recordingSubscription.waitUntilStarted(Duration.ofSeconds(20))).as("the recording subscription never started").isTrue();
+            // A raw, side-channel subscription (independent of the recording wrapper under test) that records the
+            // real delivery order and the real position of every event, proving the inversion genuinely happened
+            // rather than being assumed.
+            MongoTemplate observerTemplate = new MongoTemplate(observerClient, requireNonNull(connectionString.getDatabase()));
+            SpringMongoSubscriptionModel observerModel = new SpringMongoSubscriptionModel(observerTemplate, collection, TimeRepresentation.RFC_3339_STRING);
 
-        Thread appender = new Thread(() -> writerAStore.write("stream-a", List.of(converter.toCloudEvent(new Ticked("a")))), "writer-a");
-        try {
-            // A starts writing and pauses, its position already reserved.
-            appender.start();
-            assertThat(reserved.await(30, TimeUnit.SECONDS)).as("writer A did not reach its paused transaction").isTrue();
+            // The recording projection under test: a real RecordingMaterializedView over a real live subscription,
+            // the shipped production path (Projections.recordingAppliedAppends), never a hand-rolled record call.
+            MongoTemplate recorderTemplate = new MongoTemplate(recorderClient, requireNonNull(connectionString.getDatabase()));
+            SpringMongoSubscriptionModel recorderModel = new SpringMongoSubscriptionModel(recorderTemplate, collection, TimeRepresentation.RFC_3339_STRING);
 
-            // B commits fully, on a different stream, and reserves a strictly higher position than A's already-reserved one.
-            WriteResult resultB = writerBStore.write("stream-b", List.of(converter.toCloudEvent(new Ticked("b"))));
-            AppendId appendIdB = resultB.appendId().orElseThrow();
+            // Both models' shutdown lives in one finally covering both waitUntilStarted assertions below, so either
+            // one failing to start still shuts down whichever model(s) were already subscribed.
+            try {
+                CloudEventConverter<Ticked> converter = new JacksonCloudEventConverter<>(new ObjectMapper(), SOURCE);
+                List<EventMetadata> deliveryOrder = new CopyOnWriteArrayList<>();
+                Subscription observerSubscription = observerModel.subscribe("observer", StartAt.now(),
+                        cloudEvent -> deliveryOrder.add(EventMetadata.from(cloudEvent)));
+                assertThat(observerSubscription.waitUntilStarted(Duration.ofSeconds(20))).as("the observer subscription never started").isTrue();
 
-            await().atMost(Duration.ofSeconds(20)).until(() -> appliedAppendStore.hasApplied(PROJECTION_ID, appendIdB));
+                ConcurrentHashMap<String, Integer> state = new ConcurrentHashMap<>();
+                ViewStateRepository<Integer, String> repository = ViewStateRepository.create(state::get, state::put);
+                Projection<Integer, Ticked, String> projection = Projection.<Integer, Ticked>singletonBuilder(0)
+                        .on(Ticked.class, (count, event) -> count + 1)
+                        .build();
+                AppliedAppendStore appliedAppendStore = AppliedAppendStore.inMemory();
+                List<AppendId> recordedInOrder = new CopyOnWriteArrayList<>();
+                AppliedAppendStore observedStore = recordingSpy(appliedAppendStore, recordedInOrder);
+                MaterializedView<Ticked> view = Projections.materializedView(projection, repository, PROJECTION_ID);
+                MaterializedView<Ticked> recordingView = Projections.recordingAppliedAppends(view, PROJECTION_ID, observedStore, ReplayPhase.neverReplays());
+                ProjectionRunner<Ticked> runner = ProjectionRunner.stream(recorderModel, converter);
+                Subscription recordingSubscription = runner.project(PROJECTION_ID, projection, recordingView, StartAt.now());
+                assertThat(recordingSubscription.waitUntilStarted(Duration.ofSeconds(20))).as("the recording subscription never started").isTrue();
 
-            // The crux of the acceptance criterion: at the moment B's (higher-position) append is recorded as
-            // applied, A's event has not committed yet, so nothing else has been recorded. A position-based
-            // watermark would have called this "applied up to B's position", wrongly including A's lower one.
-            assertThat(recordedInOrder).as("only B's append should be recorded while A is still paused before commit").containsExactly(appendIdB);
+                Thread appender = new Thread(() -> writerAStore.write("stream-a", List.of(converter.toCloudEvent(new Ticked("a")))), "writer-a");
+                try {
+                    // A starts writing and pauses, its position already reserved.
+                    appender.start();
+                    assertThat(reserved.await(30, TimeUnit.SECONDS)).as("writer A did not reach its paused transaction").isTrue();
 
-            // Release A: it commits last, with the lower position.
-            release.countDown();
-            appender.join(TimeUnit.SECONDS.toMillis(30));
-            assertThat(appender.isAlive()).isFalse();
+                    // B commits fully, on a different stream, and reserves a strictly higher position than A's already-reserved one.
+                    WriteResult resultB = writerBStore.write("stream-b", List.of(converter.toCloudEvent(new Ticked("b"))));
+                    AppendId appendIdB = resultB.appendId().orElseThrow();
 
-            // Read A's append id back from what was actually delivered (not minted ahead of time), and prove the
-            // wait now (and only now) answers true for it.
-            await().atMost(Duration.ofSeconds(20)).until(() -> deliveryOrder.size() >= 2);
-            EventMetadata aMetadata = deliveryOrder.stream()
-                    .filter(metadata -> "stream-a".equals(metadata.getStreamId()))
-                    .findFirst()
-                    .orElseThrow(() -> new AssertionError("A's event was never observed as delivered"));
-            AppendId appendIdA = AppendId.from(aMetadata).orElseThrow();
+                    await().atMost(Duration.ofSeconds(20)).until(() -> appliedAppendStore.hasApplied(PROJECTION_ID, appendIdB));
 
-            assertThat(appliedAppendStore.waitUntilApplied(PROJECTION_ID, appendIdA, Duration.ofSeconds(20))).isTrue();
-            assertThat(recordedInOrder).as("B was recorded first, A only after its own commit").containsExactly(appendIdB, appendIdA);
+                    // The crux of the acceptance criterion: at the moment B's (higher-position) append is recorded as
+                    // applied, A's event has not committed yet, so nothing else has been recorded. A position-based
+                    // watermark would have called this "applied up to B's position", wrongly including A's lower one.
+                    assertThat(recordedInOrder).as("only B's append should be recorded while A is still paused before commit").containsExactly(appendIdB);
 
-            // The real, independently observed positions confirm the inversion actually happened: A's position is
-            // lower than B's even though A committed and was delivered after B.
-            EventMetadata bMetadata = deliveryOrder.stream()
-                    .filter(metadata -> "stream-b".equals(metadata.getStreamId()))
-                    .findFirst()
-                    .orElseThrow();
-            assertThat(deliveryOrder.get(0).getStreamId()).as("B is delivered first, in real commit order").isEqualTo("stream-b");
-            assertThat(requireNonNull(aMetadata.getPosition())).as("but A's reserved position is lower than B's")
-                    .isLessThan(requireNonNull(bMetadata.getPosition()));
-        } finally {
-            // release unconditionally, not just after the happy path: if an assertion above throws before
-            // release.countDown() runs, writer A stays parked on its latch forever, and this join would hang the
-            // whole Maven fork rather than let the failure surface. CountDownLatch.countDown() is a no-op once the
-            // count has already reached zero, so releasing twice on the happy path is harmless.
-            release.countDown();
-            appender.join(TimeUnit.SECONDS.toMillis(30));
-            recorderModel.shutdown();
-            observerModel.shutdown();
-            recorderClient.close();
-            observerClient.close();
-            writerAClient.close();
-            writerBClient.close();
+                    // Release A: it commits last, with the lower position.
+                    release.countDown();
+                    appender.join(TimeUnit.SECONDS.toMillis(30));
+                    assertThat(appender.isAlive()).isFalse();
+
+                    // Read A's append id back from what was actually delivered (not minted ahead of time), and prove
+                    // the wait now (and only now) answers true for it.
+                    await().atMost(Duration.ofSeconds(20)).until(() -> deliveryOrder.size() >= 2);
+                    EventMetadata aMetadata = deliveryOrder.stream()
+                            .filter(metadata -> "stream-a".equals(metadata.getStreamId()))
+                            .findFirst()
+                            .orElseThrow(() -> new AssertionError("A's event was never observed as delivered"));
+                    AppendId appendIdA = AppendId.from(aMetadata).orElseThrow();
+
+                    assertThat(appliedAppendStore.waitUntilApplied(PROJECTION_ID, appendIdA, Duration.ofSeconds(20))).isTrue();
+                    assertThat(recordedInOrder).as("B was recorded first, A only after its own commit").containsExactly(appendIdB, appendIdA);
+
+                    // The real, independently observed positions confirm the inversion actually happened: A's
+                    // position is lower than B's even though A committed and was delivered after B.
+                    EventMetadata bMetadata = deliveryOrder.stream()
+                            .filter(metadata -> "stream-b".equals(metadata.getStreamId()))
+                            .findFirst()
+                            .orElseThrow();
+                    assertThat(deliveryOrder.get(0).getStreamId()).as("B is delivered first, in real commit order").isEqualTo("stream-b");
+                    assertThat(requireNonNull(aMetadata.getPosition())).as("but A's reserved position is lower than B's")
+                            .isLessThan(requireNonNull(bMetadata.getPosition()));
+                } finally {
+                    // release unconditionally, not just after the happy path: if an assertion above throws before
+                    // release.countDown() runs, writer A stays parked on its latch forever, and this join would hang
+                    // the whole Maven fork rather than let the failure surface. CountDownLatch.countDown() is a
+                    // no-op once the count has already reached zero, so releasing twice on the happy path is
+                    // harmless.
+                    release.countDown();
+                    appender.join(TimeUnit.SECONDS.toMillis(30));
+                }
+            } finally {
+                recorderModel.shutdown();
+                observerModel.shutdown();
+            }
         }
     }
 
