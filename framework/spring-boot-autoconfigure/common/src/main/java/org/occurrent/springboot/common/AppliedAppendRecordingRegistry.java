@@ -35,9 +35,11 @@ import static java.util.Objects.requireNonNull;
  * self-rescheduling per projection instead of a global tick that wakes up every registered projection whether or not
  * it is due.
  * <p>
- * Not thread-safe across concurrent calls for the <em>same</em> {@code projectionId}: a registrar that runs its
- * scheduler single-threaded (blocking) or on a single-worker {@code Scheduler} (reactor) never calls
- * {@link #tick(String)} for one id from two threads at once, which is the only guarantee this class relies on.
+ * Not thread-safe across concurrent calls for the <em>same</em> {@code projectionId}. A registrar's self-rescheduling
+ * only asks {@link #dueInNanos(String)} again and reschedules once {@link #tick(String)} for that id has already
+ * returned, never before, so the same id's ticks stay serialized regardless of how many worker threads the
+ * scheduler runs overall (a virtual thread per fired tick on the blocking stack, a {@code boundedElastic} worker on
+ * the reactor stack). Two different ids can, and are meant to, tick concurrently.
  */
 @NullMarked
 public final class AppliedAppendRecordingRegistry {

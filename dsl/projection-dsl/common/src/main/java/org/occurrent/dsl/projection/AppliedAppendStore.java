@@ -69,6 +69,12 @@ public interface AppliedAppendStore {
      * Deletes every append recorded for {@code projectionId}. A projection whose read model is rebuilt from
      * scratch must not answer for appends recorded by whatever it was before the rebuild, and this is what removes
      * them.
+     * <p>
+     * Calling this directly, rather than through a replay a recorder observed itself, leaves that recorder's own
+     * one-append dedup memory unaware the store changed underneath it. The next delivery of whichever append it last
+     * recorded is skipped as an assumed repeat, and a wait for that specific append then times out rather than
+     * seeing it recorded again, until a delivery of a different append updates that memory. The safe direction to
+     * get wrong, since the failure is a wait that gives up rather than a record that should not exist.
      */
     void clear(String projectionId);
 

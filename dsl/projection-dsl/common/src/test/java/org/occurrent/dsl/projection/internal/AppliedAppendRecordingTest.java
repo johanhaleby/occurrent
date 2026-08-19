@@ -141,6 +141,64 @@ class AppliedAppendRecordingTest {
         assertThat(store.hasApplied(PROJECTION_ID, liveAppend)).isTrue();
     }
 
+    // Decision 7 mandates a clear attempt on every delivery seen while replaying, not a repeat store.clear() call on
+    // every one of them: a replay of N events all hitting the per-delivery check must clear once, not N times.
+    @Test
+    void a_replay_episode_clears_the_store_at_most_once_across_every_delivery_seen_while_replaying() {
+        List<String> clears = new ArrayList<>();
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> true);
+
+        for (int i = 0; i < 1000; i++) {
+            recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        }
+
+        assertThat(clears).hasSize(1);
+    }
+
+    // The latch that suppresses a repeat clear has to reset once the episode ends, or a genuinely new replay later
+    // would find recording still off with nothing left to clear it.
+    @Test
+    void a_new_replay_episode_after_going_live_is_cleared_again() {
+        List<String> clears = new ArrayList<>();
+        AtomicBoolean replaying = new AtomicBoolean(true);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), replaying::get);
+
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        assertThat(clears).hasSize(1);
+
+        replaying.set(false);
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+
+        replaying.set(true);
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+
+        assertThat(clears).hasSize(2);
+    }
+
+    // The full state machine the per-episode latch has to get right: a failing clear is retried on every delivery
+    // until it succeeds (unchanged from before this latch existed), and once it succeeds, every later delivery in
+    // the same episode is suppressed rather than retried.
+    @Test
+    void a_failing_clear_is_retried_every_delivery_until_it_succeeds_then_suppressed_for_the_rest_of_the_episode() {
+        List<String> clears = new ArrayList<>();
+        AtomicBoolean clearShouldFail = new AtomicBoolean(true);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, clearShouldFail), () -> true);
+
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        assertThat(clears).hasSize(2);
+
+        clearShouldFail.set(false);
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        assertThat(clears).hasSize(3);
+
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        assertThat(clears).hasSize(3);
+    }
+
     @Test
     void replayAbandoned_does_not_attempt_the_clear_but_a_later_delivery_still_retries_it() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
@@ -158,5 +216,30 @@ class AppliedAppendRecordingTest {
 
     private static EventMetadata metadataWithAppendId(AppendId appendId) {
         return new EventMetadata(Map.of(OccurrentCloudEventExtension.APPEND_ID, appendId.toString()));
+    }
+
+    // Records every clear(..) call in order, failing them while shouldFail is true.
+    private static AppliedAppendStore clearCountingStore(List<String> clears, AtomicBoolean shouldFail) {
+        AppliedAppendStore delegate = AppliedAppendStore.inMemory();
+        return new AppliedAppendStore() {
+            @Override
+            public void recordApplied(String projectionId, AppendId appendId) {
+                delegate.recordApplied(projectionId, appendId);
+            }
+
+            @Override
+            public boolean hasApplied(String projectionId, AppendId appendId) {
+                return delegate.hasApplied(projectionId, appendId);
+            }
+
+            @Override
+            public void clear(String projectionId) {
+                clears.add(projectionId);
+                if (shouldFail.get()) {
+                    throw new RuntimeException("clear failed");
+                }
+                delegate.clear(projectionId);
+            }
+        };
     }
 }

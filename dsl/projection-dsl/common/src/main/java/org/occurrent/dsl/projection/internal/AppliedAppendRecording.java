@@ -58,6 +58,12 @@ public final class AppliedAppendRecording {
     // that also declares it, on the same thread.
     private final Object clearLock = new Object();
     private volatile boolean pendingClear = false;
+    // True once a clear has already succeeded for the replay episode currently in progress. Decision 7 mandates a
+    // clear attempt on every delivery seen while replaying, not a repeat store.clear() call on every one of them.
+    // Without this, a replay of N events that all hit the per-delivery check runs N deleteMany round trips against
+    // an already-empty result instead of one. Reset whenever a live observation ends the episode, or an explicit
+    // replay-start signal begins one, so the next episode still gets its own clear.
+    private volatile boolean episodeCleared = false;
     // Set by the view-DSL replay lifecycle (CatchupProjectionFeed/DomainEventFeed), independent of what phase says.
     // A composition fed that way has no ReplayPhase to ask (it is neverReplays()), so this is its only replay signal.
     private volatile boolean lifecycleReplaying = false;
@@ -78,20 +84,28 @@ public final class AppliedAppendRecording {
      * Records {@code metadata}'s append id if the projection is ready to record right now, atomically with a
      * concurrent clear: a write already about to happen when a clear runs can never land after it and reinstate
      * what the clear just removed. Not recording is never an error. It means the projection is currently replaying
-     * (lifecycle or phase, whichever says so), which also attempts the clear that implies, or a previously owed
-     * clear has not yet succeeded, which this also retries. An append with no identifier (predates this feature, or
-     * arrived through a push feed whose producer supplied none), a malformed one, or a repeat of the one just
-     * recorded for this instance, is skipped quietly either way. May block on {@link AppliedAppendStore#clear(String)}
-     * or {@link AppliedAppendStore#recordApplied}, so a reactive caller must already be off the event loop.
+     * (lifecycle or phase, whichever says so), which also attempts the clear that implies once per replay episode
+     * (a later delivery seen while still replaying, after that clear already succeeded, costs nothing further), or a
+     * previously owed clear has not yet succeeded, which this also retries on every delivery until it does. An
+     * append with no identifier (predates this feature, or arrived through a push feed whose producer supplied
+     * none), a malformed one, or a repeat of the one just recorded for this instance, is skipped quietly either way.
+     * May block on {@link AppliedAppendStore#clear(String)} or {@link AppliedAppendStore#recordApplied}, so a
+     * reactive caller must already be off the event loop.
      */
     public void recordIfReady(EventMetadata metadata) {
         requireNonNull(metadata, "metadata cannot be null");
         synchronized (clearLock) {
             if (lifecycleReplaying || phase.isReplaying()) {
-                pendingClear = true;
-                attemptClear();
+                if (!episodeCleared) {
+                    pendingClear = true;
+                    attemptClear();
+                    if (!pendingClear) {
+                        episodeCleared = true;
+                    }
+                }
                 return;
             }
+            episodeCleared = false;
             if (pendingClear) {
                 attemptClear();
                 if (pendingClear) {
@@ -131,8 +145,13 @@ public final class AppliedAppendRecording {
      */
     public void replayObserved() {
         synchronized (clearLock) {
-            pendingClear = true;
-            attemptClear();
+            if (!episodeCleared) {
+                pendingClear = true;
+                attemptClear();
+                if (!pendingClear) {
+                    episodeCleared = true;
+                }
+            }
         }
     }
 
@@ -149,10 +168,18 @@ public final class AppliedAppendRecording {
         synchronized (clearLock) {
             boolean replaying = lifecycleReplaying || phase.isReplaying();
             if (replaying) {
-                pendingClear = true;
-                attemptClear();
-            } else if (pendingClear) {
-                attemptClear();
+                if (!episodeCleared) {
+                    pendingClear = true;
+                    attemptClear();
+                    if (!pendingClear) {
+                        episodeCleared = true;
+                    }
+                }
+            } else {
+                episodeCleared = false;
+                if (pendingClear) {
+                    attemptClear();
+                }
             }
             return replaying;
         }
@@ -183,6 +210,7 @@ public final class AppliedAppendRecording {
     public void replayStarted() {
         lifecycleReplaying = true;
         pendingClear = true;
+        episodeCleared = false;
     }
 
     /**
@@ -197,6 +225,7 @@ public final class AppliedAppendRecording {
         lifecycleReplaying = false;
         synchronized (clearLock) {
             attemptClear();
+            episodeCleared = false;
         }
     }
 
@@ -209,6 +238,7 @@ public final class AppliedAppendRecording {
      */
     public void replayAbandoned() {
         lifecycleReplaying = false;
+        episodeCleared = false;
     }
 
     // Assumes clearLock is already held by the caller.
