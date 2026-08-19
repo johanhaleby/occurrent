@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 27
-updated_at: 2026-08-19T05:30:52Z
+revision: 28
+updated_at: 2026-08-19T06:20:00Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -18,6 +18,14 @@ definition_of_done:
   - "#740 closed at ship; #361 closed as duplicate of #740, never resolved separately"
   - "Memory checkpointed, sessions archived, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
 pending_actions:
+  - id: act-007
+    type: merge
+    target: "PR 860, CAS-pinned to 324f8935 after the invariant pass, capped clean round and the verify's final slice"
+    expected: "PR 860 merged, merged head equals the verified pin, recording projections on main"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-19T06:18:14Z
   - id: act-006
     type: merge
     target: "PR 851, CAS-pinned to 1ccbc948e after the round-9 cap ruling and gate"
@@ -146,15 +154,15 @@ units:
   U4:
     issue: 740
     goal: "Recording projections: wrappers both stacks, owner-supplied phase gates, reset-rule clear with completion precondition, shared-scheduler poll with registrar-retained lifecycle, skip-and-log, @Projection attribute and registrar wiring"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U3]
     session: null
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 860, met: true, evidence: "squash bb6b5495e, CAS pin 324f8935 matched, merged state read back 2026-08-19T06:18Z, branch deleted after tip==pin, final slice diff verified scoped to the four ordered outcomes"}
     blocking_on: []
-    next_action: "Final slice returned 2026-08-19T05:30Z from the adversarial verify (invariant CONFIRMED on every path by execution; capped round was clean on the final head): fix the replay clear storm with a per-episode latch, scope the PR body's WARN sentence to the reactor stack (code follows ADR decision 8, prose overclaimed), two javadoc notes. Then merge WITHOUT a new Copilot round per the cap ruling, my verify covers the delta"
+    next_action: "none. Main's matrix on squash bb6b5495e was still running at the merge tick, re-check at the next natural tick (DoD item). Session archiving batches at closeout"
     last_meaningful_progress_at: 2026-08-18T20:17:44Z
     observed:
       plan: {path: "scratchpad/u4-approved-plan.md in the session scratchpad", approved: 2026-08-18T19:00:00Z, at: 2026-08-18T19:05:00Z}
@@ -164,34 +172,34 @@ units:
   U5:
     issue: 740
     goal: "Acceptance and falsifier proofs: the seven-test suite from the plan (inversion, Mongo e2e cross-instance, abandoned-replay, post-reset in two variants, partial-visibility pin, empty-append, write-to-delivery fidelity)"
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U4]
-    session: null
+    session: "subagent ade92704d394f01ca"
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch after U4 merges"
-    last_meaningful_progress_at: 2026-08-17T14:37:26Z
+    next_action: "Implementation subagent running since 2026-08-19T06:20Z (Sonnet, isolated worktree, branch ayi/u5-falsifier-suite from origin/main at or after bb6b5495e). Brief requires each test to be mutation-proven to bite, and a real defect found stops for the orchestrator rather than being silently fixed"
+    last_meaningful_progress_at: 2026-08-19T06:20:00Z
     observed: {}
-    assessment: "Sonnet/high chip. A contract finding here re-triggers a U6 pass. Carries from U2's adversarial verify: add the reactor write() resubscription test (same shape as ReactorMongoEventStoreDcbTest's resubscribing_the_same_append_publisher test, aimed at write())."
+    assessment: "Subagent unit under Unattended. A contract finding here re-triggers a U6 pass. Carries from U2's adversarial verify: add the reactor write() resubscription test (same shape as ReactorMongoEventStoreDcbTest's resubscribing_the_same_append_publisher test, aimed at write())."
   U6:
     issue: 740
     goal: "Held docs branch docs/append-identity in occurrent-org.github.io, news-post mention coordinated with r34's release-notes branch, addedTags entry, the honest window bound"
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U4]
-    session: null
+    session: "subagent a382064555b604e46"
     deliverables:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/append-identity, met: false, evidence: null}
       - {check: manual_approval, ref: "held docs PR review-clean, frozen only after U5 merges", met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch after U4 merges, parallel to U5 under the freeze rule"
-    last_meaningful_progress_at: 2026-08-17T14:37:26Z
+    next_action: "Docs subagent running since 2026-08-19T06:20Z (Sonnet), parallel to U5 under the freeze rule. Brief forbids the shared docs checkout (other sessions carry live branches there), requires a fresh scratchpad clone or the contents API, and the honest window bound including the within-interval replay residual and the blocking never-replays fallback"
+    last_meaningful_progress_at: 2026-08-19T06:20:00Z
     observed: {}
-    assessment: "Sonnet/medium chip. Held for release day; docs-repo merges are Johan's."
+    assessment: "Subagent unit under Unattended. Held for release day; docs-repo merges are Johan's. Content freezes only after U5 merges, since a U5 contract finding re-triggers a docs pass."
   U7:
     issue: 740
     goal: "Epic-end fresh-context review fixpoint over the complete ayi increment, blocker-only reopens, cap 3 rounds"
