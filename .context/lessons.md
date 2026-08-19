@@ -1489,3 +1489,11 @@ Assertions in the opposite direction, that a message COMES BACK, are unaffected,
 A worker ran its prose gate check and its `git push` in the same tool batch, so the check's output could not influence the push, and a commit message with a banned semicolon reached the remote. The check ran, it just gated nothing. Same shape as the recorded `gh` plus dash-detection-grep collision: the verification and the thing it verifies have to be separated by a decision point, not merely ordered within one command.
 
 Consequence worth knowing: a squash merge here composes its body from the branch's commit messages (verified against `fa367096b` on main), so a defective branch commit message DOES land on main. The fix at the gate is to supply an explicit subject and `--body-file` describing what the unit delivers, rather than letting GitHub concatenate a round-by-round history.
+
+## Verify a reviewer's claim against the committed blob, never the working tree (brk/U4, 2026-08-19)
+
+I checked a reviewer's blocker by reading files in the worker's worktree with `sed`/`grep` after confirming `git log --oneline -1` showed the reviewed head. The head was right and the file content was not: the worker had already applied an uncommitted fix, so I read the FIXED code while attributing it to the head under review. I then declared the finding a false positive and instructed the worker to decline it with a line-numbered rebuttal.
+
+The finding was real. `git show 8dd8b0273:<path>` shows the readiness check AFTER the accept, exactly as the reviewer said; the working tree showed it before. No harm followed only because the worker had independently found and fixed the same race in `a728f31af` and declined merely the duplicate thread.
+
+Rule: when verifying any claim about a pushed head, read `git show <sha>:<path>`. A worker's worktree is dirty by default while it is mid-round, and `git log -1` tells you nothing about the state of the files you are about to read.
