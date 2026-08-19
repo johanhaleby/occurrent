@@ -153,15 +153,26 @@ class ProjectionAnnotationRegistrar {
         // closing and shutting down share recordingLock with scheduleRecordingPoll's own use of it below, so a
         // registration racing this either creates the executors before this sees them (and this shuts down what it
         // just created) or sees closing already set (and creates nothing this would have to know about).
+        //
+        // shutdownNow() alone only requests interruption. A tick already blocked in AppliedAppendStore.clear() can
+        // still be running once close() returns, against a store the context is tearing down. Both executors are
+        // awaited outside recordingLock afterward, capped at the same deadline the catch-ups below use, so a stuck
+        // clear cannot hold this method open forever.
+        ScheduledExecutorService pollSchedulerToClose;
+        ExecutorService tickExecutorToClose;
         synchronized (recordingLock) {
             closing = true;
-            if (recordingPollScheduler != null) {
-                recordingPollScheduler.shutdownNow();
+            pollSchedulerToClose = recordingPollScheduler;
+            if (pollSchedulerToClose != null) {
+                pollSchedulerToClose.shutdownNow();
             }
-            if (recordingTickExecutor != null) {
-                recordingTickExecutor.shutdownNow();
+            tickExecutorToClose = recordingTickExecutor;
+            if (tickExecutorToClose != null) {
+                tickExecutorToClose.shutdownNow();
             }
         }
+        awaitTermination(pollSchedulerToClose);
+        awaitTermination(tickExecutorToClose);
         // The models first, because their shutdown is what stops a push replay and so releases the watcher joined
         // below. Each model waits for its own replays, so this can take that long again before the join starts.
         pushModels.forEach(CatchupThenPushSubscriptionModel::shutdown);
@@ -345,6 +356,19 @@ class ProjectionAnnotationRegistrar {
                 }
                 scheduleRecordingPoll(id);
             }), registry.dueInNanos(id), TimeUnit.NANOSECONDS);
+        }
+    }
+
+    // Waits for an already-shutdownNow() executor to actually finish whatever it was running, capped at
+    // SHUTDOWN_CATCHUP_TIMEOUT so a tick stuck in a blocking clear() cannot hold close() open forever.
+    private static void awaitTermination(@Nullable ExecutorService executor) {
+        if (executor == null) {
+            return;
+        }
+        try {
+            executor.awaitTermination(SHUTDOWN_CATCHUP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

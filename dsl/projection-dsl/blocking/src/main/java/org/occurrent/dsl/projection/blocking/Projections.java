@@ -309,11 +309,13 @@ public final class Projections {
      * whatever {@code view} was when this was called.
      * <p>
      * The Spring Boot starter's own scheduled poll (ADR 132 decision 7) is what still retries a clear when a replay
-     * delivered no matching event to retry it from, by asking {@code phase} on a schedule and calling the returned
-     * view's {@link AppliedAppendRecorder#replayObserved()} or {@link AppliedAppendRecorder#retryPendingClear()}
-     * accordingly. Calling this factory directly does not install that poll. Run the same schedule yourself, or
-     * accept the residual. Without it, a clear a replay left owed only retries once a live delivery reaches this
-     * projection.
+     * delivered no matching event to retry it from. Calling this factory directly does not install that poll. Call
+     * {@link AppliedAppendRecorder#pollReplayPhase()} on the returned view yourself on a schedule, rather than
+     * asking {@code phase} first and dispatching to {@link AppliedAppendRecorder#replayObserved()} or
+     * {@link AppliedAppendRecorder#retryPendingClear()} from that separate reading: a live delivery landing between
+     * the two can record a genuinely live append, which a stale {@code replayObserved()} call would then clear.
+     * {@code pollReplayPhase()} re-checks the phase itself, atomically with reacting to it. Or accept the residual.
+     * Without polling it, a clear a replay left owed only retries once a live delivery reaches this projection.
      */
     public static <E> RecordingMaterializedView<E> recordingAppliedAppends(MaterializedView<E> view, String projectionId, AppliedAppendStore store, ReplayPhase phase) {
         requireNonNull(view, "view cannot be null");

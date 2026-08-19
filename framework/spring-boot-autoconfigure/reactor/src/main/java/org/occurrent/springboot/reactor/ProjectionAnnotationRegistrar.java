@@ -149,9 +149,22 @@ class ProjectionAnnotationRegistrar {
             }
         }
         backgroundCatchUps.clear();
+        // dispose() alone only stops the scheduler from accepting new work. A tick already blocked in
+        // AppliedAppendStore.clear() can otherwise still be running once close() returns, against a store the
+        // context is tearing down. disposeGracefully() is awaited outside recordingLock instead, capped at the
+        // same deadline the catch-ups above use, so a stuck clear cannot hold this method open forever.
+        Scheduler schedulerToClose;
         synchronized (recordingLock) {
-            if (recordingPollScheduler != null) {
-                recordingPollScheduler.dispose();
+            schedulerToClose = recordingPollScheduler;
+            if (schedulerToClose != null) {
+                schedulerToClose.dispose();
+            }
+        }
+        if (schedulerToClose != null) {
+            try {
+                schedulerToClose.disposeGracefully().block(SHUTDOWN_CATCHUP_TIMEOUT);
+            } catch (RuntimeException e) {
+                // Nowhere useful to put a shutdown timeout, same as the catch-ups above.
             }
         }
     }
