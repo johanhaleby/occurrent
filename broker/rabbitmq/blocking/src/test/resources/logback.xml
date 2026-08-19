@@ -1,4 +1,3 @@
-<?xml version="1.0" encoding="UTF-8"?>
 <!--
   ~ Copyright 2026 Johan Haleby
   ~
@@ -15,20 +14,17 @@
   ~ limitations under the License.
   -->
 
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <parent>
-        <artifactId>occurrent</artifactId>
-        <groupId>org.occurrent</groupId>
-        <version>${revision}</version>
-    </parent>
-    <modelVersion>4.0.0</modelVersion>
-    <artifactId>broker</artifactId>
+<configuration debug="false">
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
 
-    <packaging>pom</packaging>
-    <modules>
-        <module>api</module>
-        <module>rabbitmq</module>
-    </modules>
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
 
-</project>
+    <logger name="org.testcontainers.shaded.org.zeroturnaround.exec.ProcessExecutor" level="off"/>
+    <logger name="com.github.dockerjava" level="WARN"/>
+</configuration>
