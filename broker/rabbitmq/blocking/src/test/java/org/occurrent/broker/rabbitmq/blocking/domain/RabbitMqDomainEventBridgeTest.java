@@ -93,6 +93,42 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
         }
     }
 
+    /**
+     * The silent-loss case ADR 133 exists to prevent. A projection registered but not yet caught up or gone live
+     * only buffers in memory, and a {@code DomainEventFeed} bound for {@code goLive(..)} never replays, so an
+     * acknowledged message in that window would be lost for good on a crash. Proof this cannot happen: the message
+     * stays on the queue, unacknowledged, until the application actually calls {@code goLive(..)}, at which point it
+     * is delivered and only then acknowledged.
+     */
+    @Test
+    void a_message_delivered_before_the_feed_has_gone_live_is_not_acknowledged_and_is_delivered_once_it_does() throws Exception {
+        String queue = declareAndBindQueue(TestOrderPlaced.class.getName());
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        // Registered, but goLive(..) is deliberately not called yet: hasProjection() is already true, so without the
+        // isReadyForLiveDelivery() gate the bridge would start consuming and, before this fix, would acknowledge the
+        // message on a merely buffered event.
+        feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()));
+
+        try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = RabbitMqDomainEventBridge.builder(connection(), feed, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .build()) {
+            publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
+
+            // Several poll intervals pass with the feed registered but not ready: the message must still be sitting
+            // on the queue, never acknowledged, and never handled either (buffered, not folded).
+            Thread.sleep(POLL_INTERVAL.toMillis() * 6);
+            assertThat(queueMessageCount(queue)).isEqualTo(1);
+            assertThat(handled).isEmpty();
+
+            feed.goLive("proj");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
+        }
+    }
+
     @Test
     void redelivers_on_a_projection_failure_and_the_retry_succeeds() throws Exception {
         String queue = declareAndBindQueue(TestOrderPlaced.class.getName());

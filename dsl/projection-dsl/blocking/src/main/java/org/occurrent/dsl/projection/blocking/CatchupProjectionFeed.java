@@ -81,6 +81,14 @@ public final class CatchupProjectionFeed<E> {
     private final BlockingHandover<Delivered<E>> handover;
     // Read by the replay once per event, so stopCatchUp() takes effect at the next event rather than at the end.
     private volatile boolean stopped = false;
+    // Set once, at the top of catchUp() or goLive(), before either has buffered or delivered anything for that
+    // call. Never cleared again, the same one-shot shape as hasProjection(). Answers whether a live event fed
+    // right now is backed by something that survives a crash. Before either method has ever been called, a live event
+    // can only be buffered in memory with no source to replay it back, whichever of the two this registration turns
+    // out to use, so isReadyForLiveDelivery() must read false there. Once one has started, a still-buffered event
+    // is buffered ahead of a catchUp() replay in flight, safe because a crash re-runs that whole replay from the
+    // store, and a live delivery reaching the view directly is safe on its own terms.
+    private volatile boolean readyForLiveDelivery = false;
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
                                         CloudEventConverter<E> converter, Function<E, String> eventId,
@@ -218,6 +226,12 @@ public final class CatchupProjectionFeed<E> {
         return id;
     }
 
+    // Package-private. Lets DomainEventFeed.acceptCloudEvent(CloudEvent) and DomainEventFeed.isReadyForLiveDelivery()
+    // read the flag catchUp() and goLive() set. See the field's own javadoc for what it answers.
+    boolean isReadyForLiveDelivery() {
+        return readyForLiveDelivery;
+    }
+
     /**
      * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), then drain
      * the buffered live events and go live. Skipped if the catch-up marker already records completion. Call this once,
@@ -227,6 +241,9 @@ public final class CatchupProjectionFeed<E> {
      * {@link #stopCatchUp()} to bring it back down.
      */
     public void catchUp() {
+        // Set before anything below buffers or delivers a single event for this call, so isReadyForLiveDelivery()
+        // reads true for the whole call, replay included, not only once it returns.
+        readyForLiveDelivery = true;
         // Cleared here rather than only in the handover, so a feed stopped once can catch up again instead of
         // stopping instantly on the first replayed event.
         stopped = false;
@@ -287,6 +304,9 @@ public final class CatchupProjectionFeed<E> {
      * it is not a guard against your broker redelivering a message.
      */
     public void goLive() {
+        // Set before the drain below, for the same reason catchUp() sets it first. Nothing this call is about to
+        // buffer or drain should read as unsafe just because the flip has not reached the buffer.add(..) branch yet.
+        readyForLiveDelivery = true;
         handover.catchUp(new BlockingHandover.Source<>() {
             @Override
             public boolean isAlreadyCaughtUp() {

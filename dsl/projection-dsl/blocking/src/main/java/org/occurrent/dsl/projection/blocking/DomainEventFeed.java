@@ -175,6 +175,21 @@ public final class DomainEventFeed<E> {
     }
 
     /**
+     * Whether the registered projection has actually started {@link #catchUpAll()}/{@link #catchUp(String)} or
+     * {@link #goLive(String)}, so a listener can gate its own consumption on more than just {@link #hasProjection()}.
+     * A live event fed through {@link #acceptCloudEvent(CloudEvent)} before either has been called only ever
+     * buffers in memory with nothing behind it to replay, whichever of the two this registration turns out to use,
+     * and {@link #acceptCloudEvent(CloudEvent)}'s own javadoc covers what it reports there. {@code false} for an
+     * unregistered feed, the same as {@link #hasProjection()} rather than the {@link IllegalStateException}
+     * {@link #accept(Object)} throws, so a listener can check both together before it has anything registered at
+     * all.
+     */
+    public boolean isReadyForLiveDelivery() {
+        Registered<E> registered = feed.get();
+        return registered != null && registered.catchupFeed().isReadyForLiveDelivery();
+    }
+
+    /**
      * Feed a live domain event to the registered projection, on the calling thread. Call this from the broker
      * listener, acknowledging the message only once it returns. An exception from the projection propagates.
      *
@@ -239,6 +254,16 @@ public final class DomainEventFeed<E> {
      * the catch-up-then-live engine already keeps for {@link #accept(Object)}: nothing is lost, because the
      * completion marker is never recorded for an interrupted attempt, so the next {@link #catchUpAll()} replays the
      * whole history again, including this event, from the store rather than from the buffer.
+     * <p>
+     * That reasoning holds only while a replay backs the buffer. A matching event that arrives before
+     * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has been called at all also only
+     * buffers, exactly like the case above, but this registration may turn out to use {@link #goLive(String)},
+     * which never replays because its own javadoc says the events are not in the local store to begin with. A crash
+     * before that call loses such a buffered event for good, so this reports {@link RoutingOutcome#NOT_DELIVERABLE}
+     * for it instead, the same outcome an event dropped by {@link #stopCatchUp()} gets, and for the same reason. The
+     * filter accepted it, but nothing durable is going to redeliver it if this attempt does not fold it. Once either
+     * method has started, buffering is store-backed again and reports {@link RoutingOutcome#DELIVERED}. See
+     * {@link #isReadyForLiveDelivery()}.
      *
      * @throws IllegalStateException if no projection is registered on this feed, for the reason
      *                               {@link #accept(Object)} gives. Refused rather than reported as
@@ -266,8 +291,12 @@ public final class DomainEventFeed<E> {
             return RoutingOutcome.FILTERED;
         }
         E event = converter.toDomainEvent(cloudEvent);
-        boolean delivered = registered.catchupFeed().acceptReportingDelivery(EventMetadata.from(cloudEvent), event);
-        return delivered ? RoutingOutcome.DELIVERED : RoutingOutcome.NOT_DELIVERABLE;
+        CatchupProjectionFeed<E> catchupFeed = registered.catchupFeed();
+        boolean delivered = catchupFeed.acceptReportingDelivery(EventMetadata.from(cloudEvent), event);
+        // Checked after accepting, not before. This only ever turns a true delivered into NOT_DELIVERABLE, never
+        // the other way around, so reading the freshest state here never masks the unsafe case as DELIVERED.
+        boolean readyForLiveDelivery = catchupFeed.isReadyForLiveDelivery();
+        return delivered && readyForLiveDelivery ? RoutingOutcome.DELIVERED : RoutingOutcome.NOT_DELIVERABLE;
     }
 
     // The one place the "nothing registered" refusal is spelled, so every accept overload and catchUpAll cannot

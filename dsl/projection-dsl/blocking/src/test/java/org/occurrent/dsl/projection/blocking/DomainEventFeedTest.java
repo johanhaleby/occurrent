@@ -712,6 +712,105 @@ class DomainEventFeedTest {
         assertThat(repo).doesNotContainKey("counter");
     }
 
+    @Test
+    void a_feed_is_not_ready_for_live_delivery_until_catch_up_all_runs() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+
+        assertThat(feed.isReadyForLiveDelivery()).isFalse();
+
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        assertThat(feed.isReadyForLiveDelivery()).as("registered, but neither catchUpAll() nor goLive() has run yet").isFalse();
+
+        feed.catchUpAll();
+        assertThat(feed.isReadyForLiveDelivery()).isTrue();
+    }
+
+    @Test
+    void go_live_also_marks_the_feed_ready_for_live_delivery() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+
+        assertThat(feed.isReadyForLiveDelivery()).isFalse();
+
+        feed.goLive("counter");
+
+        assertThat(feed.isReadyForLiveDelivery()).isTrue();
+    }
+
+    /**
+     * The silent-loss case ADR 133 exists to prevent. {@code hasProjection()} turns true the moment
+     * {@code register(..)} returns, well before the application calls {@code goLive(..)}, so a live event arriving
+     * in that window used to report {@link RoutingOutcome#DELIVERED} for an event only buffered in memory. A
+     * {@code DomainEventFeed} bound for {@code goLive(..)} never replays (its own javadoc: the events are not in the
+     * local store), so a crash in that window lost the event for good even though a broker bridge would already have
+     * acknowledged it. {@code RabbitMqDomainEventBridgeTest} (in the RabbitMQ broker module) exercises the same
+     * scenario end to end through the actual bridge; this is the unit-level proof of the feed's own contract.
+     */
+    @Test
+    void accept_cloud_event_reports_not_deliverable_for_an_event_buffered_before_catch_up_or_go_live_has_started() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+
+        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1")));
+
+        assertThat(outcome).as("nothing has decided yet whether this registration replays from the store or skips "
+                        + "straight to live, so a caller must not acknowledge this delivery")
+                .isEqualTo(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(repo).as("not folded yet, but not dropped either").isEmpty();
+
+        // Proof the event was buffered rather than lost: goLive(..) drains it into the projection, exactly as it
+        // would for a real application that only decides goLive(..) once it starts, after the bridge could already
+        // have delivered a message.
+        feed.goLive("counter");
+
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    @Test
+    void accept_cloud_event_still_reports_delivered_for_an_event_buffered_while_a_catch_up_replay_is_in_flight() {
+        // The counterpart to the test above: once catchUpAll() has started, a still-buffered event is buffered
+        // ahead of a replay actually in flight, backed by the store, so it must keep reporting DELIVERED exactly as
+        // it always has.
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s", counterConverter().toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
+        CountDownLatch parked = new CountDownLatch(1);
+        CountDownLatch proceed = new CountDownLatch(1);
+        AtomicInteger converted = new AtomicInteger();
+        CloudEventConverter<Counted> converter = parkingConverter(converted, parked, proceed);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+
+        Thread replay = new Thread(feed::catchUpAll);
+        replay.start();
+        awaitUninterruptibly(parked);
+        assertThat(feed.isReadyForLiveDelivery()).as("catchUp() marks this before the replay itself starts").isTrue();
+
+        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live")));
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.DELIVERED);
+
+        proceed.countDown();
+        try {
+            replay.join(TimeUnit.SECONDS.toMillis(5));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
+        assertThat(replay.isAlive()).isFalse();
+        // The two replayed events plus the one buffered mid-replay: three folds in total.
+        assertThat(repo.get("counter")).isEqualTo(3);
+    }
+
     private static CloudEventConverter<Counted> countingConverter(AtomicInteger decodes) {
         CloudEventConverter<Counted> delegate = counterConverter();
         return new CloudEventConverter<>() {

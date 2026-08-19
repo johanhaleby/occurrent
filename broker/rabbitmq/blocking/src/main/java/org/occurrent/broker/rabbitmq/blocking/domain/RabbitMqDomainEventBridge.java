@@ -75,17 +75,21 @@ import static java.util.Objects.requireNonNull;
  * so the event survives rather than being lost.
  * <p>
  * <strong>Coarse lifecycle.</strong> A background poll, {@link Builder#pollInterval(Duration)} apart (one second by
- * default), reads {@link DomainEventFeed#hasProjection()} and starts or cancels this bridge's own AMQP consumer to
- * match: consuming only once a projection is registered. This exists for the same reason
- * {@link RabbitMqCloudEventBridge} polls {@code isRunning(...)}: without it, a
- * message arriving before the application registers its projection would hit {@code acceptCloudEvent(...)}'s
- * {@link IllegalStateException} refusal on every delivery, and under {@link DeliveryFailurePolicy#REDELIVER} that is
- * an instant requeue-and-redeliver loop, not a wait. {@link DomainEventFeed} has no running/paused distinction
- * beyond {@link DomainEventFeed#hasProjection()}, so that is what this poll reads. Feeding
- * {@code acceptCloudEvent(...)} can still throw {@link IllegalStateException} despite the poll, for the narrow race
- * where the check ran just before the one registration this feed ever accepts; that case, unlike
- * {@link UnreadableLiveFilterException}, applies the configured {@link DeliveryFailurePolicy} like any other failure,
- * since it is transient rather than permanent.
+ * default), reads {@link DomainEventFeed#hasProjection()} and {@link DomainEventFeed#isReadyForLiveDelivery()} and
+ * starts or cancels this bridge's own AMQP consumer to match, consuming only once a projection is registered and its
+ * catch-up-then-live transition has actually started. This exists for the same reason {@link RabbitMqCloudEventBridge}
+ * polls {@code isRunning(...)}. Without the registration half, a message arriving before the application registers
+ * its projection would hit {@code acceptCloudEvent(...)}'s {@link IllegalStateException} refusal on every delivery,
+ * and under {@link DeliveryFailurePolicy#REDELIVER} that is an instant requeue-and-redeliver loop, not a wait.
+ * Without the readiness half, a message arriving after registration but before the application calls
+ * {@code catchUpAll()}/{@code catchUp(...)} or {@code goLive(...)} would only ever buffer with nothing behind it,
+ * which {@code acceptCloudEvent(...)} answers with {@link RoutingOutcome#NOT_DELIVERABLE} rather than
+ * {@link RoutingOutcome#DELIVERED} for exactly that reason (see its own javadoc), and under
+ * {@link DeliveryFailurePolicy#REDELIVER} that is the same instant requeue-and-redeliver loop, this time against a
+ * buffer that never drains until the application calls one of those. Feeding {@code acceptCloudEvent(...)} can still
+ * throw {@link IllegalStateException} despite the poll, for the narrow race where the check ran just before the one
+ * registration this feed ever accepts. That case, unlike {@link UnreadableLiveFilterException}, applies the
+ * configured {@link DeliveryFailurePolicy} like any other failure, since it is transient rather than permanent.
  */
 public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
 
@@ -145,13 +149,13 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
-    // Coarse lifecycle control, per the class javadoc: consumes only once a projection is registered, checked on a
-    // fixed poll rather than on every message, and never resumes once permanentlyStopped is set. permanentlyStopped
-    // is read here under consumeLock, the same lock stopPermanently() sets it under, rather than checked once
-    // before acquiring the lock: a poll that read the flag as false, then blocked on the lock while
-    // stopPermanently() ran and cancelled the consumer, would otherwise restart the very consumer that permanent
-    // stop just cancelled once the lock finally freed, feeding a live event straight back into the same permanently
-    // refused filter this exists to stop redelivering into.
+    // Coarse lifecycle control, per the class javadoc. Consumes only once a projection is registered and ready for
+    // live delivery, checked on a fixed poll rather than on every message, and never resumes once permanentlyStopped
+    // is set. permanentlyStopped is read here under consumeLock, the same lock stopPermanently() sets it under,
+    // rather than checked once before acquiring the lock. A poll that read the flag as false, then blocked on the
+    // lock while stopPermanently() ran and cancelled the consumer, would otherwise restart the very consumer that
+    // permanent stop just cancelled once the lock finally freed, feeding a live event straight back into the same
+    // permanently refused filter this exists to stop redelivering into.
     private void reconcileConsumption() {
         try {
             consumeLock.lock();
@@ -159,7 +163,7 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                 if (permanentlyStopped) {
                     return;
                 }
-                boolean shouldConsume = feed.hasProjection();
+                boolean shouldConsume = feed.hasProjection() && feed.isReadyForLiveDelivery();
                 if (shouldConsume && consumerTag == null) {
                     consumerTag = consumeChannel.basicConsume(queue, false, this::handleDelivery, this::handleCancel);
                 } else if (!shouldConsume && consumerTag != null) {
@@ -357,7 +361,8 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         }
 
         /**
-         * How often the coarse lifecycle poll checks {@link DomainEventFeed#hasProjection()}. One second by default.
+         * How often the coarse lifecycle poll checks {@link DomainEventFeed#hasProjection()} and
+         * {@link DomainEventFeed#isReadyForLiveDelivery()}. One second by default.
          */
         public Builder<E> pollInterval(Duration pollInterval) {
             requireNonNull(pollInterval, "pollInterval cannot be null");

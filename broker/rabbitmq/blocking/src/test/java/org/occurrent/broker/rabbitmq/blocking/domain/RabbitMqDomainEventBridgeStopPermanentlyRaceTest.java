@@ -90,6 +90,9 @@ class RabbitMqDomainEventBridgeStopPermanentlyRaceTest {
             }
             return true;
         });
+        // The coarse poll now also gates on isReadyForLiveDelivery(); stubbed true throughout, since this test's
+        // race is about the hasProjection()/permanent-stop interleaving, not about readiness.
+        when(feed.isReadyForLiveDelivery()).thenReturn(true);
         when(feed.acceptCloudEvent(any())).thenThrow(new UnreadableLiveFilterException("unreadable", new UnsupportedOperationException()));
 
         RabbitMqDomainEventBridge<String> bridge = RabbitMqDomainEventBridge.builder(connection, feed, "queue")
