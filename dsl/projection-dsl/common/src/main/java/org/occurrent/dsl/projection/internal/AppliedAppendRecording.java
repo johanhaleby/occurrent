@@ -51,7 +51,7 @@ public final class AppliedAppendRecording {
     private final AppliedAppendStore store;
     private final ReplayPhase phase;
 
-    // Guards every check-and-write against a concurrent clear attempt, from whichever of readyness check, record,
+    // Guards every check-and-write against a concurrent clear attempt, from whichever of readiness check, record,
     // or clear runs first: without one lock spanning both halves, a live delivery that read "ready" just before a
     // poll-driven clear could still write its append back in immediately after that clear finished, reinstating a
     // record the clear was supposed to remove. Reentrant, so a method already holding it can still call another

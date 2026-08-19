@@ -106,9 +106,10 @@ class ProjectionAnnotationRegistrar {
 
     // The applied-append recording poll's pacing (ADR 132 decision 7), and the scheduler that runs it. Both created
     // lazily on the first recordAppliedAppends = true projection, so an application that never uses the feature pays
-    // for neither. One single-worker Scheduler for every recording projection in this context, disposed in close().
-    // recordingLock guards both fields' initialization and recordingPollScheduler's disposal, since a manually
-    // started push projection can register concurrently with another one, or with close() itself.
+    // for neither. One Scheduler shared by every recording projection in this context, disposed in close(), with a
+    // thread per busy projection so one projection's stuck clear() cannot starve another's poll (see where it is
+    // built). recordingLock guards both fields' initialization and recordingPollScheduler's disposal, since a
+    // manually started push projection can register concurrently with another one, or with close() itself.
     private final Object recordingLock = new Object();
     private @Nullable AppliedAppendRecordingRegistry recordingRegistry;
     private @Nullable Scheduler recordingPollScheduler;
@@ -378,10 +379,12 @@ class ProjectionAnnotationRegistrar {
                 return;
             }
             if (recordingPollScheduler == null) {
-                // Unbounded queue cap deliberately: one long-delayed, self-rescheduling task lives per registered
-                // recording projection at a time, so the queue's natural size is the number of such projections, a
-                // legitimate registration count rather than something a fixed cap should reject once exceeded.
-                recordingPollScheduler = Schedulers.newBoundedElastic(1, Integer.MAX_VALUE, "occurrent-applied-append-poll", 60, true);
+                // Unbounded thread and queue caps deliberately: a single worker would let one projection's stuck
+                // clear() (AppliedAppendStore's default retry is unbounded, decision 7) occupy the only thread and
+                // starve every other registered projection's poll. One long-delayed, self-rescheduling task lives
+                // per registered recording projection at a time, so both caps' natural size is the registration
+                // count, a legitimate size rather than something a fixed cap should reject once exceeded.
+                recordingPollScheduler = Schedulers.newBoundedElastic(Integer.MAX_VALUE, Integer.MAX_VALUE, "occurrent-applied-append-poll", 60, true);
             }
             recordingPollScheduler.schedule(() -> {
                 try {

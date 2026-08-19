@@ -119,7 +119,8 @@ class ProjectionAnnotationRegistrar {
 
     // The applied-append recording poll's pacing (ADR 132 decision 7), and the scheduler that runs it. Both created
     // lazily on the first recordAppliedAppends = true projection, so an application that never uses the feature pays
-    // for neither. One scheduler for every recording projection in this context, stopped in close().
+    // for neither. One scheduler for every recording projection in this context, stopped in close(), with a thread
+    // per busy projection so one projection's stuck clear() cannot starve another's poll (see where it is built).
     private @Nullable AppliedAppendRecordingRegistry recordingRegistry;
     private @Nullable ScheduledExecutorService recordingPollScheduler;
 
@@ -292,7 +293,14 @@ class ProjectionAnnotationRegistrar {
 
     private synchronized ScheduledExecutorService recordingPollScheduler() {
         if (recordingPollScheduler == null) {
-            recordingPollScheduler = Executors.newSingleThreadScheduledExecutor(daemonThreadFactory("occurrent-applied-append-poll"));
+            // A single shared worker would let one projection's stuck clear() (AppliedAppendStore's default retry is
+            // unbounded, decision 7) occupy the only thread and starve every other registered projection's poll.
+            // Grows a thread per busy projection instead, up to the registration count (there is never more
+            // concurrent work than that), and reclaims an idle one after 60 seconds.
+            ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(Integer.MAX_VALUE, daemonThreadFactory("occurrent-applied-append-poll"));
+            executor.setKeepAliveTime(60, TimeUnit.SECONDS);
+            executor.allowCoreThreadTimeOut(true);
+            recordingPollScheduler = executor;
         }
         return recordingPollScheduler;
     }
