@@ -98,6 +98,21 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Real MongoDB event store + subscription model for the U5 falsifier suite (ADR 132 / #740), which proves
+             the recording wrapper against genuine commit-order and delivery behaviour rather than the in-memory
+             store's synchronous one. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-mongodb-spring-blocking</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-mongodb-spring-blocking</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-inmemory</artifactId>
