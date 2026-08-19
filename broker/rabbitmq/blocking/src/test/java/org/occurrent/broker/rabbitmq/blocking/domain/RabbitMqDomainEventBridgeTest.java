@@ -65,8 +65,8 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
             publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
         }
+        assertAcknowledged(queue);
     }
 
     /**
@@ -100,8 +100,8 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
             adminChannel.basicPublish(exchange, TestOrderPlaced.class.getName(), properties, RabbitMqCloudEventMapper.toBody(cloudEvent));
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
         }
+        assertAcknowledged(queue);
     }
 
     @Test
@@ -116,6 +116,10 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
                 .build()) {
             publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
 
+            // No projection registered yet. Give the coarse poll several chances to (wrongly) consume, then confirm
+            // the message is still sitting on the queue, untouched. Sound to check while the bridge is still open,
+            // unlike an acknowledgement claim. Nothing has been delivered to any consumer yet, so the ready count
+            // is not the ambiguous one an outstanding-but-unacked delivery would produce.
             Thread.sleep(POLL_INTERVAL.toMillis() * 6);
             assertThat(queueMessageCount(queue)).isEqualTo(1);
             assertThat(handled).isEmpty();
@@ -124,8 +128,8 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
             feed.goLive("proj");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
         }
+        assertAcknowledged(queue);
     }
 
     /**
@@ -152,7 +156,9 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
             publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
 
             // Several poll intervals pass with the feed registered but not ready: the message must still be sitting
-            // on the queue, never acknowledged, and never handled either (buffered, not folded).
+            // on the queue, never acknowledged, and never handled either (buffered, not folded). Sound to check
+            // while the bridge is still open. Nothing has been delivered to a consumer at all yet in this window,
+            // unlike the later acknowledgement claim this test also makes, which is checked only after close().
             Thread.sleep(POLL_INTERVAL.toMillis() * 6);
             assertThat(queueMessageCount(queue)).isEqualTo(1);
             assertThat(handled).isEmpty();
@@ -160,8 +166,8 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
             feed.goLive("proj");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
         }
+        assertAcknowledged(queue);
     }
 
     @Test
@@ -184,8 +190,8 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
             publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(attempts).hasValue(2));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
         }
+        assertAcknowledged(queue);
     }
 
     /**
@@ -213,8 +219,8 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
             publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(attempts).hasValue(2));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
         }
+        assertAcknowledged(queue);
     }
 
     @Test
@@ -239,13 +245,15 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
                 .build()) {
             publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
 
+            // The parking queue has no consumer attached, so its own ready count is not the ambiguous one a
+            // delivery outstanding on the bridge's consumer would produce; sound to check while the bridge is open.
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(parkingQueue)).isEqualTo(1));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
 
             GetResponse parked = adminChannel.basicGet(parkingQueue, true);
             assertThat(parked).isNotNull();
             assertThat(parked.getProps().getHeaders().get("cloudEvents_id")).hasToString("id-1");
         }
+        assertAcknowledged(queue);
     }
 
     /**
@@ -277,13 +285,13 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
             adminChannel.basicPublish(exchange, "malformed", malformedProperties, malformedBody);
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(parkingQueue)).isEqualTo(1));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
 
             GetResponse parked = adminChannel.basicGet(parkingQueue, true);
             assertThat(parked).isNotNull();
             assertThat(parked.getBody()).isEqualTo(malformedBody);
             assertThat(parked.getProps().getContentType()).isEqualTo("text/plain");
         }
+        assertAcknowledged(queue);
     }
 
     /**
@@ -291,7 +299,9 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
      * refused live, the bridge stops itself rather than redelivering into the same permanent failure, and, per
      * UnreadableLiveFilterException's own javadoc, the triggering delivery is never acknowledged and never
      * negatively acknowledged. Proven here by closing the bridge afterward (without ever calling ack/nack ourselves)
-     * and observing the message come straight back to the queue, still there and still unconsumed.
+     * and observing the message come straight back to the queue, still there and still unconsumed. This is the same
+     * close-then-check shape assertAcknowledged(...) below uses, since it is what actually distinguishes an
+     * acknowledged message from one merely delivered and never acknowledged.
      */
     @Test
     void an_unreadable_live_filter_stops_the_bridge_and_leaves_the_delivery_unacknowledged() throws Exception {
@@ -350,6 +360,18 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
 
     private long queueMessageCount(String queue) throws Exception {
         return adminChannel.queueDeclarePassive(queue).getMessageCount();
+    }
+
+    /**
+     * Asserts {@code queue} is empty, meaningfully only once the bridge that consumed it has already been closed
+     * (a try-with-resources block exiting, typically). RabbitMQ's ready count excludes a delivery still outstanding
+     * on a consumer, so checking it while the bridge is still open cannot tell an acknowledged message apart from
+     * one merely delivered and never acknowledged, both read zero the instant the bridge receives it. Closing the
+     * bridge first requeues whatever it never acknowledged, so a message still gone afterwards is proof of an
+     * actual acknowledgement rather than an artifact of the consumer still holding it.
+     */
+    private void assertAcknowledged(String queue) throws Exception {
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
     }
 
     private record TestOrderPlaced(String orderId) {

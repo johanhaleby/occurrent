@@ -70,6 +70,16 @@ public final class RabbitMqCloudEventMapper {
     private static final String SPEC_VERSION_ATTRIBUTE = "specversion";
 
     /**
+     * Marks a message whose {@link CloudEvent#getData()} is present but explicitly empty ({@code byte[0]}), rather
+     * than absent ({@code null}). Both encode as the same zero-length AMQP body, since a body has no way to be
+     * absent the way {@code data} itself can, so {@link #toCloudEvent(BasicProperties, byte[])} cannot tell the two
+     * apart from the body alone and needs this header to recover which one a zero-length body actually was.
+     * Contains an underscore, which a real CloudEvent attribute or extension name can never contain, so this can
+     * never collide with one and never needs its own reserved-prefix check beyond {@value #HEADER_PREFIX} itself.
+     */
+    private static final String EMPTY_DATA_ATTRIBUTE = "data_present_empty";
+
+    /**
      * AMQP's persistent delivery mode. Unset defaults to transient, which a broker restart can discard even after a
      * publisher confirm, so every message this mapper writes asks to survive one instead.
      */
@@ -88,7 +98,9 @@ public final class RabbitMqCloudEventMapper {
     /**
      * The {@link BasicProperties} for {@code cloudEvent}, carrying every one of its attributes as a
      * {@value #HEADER_PREFIX}-prefixed header (string-valued), its content type as {@link BasicProperties#getContentType()},
-     * and {@code applicationHeaders} alongside them.
+     * and {@code applicationHeaders} alongside them. Also carries the {@value #EMPTY_DATA_ATTRIBUTE} marker header
+     * when {@code cloudEvent}'s data is present but empty, so {@link #toCloudEvent(BasicProperties, byte[])} can
+     * rebuild that distinctly from data that was never there at all. See that method's own javadoc.
      */
     public static BasicProperties toBasicProperties(CloudEvent cloudEvent, Map<String, String> applicationHeaders) {
         requireNonNull(cloudEvent, "cloudEvent cannot be null");
@@ -110,6 +122,10 @@ public final class RabbitMqCloudEventMapper {
                 headers.put(HEADER_PREFIX + extensionName, encodeExtensionValue(value));
             }
         }
+        CloudEventData data = cloudEvent.getData();
+        if (data != null && data.toBytes().length == 0) {
+            headers.put(HEADER_PREFIX + EMPTY_DATA_ATTRIBUTE, "true");
+        }
 
         return new BasicProperties.Builder()
                 .contentType(cloudEvent.getDataContentType())
@@ -127,7 +143,10 @@ public final class RabbitMqCloudEventMapper {
     }
 
     /**
-     * The message body for {@code cloudEvent}: its data, unchanged, or an empty array for an event with none.
+     * The message body for {@code cloudEvent}: its data, unchanged, or an empty array for an event with none. Data
+     * that is itself present but empty also becomes an empty array here, the one thing an AMQP body cannot tell
+     * apart from absent data on its own; {@link #toBasicProperties(CloudEvent, Map)} carries the
+     * {@value #EMPTY_DATA_ATTRIBUTE} header alongside it so the two can still be told apart on the read side.
      */
     public static byte[] toBody(CloudEvent cloudEvent) {
         requireNonNull(cloudEvent, "cloudEvent cannot be null");
@@ -158,6 +177,11 @@ public final class RabbitMqCloudEventMapper {
      * {@link #toBasicProperties(CloudEvent, Map)} writes whatever spec version the event it was given actually has,
      * so a {@code V03} event's own attributes, {@code schemaurl} rather than {@code dataschema} among them, only
      * round trip correctly when this reads that same version back instead of coercing every message to {@code V1}.
+     * <p>
+     * {@code data} comes back present but empty, rather than absent, when the {@value #EMPTY_DATA_ATTRIBUTE} header
+     * is set. Without that header a zero-length body always means absent data, since an AMQP body cannot itself be
+     * absent the way {@code data} can, and {@link #toBasicProperties(CloudEvent, Map)} is what sets the header in
+     * the one case that distinction matters.
      */
     public static CloudEvent toCloudEvent(BasicProperties properties, byte[] body) {
         requireNonNull(properties, "properties cannot be null");
@@ -165,6 +189,7 @@ public final class RabbitMqCloudEventMapper {
 
         Map<String, Object> headers = properties.getHeaders();
         CloudEventBuilder builder = CloudEventBuilder.fromSpecVersion(specVersionOf(headers));
+        boolean dataPresentEmpty = false;
         if (headers != null) {
             for (Map.Entry<String, Object> header : headers.entrySet()) {
                 String key = header.getKey();
@@ -174,6 +199,10 @@ public final class RabbitMqCloudEventMapper {
                 }
                 String attributeName = key.substring(HEADER_PREFIX.length());
                 if (SPEC_VERSION_ATTRIBUTE.equals(attributeName)) {
+                    continue;
+                }
+                if (EMPTY_DATA_ATTRIBUTE.equals(attributeName)) {
+                    dataPresentEmpty = true;
                     continue;
                 }
                 // toString() rather than a cast: a header value read back off the wire is a
@@ -192,7 +221,7 @@ public final class RabbitMqCloudEventMapper {
         if (contentType != null) {
             builder.withDataContentType(contentType);
         }
-        if (body.length > 0) {
+        if (body.length > 0 || dataPresentEmpty) {
             builder.withData(BytesCloudEventData.wrap(body));
         }
         return builder.build();

@@ -62,8 +62,8 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
             publish(OrderPlaced.class.getName(), "id-1");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
         }
+        assertAcknowledged(queue);
     }
 
     @Test
@@ -81,9 +81,14 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
                 .build()) {
             publish(OrderPlaced.class.getName(), "id-1");
 
+            // FILTERED never reaches a handler, so there is no positive signal to await directly. The ready count
+            // dropping to zero reliably means the broker handed the delivery to the bridge's consumer, whether or
+            // not it goes on to acknowledge it, so this only waits for the delivery to have happened. The actual
+            // acknowledgement proof is assertAcknowledged(...) below, checked only once the bridge has closed.
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
             assertThat(handled).isEmpty();
         }
+        assertAcknowledged(queue);
     }
 
     /**
@@ -115,8 +120,8 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
             adminChannel.basicPublish(exchange, OrderPlaced.class.getName(), properties, RabbitMqCloudEventMapper.toBody(cloudEvent));
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
         }
+        assertAcknowledged(queue);
     }
 
     @Test
@@ -133,7 +138,9 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
             publish(OrderPlaced.class.getName(), "id-1");
 
             // No subscription registered yet: give the coarse poll several chances to (wrongly) consume, then
-            // confirm the message is still sitting on the queue, untouched.
+            // confirm the message is still sitting on the queue, untouched. Sound to check while the bridge is
+            // still open, unlike an acknowledgement claim. Nothing has been delivered to any consumer yet, so the
+            // ready count is not the ambiguous one an outstanding-but-unacked delivery would produce.
             Thread.sleep(POLL_INTERVAL.toMillis() * 6);
             assertThat(queueMessageCount(queue)).isEqualTo(1);
             assertThat(handled).isEmpty();
@@ -141,8 +148,8 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
             model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
         }
+        assertAcknowledged(queue);
     }
 
     /**
@@ -174,9 +181,9 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
             publish(OrderPlaced.class.getName(), "id-1");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(attempts).hasValue(2));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
-            assertThat(appliedIds).containsExactly("id-1");
         }
+        assertAcknowledged(queue);
+        assertThat(appliedIds).containsExactly("id-1");
     }
 
     /**
@@ -203,8 +210,8 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
             publish(OrderPlaced.class.getName(), "id-1");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(attempts).hasValue(2));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
         }
+        assertAcknowledged(queue);
     }
 
     @Test
@@ -228,13 +235,15 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
                 .build()) {
             publish(OrderPlaced.class.getName(), "id-1");
 
+            // The parking queue has no consumer attached, so its own ready count is not the ambiguous one a
+            // delivery outstanding on the bridge's consumer would produce; sound to check while the bridge is open.
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(parkingQueue)).isEqualTo(1));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
 
             GetResponse parked = adminChannel.basicGet(parkingQueue, true);
             assertThat(parked).isNotNull();
             assertThat(parked.getProps().getHeaders().get("cloudEvents_id")).hasToString("id-1");
         }
+        assertAcknowledged(queue);
     }
 
     /**
@@ -266,13 +275,13 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
             adminChannel.basicPublish(exchange, "malformed", malformedProperties, malformedBody);
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(parkingQueue)).isEqualTo(1));
-            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
 
             GetResponse parked = adminChannel.basicGet(parkingQueue, true);
             assertThat(parked).isNotNull();
             assertThat(parked.getBody()).isEqualTo(malformedBody);
             assertThat(parked.getProps().getContentType()).isEqualTo("text/plain");
         }
+        assertAcknowledged(queue);
     }
 
     @Test
@@ -295,7 +304,11 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
     }
 
     private String declareAndBindQueue(String routingKey) throws Exception {
-        String queue = adminChannel.queueDeclare().getQueue();
+        // Not auto-delete. The default no-arg queueDeclare() is exclusive and auto-delete, so the queue itself
+        // would vanish the instant the bridge's consumer disconnects, which is exactly what assertAcknowledged(..)
+        // needs to survive to tell an acknowledged message apart from one merely delivered and never acknowledged.
+        String queue = "test-queue-" + UUID.randomUUID();
+        adminChannel.queueDeclare(queue, false, false, false, null);
         adminChannel.queueBind(queue, exchange, routingKey);
         return queue;
     }
@@ -313,6 +326,18 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
 
     private long queueMessageCount(String queue) throws Exception {
         return adminChannel.queueDeclarePassive(queue).getMessageCount();
+    }
+
+    /**
+     * Asserts {@code queue} is empty, meaningfully only once the bridge that consumed it has already been closed
+     * (a try-with-resources block exiting, typically). RabbitMQ's ready count excludes a delivery still outstanding
+     * on a consumer, so checking it while the bridge is still open cannot tell an acknowledged message apart from
+     * one merely delivered and never acknowledged, both read zero the instant the bridge receives it. Closing the
+     * bridge first requeues whatever it never acknowledged, so a message still gone afterwards is proof of an
+     * actual acknowledgement rather than an artifact of the consumer still holding it.
+     */
+    private void assertAcknowledged(String queue) throws Exception {
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
     }
 
     private static final class OrderPlaced {

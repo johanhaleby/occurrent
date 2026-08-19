@@ -177,6 +177,29 @@ class RabbitMqCloudEventMapperTest {
         assertThat(rebuilt.getData()).isNull();
     }
 
+    /**
+     * Data present but explicitly empty ({@code withData(new byte[0])}) is not the same thing as no data at all,
+     * and a handler or a payload filter can tell the two apart. Both encode as the same zero-length AMQP body, so
+     * without the {@code cloudEvents_data_present_empty} marker header this rebuilt as {@code null}, the same as
+     * {@link #toCloudEvent_leaves_data_null_for_an_empty_body()} above, silently conflating the two on every round
+     * trip.
+     */
+    @Test
+    void toCloudEvent_rebuilds_data_present_but_empty_distinctly_from_no_data_at_all() {
+        CloudEvent original = CloudEventBuilder.v1()
+                .withId("id")
+                .withSource(URI.create("urn:test"))
+                .withType("t")
+                .withData(new byte[0])
+                .build();
+        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(original, Map.of());
+
+        CloudEvent rebuilt = RabbitMqCloudEventMapper.toCloudEvent(properties, RabbitMqCloudEventMapper.toBody(original));
+
+        assertThat(rebuilt.getData()).isNotNull();
+        assertThat(rebuilt.getData().toBytes()).isEmpty();
+    }
+
     @Test
     void toCloudEvent_rebuilds_under_the_spec_version_the_message_was_written_with_rather_than_always_v1() {
         CloudEvent original = CloudEventBuilder.v03()
