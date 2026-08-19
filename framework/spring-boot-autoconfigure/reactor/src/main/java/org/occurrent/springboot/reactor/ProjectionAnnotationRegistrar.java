@@ -52,6 +52,7 @@ import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscribable;
+import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
 import org.occurrent.subscription.push.reactor.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.reactor.PushSubscriptionModel;
 import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
@@ -213,9 +214,11 @@ class ProjectionAnnotationRegistrar {
             startPositionSupport.applyStartupWorkarounds();
             // Resolved from fluxSubscriptionModel itself, not from an independently looked-up Subscribable bean: a
             // DCB-only composition is not required to expose one at all, and a context with more than one would let
-            // the two lookups disagree about which model the phase actually describes.
+            // the two lookups disagree about which model the phase actually describes. Checked against
+            // SubscriptionModelCapability rather than Subscribable specifically, since ReplayAwareSubscriptions
+            // itself does not require the wider Subscribable contract, only the capability lookup.
             ReplayPhaseResolution recordingResolution = annotation.recordAppliedAppends()
-                    ? resolveEventStorePhase(id, fluxSubscriptionModel instanceof Subscribable subscribable ? subscribable : null)
+                    ? resolveEventStorePhase(id, fluxSubscriptionModel instanceof SubscriptionModelCapability capability ? capability : null)
                     : null;
             var subscription = projectDcb(runner, id, annotation, dcbProjection, resolveStore(annotation, id), startAt, recordingResolution);
             if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
@@ -313,13 +316,15 @@ class ProjectionAnnotationRegistrar {
 
     // The phase for an event-store-fed projection (DCB or plain), asynchronous. Tried in order: the ComposedReplayPhase
     // holder OccurrentReactiveMongoAutoConfiguration fills for the default Mongo composition, then a direct capability
-    // check on subscribable itself for a composition that exposes ReplayAwareSubscriptions directly (this stack's
+    // check on capability itself for a composition that exposes ReplayAwareSubscriptions directly (this stack's
     // capability lookup is a plain instanceof, not a wrapper-chain walk, so nothing else can see further in). Falling
     // back to neverReplays() when both come up empty cannot tell "this composition genuinely never replays" from "it
     // replays but nothing here can see it", so it warns rather than silently choosing the optimistic reading (ADR 132
-    // decision 2). subscribable is null for a DCB composition whose FluxSubscriptionModel bean does not also
-    // implement Subscribable, treated the same as one that does but answers empty.
-    private ReplayPhaseResolution resolveEventStorePhase(String id, @Nullable Subscribable subscribable) {
+    // decision 2). Typed as the minimal SubscriptionModelCapability rather than Subscribable, since a DCB-only
+    // FluxSubscriptionModel bean can implement ReplayAwareSubscriptions directly without being a full Subscribable.
+    // capability is null for a composition whose model exposes neither, treated the same as one that does but
+    // answers empty.
+    private ReplayPhaseResolution resolveEventStorePhase(String id, @Nullable SubscriptionModelCapability capability) {
         ComposedReplayPhase holder = applicationContext.getBeanProvider(ComposedReplayPhase.class).getIfAvailable();
         Optional<ReplayPhase> composed = holder == null ? Optional.empty() : holder.forSubscription(id);
         if (composed.isPresent()) {
@@ -329,16 +334,16 @@ class ProjectionAnnotationRegistrar {
             // never report true would only cost a tick every interval for an answer that cannot change.
             return new ReplayPhaseResolution(phase, phase != ReplayPhase.neverReplays());
         }
-        Optional<ReplayAwareSubscriptions> direct = subscribable == null ? Optional.empty() : subscribable.capability(ReplayAwareSubscriptions.class);
+        Optional<ReplayAwareSubscriptions> direct = capability == null ? Optional.empty() : capability.capability(ReplayAwareSubscriptions.class);
         if (direct.isPresent()) {
             ReplayAwareSubscriptions replayAware = direct.get();
             return new ReplayPhaseResolution(() -> replayAware.isCatchingUp(id), true);
         }
         log.warn("@Projection '{}' sets recordAppliedAppends = true, but its subscription model ({}) does not expose " +
                         "whether it is replaying. The default reactive Mongo composition does not have this problem; a " +
-                        "custom or third-party Subscribable can. Recording proceeds as though this projection never " +
-                        "replays: a genuine replay would record straight through it, with no automatic clear afterwards.",
-                id, subscribable == null ? "none" : subscribable.getClass().getName());
+                        "custom or third-party subscription model can. Recording proceeds as though this projection " +
+                        "never replays: a genuine replay would record straight through it, with no automatic clear afterwards.",
+                id, capability == null ? "none" : capability.getClass().getName());
         return new ReplayPhaseResolution(ReplayPhase.neverReplays(), false);
     }
 
