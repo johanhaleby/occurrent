@@ -18,11 +18,10 @@ package org.occurrent.broker.kafka.blocking;
 
 /**
  * A {@link KafkaCloudEventSink} publish that did not succeed. {@link KafkaPublishTimeoutException} is the specific
- * case where the acknowledgement wait itself expired. This is the general case, everything else the Kafka client
- * reported, including its own {@code org.apache.kafka.common.errors.TimeoutException} raised while waiting for
- * topic metadata rather than while waiting for the broker's acknowledgement of a send already under way, which is
- * usually transient and is deliberately not {@link KafkaPublishTimeoutException}, so the default retry strategy
- * still retries it.
+ * case where the publish could not be confirmed within the configured acknowledgement timeout, whether that is
+ * because the broker never acknowledged an already-sent record or because the producer could not even enqueue the
+ * send in time. This is everything else, a channel or connection failure the Kafka client reported outright rather
+ * than one it merely timed out waiting on.
  */
 public class KafkaPublishException extends RuntimeException {
 

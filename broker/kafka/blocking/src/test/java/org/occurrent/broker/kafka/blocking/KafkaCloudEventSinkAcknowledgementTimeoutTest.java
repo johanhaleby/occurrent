@@ -39,13 +39,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * {@link KafkaCloudEventSink#publish(CloudEvent)} has two distinct ways to fail on an unreachable broker, and only
- * one of them is {@link KafkaPublishTimeoutException}. A broker unreachable from a cold producer fails {@code send}
- * itself, synchronously, with Kafka's own {@code org.apache.kafka.common.errors.TimeoutException} while waiting for
- * topic metadata, which {@link KafkaCloudEventSink} maps to a plain {@link KafkaPublishException} since it is
- * usually transient and the default retry strategy is meant to absorb it. Reaching the acknowledgement-wait timeout
- * this class actually tests needs the send itself to succeed first, meaning the producer already holds the topic's
- * metadata, so the broker is warmed up with one successful publish and only then stopped.
+ * {@link KafkaCloudEventSink#publish(CloudEvent)} has two distinct ways to be unable to confirm a send against a
+ * broker that has gone away, and both are meant to report {@link KafkaPublishTimeoutException} within the
+ * configured acknowledgement timeout, not just one of them. A broker that goes away between two publishes on the
+ * same producer, the case this test forces by warming the producer up with one successful publish and only then
+ * stopping the container, makes the second {@code send} itself block waiting for a fresh view of the cluster,
+ * which is exactly the case {@link KafkaCloudEventSink.Builder#build()}'s forced {@code max.block.ms} exists to
+ * bound. Before that fix this test hung for a full minute on CI, the {@code send} call blocking on Kafka's own
+ * default well past the one second {@code acknowledgementTimeout} configured below, and on every retry after that.
  * <p>
  * This container is a JUnit-managed, per-method instance field rather than the shared static one
  * {@link KafkaTestSupport} declares, since it is stopped mid-test and must not affect any other test.
@@ -63,7 +64,7 @@ class KafkaCloudEventSinkAcknowledgementTimeoutTest {
     private final KafkaContainer kafkaContainer = new KafkaContainer("apache/kafka:4.1.0");
 
     @Test
-    @Timeout(60)
+    @Timeout(20)
     void an_expired_acknowledgement_wait_fails_promptly_and_is_excluded_from_the_default_retry() throws Exception {
         String topic = "test-topic";
         try (AdminClient adminClient = AdminClient.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaContainer.getBootstrapServers()))) {
@@ -73,13 +74,10 @@ class KafkaCloudEventSinkAcknowledgementTimeoutTest {
         KafkaDestination destination = KafkaDestination.of(topic);
         Map<String, Object> producerConfig = Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, kafkaContainer.getBootstrapServers(),
-                // Bounds how long the initial metadata fetch and the client's own internal retries can take, so a
-                // broker that is genuinely unreachable fails this test with a clear timeout well inside the 60
-                // second budget above, instead of silently eating into it one default-60-second block at a time.
-                ProducerConfig.MAX_BLOCK_MS_CONFIG, "5000",
                 // Bounds how long the Kafka client itself keeps retrying a batch once the broker is gone, so this
-                // sink's close() below (which waits for outstanding sends to resolve) returns promptly instead of
-                // waiting out the default two-minute delivery timeout.
+                // sink's close() below returns promptly instead of waiting out the default two-minute delivery
+                // timeout. max.block.ms is deliberately not set here, since Builder.build() is the thing under
+                // test for forcing it down to acknowledgementTimeout.
                 ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, "5000",
                 ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, "3000");
 
@@ -97,8 +95,10 @@ class KafkaCloudEventSinkAcknowledgementTimeoutTest {
                     .isInstanceOf(KafkaPublishTimeoutException.class);
             Duration elapsed = Duration.between(before, Instant.now());
             assertThat(elapsed)
-                    .as("KafkaPublishTimeoutException is excluded from the default retry, so this should return " +
-                            "close to the one second acknowledgementTimeout rather than after several backed-off attempts")
+                    .as("KafkaPublishTimeoutException is excluded from the default retry, and the forced " +
+                            "max.block.ms bounds send() itself the same way, so this should return close to the " +
+                            "one second acknowledgementTimeout rather than after several backed-off attempts or a " +
+                            "send() blocked on Kafka's own much longer default")
                     .isLessThan(Duration.ofSeconds(4));
         }
     }

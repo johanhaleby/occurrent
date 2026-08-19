@@ -61,16 +61,15 @@ import static java.util.Objects.requireNonNull;
  * {@code key.serializer} and {@code value.serializer}, since this sink's wire format is fixed by
  * {@code KafkaMessageFactory}'s binary writer rather than left to the caller's configuration.
  * <p>
- * An acknowledgement timeout, five seconds by default, bounds the wait on the send's {@link Future} and fails it
- * with {@link KafkaPublishTimeoutException} rather than blocking forever on a broker that never answers, and
+ * An acknowledgement timeout, five seconds by default, bounds the whole of {@link #publish(CloudEvent)}, not only
+ * the wait on the send's {@link Future}. {@link Builder#build()} forces Kafka's own {@code max.block.ms} down to
+ * this same timeout, so a {@code send} that needs a fresh view of the cluster, most often because the broker was
+ * reachable when this producer last used it and has since gone away, cannot block on its own for up to Kafka's
+ * default of a minute before the acknowledgement wait even begins. Either failure, {@code send} itself giving up on
+ * the cluster or the broker never acknowledging a record it already accepted, fails the same way, with
+ * {@link KafkaPublishTimeoutException} rather than blocking forever on a broker that never answers, and
  * {@link Builder#acknowledgementTimeout(Duration)} is not offered as something that can be turned off, for the same
- * reason {@link CloudEventSink}'s own javadoc gives. That exception is reserved strictly for the send's own
- * acknowledgement wait expiring, {@code java.util.concurrent.TimeoutException} from the future's {@code get}.
- * Kafka's own {@code org.apache.kafka.common.errors.TimeoutException}, raised while waiting for topic metadata
- * before a send can even be attempted, whether thrown synchronously from {@code send} or wrapped in an
- * {@link ExecutionException} from the future, surfaces as a plain {@link KafkaPublishException} instead, since it is
- * usually transient (the topic or the broker was not yet known) and the default {@link RetryStrategy} is meant to
- * absorb it rather than hand it to the caller as an unresolved wait the way an expired acknowledgement is.
+ * reason {@link CloudEventSink}'s own javadoc gives.
  * <p>
  * Unlike a RabbitMQ channel, sending on this sink's {@link Producer} needs no external serialization and an
  * abandoned wait needs no client-side cleanup. {@code KafkaProducer.send} and the {@link Future} it returns are
@@ -93,6 +92,8 @@ import static java.util.Objects.requireNonNull;
  * owns.
  */
 public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable {
+
+    private static final long CLOSE_TIMEOUT_SECONDS = 30;
 
     private final Producer<String, byte[]> producer;
     private final DestinationResolver<KafkaDestination> resolver;
@@ -137,13 +138,16 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
         Future<RecordMetadata> future;
         try {
             future = producer.send(record);
+        } catch (org.apache.kafka.common.errors.TimeoutException e) {
+            // send() itself blocks up to max.block.ms waiting for a usable view of the cluster, most often
+            // because a broker that was reachable when this producer last used it has since gone away.
+            // Builder.build() forces max.block.ms down to acknowledgementTimeout so this can never silently
+            // outlast it, and it is reported the same way an expired acknowledgement wait is.
+            throw new KafkaPublishTimeoutException(acknowledgementTimeout, e);
         } catch (InterruptException e) {
             Thread.currentThread().interrupt();
             throw new KafkaPublishException("Interrupted while sending to topic \"" + destination.topic() + "\"", e);
         } catch (KafkaException e) {
-            // Includes org.apache.kafka.common.errors.TimeoutException, raised here while waiting for topic
-            // metadata before the send could even be attempted, deliberately not KafkaPublishTimeoutException,
-            // which is reserved for the acknowledgement wait below expiring on a send already under way.
             throw new KafkaPublishException("Failed to send to topic \"" + destination.topic() + "\"", e);
         } catch (RuntimeException e) {
             // A producer this client has already closed throws IllegalStateException here rather than a
@@ -156,6 +160,9 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
             future.get(acknowledgementTimeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
+            if (cause instanceof org.apache.kafka.common.errors.TimeoutException timeoutCause) {
+                throw new KafkaPublishTimeoutException(acknowledgementTimeout, timeoutCause);
+            }
             throw new KafkaPublishException("Broker failed to acknowledge a send to topic \"" + destination.topic() + "\"", cause == null ? e : cause);
         } catch (TimeoutException e) {
             throw new KafkaPublishTimeoutException(acknowledgementTimeout, e);
@@ -166,11 +173,14 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
     }
 
     /**
-     * Closes the {@link Producer} this sink created and owns.
+     * Closes the {@link Producer} this sink created and owns, waiting up to {@value #CLOSE_TIMEOUT_SECONDS} seconds
+     * for any outstanding send to finish. {@code Producer#close()} with no argument waits indefinitely instead, and
+     * an outstanding send to a broker that has gone away can otherwise hold this call open far longer than a caller
+     * closing this sink down would expect.
      */
     @Override
     public void close() {
-        producer.close();
+        producer.close(Duration.ofSeconds(CLOSE_TIMEOUT_SECONDS));
     }
 
     public static final class Builder {
@@ -222,7 +232,10 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
          * set it, and this method throws {@link IllegalArgumentException} when {@code producerConfig} sets it to
          * anything other than {@code "all"} or {@code "-1"}, per ADR 133 decision 7: waiting for an acknowledgement
          * is only worth anything if the broker is configured to give one that means the write is durable, and a
-         * weaker setting has to be caught here, since afterwards it looks exactly like success.
+         * weaker setting has to be caught here, since afterwards it looks exactly like success. {@code max.block.ms}
+         * is always forced down to {@link #acknowledgementTimeout(Duration)}, regardless of what {@code producerConfig}
+         * says, so a {@code send} that needs a fresh view of the cluster is bounded by the same timeout as the
+         * acknowledgement wait rather than by Kafka's own unrelated default of a minute.
          */
         public KafkaCloudEventSink build() {
             Map<String, Object> config = new HashMap<>(producerConfig);
@@ -235,6 +248,7 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
                         "(or the equivalent \"-1\"), since an acknowledgement wait under a weaker setting can " +
                         "succeed for a send the broker never durably stored");
             }
+            config.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, acknowledgementTimeout.toMillis());
             Producer<String, byte[]> producer = new KafkaProducer<>(config, new StringSerializer(), new ByteArraySerializer());
             return new KafkaCloudEventSink(producer, resolver, acknowledgementTimeout, retryStrategy);
         }
