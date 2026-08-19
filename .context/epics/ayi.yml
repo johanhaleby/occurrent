@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 30
-updated_at: 2026-08-19T06:50:00Z
+revision: 31
+updated_at: 2026-08-19T07:05:00Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -187,7 +187,7 @@ units:
   U6:
     issue: 740
     goal: "Held docs branch docs/append-identity in occurrent-org.github.io, news-post mention coordinated with r34's release-notes branch, addedTags entry, the honest window bound"
-    phase: RUNNING
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: [U4]
@@ -195,8 +195,8 @@ units:
     deliverables:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/append-identity, met: true, evidence: "PR 73 open against docs main, held, docs.md read-your-writes section plus addedTags 0.34.0 entry plus news-post highlight; window-bound numbers (20s lease, 5s poll cap) independently verified by the orchestrator against the shipped code"}
       - {check: manual_approval, ref: "held docs PR review-clean, frozen only after U5 merges", met: false, evidence: null}
-    blocking_on: []
-    next_action: "Docs PR 73 OPEN and held (branch docs/append-identity, docs repo). Three follow-ups returned 2026-08-19T06:45Z: the WriteResult-shape gap ruling (extend only where the site already describes those types components), attempt a local Jekyll build since that repo has no CI, request Copilot there if available. Then U6 waits: its content freezes only after U5 merges"
+    blocking_on: ["U5 merging, since a contract finding there could change what the honest window bound must say"]
+    next_action: "Docs work COMPLETE, all three follow-ups closed. Waiting on U5 to merge before the content freezes and the manual_approval deliverable can be met. Re-run a docs pass only if U5 surfaces a contract finding that changes what the window bound must say"
     last_meaningful_progress_at: 2026-08-19T06:20:00Z
     observed: {}
     assessment: "Subagent unit under Unattended. Held for release day; docs-repo merges are Johan's. Content freezes only after U5 merges, since a U5 contract finding re-triggers a docs pass."
