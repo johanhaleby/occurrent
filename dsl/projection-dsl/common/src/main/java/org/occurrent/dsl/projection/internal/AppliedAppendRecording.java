@@ -137,6 +137,28 @@ public final class AppliedAppendRecording {
     }
 
     /**
+     * The one hook {@code AppliedAppendRecorder.pollReplayPhase()} forwards to: re-checks {@code phase} and reacts,
+     * both inside the same {@code clearLock} acquisition, and returns what the check found. A caller that read
+     * {@code phase} itself first and dispatched to {@link #replayObserved()} or {@link #retryPendingClear()} based
+     * on that earlier read races a live delivery landing between the read and the call: this projection recording a
+     * genuinely live append in between, only to have it wiped by a clear this method then runs for a replay that
+     * ended before the call arrived. Re-checking here, under the same lock the clear itself runs under, closes that
+     * window instead of narrowing it.
+     */
+    public boolean pollReplayPhase() {
+        synchronized (clearLock) {
+            boolean replaying = lifecycleReplaying || phase.isReplaying();
+            if (replaying) {
+                pendingClear = true;
+                attemptClear();
+            } else if (pendingClear) {
+                attemptClear();
+            }
+            return replaying;
+        }
+    }
+
+    /**
      * The one hook {@code AppliedAppendRecorder.retryPendingClear()} forwards to: retry a clear already marked as
      * owed, doing nothing if none is. Lets a poll tick that finds the phase back to live still retry a clear a
      * replay observed earlier and left failing, since the phase no longer reporting a replay is not the same as the

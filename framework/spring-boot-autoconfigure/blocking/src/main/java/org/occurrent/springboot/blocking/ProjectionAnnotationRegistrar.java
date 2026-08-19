@@ -283,7 +283,7 @@ class ProjectionAnnotationRegistrar {
         AppliedAppendStore store = resolveAppliedAppendStore(id);
         RecordingMaterializedView<E> recordingView = Projections.recordingAppliedAppends(materializedView, id, store, phase);
         if (registerWithPoll) {
-            recordingRegistry().register(id, phase, recordingView);
+            recordingRegistry().register(id, recordingView);
             scheduleRecordingPoll(id);
         }
         return recordingView;

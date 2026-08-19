@@ -92,6 +92,11 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
     }
 
     @Override
+    public boolean pollReplayPhase() {
+        return recording.pollReplayPhase();
+    }
+
+    @Override
     public void replayStarted() {
         if (delegate instanceof ReactiveReplayAware replayAware) {
             replayAware.replayStarted();

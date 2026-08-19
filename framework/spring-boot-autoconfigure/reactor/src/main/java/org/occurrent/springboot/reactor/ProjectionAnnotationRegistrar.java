@@ -356,7 +356,7 @@ class ProjectionAnnotationRegistrar {
     private <E> BiFunction<EventMetadata, E, Mono<Void>> applyRecording(String id, BiFunction<EventMetadata, E, Mono<Void>> update, ReplayPhaseResolution resolution) {
         BiFunction<EventMetadata, E, Mono<Void>> recording = Projections.recordingAppliedAppends(update, id, resolveAppliedAppendStore(id), resolution.phase());
         if (resolution.registerWithPoll() && recording instanceof AppliedAppendRecorder recorder) {
-            registerForPoll(id, resolution.phase(), recorder);
+            registerForPoll(id, recorder);
         }
         return recording;
     }
@@ -366,8 +366,8 @@ class ProjectionAnnotationRegistrar {
     // registry how long until the next one is due and reschedules only itself, rather than waking every registered
     // projection on one fixed global tick. boundedElastic-family only, per this epic's ruling, since AppliedAppendStore
     // is a blocking-shaped interface and the tick calls it directly.
-    private void registerForPoll(String id, ReplayPhase phase, AppliedAppendRecorder recorder) {
-        appliedAppendRecordingRegistry().register(id, phase, recorder);
+    private void registerForPoll(String id, AppliedAppendRecorder recorder) {
+        appliedAppendRecordingRegistry().register(id, recorder);
         scheduleNextTick(id);
     }
 

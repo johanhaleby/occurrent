@@ -92,6 +92,11 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
     }
 
     @Override
+    public boolean pollReplayPhase() {
+        return recording.pollReplayPhase();
+    }
+
+    @Override
     public void replayStarted() {
         if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayStarted();

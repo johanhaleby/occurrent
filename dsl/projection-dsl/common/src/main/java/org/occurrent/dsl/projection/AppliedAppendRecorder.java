@@ -27,10 +27,11 @@ import org.jspecify.annotations.NullMarked;
  * A recording wrapper already reacts to a replay it can see for itself, through the {@link ReplayPhase} it was built
  * with or the view-DSL replay lifecycle it forwards. These hooks cover what neither of those catches. A replay whose
  * deliveries are all filtered out server-side never delivers anything for the wrapper to check, and a clear can fail
- * while that replay is going on. The Spring Boot registrars' poll asks {@link ReplayPhase#isReplaying()} on a
- * schedule. It calls {@link #replayObserved()} when the answer is {@code true}, {@link #retryPendingClear()}
- * otherwise, so a clear owed from a replay the phase no longer reports (it ended, possibly before a live delivery
- * ever reached the wrapper to retry it there) still gets retried until it succeeds.
+ * while that replay is going on. The Spring Boot registrars' poll calls {@link #pollReplayPhase()} on a schedule,
+ * which re-checks the phase itself before reacting, so a clear owed from a replay the phase no longer reports (it
+ * ended, possibly before a live delivery ever reached the wrapper to retry it there) still gets retried until it
+ * succeeds, and a poll whose earlier reading of the phase is already stale by the time it acts cannot wipe a live
+ * append the wrapper recorded in the meantime.
  */
 @NullMarked
 public interface AppliedAppendRecorder {
@@ -38,7 +39,8 @@ public interface AppliedAppendRecorder {
     /**
      * This projection was seen replaying. Marks it as needing a clear and attempts the clear on the calling thread.
      * Recording stays off until a clear succeeds, retried on every later call to this method, to
-     * {@link #retryPendingClear()}, or to the wrapper's normal update path, until one does.
+     * {@link #retryPendingClear()}, to {@link #pollReplayPhase()}, or to the wrapper's normal update path, until one
+     * does.
      */
     void replayObserved();
 
@@ -49,5 +51,19 @@ public interface AppliedAppendRecorder {
      * the retry. The recording wrappers override it to reach the same state a normal update would retry through.
      */
     default void retryPendingClear() {
+    }
+
+    /**
+     * Re-checks whether this projection is currently replaying and reacts atomically with that check, marking a
+     * clear as owed and attempting it if so, or retrying one already owed if not, returning what the check found.
+     * This is what a poller should call on a schedule, rather than reading the phase itself first and dispatching to
+     * {@link #replayObserved()} or {@link #retryPendingClear()} from that separate reading: between the two, a live
+     * delivery can land and record a genuinely live append, which a {@link #replayObserved()} call made from the
+     * stale earlier reading would then wipe. The default no-op, returning {@code false}, is for a caller (a test
+     * double, typically) that never polls. The recording wrappers override it to check the phase they were built
+     * with, under the same lock the clear itself runs under.
+     */
+    default boolean pollReplayPhase() {
+        return false;
     }
 }

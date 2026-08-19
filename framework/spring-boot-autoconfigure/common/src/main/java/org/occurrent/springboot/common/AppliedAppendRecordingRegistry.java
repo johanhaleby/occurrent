@@ -18,7 +18,6 @@ package org.occurrent.springboot.common;
 
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.dsl.projection.AppliedAppendRecorder;
-import org.occurrent.dsl.projection.ReplayPhase;
 
 import java.time.Duration;
 import java.util.Map;
@@ -48,7 +47,7 @@ public final class AppliedAppendRecordingRegistry {
     private final double multiplier;
     private final Map<String, Entry> entries = new ConcurrentHashMap<>();
 
-    private record Entry(ReplayPhase phase, AppliedAppendRecorder recorder, long[] intervalNanos) {
+    private record Entry(AppliedAppendRecorder recorder, long[] intervalNanos) {
     }
 
     /**
@@ -85,11 +84,10 @@ public final class AppliedAppendRecordingRegistry {
      * Registers {@code projectionId} for the poll, due for its first {@link #tick(String)} after
      * {@link #dueInNanos(String)} nanoseconds, which starts at the configured {@code initial} interval.
      */
-    public void register(String projectionId, ReplayPhase phase, AppliedAppendRecorder recorder) {
+    public void register(String projectionId, AppliedAppendRecorder recorder) {
         requireNonNull(projectionId, "projectionId cannot be null");
-        requireNonNull(phase, "phase cannot be null");
         requireNonNull(recorder, "recorder cannot be null");
-        entries.put(projectionId, new Entry(phase, recorder, new long[]{initialNanos}));
+        entries.put(projectionId, new Entry(recorder, new long[]{initialNanos}));
     }
 
     /**
@@ -104,22 +102,20 @@ public final class AppliedAppendRecordingRegistry {
     }
 
     /**
-     * Asks {@code projectionId}'s {@link ReplayPhase}. Replaying calls {@link AppliedAppendRecorder#replayObserved()}
-     * and resets the interval to {@code initial}, so a projection just seen replaying, or one that has just
-     * registered, is polled at the fast end. Live retries a clear the recorder already owes from an earlier
-     * replay, through {@link AppliedAppendRecorder#retryPendingClear()}, since the phase no longer reporting a
-     * replay is not the same as a clear that replay caused having succeeded, then grows the interval by
-     * {@code multiplier}, capped at {@code max}.
+     * Calls {@link AppliedAppendRecorder#pollReplayPhase()}, which checks the phase and reacts to it atomically
+     * rather than this class checking it first and dispatching from a reading that could go stale before the
+     * recorder acts on it. Replaying resets the interval to {@code initial}, so a projection just seen replaying, or
+     * one that has just registered, is polled at the fast end. Live grows the interval by {@code multiplier}, capped
+     * at {@code max}.
      *
      * @throws IllegalArgumentException if {@code projectionId} was never registered
      */
     public void tick(String projectionId) {
         Entry entry = entryFor(projectionId);
-        if (entry.phase().isReplaying()) {
-            entry.recorder().replayObserved();
+        boolean replaying = entry.recorder().pollReplayPhase();
+        if (replaying) {
             entry.intervalNanos()[0] = initialNanos;
         } else {
-            entry.recorder().retryPendingClear();
             entry.intervalNanos()[0] = Math.min((long) (entry.intervalNanos()[0] * multiplier), maxNanos);
         }
     }

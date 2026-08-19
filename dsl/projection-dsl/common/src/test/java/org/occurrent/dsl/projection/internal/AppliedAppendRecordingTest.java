@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -111,6 +112,33 @@ class AppliedAppendRecordingTest {
         recording.replayCompleted();
 
         assertThat(store.hasApplied(PROJECTION_ID, before)).isFalse();
+    }
+
+    // The race a poller closes by calling pollReplayPhase() instead of reading the phase itself first and
+    // dispatching to replayObserved()/retryPendingClear() from that earlier reading: between the two, a live
+    // delivery can land and record a genuinely live append, which replayObserved() called from the stale reading
+    // would then wipe. pollReplayPhase() re-checks the phase itself, so it sees the replay has already ended and
+    // leaves the live record alone.
+    @Test
+    void pollReplayPhase_checks_the_phase_fresh_so_a_live_delivery_recorded_after_an_earlier_reading_survives() {
+        AtomicBoolean replaying = new AtomicBoolean(true);
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, replaying::get);
+
+        // A poller would have read "replaying" here...
+        assertThat(replaying.get()).isTrue();
+
+        // ...but the replay actually ends and a live delivery arrives and records before the poller acts.
+        replaying.set(false);
+        AppendId liveAppend = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(liveAppend));
+        assertThat(store.hasApplied(PROJECTION_ID, liveAppend)).isTrue();
+
+        // The poller now calls pollReplayPhase(), not replayObserved() from its stale earlier reading.
+        boolean sawReplaying = recording.pollReplayPhase();
+
+        assertThat(sawReplaying).isFalse();
+        assertThat(store.hasApplied(PROJECTION_ID, liveAppend)).isTrue();
     }
 
     @Test
