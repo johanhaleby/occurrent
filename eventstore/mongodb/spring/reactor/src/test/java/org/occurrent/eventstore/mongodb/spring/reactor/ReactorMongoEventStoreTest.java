@@ -237,6 +237,30 @@ public class ReactorMongoEventStoreTest {
         );
     }
 
+    // Carried from U2's adversarial verify: the DCB append() path already has
+    // ReactorMongoEventStoreDcbTest#resubscribing_the_same_append_publisher_mints_a_fresh_append_id_each_time; the
+    // stream write() path had no equivalent, a coverage asymmetry rather than a known bug (write() was proven
+    // correct empirically). ADR 132's AppendId is minted once per write()/append() call and must not be cached in
+    // the returned lazy Mono, so resubscribing the same publisher (a mistake this library's own examples make
+    // easily, since a Mono is reusable) must mint a fresh id on every execution rather than replaying the first one.
+    @Test
+    void resubscribing_the_same_write_publisher_mints_a_fresh_append_id_each_time() {
+        CloudEvent event = convertDomainEventCloudEvent(new NameDefined(UUID.randomUUID().toString(), LocalDateTime.now(), "name", "reused-name"));
+        Mono<WriteResult> publisher = eventStore.write("reused-stream", Flux.just(event));
+
+        WriteResult first = requireNonNull(publisher.block());
+        eventStore.deleteEvent(event.getId(), event.getSource()).block();
+        WriteResult second = publisher.block();
+
+        assertAll(
+                () -> assertThat(first.appendId()).isPresent(),
+                () -> assertThat(requireNonNull(second).appendId()).isPresent(),
+                () -> assertThat(second.appendId())
+                        .as("a reused write() publisher must mint a fresh append id on every subscription, not reuse the one from its first execution")
+                        .isNotEqualTo(first.appendId())
+        );
+    }
+
     @Nested
     @DisplayName("queries")
     class QueriesTest {
