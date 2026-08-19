@@ -1483,3 +1483,9 @@ RabbitMQ's ready-message count EXCLUDES deliveries outstanding on a consumer, so
 The distinguishing move is to close the consumer first, since channel closure requeues an outstanding delivery: an acknowledged message stays gone, an unacknowledged one comes back. The general rule this is an instance of: when a test asserts an ABSENCE, ask what else produces that absence. And the mutation test that catches it is to delete the acknowledgement itself rather than the behaviour around it.
 
 Assertions in the opposite direction, that a message COMES BACK, are unaffected, which is why the not-acknowledged tests from earlier rounds may be sound while the acknowledged ones are not.
+
+## A gate check and the gated action in one batch is not a gate (brk/U4, 2026-08-19)
+
+A worker ran its prose gate check and its `git push` in the same tool batch, so the check's output could not influence the push, and a commit message with a banned semicolon reached the remote. The check ran, it just gated nothing. Same shape as the recorded `gh` plus dash-detection-grep collision: the verification and the thing it verifies have to be separated by a decision point, not merely ordered within one command.
+
+Consequence worth knowing: a squash merge here composes its body from the branch's commit messages (verified against `fa367096b` on main), so a defective branch commit message DOES land on main. The fix at the gate is to supply an explicit subject and `--body-file` describing what the unit delivers, rather than letting GitHub concatenate a round-by-round history.
