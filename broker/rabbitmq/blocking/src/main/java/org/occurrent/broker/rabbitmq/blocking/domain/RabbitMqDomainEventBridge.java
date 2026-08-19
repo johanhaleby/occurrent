@@ -203,10 +203,12 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                     "does not reference the field, or with a DataFieldReader that can read it.", queue, deliveryTag, e);
             stopPermanently();
             return;
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | AssertionError e) {
             // Either the projection handler itself threw, or the narrow registeredProjection() race the class
             // javadoc describes (an IllegalStateException that is not an UnreadableLiveFilterException). Both are
-            // ordinary failure-policy cases, unlike the permanent one caught above.
+            // ordinary failure-policy cases, unlike the permanent one caught above. AssertionError is caught here
+            // too, since the converter, the live matcher or the projection can throw one, and leaving it uncaught
+            // would strand the delivery unacked at prefetch one. Any other Error still propagates.
             failureAction.apply(deliveryTag, cloudEvent);
             return;
         }

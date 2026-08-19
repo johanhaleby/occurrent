@@ -117,6 +117,35 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
         }
     }
 
+    /**
+     * The converter, the live matcher or the projection can throw an {@link AssertionError}, and the bridge has to
+     * redeliver on it exactly as it does on a {@link RuntimeException}, rather than leaving it uncaught and
+     * stalling the consumer at prefetch one.
+     */
+    @Test
+    void a_projection_that_throws_an_assertionError_is_redelivered_rather_than_stalling_the_consumer() throws Exception {
+        String queue = declareAndBindQueue(TestOrderPlaced.class.getName());
+        AtomicInteger attempts = new AtomicInteger();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        MaterializedView<TestOrderPlaced> view = event -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new AssertionError("simulated assertion failure");
+            }
+        };
+        feed.register("proj", view, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = RabbitMqDomainEventBridge.builder(connection(), feed, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .build()) {
+            publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(attempts).hasValue(2));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
+        }
+    }
+
     @Test
     void parks_a_delivery_that_keeps_failing_and_acknowledges_the_original_once_the_park_is_confirmed() throws Exception {
         String queue = declareAndBindQueue(TestOrderPlaced.class.getName());

@@ -145,6 +145,34 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
         }
     }
 
+    /**
+     * {@code PushSubscriptionModel.routeReportingMatch} propagates an {@link AssertionError} from a filter, and a
+     * handler can throw one too, so the bridge has to redeliver on it exactly as it does on a {@link RuntimeException},
+     * rather than leaving it uncaught and stalling the consumer at prefetch one.
+     */
+    @Test
+    void a_handler_that_throws_an_assertionError_is_redelivered_rather_than_stalling_the_consumer() throws Exception {
+        String queue = declareAndBindQueue(OrderPlaced.class.getName());
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        AtomicInteger attempts = new AtomicInteger();
+        model.subscribe("sub", cloudEvent -> {
+            if (attempts.incrementAndGet() == 1) {
+                throw new AssertionError("simulated assertion failure");
+            }
+        });
+
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, outcomeChannel, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .build()) {
+            publish(OrderPlaced.class.getName(), "id-1");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(attempts).hasValue(2));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
+        }
+    }
+
     @Test
     void parks_a_delivery_that_keeps_failing_and_acknowledges_the_original_once_the_park_is_confirmed() throws Exception {
         String queue = declareAndBindQueue(OrderPlaced.class.getName());

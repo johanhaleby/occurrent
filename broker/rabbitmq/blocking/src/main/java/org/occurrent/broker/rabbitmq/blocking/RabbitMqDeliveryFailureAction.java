@@ -19,6 +19,7 @@ package org.occurrent.broker.rabbitmq.blocking;
 import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ShutdownSignalException;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
@@ -119,9 +120,20 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
         if (parkingDestination == null) {
             return new RabbitMqDeliveryFailureAction(consumeChannel, policy, null, null, null, log);
         }
+        // Unwound in the catch below on any later failure, so a parking sink already built here (which owns its
+        // own channel) is never left open behind a create() that ends up throwing.
         RabbitMqCloudEventSink parkingSink = RabbitMqCloudEventSink.builder(connection, new SingleDestinationResolver(parkingDestination)).build();
-        Channel rawParkChannel = openRawParkChannel(connection);
-        return new RabbitMqDeliveryFailureAction(consumeChannel, policy, parkingSink, rawParkChannel, parkingDestination, log);
+        Channel rawParkChannel = null;
+        try {
+            rawParkChannel = openRawParkChannel(connection);
+            return new RabbitMqDeliveryFailureAction(consumeChannel, policy, parkingSink, rawParkChannel, parkingDestination, log);
+        } catch (RuntimeException e) {
+            closeQuietly(parkingSink, log);
+            if (rawParkChannel != null) {
+                closeQuietly(rawParkChannel, log);
+            }
+            throw e;
+        }
     }
 
     private static Channel openRawParkChannel(Connection connection) {
@@ -132,6 +144,24 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
             return channel;
         } catch (IOException e) {
             throw new RabbitMqBridgeException("Failed to create the raw parking confirm-mode channel", e);
+        }
+    }
+
+    // Best effort, unwinding a partially built create(): a failure closing one already-acquired resource is logged
+    // rather than allowed to replace the failure the caller is already unwinding for.
+    private static void closeQuietly(RabbitMqCloudEventSink parkingSink, Logger log) {
+        try {
+            parkingSink.close();
+        } catch (IOException | TimeoutException e) {
+            log.warn("Failed to close the parking sink cleanly while unwinding a failed create().", e);
+        }
+    }
+
+    private static void closeQuietly(Channel channel, Logger log) {
+        try {
+            channel.close();
+        } catch (IOException | ShutdownSignalException | TimeoutException e) {
+            log.warn("Failed to close the raw parking channel cleanly while unwinding a failed create().", e);
         }
     }
 
@@ -198,7 +228,10 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
                     return false;
                 }
                 return true;
-            } catch (IOException e) {
+            } catch (IOException | ShutdownSignalException e) {
+                // ShutdownSignalException is unchecked and covers exactly the failure a missing or misconfigured
+                // parking exchange produces, the broker closing this channel with a protocol error rather than
+                // basicPublish throwing a checked IOException, so it is caught here on the same footing as one.
                 log.warn("Failed to publish an undecodable delivery to the parking destination. Redelivering it instead of losing it.", e);
                 return false;
             } catch (InterruptedException e) {
@@ -241,18 +274,10 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
     @Override
     public void close() {
         if (parkingSink != null) {
-            try {
-                parkingSink.close();
-            } catch (IOException | TimeoutException e) {
-                log.warn("Failed to close the parking sink cleanly during shutdown.", e);
-            }
+            closeQuietly(parkingSink, log);
         }
         if (rawParkChannel != null) {
-            try {
-                rawParkChannel.close();
-            } catch (IOException | TimeoutException e) {
-                log.warn("Failed to close the raw parking channel cleanly during shutdown.", e);
-            }
+            closeQuietly(rawParkChannel, log);
         }
     }
 }

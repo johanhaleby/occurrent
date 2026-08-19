@@ -189,7 +189,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         }
         try {
             model.accept(cloudEvent);
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | AssertionError e) {
+            // Catches AssertionError too, since a filter or the handler can throw one, and an uncaught Error here
+            // would leave the delivery unacked and stall the consumer at prefetch one. Any other Error still propagates.
             outcomeChannel.takeLastOutcome();
             failureAction.apply(deliveryTag, cloudEvent);
             return;
