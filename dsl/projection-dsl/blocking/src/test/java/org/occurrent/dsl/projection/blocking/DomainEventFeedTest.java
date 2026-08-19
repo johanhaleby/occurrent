@@ -744,6 +744,48 @@ class DomainEventFeedTest {
     }
 
     /**
+     * The narrower race a round-6 sequential test could not reach: {@code goLive()} used to flip
+     * {@code isReadyForLiveDelivery()} true before draining the buffer it inherited, not after, so a poll running on
+     * another thread could see it as safe to consume while an event fed ahead of {@code goLive()} was still only
+     * sitting in that buffer. A projection whose fold blocks proves the window is now closed, since the flag has to
+     * stay false for as long as the drain that would fold a crash-vulnerable event is still running.
+     */
+    @Test
+    void go_live_is_not_ready_for_live_delivery_until_its_drain_of_the_inherited_buffer_completes() throws InterruptedException {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = counterConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        CountDownLatch foldEntered = new CountDownLatch(1);
+        CountDownLatch releaseFold = new CountDownLatch(1);
+        Projection<Integer, Counted, String> blockingProjection = Projection.<Integer, Counted, String>builder(0)
+                .id(event -> "counter")
+                .on(Counted.class, (state, event) -> {
+                    foldEntered.countDown();
+                    awaitUninterruptibly(releaseFold);
+                    return state + 1;
+                })
+                .build();
+        feed.register("counter", blockingProjection, ViewStateRepository.create(repo::get, repo::put));
+        // Buffered ahead of goLive(), since it is not registered as ready yet, exactly the crash-vulnerable state
+        // this event would be left in if goLive() reported ready before draining it.
+        feed.accept(new Counted("1"));
+
+        Thread goLive = new Thread(() -> feed.goLive("counter"));
+        goLive.start();
+        awaitUninterruptibly(foldEntered);
+
+        assertThat(feed.isReadyForLiveDelivery()).as("the drain is still folding the inherited buffer").isFalse();
+
+        releaseFold.countDown();
+        goLive.join(TimeUnit.SECONDS.toMillis(5));
+
+        assertThat(goLive.isAlive()).isFalse();
+        assertThat(feed.isReadyForLiveDelivery()).isTrue();
+        assertThat(repo.get("counter")).isEqualTo(1);
+    }
+
+    /**
      * The silent-loss case ADR 133 exists to prevent. {@code hasProjection()} turns true the moment
      * {@code register(..)} returns, well before the application calls {@code goLive(..)}, so a live event arriving
      * in that window used to report {@link RoutingOutcome#DELIVERED} for an event only buffered in memory. A

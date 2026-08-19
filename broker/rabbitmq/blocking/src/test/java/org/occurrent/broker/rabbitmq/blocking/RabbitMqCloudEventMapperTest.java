@@ -115,6 +115,10 @@ class RabbitMqCloudEventMapperTest {
         assertThat(RabbitMqCloudEventMapper.toBody(minimalCloudEvent())).isEmpty();
     }
 
+    // This round trip stays in the JVM, so properties.getHeaders() already holds plain java.lang.String values.
+    // It does not exercise the LongString branch toCloudEvent's own comment calls out, since that only shows up in
+    // a header read back off a real broker delivery. RabbitMqCloudEventBridgeTest and RabbitMqDomainEventBridgeTest
+    // cover that conversion end to end, against an actual RabbitMQ container.
     @Test
     void toCloudEvent_rebuilds_every_context_attribute_and_extension_from_a_previously_written_message() {
         CloudEvent original = CloudEventBuilder.v1()

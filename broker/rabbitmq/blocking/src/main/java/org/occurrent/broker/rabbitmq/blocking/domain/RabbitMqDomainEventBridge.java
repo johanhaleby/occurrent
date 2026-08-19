@@ -397,15 +397,22 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             // than leaking it.
             Channel channel = openChannel(connection);
             RabbitMqDeliveryFailureAction failureAction = null;
+            RabbitMqDomainEventBridge<E> bridge = null;
             try {
                 failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log);
-                RabbitMqDomainEventBridge<E> bridge = new RabbitMqDomainEventBridge<>(feed, channel, queue, prefetchCount, pollInterval, failureAction);
+                bridge = new RabbitMqDomainEventBridge<>(feed, channel, queue, prefetchCount, pollInterval, failureAction);
                 bridge.start(this);
                 return bridge;
             } catch (RuntimeException e) {
                 closeQuietly(channel);
                 if (failureAction != null) {
                     failureAction.close();
+                }
+                if (bridge != null) {
+                    // start() can fail after the bridge, and its scheduler, already exist. The scheduler has no
+                    // thread yet here, since scheduleWithFixedDelay(...) is the last thing start() does, but this
+                    // stays defensive against that ordering changing later.
+                    bridge.scheduler.shutdownNow();
                 }
                 throw e;
             }

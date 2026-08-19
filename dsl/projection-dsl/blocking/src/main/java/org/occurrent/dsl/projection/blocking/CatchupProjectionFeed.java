@@ -81,13 +81,12 @@ public final class CatchupProjectionFeed<E> {
     private final BlockingHandover<Delivered<E>> handover;
     // Read by the replay once per event, so stopCatchUp() takes effect at the next event rather than at the end.
     private volatile boolean stopped = false;
-    // Set once, at the top of catchUp() or goLive(), before either has buffered or delivered anything for that
-    // call. Never cleared again, the same one-shot shape as hasProjection(). Answers whether a live event fed
-    // right now is backed by something that survives a crash. Before either method has ever been called, a live event
-    // can only be buffered in memory with no source to replay it back, whichever of the two this registration turns
-    // out to use, so isReadyForLiveDelivery() must read false there. Once one has started, a still-buffered event
-    // is buffered ahead of a catchUp() replay in flight, safe because a crash re-runs that whole replay from the
-    // store, and a live delivery reaching the view directly is safe on its own terms.
+    // Set once, never cleared again, the same one-shot shape as hasProjection(). Answers whether a live event fed
+    // right now is backed by something that survives a crash. catchUp() sets it at the top, before its replay
+    // starts, because a still-buffered event ahead of that replay is safe either way. A crash re-runs the whole
+    // replay from the store. goLive() has no store behind it, so it sets this only after its drain returns, once
+    // the handover is actually live and a fold is synchronous. Before either method has run, a live event only
+    // buffers in memory with no source to replay it back, so this must read false there.
     private volatile boolean readyForLiveDelivery = false;
 
     private CatchupProjectionFeed(String id, MaterializedView<E> view, Filter replayFilter, PositionOrderedReader reader,
@@ -304,9 +303,6 @@ public final class CatchupProjectionFeed<E> {
      * it is not a guard against your broker redelivering a message.
      */
     public void goLive() {
-        // Set before the drain below, for the same reason catchUp() sets it first. Nothing this call is about to
-        // buffer or drain should read as unsafe just because the flip has not reached the buffer.add(..) branch yet.
-        readyForLiveDelivery = true;
         handover.catchUp(new BlockingHandover.Source<>() {
             @Override
             public boolean isAlreadyCaughtUp() {
@@ -323,6 +319,11 @@ public final class CatchupProjectionFeed<E> {
                 throw new AssertionError("isAlreadyCaughtUp() is true, so nothing here was caught up to mark.");
             }
         });
+        // Set after the drain above returns, not before it, unlike catchUp()'s early flip. This path has no store
+        // behind it, so a live event that only reaches the buffer while the drain is still running has nothing to
+        // survive a crash on. Once this line runs the handover is live, so a fold from here on is synchronous and
+        // isReadyForLiveDelivery() stays honest.
+        readyForLiveDelivery = true;
     }
 
     /**

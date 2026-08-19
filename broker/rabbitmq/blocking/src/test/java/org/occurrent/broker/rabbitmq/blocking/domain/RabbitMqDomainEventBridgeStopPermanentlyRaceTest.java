@@ -50,12 +50,23 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Reproduces, deterministically enough for a regression test, the race between the coarse reconciliation poll and
- * {@code RabbitMqDomainEventBridge}'s own permanent stop: a poll tick that is mid-decision while a concurrent
- * permanent stop cancels the consumer must not go on to restart it once its own decision resumes. A real broker
- * gives no way to force this exact interleaving on demand, so this drives the bridge against a mocked
- * {@link Connection} and {@link Channel}, and forces the interleaving directly with latches around a stubbed
- * {@link DomainEventFeed#hasProjection()}.
+ * Proves the specific ordering {@code reconcileConsumption()} and {@code stopPermanently()} both read and write
+ * {@code permanentlyStopped} under, by reproducing, deterministically enough for a regression test, a poll tick
+ * that is mid-decision while a concurrent permanent stop tries to cancel the consumer. A real broker gives no way
+ * to force this exact interleaving on demand, so this drives the bridge against a mocked {@link Connection} and
+ * {@link Channel}, and forces the interleaving directly with latches around a stubbed
+ * {@link DomainEventFeed#hasProjection()}, which {@code reconcileConsumption()} only calls after acquiring
+ * {@code consumeLock}.
+ * <p>
+ * That placement is what this test can actually tell apart from a regression. Since the blocked tick already holds
+ * {@code consumeLock} for the whole time {@link DomainEventFeed#hasProjection()} is stuck, a concurrent
+ * {@code stopPermanently()} cannot even start deciding the consumer's fate until the tick's own decision finishes
+ * and releases the lock, so whichever of the two wins the lock next fully decides that fate before the other reads
+ * anything. This does not prove that checking {@code permanentlyStopped} on its own, ahead of {@code consumeLock},
+ * would stay safe if a later change kept {@link DomainEventFeed#hasProjection()} itself inside the lock, since the
+ * blocked call this test hooks would no longer be the one holding the lock either. That variant never shipped, and
+ * the fix keeps the flag check and the {@link DomainEventFeed#hasProjection()} read in the same locked scope
+ * together rather than relying on a test to catch them drifting apart.
  */
 class RabbitMqDomainEventBridgeStopPermanentlyRaceTest {
 
