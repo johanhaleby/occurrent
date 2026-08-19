@@ -20,19 +20,31 @@ import java.time.Duration;
 
 /**
  * A {@link KafkaCloudEventSink} publish that could not be confirmed within the configured acknowledgement timeout.
- * Two distinct failures both report this, since both leave the caller with the same decision to make. The broker
- * never acknowledged a record the producer had already sent, {@code java.util.concurrent.TimeoutException} from the
- * send future's {@code get}. Or the producer could not even hand the record to a broker within that same timeout,
- * most often because it needed a fresh view of the cluster and could not get one in time,
- * {@code org.apache.kafka.common.errors.TimeoutException} from {@code send} itself or wrapped in an
- * {@code ExecutionException} from the future. {@link KafkaCloudEventSink.Builder#build()} forces Kafka's own
- * {@code max.block.ms} down to this same acknowledgement timeout precisely so the second failure cannot silently
- * run past it, on a broker that was reachable when it was last used and has since gone away for example, where
- * Kafka's own default lets that wait run to a full minute regardless of what this sink was configured with.
+ * Three distinct failures report this, and they are not equally uncertain about whether the record reached a
+ * broker, even though this type reports them all the same way.
  * <p>
- * Either way, the message may or may not have reached the broker, so this reports neither success nor a known
- * failure, only that the caller has to decide, and a caller that republishes may produce a duplicate under the same
- * at-least-once contract every consumer here already works under.
+ * In the synchronous {@code send()} case, {@code send} itself throws Kafka's own
+ * {@code org.apache.kafka.common.errors.TimeoutException} before returning a future, most often because the
+ * producer needed a fresh view of the cluster and could not get one in time.
+ * {@link KafkaCloudEventSink.Builder#build()} forces {@code max.block.ms} down to this same acknowledgement
+ * timeout so this cannot silently run past it, on a broker that was reachable when this producer last used it and
+ * has since gone away, for example. The record was never accepted by the producer here, so it never reached any
+ * broker, and republishing after this specific case cannot create a duplicate on its own.
+ * <p>
+ * In the wrapped-future case, that same {@code org.apache.kafka.common.errors.TimeoutException} is caught as
+ * the cause of an {@code ExecutionException} from a future {@code send} did return. The record was accepted and
+ * its delivery then ran out of time, so it may already be on the broker.
+ * <p>
+ * In the acknowledgement-wait case, the send future's own {@code java.util.concurrent.TimeoutException} is what
+ * expires, when the configured acknowledgement timeout itself runs out on a send still in flight. The record may
+ * also already be on the broker here.
+ * <p>
+ * Only the synchronous {@code send()} case is known to have never reached a broker, and nothing here lets a caller
+ * tell it apart from the wrapped-future case. Both carry the identical
+ * {@code org.apache.kafka.common.errors.TimeoutException} as their cause, so this exception's cause alone cannot
+ * distinguish them. Treat every occurrence of this exception as the uncertain case. The record may already be on
+ * the broker, and republishing may produce a duplicate under the same at-least-once contract every consumer here
+ * already works under.
  */
 public class KafkaPublishTimeoutException extends KafkaPublishException {
 
