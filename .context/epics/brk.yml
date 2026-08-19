@@ -1,7 +1,7 @@
 schema_version: 1
 epic: brk
-revision: 64
-updated_at: 2026-08-18T20:20:09Z
+revision: 66
+updated_at: 2026-08-19T04:52:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Johan's registration-ask rulings 2026-08-18T04:5xZ: release-train is 0.34.0 WAITS on brk+ayi; plan revision 2 APPROVED; U9 stopping rule is MAJOR-AND-ABOVE reopens after the fixpoint, cap 3 rounds, remainders return as one structured ask (stricter than the recommended blocker-only, Johan's explicit choice); U1 dispatch approved. Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly. Gate-ask rulings 2026-08-18T~10:58Z: the ADR review loop STOPPED at ten rounds, Johan's own read of PR 847 is the closing review; #848 ADOPTED as U11 at Opus/high, blocking both consume bridges."
@@ -16,6 +16,22 @@ definition_of_done:
   - "#388 closed"
   - "Memory checkpointed, sessions archived at closeout, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
 pending_actions:
+  - id: act-007
+    type: dispatch-subagent
+    target: "U5 worktree subagent (Sonnet), Unattended vehicle; id in this session's task list"
+    expected: "plan gate stop with a PLAN ⌁[brk/U5#416] block; #416 claim comment 5337604969 and in-progress label read back"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-19T04:49:00Z
+  - id: act-006
+    type: dispatch-subagent
+    target: "U4 worktree subagent (Sonnet), Unattended vehicle; id in this session's task list"
+    expected: "plan gate stop with a PLAN ⌁[brk/U4#415] block; #415 claim comment 5337604731 and in-progress label read back"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-19T04:49:00Z
   - id: act-005
     type: dispatch-chip
     target: "U3 chip task_dca9fcca, title ⌁[brk/U3#414] RabbitMQ publish module · Sonnet/high"
@@ -101,20 +117,20 @@ units:
   U3:
     issue: 414
     goal: "RabbitMQ publish: destination, topic-exchange resolver, CloudEvent + domain sinks, publisher confirms; own aggregator/BOM/excludeArtifacts entries; EDITS the broker changelog entry in place (authorship moved to U2 at the verify-pass correction)"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U2]
     session: local_60dca6d4-7ad1-4187-acb5-c816d2738ec8
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: issue_closed, ref: 414, met: false, evidence: null}
+      - {check: pr_merged, ref: 856, met: true, evidence: "squash 344d8738, CAS pin 7e19522 matched, tip==pin before branch delete; adversarial verify MERGE-SAFE (3 MINOR robustness notes journaled to U9, none touching the confirm-and-routed invariant); gate facts on the exact head: 4 green runs, 2 unresolved threads both evidence-backed reasoned declines, latest Copilot review's 1 comment covered by those threads, no suppressed blocks"}
+      - {check: issue_closed, ref: 414, met: true, evidence: "gh issue view state CLOSED post-merge 2026-08-19T04:45Z"}
     blocking_on: []
-    next_action: "DELIVERY_RESULT mirror found (posted 18:59Z, direct message lost; blocker was the red main, resolved). Twelve review rounds, every one but the last fix-bearing incl. serious transport catches (wrong-publish confirm correlation, waitForConfirmsOrDie channel death, deliveryMode). Stop rule sent 20:19Z: current-round triage in one pass, any-decline round is final, at most one more push, mirror updated to final head, then quiet. Then: gate facts + adversarial verify (confirm-and-routed incl. persistent deliveryMode) + CAS merge + U4/U5 subagent dispatches. Worker-filed #858 closed as resolved by #859 (comment 5333592820). Deadline 2026-08-18T21:00Z"
-    last_meaningful_progress_at: 2026-08-18T18:10:01Z
+    next_action: "none; session archiving batches at closeout"
+    last_meaningful_progress_at: 2026-08-19T04:45:00Z
     observed:
       session: {id: local_60dca6d4-7ad1-4187-acb5-c816d2738ec8, worktree: "intelligent-curie-e60812", via: "transcript marker search", at: 2026-08-18T16:41:24Z}
-      pr_856: {head: "14602f029ca1d18155ab9ccf016318f1b9def5e1", branch: "brk/u3-rabbitmq-publish", rollup: "0fail running", review: "in the worker's loop", via: "monitor PR-DELTA", at: 2026-08-18T18:10:01Z}
+      pr_856: {head: "7e19522710b250192748a193d03096ae952a5158", branch: "deleted after tip==pin", rollup: "MERGED as 344d8738", review: "closed out, 2 reasoned declines stand", via: "gh pr view post-merge", at: 2026-08-19T04:45:00Z}
     assessment: "Sonnet/high chip. Establishes the publish-side shape U5 mirrors. Brief carries the merged ADR's 0-9-1 mapping, confirms + mandatory/basic.return, edit-the-changelog-entry rule, releasable-as-is."
   U4:
     issue: 415
@@ -128,10 +144,11 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 415, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch after U3 merges; parallel to U5/U6 track"
-    last_meaningful_progress_at: 2026-08-18T04:44:26Z
-    observed: {}
-    assessment: "Sonnet/high chip. @RabbitSaga maintainer comment on #415 is future-module inspiration, explicitly out of remit."
+    next_action: "Plan APPROVED 2026-08-19T05:0xZ with four corrections after verifying its claims against origin/main (ADR 133 decisions 1 and 6, RoutingOutcome javadoc): keep the isRunning poller (ADR-prescribed, the skip alternative would feed a stopped model); domain bridge gates consumption on hasProjection() via the same coarse poll instead of a hot nack-requeue spin, IllegalStateException stays the race fallback; UnreadableLiveFilterException stop leaves the in-flight delivery unacked, javadoc plus test; never-CatchupThenPush javadoc line and a real-model handler-exception propagation test. ThreadLocal outcome capture approved. Worker implementing; next stop is the delivery protocol"
+    last_meaningful_progress_at: 2026-08-19T04:49:00Z
+    observed:
+      dispatch: {vehicle: "worktree subagent (Sonnet), act-006", claim: "comment 5337604731 + in-progress label read back", at: 2026-08-19T04:49:00Z}
+    assessment: "Sonnet worktree subagent per Unattended terms. @RabbitSaga maintainer comment on #415 is future-module inspiration, explicitly out of remit."
   U5:
     issue: 416
     goal: "Kafka publish: KafkaDestination, topic-from-type-mapper + key-by-stream-id resolver, sinks, checkpoint-after-acked-send; owns the kafka-clients managed version; own aggregator/BOM/excludeArtifacts; folds changelog"
@@ -144,10 +161,11 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 416, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch after U3 merges (publish shape established once, per the review's finding 8 disposition)"
-    last_meaningful_progress_at: 2026-08-18T04:44:26Z
-    observed: {}
-    assessment: "Sonnet/high chip. Mirrors U3's shape per the ADR convention section. Stream-id-keying tradeoff documented, never silent."
+    next_action: "Plan APPROVED 2026-08-19T05:1xZ after verifying conventions against ADR 133 decision 7; topic-per-type resolver CONFIRMED on the epic plan's own words (topic-from-type-mapper). Two corrections: acks=all is SET explicitly when producerConfig omits it, not left to the client default (plus the refusal on an explicit lower value); KafkaPublishTimeoutException reserved for the expired acknowledgementTimeout (future get), Kafka's own TimeoutException maps to KafkaPublishException as retryable transient, and the timeout test warms metadata then stops the container instead of cold-unreachable (send blocks in max.block.ms otherwise and the wrong type surfaces). Worker implementing; next stop is the delivery protocol"
+    last_meaningful_progress_at: 2026-08-19T04:49:00Z
+    observed:
+      dispatch: {vehicle: "worktree subagent (Sonnet), act-007", claim: "comment 5337604969 + in-progress label read back", at: 2026-08-19T04:49:00Z}
+    assessment: "Sonnet worktree subagent per Unattended terms. Mirrors U3's shape per the ADR convention section. Stream-id-keying tradeoff documented, never silent."
   U6:
     issue: 417
     goal: "Kafka consume bridge: poll, reconstruct, Pushable.accept/DomainEventFeed, offset-commit-after-accept, topics from destinationsFor(filter), ordering caveats documented prominently; folds changelog"
@@ -279,4 +297,4 @@ units:
     next_action: "Run as orchestrator-integrated subagent rounds after U7 and U8"
     last_meaningful_progress_at: 2026-08-18T04:44:26Z
     observed: {}
-    assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge)."
+    assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."

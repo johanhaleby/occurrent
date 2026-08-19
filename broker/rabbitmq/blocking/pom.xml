@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Copyright 2026 Johan Haleby
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~        http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>broker-rabbitmq</artifactId>
+        <groupId>org.occurrent</groupId>
+        <version>${revision}</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <artifactId>occurrent-broker-rabbitmq-blocking</artifactId>
+
+    <name>${mavenProjectName}</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-broker-api-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-cloudevent-type-mapper-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- CloudEventConverter appears directly in this module's own public API (RabbitMqDomainEventSink.using(...)),
+             so it's declared rather than left to arrive transitively through occurrent-broker-api-blocking. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-cloudevent-converter-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- SubscriptionFilter (and its AgnosticSubscriptionFilter/StreamSubscriptionFilter wrappers) appears
+             directly in this module's own public API (DestinationResolver#destinationsFor), so it's declared
+             rather than left to arrive transitively through occurrent-broker-api-blocking. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- EventMetadata appears directly in this module's own public API (RabbitMqDomainEventSink#publish), so
+             it's declared rather than left to arrive transitively through occurrent-broker-api-blocking. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-cloudevents-extension</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- Used internally to walk a SubscriptionFilter's type conditions when narrowing bindings in
+             DestinationResolver#destinationsFor. Not part of this module's own public API, but declared directly
+             rather than relied on as a transitive of occurrent-subscription-core, the same discipline
+             occurrent-broker-api-blocking applies to its own direct imports. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-filter</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-retry</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.rabbitmq</groupId>
+            <artifactId>amqp-client</artifactId>
+        </dependency>
+        <!-- CloudEvent appears directly in this module's own public API (CloudEventSink, DestinationResolver), so
+             it's declared rather than left to arrive transitively. -->
+        <dependency>
+            <groupId>io.cloudevents</groupId>
+            <artifactId>cloudevents-api</artifactId>
+        </dependency>
+        <!-- RabbitMqDomainEventSink#publish(EventMetadata, E) builds a fresh CloudEvent to stamp the supplied
+             metadata onto, which needs the SDK's builder implementation rather than only its interfaces. -->
+        <dependency>
+            <groupId>io.cloudevents</groupId>
+            <artifactId>cloudevents-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.jspecify</groupId>
+            <artifactId>jspecify</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-cloudevent-type-mapper-reflection</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-rabbitmq</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>
