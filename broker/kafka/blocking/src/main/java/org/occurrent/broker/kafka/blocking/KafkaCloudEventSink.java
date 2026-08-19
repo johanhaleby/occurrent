@@ -82,11 +82,13 @@ import static java.util.Objects.requireNonNull;
  * no equivalent of {@code RabbitMqUnroutableEventException} here.
  * <p>
  * A transient failure is retried under {@link Builder#retryStrategy(RetryStrategy)} before a caller sees it,
- * exponential backoff from 100 ms up to 2 seconds by default. The retry is not a substitute for the acknowledgement
- * wait, since a publish that was never acknowledged is not known to have failed, only unresolved. Per ADR 133, an
- * expired {@link KafkaPublishTimeoutException} is for the caller to decide on rather than something this retry
- * absorbs, so the default excludes it, along with an interrupted wait and a producer this client has already
- * closed, none of which a retry can turn into success.
+ * exponential backoff from 100 ms up to 2 seconds by default, only when Kafka itself marked the failure retriable.
+ * A permanent failure, an unknown topic or an authorization error for example, is never retried by the default,
+ * since ADR 133 asks this retry to guard against a transient failure and retrying a permanent one without limit
+ * would keep {@link #publish(CloudEvent)} from ever returning. The retry is also not a substitute for the
+ * acknowledgement wait, since a publish that was never acknowledged is not known to have failed, only unresolved.
+ * Per ADR 133, an expired {@link KafkaPublishTimeoutException} is for the caller to decide on rather than
+ * something this retry absorbs, so the default excludes it too.
  * <p>
  * Call {@link #close()} once the sink is no longer needed. It closes the {@link Producer} this sink created and
  * owns.
@@ -215,8 +217,12 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
          * How a transient publish failure is retried before {@link #publish(CloudEvent)} throws. Exponential
          * backoff from 100 ms up to 2 seconds by default, {@link CloudEventForwarder}'s own template for an
          * external store, retrying a {@link KafkaPublishException} only when it is not
-         * {@link KafkaPublishTimeoutException} (excluded per ADR 133), not caused by an interrupted wait, and not
-         * caused by a producer this client has already closed. Passing a {@link RetryStrategy} here replaces that
+         * {@link KafkaPublishTimeoutException} (excluded per ADR 133) and its cause is an
+         * {@code org.apache.kafka.common.errors.RetriableException}, Kafka's own marker for a failure the client
+         * itself considers worth retrying. A permanent failure such as an unknown topic, a record too large, or an
+         * authorization error is not retriable by that marker, and is never retried by this default, since ADR 133
+         * only asks this retry to guard against a transient failure and an unbounded retry of a permanent one would
+         * never let {@link #publish(CloudEvent)} return. Passing a {@link RetryStrategy} here replaces that
          * predicate too, so a caller that wants a wider retry configures its own. It never substitutes for the
          * acknowledgement wait {@link #acknowledgementTimeout(Duration)} configures.
          */
@@ -261,9 +267,7 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
             return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)
                     .retryIf(throwable -> throwable instanceof KafkaPublishException publishException
                             && !(publishException instanceof KafkaPublishTimeoutException)
-                            && !(publishException.getCause() instanceof InterruptedException)
-                            && !(publishException.getCause() instanceof InterruptException)
-                            && !(publishException.getCause() instanceof IllegalStateException));
+                            && publishException.getCause() instanceof org.apache.kafka.common.errors.RetriableException);
         }
     }
 }

@@ -153,6 +153,22 @@ class KafkaTopicPerTypeDestinationResolverTest {
         assertThat(destinations).isEmpty();
     }
 
+    /**
+     * The case Kafka's own topic naming rule exists to catch: {@link Class#getName()} writes a nested class's
+     * enclosing class separator as {@code $}, which {@code [a-zA-Z0-9._-]} does not allow.
+     */
+    @Test
+    void destinationFor_refuses_a_type_that_resolves_to_an_illegal_kafka_topic_name() {
+        CloudEventTypeMapper<NestedEvent> nestedTypeMapper = ReflectionCloudEventTypeMapper.qualified();
+        KafkaTopicPerTypeDestinationResolver nestedResolver = new KafkaTopicPerTypeDestinationResolver("my-topic-", nestedTypeMapper);
+        CloudEvent cloudEvent = cloudEventOfType(NestedEvent.class.getName(), null);
+
+        assertThatThrownBy(() -> nestedResolver.destinationFor(cloudEvent))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("$")
+                .hasMessageContaining(NestedEvent.class.getName());
+    }
+
     private CloudEvent cloudEventOfType(String type, String streamId) {
         CloudEventBuilder builder = CloudEventBuilder.v1().withId("id").withSource(URI.create("urn:test")).withType(type);
         if (streamId != null) {
@@ -161,12 +177,21 @@ class KafkaTopicPerTypeDestinationResolverTest {
         return builder.build();
     }
 
-    private interface TestEvent {
+    /**
+     * Nested only for this one negative test, since a nested class's qualified name is exactly what
+     * {@code destinationFor_refuses_a_type_that_resolves_to_an_illegal_kafka_topic_name} needs to be illegal.
+     * {@link EventA} and {@link EventB} above are top-level instead, precisely so the rest of this file's fixtures
+     * stay legal Kafka topic names.
+     */
+    private static final class NestedEvent {
     }
+}
 
-    private static final class EventA implements TestEvent {
-    }
+interface TestEvent {
+}
 
-    private static final class EventB implements TestEvent {
-    }
+final class EventA implements TestEvent {
+}
+
+final class EventB implements TestEvent {
 }

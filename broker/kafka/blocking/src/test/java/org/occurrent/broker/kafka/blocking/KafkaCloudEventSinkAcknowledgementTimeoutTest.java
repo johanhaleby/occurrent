@@ -54,14 +54,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @Testcontainers
 class KafkaCloudEventSinkAcknowledgementTimeoutTest {
 
-    // Deliberately the literal "4.1.0" rather than the test.kafka.version system property every other test in this
-    // module reads (see KafkaTestSupport.kafkaVersion()). On this machine, resolving the tag through any method
-    // call in this field's own initializer, whether on KafkaTestSupport or on an identical duplicate kept local to
-    // this class, was observed to make the container it built intermittently unreachable from a freshly built
-    // producer, for an hour of debugging with no exception this test could catch to explain why, while the literal
-    // was reliable every time. If integration-tests.kafka.version moves in pom.xml, bump this literal too.
     @Container
-    private final KafkaContainer kafkaContainer = new KafkaContainer("apache/kafka:4.1.0");
+    private final KafkaContainer kafkaContainer = new KafkaContainer("apache/kafka:" + KafkaTestSupport.kafkaVersion());
 
     @Test
     @Timeout(20)

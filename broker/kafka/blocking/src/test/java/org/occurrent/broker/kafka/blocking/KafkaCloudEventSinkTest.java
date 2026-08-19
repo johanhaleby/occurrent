@@ -18,6 +18,9 @@ package org.occurrent.broker.kafka.blocking;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.junit.jupiter.api.Test;
@@ -28,9 +31,12 @@ import org.occurrent.subscription.SubscriptionFilter;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -79,6 +85,67 @@ class KafkaCloudEventSinkTest extends KafkaTestSupport {
             ConsumerRecord<String, byte[]> record = consumeOneRecord(topic);
             assertThat(headerValue(record, "tenant")).isEqualTo("acme");
             assertThat(headerValue(record, "ce_id")).isEqualTo("id-2");
+        }
+    }
+
+    /**
+     * The topic name {@link KafkaTopicPerTypeDestinationResolver} derives for a legal cloud event type is not just
+     * something this module's own regex accepts, a real broker accepts it too, both to create ahead of time through
+     * {@code AdminClient} and to publish a record onto through this sink.
+     */
+    @Test
+    void a_legal_derived_topic_name_is_accepted_by_a_real_broker() throws Exception {
+        KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic + "-", ReflectionCloudEventTypeMapper.qualified());
+        CloudEvent cloudEvent = CloudEventBuilder.v1()
+                .withId("id-3")
+                .withSource(URI.create("urn:test"))
+                .withType(EventA.class.getName())
+                .build();
+        String derivedTopic = resolver.destinationFor(cloudEvent).topic();
+
+        try (AdminClient adminClient = AdminClient.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers()))) {
+            adminClient.createTopics(List.of(new NewTopic(derivedTopic, 1, (short) 1))).all().get(30, TimeUnit.SECONDS);
+        }
+
+        Map<String, Object> producerConfig = Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers());
+        try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfig, resolver).build()) {
+            sink.publish(cloudEvent);
+
+            ConsumerRecord<String, byte[]> record = consumeOneRecord(derivedTopic);
+            assertThat(headerValue(record, "ce_id")).isEqualTo("id-3");
+        }
+    }
+
+    /**
+     * A record too large for {@code max.request.size} is a permanent failure, since resending the exact same
+     * record can never make it smaller. The default {@link org.occurrent.retry.RetryStrategy} must never retry it,
+     * or {@link KafkaCloudEventSink#publish(CloudEvent)} would keep retrying into the same failure and never
+     * return, which is checked here by asserting the call fails promptly rather than after the default's
+     * exponential backoff would have piled up.
+     */
+    @Test
+    void a_permanent_broker_side_failure_is_not_retried_and_publish_returns_promptly() {
+        Map<String, Object> producerConfig = Map.of(
+                ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ProducerConfig.MAX_REQUEST_SIZE_CONFIG, "100");
+        KafkaDestination destination = KafkaDestination.of(topic);
+        try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfig, new FixedDestinationResolver(destination)).build()) {
+            CloudEvent oversizedEvent = CloudEventBuilder.v1()
+                    .withId("id-oversized")
+                    .withSource(URI.create("urn:test"))
+                    .withType(OrderPlaced.class.getName())
+                    .withData(new byte[10_000])
+                    .build();
+
+            Instant before = Instant.now();
+            assertThatThrownBy(() -> sink.publish(oversizedEvent))
+                    .isInstanceOf(KafkaPublishException.class)
+                    .isNotInstanceOf(KafkaPublishTimeoutException.class);
+            Duration elapsed = Duration.between(before, Instant.now());
+            assertThat(elapsed)
+                    .as("a record too large for max.request.size is never retriable, so this must fail on the " +
+                            "first attempt instead of retrying into the default's exponential backoff")
+                    .isLessThan(Duration.ofSeconds(1));
         }
     }
 

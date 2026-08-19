@@ -50,11 +50,16 @@ import static java.util.Objects.requireNonNull;
  * partition, so keying by stream id puts every event of one stream on the same partition and therefore in order
  * relative to each other, at the cost of that one stream's throughput being capped by whatever one partition can
  * do, and of every other stream sharing the topic being ordered only within itself, never against it. The
- * alternative, a single fixed key or no key at all, spreads events evenly across every partition and lets the
- * topic's full partition count carry the throughput, at the cost of giving up ordering entirely, including within
- * one stream. Occurrent picks stream-id keying as the shipped default because a projection or saga reading one
- * stream is the common case this library is built around, but this is a topology choice your deployment makes, not
- * a fact about Kafka, and an application that wants the other tradeoff replaces this resolver with one of its own.
+ * alternative this resolver actually offers by falling back to it, a {@code null} key, spreads records across
+ * every partition instead and lets the topic's full partition count carry the throughput, at the cost of giving up
+ * ordering entirely, even within one stream. A single fixed key used for every message is neither alternative and
+ * is not what a caller wanting spread should reach for. Kafka hashes one key to exactly one partition, so a fixed
+ * key sends every message to that same partition, trading the whole topic's throughput away for a global order
+ * across every stream, which is a narrower guarantee than stream-id keying already gives and a worse throughput
+ * cost than either alternative above. Occurrent picks stream-id keying as the shipped default because a
+ * projection or saga reading one stream is the common case this library is built around, but this is a topology
+ * choice your deployment makes, not a fact about Kafka, and an application that wants a different tradeoff
+ * replaces this resolver with one of its own.
  * <p>
  * Both {@link #destinationFor(CloudEvent)} and {@link #destinationsFor(SubscriptionFilter)} round-trip the cloud
  * event type through {@code topicMapper}, {@code getCloudEventType(getDomainEventType(type))}, rather than trusting
@@ -64,16 +69,34 @@ import static java.util.Objects.requireNonNull;
  */
 public final class KafkaTopicPerTypeDestinationResolver implements DestinationResolver<KafkaDestination> {
 
+    /**
+     * Kafka's own rule for a legal topic name, {@code [a-zA-Z0-9._-]}. Not exposed through the client's public API,
+     * so this resolver states it independently rather than depending on Kafka's {@code internals} package, and
+     * refuses a derived name that breaks it rather than silently truncating or rewriting a name a caller's
+     * {@code CloudEventTypeMapper} chose.
+     */
+    private static final Pattern LEGAL_TOPIC_NAME = Pattern.compile("[a-zA-Z0-9._-]+");
+
+    /**
+     * Kafka's own limit on a topic name's length.
+     */
+    private static final int MAX_TOPIC_NAME_LENGTH = 249;
+
     private final String topicPrefix;
     private final CloudEventTypeMapper<?> topicMapper;
 
     /**
      * @param topicPrefix Every topic this resolver derives is {@code topicPrefix} followed by a cloud event type
-     *                    read through {@code topicMapper}. {@link #catchAllDestination()} returns a topic pattern
-     *                    matching every topic this prefix produces, meant for
-     *                    {@code KafkaConsumer.subscribe(java.util.regex.Pattern)} rather than for publishing.
+     *                    read through {@code topicMapper}, refused at derivation time if the result is not a legal
+     *                    Kafka topic name. {@link #catchAllDestination()} returns a topic pattern matching every
+     *                    topic this prefix produces, meant for {@code KafkaConsumer.subscribe(java.util.regex.Pattern)}
+     *                    rather than for publishing.
      * @param topicMapper The mapper that derives a topic suffix from a cloud event type, ideally the same instance
-     *                    backing your {@code CloudEventConverter}.
+     *                    backing your {@code CloudEventConverter}. {@code org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper.qualified()}
+     *                    is refused for a nested or inner class, since {@link Class#getName()} writes its enclosing
+     *                    class separator as {@code $}, a character Kafka does not allow in a topic name.
+     *                    {@code ReflectionCloudEventTypeMapper.simple(...)} does not have that problem, since a
+     *                    class's simple name carries no such separator.
      */
     public KafkaTopicPerTypeDestinationResolver(String topicPrefix, CloudEventTypeMapper<?> topicMapper) {
         this.topicPrefix = requireNonNull(topicPrefix, "topicPrefix cannot be null");
@@ -119,7 +142,27 @@ public final class KafkaTopicPerTypeDestinationResolver implements DestinationRe
         @SuppressWarnings("unchecked")
         CloudEventTypeMapper<T> mapper = (CloudEventTypeMapper<T>) topicMapper;
         Class<T> domainEventType = mapper.<T>getDomainEventType(cloudEventType);
-        return topicPrefix + mapper.getCloudEventType(domainEventType);
+        String topic = topicPrefix + mapper.getCloudEventType(domainEventType);
+        requireLegalTopicName(topic, cloudEventType);
+        return topic;
+    }
+
+    /**
+     * Refuses a {@code topic} Kafka itself would reject, rather than letting a caller discover it later at
+     * publish time or, worse, at a consumer's bind time. Deliberately a refusal and not a sanitizing rewrite,
+     * since a rewrite that maps two different cloud event types onto the same topic name would silently break the
+     * one topic per type this resolver promises, and would still need reversing symmetrically by whatever consumes
+     * this same mapping later.
+     */
+    private static void requireLegalTopicName(String topic, String cloudEventType) {
+        if (topic.isEmpty() || topic.equals(".") || topic.equals("..")
+                || topic.length() > MAX_TOPIC_NAME_LENGTH || !LEGAL_TOPIC_NAME.matcher(topic).matches()) {
+            throw new IllegalArgumentException("Cloud event type \"" + cloudEventType + "\" resolved to topic \"" +
+                    topic + "\", which is not a legal Kafka topic name. A topic name must be 1-" + MAX_TOPIC_NAME_LENGTH +
+                    " characters, may only contain letters, digits, '.', '_' and '-', and may not be \".\" or \"..\". " +
+                    "A nested or inner domain event class is a common cause, since Class#getName() writes its " +
+                    "enclosing class separator as '$'.");
+        }
     }
 
     /**
