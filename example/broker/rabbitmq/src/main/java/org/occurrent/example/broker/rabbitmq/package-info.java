@@ -17,7 +17,9 @@
 /**
  * An end-to-end broker example. A stored event is forwarded to RabbitMQ by {@code CloudEventForwarder}, consumed
  * back by a bridge, and delivered to a {@code @Projection(source = PUSH)}, at the CloudEvent level and at the
- * domain level.
+ * domain level. {@code RabbitMqCloudEventLevelBootstrap} and {@code RabbitMqDomainEventLevelBootstrap} run the
+ * whole loop against a real broker an operator supplies, one {@code main(String[])} per level. The Testcontainers
+ * tests in this package's {@code src/test} prove the same wiring against RabbitMQ and MongoDB neither one owns.
  */
 @NullMarked
 package org.occurrent.example.broker.rabbitmq;

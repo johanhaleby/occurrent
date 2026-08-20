@@ -49,8 +49,8 @@ import static java.util.Objects.requireNonNull;
  * domain-level example tests. Each test method gets its own scratch database (Mongo) and its own scratch exchange
  * and queue names (RabbitMQ), so tests running against the same reused containers never see each other's events.
  * The one connection to each opened here is deliberately kept open for the whole test method, including across a
- * simulated application restart. A restart tears down and rebuilds the application's own components (a bridge, a
- * push model, a forwarder's subscription), never the database connection or the broker connection themselves.
+ * simulated restart. That restart is consumer-side only. It tears down and rebuilds the bridge and the push model,
+ * never the forwarder's own subscription, the database connection or the broker connection themselves.
  */
 @Testcontainers
 abstract class AbstractBrokerExampleTest {

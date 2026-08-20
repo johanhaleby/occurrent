@@ -61,7 +61,10 @@ import static org.awaitility.Awaitility.await;
  * {@code RabbitMqCloudEventBridge} bridges the queue into a {@code PushSubscriptionModel}, and a
  * {@code @Projection(source = PUSH)} keeps a read model up to date from it. Proves the two parts of ADR 133's
  * contract that a fake in the middle cannot prove on its own. A handler that throws does not lose the message, and
- * a restarted application resumes from the broker instead of replaying its whole history again.
+ * a restarted consumer, the bridge and the push model, resumes from the broker instead of replaying its whole
+ * history again. The forwarder keeps running across that restart on purpose. Its own resumption is the
+ * {@code DurableSubscriptionModel} checkpoint contract, already tested where the forwarder lives, and restarting it
+ * here would only duplicate that coverage without showing anything specific to the consume side.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest {
@@ -134,7 +137,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
     }
 
     @Test
-    void a_restart_resumes_from_the_broker_without_replaying_the_whole_history() throws Exception {
+    void a_consumer_restart_resumes_from_the_broker_without_replaying_the_whole_history() throws Exception {
         CloudEventConverter<OrderEvent> converter = newConverter();
         CloudEventTypeMapper<OrderEvent> typeMapper = newTypeMapper();
         RabbitMqTopicExchangeDestinationResolver resolver = newResolver(typeMapper);
@@ -145,8 +148,10 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 Executors.newVirtualThreadPerTaskExecutor());
         CheckpointStorage forwarderCheckpoints = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "forwarder-checkpoints");
         DurableSubscriptionModel forwarderSubscription = new DurableSubscriptionModel(forwarderSubscriptionModel, forwarderCheckpoints);
-        // The same catch-up-complete marker backs both "boots" below, which is the one thing a real restart must
-        // preserve for resume (rather than replay) to be possible at all.
+        // The forwarder and its subscription are built once, below, and run continuously through both boots.
+        // Only the consumer side, the bridge, the push model and the projection's Spring context, is torn
+        // down and rebuilt between them. The same catch-up-complete marker backs both boots, which is the
+        // one thing a real consumer restart must preserve for resume (rather than replay) to be possible.
         CheckpointStorage pushCatchupMarker = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "push-catchup-checkpoints");
         // The read-model store also survives the restart below, the same as a durable one would, so the assertions
         // can tell "resumed with state intact" apart from "started fresh and got lucky".
@@ -159,7 +164,7 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
 
             String orderIdBeforeRestart = "order-" + UUID.randomUUID();
 
-            // Boot 1: build the queue, forward and process one order to completion, then tear the application down.
+            // Boot 1: build the queue, forward and process one order to completion, then tear the consumer down.
             RoutingOutcomeChannel outcomeChannel1 = new RoutingOutcomeChannel();
             PushSubscriptionModel pushModel1 = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel1);
             RabbitMqCloudEventBridge bridge1 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel1, outcomeChannel1, queue)
