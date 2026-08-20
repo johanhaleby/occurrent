@@ -16,6 +16,10 @@
 
 package org.occurrent.broker.kafka.blocking;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.apache.kafka.clients.admin.AdminClient;
@@ -23,10 +27,14 @@ import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -237,6 +245,60 @@ class KafkaCloudEventSinkTest extends KafkaTestSupport {
         }
         try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfigWithAcksMinusOne, resolver).build()) {
             assertThat(sink).isNotNull();
+        }
+    }
+
+    /**
+     * {@code partitioner.ignore.keys} is legitimate for a caller with its own resolver, so
+     * {@link KafkaCloudEventSink.Builder#build()} only warns about it rather than refusing to build, the way it
+     * refuses a weaker {@code acks}.
+     */
+    @Nested
+    class PartitionerIgnoreKeysWarning {
+
+        private ListAppender<ILoggingEvent> appender;
+        private ch.qos.logback.classic.Logger logger;
+
+        @BeforeEach
+        void attachAppender() {
+            LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+            logger = context.getLogger(KafkaCloudEventSink.class);
+            appender = new ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+        }
+
+        @AfterEach
+        void detachAppender() {
+            logger.detachAppender(appender);
+        }
+
+        @Test
+        void build_warns_when_producerConfig_ignores_record_keys() {
+            KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic, ReflectionCloudEventTypeMapper.qualified());
+            Map<String, Object> producerConfig = Map.of(
+                    ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                    "partitioner.ignore.keys", "true");
+
+            try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfig, resolver).build()) {
+                assertThat(sink).isNotNull();
+            }
+
+            assertThat(appender.list)
+                    .filteredOn(event -> event.getLevel() == Level.WARN)
+                    .anySatisfy(event -> assertThat(event.getFormattedMessage()).contains("partitioner.ignore.keys"));
+        }
+
+        @Test
+        void build_does_not_warn_when_partitioner_ignore_keys_is_left_unset() {
+            KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic, ReflectionCloudEventTypeMapper.qualified());
+            Map<String, Object> producerConfig = Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers());
+
+            try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfig, resolver).build()) {
+                assertThat(sink).isNotNull();
+            }
+
+            assertThat(appender.list).noneSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.WARN));
         }
     }
 

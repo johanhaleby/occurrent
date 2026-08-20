@@ -31,6 +31,8 @@ import org.occurrent.broker.api.blocking.CloudEventForwarder;
 import org.occurrent.broker.api.blocking.CloudEventSink;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.retry.RetryStrategy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -108,6 +110,8 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * retry loop from attempting again and closes the {@link Producer} this sink created and owns.
  */
 public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable {
+
+    private static final Logger log = LoggerFactory.getLogger(KafkaCloudEventSink.class);
 
     private static final long CLOSE_TIMEOUT_SECONDS = 30;
 
@@ -207,8 +211,13 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
      * {@link Producer} this sink created and owns, waiting up to {@value #CLOSE_TIMEOUT_SECONDS} seconds for any
      * outstanding send to finish. {@code Producer#close()} with no argument waits indefinitely instead, and an
      * outstanding send to a broker that has gone away can otherwise hold this call open far longer than a caller
-     * closing this sink down would expect. Setting the shutdown flag first does not interrupt a retry attempt
-     * already in progress, only the next one, the same limit that template accepts.
+     * closing this sink down would expect. The shutdown flag this sets is only read the next time a failed
+     * attempt decides whether to retry, and that decision happens before the backoff sleep for it, not after, so
+     * a {@link #close()} landing during that sleep still waits out the full delay and then runs one more attempt
+     * against the now-closed {@link Producer} before that attempt's own failure finally reads the flag and stops
+     * the retry. With the default backoff, capped at two seconds, that is a couple of seconds. A caller-supplied
+     * {@link Builder#retryStrategy(RetryStrategy)} with a longer backoff delays this by that much instead, since
+     * nothing here interrupts a sleep already in progress.
      */
     @Override
     public void close() {
@@ -284,6 +293,14 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
          * config validation refuses a non-string value for a string-typed key. It does not fail silently either
          * way, so this is accepted rather than adding a second, stricter type check for a value shape Kafka's own
          * documentation never asks a caller to use.
+         * <p>
+         * {@code producerConfig} setting {@link ProducerConfig#PARTITIONER_IGNORE_KEYS_CONFIG} logs a warning
+         * rather than refusing to build, unlike {@code acks} above. A weaker {@code acks} has no legitimate use
+         * with this sink, but ignoring keys does, for a caller with its own resolver and its own partitioning
+         * scheme, so refusing it would forbid a valid configuration. It is still worth a warning, since Kafka then
+         * ignores every record key when choosing a partition, and any resolver relying on keys for ordering, the
+         * shipped {@code KafkaSharedTopicDestinationResolver} included, loses its ordering guarantee while nothing
+         * else about the deployment looks unhealthy.
          */
         public KafkaCloudEventSink build() {
             Map<String, Object> config = new HashMap<>(producerConfig);
@@ -295,6 +312,13 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
                         configuredAcks + "\", but " + KafkaCloudEventSink.class.getSimpleName() + " requires \"all\" " +
                         "(or the equivalent \"-1\"), since an acknowledgement wait under a weaker setting can " +
                         "succeed for a send the broker never durably stored");
+            }
+            if (Boolean.parseBoolean(String.valueOf(config.get(ProducerConfig.PARTITIONER_IGNORE_KEYS_CONFIG)))) {
+                log.warn("producerConfig sets \"{}\" to true, so this producer ignores every record key when " +
+                                "choosing a partition. Keyed partition ordering is disabled, and any resolver " +
+                                "relying on record keys for it, the shipped KafkaSharedTopicDestinationResolver " +
+                                "included, loses its ordering guarantee.",
+                        ProducerConfig.PARTITIONER_IGNORE_KEYS_CONFIG);
             }
             config.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, acknowledgementTimeout.toMillis());
             Producer<String, byte[]> producer = new KafkaProducer<>(config, new StringSerializer(), new ByteArraySerializer());

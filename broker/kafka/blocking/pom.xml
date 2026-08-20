@@ -95,6 +95,12 @@
             <artifactId>jspecify</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- KafkaCloudEventSink.Builder#build() logs a warning through this directly, rather than relying on the
+             transitive kafka-clients already pulls in. -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
 
         <!-- Test -->
         <dependency>
