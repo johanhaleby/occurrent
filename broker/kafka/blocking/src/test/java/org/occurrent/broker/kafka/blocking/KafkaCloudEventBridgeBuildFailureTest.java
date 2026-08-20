@@ -93,6 +93,29 @@ class KafkaCloudEventBridgeBuildFailureTest {
                 .hasMessageContaining(ConsumerConfig.GROUP_ID_CONFIG);
     }
 
+    /**
+     * Kafka treats a blank {@code group.id} the same as an absent one, throwing {@code InvalidGroupIdException}
+     * only later, at the first commit or group operation, not at {@code KafkaConsumer} construction. Refused here
+     * for the same reason a missing {@code group.id} is, rather than left to build a bridge whose only poll loop
+     * then fails repeatedly instead of ever consuming.
+     */
+    @Test
+    void consumerConfig_with_a_blank_group_id_is_refused_rather_than_failing_invisibly_later() {
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "",
+                ConsumerConfig.GROUP_ID_CONFIG, "   ",
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+
+        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(consumerConfig, model, outcomeChannel)
+                .bindings(Set.of(KafkaDestination.of("topic")));
+
+        assertThatThrownBy(builder::build)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(ConsumerConfig.GROUP_ID_CONFIG);
+    }
+
     @Test
     void consumerConfig_with_enable_auto_commit_absent_is_refused() {
         RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();

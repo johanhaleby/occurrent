@@ -17,6 +17,7 @@
 package org.occurrent.broker.kafka.blocking;
 
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.junit.jupiter.api.Test;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
@@ -24,13 +25,16 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Unit tests for {@link KafkaDeliveryFailureAction#create(Map, DeliveryFailurePolicy, KafkaDestination, org.slf4j.Logger)}
  * against a real, but never network-connecting, {@code KafkaProducer} construction, for behaviour a real broker
- * has no way to force on demand and Kafka's client itself already validates synchronously at construction.
+ * has no way to force on demand and Kafka's client itself already validates synchronously at construction. One
+ * exception below points the parking producer at an address nothing answers, deliberately forcing the one publish
+ * path a real broker cannot force on demand either, a failed park.
  */
 class KafkaDeliveryFailureActionTest {
 
@@ -71,5 +75,53 @@ class KafkaDeliveryFailureActionTest {
         assertThatCode(() -> KafkaDeliveryFailureAction.create(consumerConfig, DeliveryFailurePolicy.PARK,
                 parkingDestination, LoggerFactory.getLogger(getClass())).close())
                 .doesNotThrowAnyException();
+    }
+
+    /**
+     * A {@code transactional.id} carried over from {@code consumerConfig} puts the parking producer in
+     * transactional mode, which requires calling {@code initTransactions()} and the rest of that lifecycle before
+     * any {@code send()}, and this class never does, so every park would be rejected or withheld indefinitely.
+     * Refused at {@code create(...)} instead, the same shape {@link KafkaCloudEventSink.Builder#build()} already
+     * refuses a transactional id in its own producer config.
+     */
+    @Test
+    void create_refuses_a_transactional_id_carried_over_from_consumerConfig() {
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:0",
+                ConsumerConfig.GROUP_ID_CONFIG, "test-group",
+                ProducerConfig.TRANSACTIONAL_ID_CONFIG, "some-transactional-id");
+        KafkaDestination parkingDestination = KafkaDestination.of("parking-topic");
+
+        assertThatThrownBy(() -> KafkaDeliveryFailureAction.create(consumerConfig, DeliveryFailurePolicy.PARK,
+                parkingDestination, LoggerFactory.getLogger(getClass())))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+    }
+
+    /**
+     * The no-loss guarantee the class javadoc states, a failed park redelivers rather than losing the record.
+     * {@code bootstrap.servers} points at an address nothing answers, so the parking publish can never complete
+     * within {@code max.block.ms}/{@code delivery.timeout.ms}, both bounded by the same
+     * {@code PARK_ACKNOWLEDGEMENT_TIMEOUT} {@code create(...)} configures. Waits out that bound (five seconds) to
+     * prove the catch branch itself runs, not merely that it exists.
+     */
+    @Test
+    void a_park_publish_that_never_completes_redelivers_instead_of_losing_the_record() {
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:1",
+                ConsumerConfig.GROUP_ID_CONFIG, "test-group");
+        KafkaDestination parkingDestination = KafkaDestination.of("parking-topic");
+        KafkaDeliveryFailureAction action = KafkaDeliveryFailureAction.create(consumerConfig, DeliveryFailurePolicy.PARK,
+                parkingDestination, LoggerFactory.getLogger(getClass()));
+        try {
+            ConsumerRecord<String, byte[]> record = new ConsumerRecord<>("source-topic", 0, 0L, "key",
+                    "value".getBytes());
+
+            KafkaDeliveryFailureAction.Outcome outcome = action.applyToUndecodable(record);
+
+            assertThat(outcome).isEqualTo(KafkaDeliveryFailureAction.Outcome.REDELIVER);
+        } finally {
+            action.close();
+        }
     }
 }

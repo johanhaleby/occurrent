@@ -439,6 +439,46 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
         }
     }
 
+    /**
+     * The same permanent-stop departure proven above, now under {@code group.instance.id} (static membership),
+     * where an ordinary {@code Consumer.close()} deliberately keeps the assignment in place rather than leaving,
+     * correct for a caller restarting the same bridge but wrong for a stop that has nothing coming back to reclaim
+     * it. Proves the permanent stop still forces an immediate departure on this configuration rather than
+     * inheriting the static member's usual close behavior.
+     */
+    @Test
+    void an_unreadable_live_filter_leaves_the_group_immediately_even_under_static_membership() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, groupId,
+                ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, "instance-" + UUID.randomUUID(),
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false",
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        feed.register("proj", handled::add, Filter.data("amount", Condition.eq(42)));
+        feed.goLive("proj");
+
+        KafkaDomainEventBridge<TestOrderPlaced> bridge = KafkaDomainEventBridge.builder(consumerConfig, feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build();
+        try {
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isEqualTo(1));
+
+            publish("stream-1", "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(consumerGroupMemberCount(groupId)).isZero());
+            assertThat(handled).isEmpty();
+            assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isNull();
+        } finally {
+            bridge.close();
+        }
+    }
+
     private Map<String, Object> consumerConfig(String groupId) {
         return Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),

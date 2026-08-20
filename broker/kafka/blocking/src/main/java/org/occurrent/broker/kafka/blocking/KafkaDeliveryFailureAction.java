@@ -107,8 +107,12 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
      *                       attempt within that bound rather than one that can still be quietly retrying in the
      *                       background after this class has already given up and redelivered instead, which risks
      *                       parking the same record twice. Consumer-only keys left over from the copy (
-     *                       {@code group.id}, {@code enable.auto.commit}, the deserializer classes, ...) are unused
-     *                       by a producer and logged as such rather than rejected.
+     *                       {@code group.id}, {@code enable.auto.commit}, the deserializer classes, ...) are simply
+     *                       unused by a producer, not rejected. {@link ProducerConfig#TRANSACTIONAL_ID_CONFIG} is
+     *                       the one key refused rather than silently carried over, the same refusal
+     *                       {@link KafkaCloudEventSink.Builder#build()} already applies to its own producer config,
+     *                       since a transactional id would put the parking producer in transactional mode and this
+     *                       class never calls {@code initTransactions()} or any other transaction lifecycle method.
      */
     public static KafkaDeliveryFailureAction create(Map<String, Object> consumerConfig, DeliveryFailurePolicy policy,
                                                       @Nullable KafkaDestination parkingDestination, Logger log) {
@@ -126,6 +130,14 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
             return new KafkaDeliveryFailureAction(policy, null, null, log);
         }
         Map<String, Object> producerConfig = new HashMap<>(consumerConfig);
+        Object configuredTransactionalId = producerConfig.get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+        if (configuredTransactionalId != null) {
+            throw new IllegalStateException("consumerConfig sets \"" + ProducerConfig.TRANSACTIONAL_ID_CONFIG +
+                    "\" to \"" + configuredTransactionalId + "\", carried over into the parking producer's own " +
+                    "config. " + KafkaDeliveryFailureAction.class.getSimpleName() + " never calls initTransactions() " +
+                    "or any other transaction lifecycle method, so every park would be rejected or withheld " +
+                    "indefinitely by a producer configured this way.");
+        }
         producerConfig.put(ProducerConfig.ACKS_CONFIG, "all");
         producerConfig.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, PARK_ACKNOWLEDGEMENT_TIMEOUT.toMillis());
         producerConfig.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, (int) PARK_ACKNOWLEDGEMENT_TIMEOUT.toMillis());

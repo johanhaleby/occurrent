@@ -121,34 +121,40 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(KafkaCloudEventBridge.class);
 
-    /**
-     * A {@code commitSync} failure Kafka itself marks retriable is retried under this, attempts uncapped, until it
-     * succeeds or this bridge closes. The same shape {@code KafkaCloudEventSink} uses for a publish, see the class
-     * javadoc's commit-batching paragraph for what a crash during that retry costs.
-     */
-    private static final RetryStrategy COMMIT_RETRY_STRATEGY = RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)
-            .retryIf(throwable -> throwable instanceof RetriableException);
-
     private final KafkaConsumer<String, byte[]> consumer;
     private final PushSubscriptionModel model;
     private final RoutingOutcomeChannel outcomeChannel;
     private final Duration pollTimeout;
     private final Duration closeTimeout;
+    private final RetryStrategy commitRetryStrategy;
     private final KafkaDeliveryFailureAction failureAction;
     private final Thread loopThread;
 
     private volatile boolean running = true;
 
     private KafkaCloudEventBridge(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel,
-                                   Duration pollTimeout, Duration closeTimeout, KafkaDeliveryFailureAction failureAction, String groupId) {
+                                   Duration pollTimeout, Duration closeTimeout, RetryStrategy commitRetryStrategy,
+                                   KafkaDeliveryFailureAction failureAction, String groupId) {
         this.consumer = consumer;
         this.model = model;
         this.outcomeChannel = outcomeChannel;
         this.pollTimeout = pollTimeout;
         this.closeTimeout = closeTimeout;
+        this.commitRetryStrategy = commitRetryStrategy;
         this.failureAction = failureAction;
         this.loopThread = new Thread(this::runLoop, "kafka-cloudevent-bridge-" + groupId);
         this.loopThread.setDaemon(true);
+    }
+
+    /**
+     * A {@code commitSync} failure Kafka itself marks retriable is retried under this by default, attempts
+     * uncapped, until it succeeds or this bridge closes. The same shape {@code KafkaCloudEventSink} uses for a
+     * publish, see the class javadoc's commit-batching paragraph for what a crash during that retry costs, and
+     * {@link Builder#commitRetryStrategy(RetryStrategy)} for how to replace it.
+     */
+    private static RetryStrategy defaultCommitRetryStrategy() {
+        return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)
+                .retryIf(throwable -> throwable instanceof RetriableException);
     }
 
     /**
@@ -197,10 +203,14 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
                     // else, a non-retriable one included, so one bad iteration never kills the only consume thread.
                     // The next poll retries from wherever the Consumer's own position and this bridge's seeks left
                     // it, which is safe exactly the way a crash mid-iteration already has to be, see the class
-                    // javadoc's commit-batching paragraph.
+                    // javadoc's commit-batching paragraph. Backs off for pollTimeout first, since some failures
+                    // (an authentication error, most notably) can make poll() itself throw immediately on every
+                    // call, and without this a persistent one would otherwise spin this loop as fast as the JVM
+                    // allows instead of at the cadence every other path through this loop already keeps to.
                     if (running) {
-                        log.warn("The Kafka consume loop for group \"{}\" failed this iteration. Retrying on the next poll.",
+                        log.warn("The Kafka consume loop for group \"{}\" failed this iteration. Retrying after pollTimeout.",
                                 consumer.groupMetadata().groupId(), e);
+                        sleepUninterruptibly(pollTimeout);
                     }
                 }
             }
@@ -253,10 +263,21 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         }
     }
 
-    // Retries a retriable commitSync failure with COMMIT_RETRY_STRATEGY, attempts uncapped, until it succeeds or
-    // this bridge closes (running turns false). A non-retriable failure propagates immediately.
+    // Retries a retriable commitSync failure with commitRetryStrategy, attempts uncapped by the default, until it
+    // succeeds or this bridge closes (running turns false). A non-retriable failure propagates immediately.
     private void commitWithRetry(Map<TopicPartition, OffsetAndMetadata> toCommit) {
-        executeWithRetry(() -> consumer.commitSync(toCommit), __ -> running, COMMIT_RETRY_STRATEGY).run();
+        executeWithRetry(() -> consumer.commitSync(toCommit), __ -> running, commitRetryStrategy).run();
+    }
+
+    // Sleeps for duration, restoring the interrupt flag rather than propagating it, since the loop thread has
+    // nothing above it to hand an InterruptedException to and running is what it already checks to decide whether
+    // to keep going.
+    private static void sleepUninterruptibly(Duration duration) {
+        try {
+            Thread.sleep(duration.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     // Returns true when record resolved (stages its offset into toCommit), false when the caller should seek back
@@ -333,6 +354,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         private @Nullable KafkaDestination parkingDestination;
         private Duration pollTimeout = Duration.ofSeconds(1);
         private Duration closeTimeout = Duration.ofSeconds(30);
+        private RetryStrategy commitRetryStrategy = defaultCommitRetryStrategy();
 
         private Builder(Map<String, Object> consumerConfig, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel) {
             requireNonNull(consumerConfig, "consumerConfig cannot be null");
@@ -430,6 +452,19 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             return this;
         }
 
+        /**
+         * How a retriable {@code commitSync} failure is retried. Exponential backoff from 100 ms up to 2 seconds by
+         * default, attempts uncapped until this bridge closes, the same shape {@link KafkaCloudEventSink.Builder#retryStrategy(RetryStrategy)}
+         * defaults to for a publish. Retries only a {@code commitSync} failure Kafka itself marks
+         * {@code org.apache.kafka.common.errors.RetriableException}, a broker outage most often. Passing a
+         * {@link RetryStrategy} here replaces that predicate too, so a caller that wants a narrower or wider retry
+         * configures its own.
+         */
+        public Builder commitRetryStrategy(RetryStrategy commitRetryStrategy) {
+            this.commitRetryStrategy = requireNonNull(commitRetryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
         public KafkaCloudEventBridge build() {
             if (bindings == null && resolver == null) {
                 throw new IllegalStateException("A resolver(...), or explicit bindings(...), is required");
@@ -443,11 +478,12 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
                         "PARK needs a literal topic name to park a failed delivery to.");
             }
             Object groupId = consumerConfig.get(ConsumerConfig.GROUP_ID_CONFIG);
-            if (groupId == null) {
+            if (groupId == null || groupId.toString().isBlank()) {
                 throw new IllegalStateException("consumerConfig must set \"" + ConsumerConfig.GROUP_ID_CONFIG +
-                        "\", since this bridge's committed offsets, and its consume identity, are keyed by it. " +
-                        "Absent, KafkaConsumer construction still succeeds and this fails later, invisibly, as an " +
-                        "InvalidGroupIdException the first time this bridge tries to commit or poll.");
+                        "\" to a non-blank value, since this bridge's committed offsets, and its consume identity, " +
+                        "are keyed by it. Absent or blank, KafkaConsumer construction still succeeds and this fails " +
+                        "later, invisibly, as an InvalidGroupIdException the first time this bridge tries to commit " +
+                        "or poll.");
             }
             Object configuredAutoCommit = consumerConfig.get(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG);
             if (configuredAutoCommit == null || !"false".equals(configuredAutoCommit.toString())) {
@@ -463,7 +499,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
                 failureAction = KafkaDeliveryFailureAction.create(consumerConfig, deliveryFailurePolicy, parkingDestination, log);
                 Set<KafkaDestination> destinations = KafkaTopology.topicsToSubscribe(resolver, bindingFilter, bindings);
                 KafkaTopology.subscribe(consumer, destinations);
-                KafkaCloudEventBridge bridge = new KafkaCloudEventBridge(consumer, model, outcomeChannel, pollTimeout, closeTimeout, failureAction, groupId.toString());
+                KafkaCloudEventBridge bridge = new KafkaCloudEventBridge(consumer, model, outcomeChannel, pollTimeout, closeTimeout, commitRetryStrategy, failureAction, groupId.toString());
                 bridge.loopThread.start();
                 return bridge;
             } catch (RuntimeException e) {
