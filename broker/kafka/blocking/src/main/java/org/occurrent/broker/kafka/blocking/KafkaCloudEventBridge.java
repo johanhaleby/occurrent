@@ -53,14 +53,14 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * {@code accept(...)} reported through a shared {@link RoutingOutcomeChannel} says the event was actually consumed.
  * <p>
  * <strong>Holds a {@link PushSubscriptionModel}, never a {@link CatchupThenPushSubscriptionModel}</strong>, for the
- * same reason {@code RabbitMqCloudEventBridge} does: ADR 133 decision 1 is explicit that a bridge feeds the live
+ * same reason {@code RabbitMqCloudEventBridge} does. ADR 133 decision 1 is explicit that a bridge feeds the live
  * model, not the catch-up wrapper in front of it.
  * <p>
  * <strong>Acknowledgement.</strong> {@code accept(...)} throwing (a handler exception, or a subscription filter
  * that failed to evaluate) never commits. A normal return with {@link RoutingOutcome#DELIVERED} or
  * {@link RoutingOutcome#FILTERED} stages this record's offset for the next commit. A normal return with
  * {@link RoutingOutcome#NOT_DELIVERABLE} never does. In every case that does not commit, this bridge's configured
- * {@link DeliveryFailurePolicy} applies: {@link DeliveryFailurePolicy#REDELIVER} (the default) seeks the consumer
+ * {@link DeliveryFailurePolicy} applies. {@link DeliveryFailurePolicy#REDELIVER} (the default) seeks the consumer
  * back to this record's offset, {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only
  * once that publish is confirmed treats this record as resolved, exactly as a delivered one.
  * <p>
@@ -113,8 +113,8 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <strong>Ordering.</strong> A partitioned topic gives no global order. Two events on different partitions can be
  * processed in either order by this bridge, whatever their publish order was. Events for one stream stay in order
  * against each other only when the publisher keyed by stream id onto one partition, which
- * {@code KafkaSharedTopicDestinationResolver} (the shipped default) does. A projection that folds per stream is
- * fine under that default. One that depends on order across streams is not, and needs a single partition or a
+ * {@code KafkaSharedTopicDestinationResolver} (the shipped default) does. A projection that accumulates state per
+ * stream is fine under that default. One that depends on order across streams is not, and needs a single partition or a
  * different feed.
  */
 public final class KafkaCloudEventBridge implements AutoCloseable {
@@ -155,8 +155,8 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
      * @param consumerConfig Kafka consumer configuration, {@code bootstrap.servers} and {@code group.id} at
      *                       minimum. Read once, at {@link Builder#build()}, to construct and own this bridge's own
      *                       {@code Consumer}. Refused when {@code group.id} is absent, and when
-     *                       {@code enable.auto.commit} is anything other than exactly {@code "false"}, per ADR 133:
-     *                       seeking only works if nothing else commits.
+     *                       {@code enable.auto.commit} is anything other than exactly {@code "false"}, per ADR 133,
+     *                       since seeking only works if nothing else commits.
      * @param model          The live model this bridge feeds. Never a {@link CatchupThenPushSubscriptionModel}, see
      *                       the class javadoc.
      * @param outcomeChannel Shared with {@code model}'s own constructor, see {@link RoutingOutcomeChannel}.
@@ -401,8 +401,9 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
          * How long each {@code poll()} call blocks waiting for records, and, since this bridge's coarse lifecycle
          * gate (see the class javadoc) is rechecked once per loop iteration rather than on a separate schedule,
          * also how often that recheck happens. One second by default. Kafka requires this bridge to keep polling
-         * even while paused, to heartbeat and complete rebalances, so the two could not be split into separate
-         * knobs without this bridge running two competing timers against the same single-threaded {@code Consumer}.
+         * even while paused, to heartbeat and complete rebalances, so the poll bound and the lifecycle recheck
+         * cadence could not be split apart without this bridge running two competing timers against the same
+         * single-threaded {@code Consumer}.
          * A small delay either way is harmless, see the class javadoc, so this rarely needs changing.
          */
         public Builder pollTimeout(Duration pollTimeout) {

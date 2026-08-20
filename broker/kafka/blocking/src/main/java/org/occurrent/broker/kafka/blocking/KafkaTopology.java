@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The topic-derivation rule both bridge builders apply, per ADR 133 decision 5: explicit {@code topics} if given,
+ * The topic-derivation rule both bridge builders apply, per ADR 133 decision 5. Explicit {@code topics} if given,
  * otherwise {@link DestinationResolver#destinationsFor(SubscriptionFilter)} for {@code bindingFilter} if given,
  * falling back to {@link DestinationResolver#catchAllDestination()} whenever the resolver cannot narrow it, or
  * {@code bindingFilter} was never given at all. Shared rather than written once per bridge, the same reasoning
@@ -63,7 +63,7 @@ public final class KafkaTopology {
      * Subscribes {@code consumer} to {@code destinations}, by literal topic name when every destination's
      * {@link KafkaDestination#topicIsPattern()} is {@code false}, or by {@link Pattern} when exactly one
      * destination is pattern-typed. {@code destinations} is homogeneous by construction whenever it comes from
-     * {@link #topicsToSubscribe(DestinationResolver, SubscriptionFilter, Set)}: {@code destinationsFor(...)} never
+     * {@link #topicsToSubscribe(DestinationResolver, SubscriptionFilter, Set)}. {@code destinationsFor(...)} never
      * returns a pattern-typed destination on either shipped resolver, and {@code catchAllDestination()} is always
      * exactly one destination. A set mixing literal and pattern-typed destinations is only reachable through a
      * misused explicit {@code bindings(...)} escape hatch, and is refused here rather than guessed at.

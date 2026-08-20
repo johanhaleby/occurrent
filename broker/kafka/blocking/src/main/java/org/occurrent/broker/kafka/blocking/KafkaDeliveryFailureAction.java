@@ -43,7 +43,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * What a consume-side bridge does with a record it will not commit, per ADR 133 decision 7, mirroring
  * {@code RabbitMqDeliveryFailureAction}'s shape but returning a decision instead of acting on a channel directly,
- * since Kafka has no per-record acknowledgement to call: {@link DeliveryFailurePolicy#REDELIVER} always reports
+ * since Kafka has no per-record acknowledgement to call. {@link DeliveryFailurePolicy#REDELIVER} always reports
  * {@link #REDELIVER}, telling the bridge's poll loop to {@code seek} back to this record's offset and stop that
  * partition's remaining records for this poll. {@link DeliveryFailurePolicy#PARK} republishes the record to a
  * parking destination, waits for that publish's own broker acknowledgement, and reports {@link #RESOLVED} only once
@@ -92,7 +92,7 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
      * Builds the action for {@code policy}, and the parking {@link Producer} it publishes through when
      * {@code policy} is {@link DeliveryFailurePolicy#PARK} and {@code parkingDestination} is given. Refuses when
      * {@code policy} is {@code PARK} and {@code parkingDestination} is {@code null}, and when it is given but
-     * {@link KafkaDestination#topicIsPattern()}: a pattern is meant for {@code Consumer.subscribe(Pattern)}, never
+     * {@link KafkaDestination#topicIsPattern()}, since a pattern is meant for {@code Consumer.subscribe(Pattern)}, never
      * for publishing, and using its regex text as a literal producer topic either fails on every park (most
      * patterns are not legal topic names) or silently publishes to a topic nobody meant to name. No parking
      * resource is opened at all when {@code policy} is not {@code PARK}, even if {@code parkingDestination} happens
@@ -101,7 +101,7 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
      * @param consumerConfig The bridge's own consumer configuration, copied as the base for the parking producer's
      *                       configuration so a cluster secured with {@code security.protocol}, SASL or SSL settings
      *                       reaches the parking topic too, not only the topic this bridge consumes from. A handful
-     *                       of producer-specific settings are then forced on top: {@code acks=all}, and
+     *                       of producer-specific settings are then forced on top, {@code acks=all} and
      *                       {@code max.block.ms}, {@code delivery.timeout.ms} and {@code request.timeout.ms} all
      *                       bounded by {@link #PARK_ACKNOWLEDGEMENT_TIMEOUT}, so a park publish is a genuine single
      *                       attempt within that bound rather than one that can still be quietly retrying in the

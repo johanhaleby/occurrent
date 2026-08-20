@@ -184,8 +184,8 @@ public abstract class KafkaTestSupport {
      * tests is proven. A committed offset read back from the broker, never the absence of a record arriving
      * somewhere else, which on Kafka proves nothing on its own unless bounded by something observable.
      * <p>
-     * Deliberately not a throwaway {@code KafkaConsumer.committed(...)} call built with its own {@code group.id}:
-     * that reads the offsets of whatever group the consumer itself belongs to, not an arbitrary group passed as an
+     * Deliberately not a throwaway {@code KafkaConsumer.committed(...)} call built with its own {@code group.id}.
+     * That reads the offsets of whatever group the consumer itself belongs to, not an arbitrary group passed as an
      * argument, so a consumer configured with a synthetic id of its own would silently read the wrong group's
      * offsets, or none at all, rather than {@code groupId}'s.
      */

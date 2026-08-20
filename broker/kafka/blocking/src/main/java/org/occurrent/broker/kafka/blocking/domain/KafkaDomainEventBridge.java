@@ -58,7 +58,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * decision 5.
  * <p>
  * <strong>Acknowledgement</strong> follows the {@link RoutingOutcome} {@code acceptCloudEvent(...)} returns, exactly
- * as {@code KafkaCloudEventBridge} follows the one its own model reports: {@link RoutingOutcome#DELIVERED} or
+ * as {@code KafkaCloudEventBridge} follows the one its own model reports. {@link RoutingOutcome#DELIVERED} or
  * {@link RoutingOutcome#FILTERED} stages this record's offset for the next commit, {@link RoutingOutcome#NOT_DELIVERABLE}
  * and a thrown exception both apply this bridge's configured {@link DeliveryFailurePolicy} instead.
  * <p>
@@ -90,7 +90,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * crash between a poll's deliveries and its commit costs. All of that applies here unchanged.
  * <p>
  * <strong>Only the loop thread itself ever closes the {@code Consumer}</strong>, the same rule and the same reason
- * {@code KafkaCloudEventBridge} states: {@link #close()} only signals and waits, the actual {@code Consumer.close()}
+ * {@code KafkaCloudEventBridge} states. {@link #close()} only signals and waits, the actual {@code Consumer.close()}
  * call lives in the loop thread's own {@code finally} block, reached whether the loop exits because {@link #close()}
  * was called or because of the permanent stop above, so a caller thread never touches the {@code Consumer} while
  * the loop thread might still be inside a poll, a handler, or a commit.
@@ -152,8 +152,8 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
      * @param consumerConfig Kafka consumer configuration, {@code bootstrap.servers} and {@code group.id} at
      *                       minimum. Read once, at {@link Builder#build()}, to construct and own this bridge's own
      *                       {@code Consumer}. Refused when {@code group.id} is absent, and when
-     *                       {@code enable.auto.commit} is anything other than exactly {@code "false"}, per ADR 133:
-     *                       seeking only works if nothing else commits.
+     *                       {@code enable.auto.commit} is anything other than exactly {@code "false"}, per ADR 133,
+     *                       since seeking only works if nothing else commits.
      * @param feed           The feed this bridge calls {@link DomainEventFeed#acceptCloudEvent(CloudEvent)} on.
      */
     public static <E> Builder<E> builder(Map<String, Object> consumerConfig, DomainEventFeed<E> feed) {

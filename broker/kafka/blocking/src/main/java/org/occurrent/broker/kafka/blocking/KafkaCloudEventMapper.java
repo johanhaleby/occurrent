@@ -76,7 +76,7 @@ public final class KafkaCloudEventMapper {
     /**
      * Rebuilds the {@link CloudEvent} {@code record} was written from by {@link KafkaCloudEventSink} (or any other
      * writer using {@code cloudevents-kafka}'s binary mode). See this class's own javadoc for the two corrections
-     * applied on top of {@code cloudevents-kafka}'s own reader: {@code streamversion} and {@code position} come
+     * applied on top of {@code cloudevents-kafka}'s own reader. {@code streamversion} and {@code position} come
      * back {@code Long}, and data that was present but empty comes back that way rather than as no data at all.
      * Every other context attribute and extension is a {@link String}, exactly what {@code cloudevents-kafka}'s
      * reader itself produces.

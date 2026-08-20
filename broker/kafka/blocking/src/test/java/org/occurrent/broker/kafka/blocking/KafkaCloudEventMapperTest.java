@@ -34,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * {@link KafkaCloudEventMapper}'s two corrections on top of {@code cloudevents-kafka}'s own reader: {@code streamversion}
+ * {@link KafkaCloudEventMapper}'s two corrections on top of {@code cloudevents-kafka}'s own reader. {@code streamversion}
  * and {@code position} come back {@code Long}, and data that is present but empty survives distinctly from no data
  * at all. Most cases build a {@link ConsumerRecord} by hand, exactly matching what {@code cloudevents-kafka}'s
  * binary writer produces, so no broker is needed to prove the reader-side fix. One test anchors the round trip

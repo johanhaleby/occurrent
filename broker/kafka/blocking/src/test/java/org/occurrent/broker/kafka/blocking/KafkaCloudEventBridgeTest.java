@@ -153,8 +153,8 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
      * The redelivery-no-double-process proof. The handler applies its effect (recording the event id in an
      * idempotent set) and only then throws on its first attempt, simulating a failure that happens after the
      * effect but before the bridge could commit it. The bridge seeks back, the next poll redelivers the same
-     * record, and the second attempt's idempotent {@code add} to the same set is a no-op, proving the fold applied
-     * the event exactly once despite being handed it twice.
+     * record, and the second attempt's idempotent {@code add} to the same set is a no-op, proving the handler
+     * applied the event exactly once despite being handed it twice.
      */
     @Test
     void a_handler_that_fails_once_is_redelivered_and_an_idempotent_fold_applies_the_event_exactly_once() throws Exception {
@@ -207,7 +207,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     }
 
     /**
-     * Proves ADR 133's rule directly: "after a seek the bridge stops processing that partition's remaining polled
+     * Proves ADR 133's rule directly, "after a seek the bridge stops processing that partition's remaining polled
      * records." Three events land on the topic's one partition, in order, before the bridge ever starts consuming,
      * so all three are available in the bridge's very first {@code poll()} call. The middle one fails on every
      * attempt. If the bridge kept walking the batch past it, the third event would eventually be handled and its
@@ -245,7 +245,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     }
 
     /**
-     * Proves the ADR's other half of the same rule: "other partitions in the same poll are unaffected, since their
+     * Proves the ADR's other half of the same rule, "other partitions in the same poll are unaffected, since their
      * offsets are independent." Partition 0 gets a permanently-failing event, partition 1 gets one that always
      * succeeds. The second partition's offset still commits despite the first's failure in the same poll batch.
      */
@@ -339,10 +339,10 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     }
 
     /**
-     * Proves the {@code Consumer} thread-ownership property directly: {@link KafkaCloudEventBridge#close()} never
+     * Proves the {@code Consumer} thread-ownership property directly. {@link KafkaCloudEventBridge#close()} never
      * touches the {@code Consumer} itself, only the loop thread's own {@code finally} block does, reached once its
      * current work actually finishes. A handler that blocks well past {@link KafkaCloudEventBridge.Builder#closeTimeout(Duration)}
-     * proves both halves: {@code close()} returns promptly, at the join timeout, rather than waiting for the
+     * proves both halves. {@code close()} returns promptly, at the join timeout, rather than waiting for the
      * handler, and the consumer group has not departed yet at that point, since nothing has closed its
      * {@code Consumer}. Only once the handler is released does the loop thread finish its own iteration and reach
      * its {@code finally}, and only then does the group show a clean departure.

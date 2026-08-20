@@ -155,7 +155,7 @@ class KafkaTopicPerTypeDestinationResolverTest {
     }
 
     /**
-     * The case Kafka's own topic naming rule exists to catch: {@link Class#getName()} writes a nested class's
+     * The case Kafka's own topic naming rule exists to catch. {@link Class#getName()} writes a nested class's
      * enclosing class separator as {@code $}, which {@code [a-zA-Z0-9._-]} does not allow.
      */
     @Test

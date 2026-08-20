@@ -57,8 +57,8 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
         List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
         DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
         feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()));
-        // No catch-up in this test (nothing stored, nothing to replay): go straight live so a live event is folded
-        // immediately rather than buffered awaiting a replay handover that never happens.
+        // No catch-up in this test (nothing stored, nothing to replay), so go straight live and a live event is
+        // handled immediately rather than buffered awaiting a replay handover that never happens.
         feed.goLive("proj");
 
         try (KafkaDomainEventBridge<TestOrderPlaced> bridge = KafkaDomainEventBridge.builder(consumerConfig(groupId), feed)
@@ -212,7 +212,7 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
     }
 
     /**
-     * Proves ADR 133's rule directly on this bridge's own copy of the seek-and-break partition loop: "after a seek
+     * Proves ADR 133's rule directly on this bridge's own copy of the seek-and-break partition loop, "after a seek
      * the bridge stops processing that partition's remaining polled records." Three events land on the topic's one
      * partition, in order, before the bridge ever starts consuming, so all three are available in the very first
      * {@code poll()} call. The middle one fails on every attempt. If the loop kept walking the batch past it, the
@@ -253,7 +253,7 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
     }
 
     /**
-     * Proves the ADR's other half of the same rule on this bridge's own copy of the loop: "other partitions in the
+     * Proves the ADR's other half of the same rule on this bridge's own copy of the loop, "other partitions in the
      * same poll are unaffected, since their offsets are independent." Partition 0 gets a permanently-failing event,
      * partition 1 gets one that always succeeds. The second partition's offset still commits despite the first's
      * failure in the same poll batch.
@@ -350,10 +350,10 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
     }
 
     /**
-     * Proves the {@code Consumer} thread-ownership property directly, this bridge's own copy of it:
+     * Proves the {@code Consumer} thread-ownership property directly, this bridge's own copy of it.
      * {@link KafkaDomainEventBridge#close()} never touches the {@code Consumer} itself, only the loop thread's own
      * {@code finally} block does, reached once its current work actually finishes. A projection that blocks well
-     * past {@link KafkaDomainEventBridge.Builder#closeTimeout(Duration)} proves both halves: {@code close()}
+     * past {@link KafkaDomainEventBridge.Builder#closeTimeout(Duration)} proves both halves. {@code close()}
      * returns promptly, at the join timeout, rather than waiting for it, and the consumer group has not departed
      * yet at that point, since nothing has closed its {@code Consumer}. Only once the projection is released does
      * the loop thread finish its own iteration and reach its {@code finally}, and only then does the group show a

@@ -98,14 +98,14 @@ public record KafkaDestination(String topic, @Nullable String key, Map<String, S
 
     /**
      * Create a destination with no message key and no application headers. {@link #topicIsPattern()} is
-     * {@code false}: {@code topic} is a literal topic name.
+     * {@code false}, so {@code topic} is a literal topic name.
      */
     public static KafkaDestination of(String topic) {
         return new KafkaDestination(topic, null, Map.of(), false);
     }
 
     /**
-     * Create a destination with no application headers. {@link #topicIsPattern()} is {@code false}: {@code topic}
+     * Create a destination with no application headers. {@link #topicIsPattern()} is {@code false}, so {@code topic}
      * is a literal topic name.
      */
     public static KafkaDestination of(String topic, @Nullable String key) {
