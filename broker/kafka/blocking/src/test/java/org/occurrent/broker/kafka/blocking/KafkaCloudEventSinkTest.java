@@ -230,6 +230,24 @@ class KafkaCloudEventSinkTest extends KafkaTestSupport {
                 .hasMessageContaining("acks");
     }
 
+    /**
+     * A transactional id puts the producer in transactional mode, which requires {@code initTransactions()} and
+     * the rest of that lifecycle before any {@code send()}. This sink never calls it, so every publish would be
+     * rejected or withheld indefinitely by a producer configured this way, and unlike
+     * {@code partitioner.ignore.keys} there is no legitimate reason to combine the two.
+     */
+    @Test
+    void build_refuses_when_producerConfig_sets_a_transactional_id() {
+        KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic, ReflectionCloudEventTypeMapper.qualified());
+        Map<String, Object> producerConfig = Map.of(
+                ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ProducerConfig.TRANSACTIONAL_ID_CONFIG, "some-transactional-id");
+
+        assertThatThrownBy(() -> KafkaCloudEventSink.builder(producerConfig, resolver).build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+    }
+
     @Test
     void build_accepts_acks_explicitly_set_to_all_or_its_numeric_equivalent() {
         KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic, ReflectionCloudEventTypeMapper.qualified());

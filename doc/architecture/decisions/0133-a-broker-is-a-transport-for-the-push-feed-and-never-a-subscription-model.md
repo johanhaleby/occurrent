@@ -732,8 +732,12 @@ derivation above is that ruling. `KafkaSharedTopicDestinationResolver` is the ne
 one topic given to its constructor, no default name invented, the same reasoning this decision already gives for
 refusing a parking bridge with no `parkingDestination` of its own, that a default destination name is precisely
 the thing an operator has to know. It keys by stream id when present and `null` otherwise, unchanged from what
-decision 7 already specifies. Its `destinationsFor` returns that one topic regardless of the filter it is asked
-to narrow, since with a single topic narrowing has nothing left to do and decision 5's rule that the feed remains
-the decider already covers the rest. `KafkaTopicPerTypeDestinationResolver` stays exactly as it is, unchanged in
-behaviour, the documented alternative for a deployment that wants per-type topics and either has single-type
-streams or accepts the narrower guarantee.
+decision 7 already specifies. That guarantee also assumes the topic's partition count is chosen before producing
+to it and stays there. Kafka hashes a key against the topic's current partition count, so growing that count
+later remaps an existing stream id onto a different partition and can silently break ordering for whatever
+streams are still in flight at that moment, a concrete operational rule rather than a caveat to hedge with. Its
+`destinationsFor` returns that one topic regardless of the filter it is asked to narrow, since with a single
+topic narrowing has nothing left to do and decision 5's rule that the feed remains the decider already covers the
+rest. `KafkaTopicPerTypeDestinationResolver` stays exactly as it is, unchanged in behaviour, the documented
+alternative for a deployment that wants per-type topics and either has single-type streams or accepts the
+narrower guarantee.

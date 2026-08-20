@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.slf4j.LoggerFactory;
 
@@ -50,6 +51,15 @@ class EventTypeNarrowingTest {
     @Test
     void an_equality_type_filter_resolves_to_a_single_type() {
         SubscriptionFilter filter = AgnosticSubscriptionFilter.filter(Filter.type(EVENT_A_TYPE));
+
+        Optional<Set<String>> types = EventTypeNarrowing.narrow(filter);
+
+        assertThat(types).contains(Set.of(EVENT_A_TYPE));
+    }
+
+    @Test
+    void a_stream_subscription_filter_resolves_the_same_way_an_agnostic_one_does() {
+        SubscriptionFilter filter = StreamSubscriptionFilter.filter(Filter.type(EVENT_A_TYPE));
 
         Optional<Set<String>> types = EventTypeNarrowing.narrow(filter);
 

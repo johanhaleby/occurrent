@@ -294,6 +294,15 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
          * way, so this is accepted rather than adding a second, stricter type check for a value shape Kafka's own
          * documentation never asks a caller to use.
          * <p>
+         * This method also throws {@link IllegalArgumentException} when {@code producerConfig} sets
+         * {@link ProducerConfig#TRANSACTIONAL_ID_CONFIG}, the same refusal shape as {@code acks} rather than the
+         * warning {@code partitioner.ignore.keys} gets below. Setting a transactional id puts the producer in
+         * transactional mode, which requires calling {@code initTransactions()} and the rest of that lifecycle
+         * before any {@code send()}, and this sink never does, so every publish would be rejected or withheld by a
+         * producer configured this way. Unlike {@code partitioner.ignore.keys}, there is no legitimate reason to
+         * combine a transactional id with a sink that never begins a transaction, so this is caught at startup
+         * where the mistake is visible rather than left to fail unpredictably on the first publish.
+         * <p>
          * {@code producerConfig} setting {@link ProducerConfig#PARTITIONER_IGNORE_KEYS_CONFIG} logs a warning
          * rather than refusing to build, unlike {@code acks} above. A weaker {@code acks} has no legitimate use
          * with this sink, but ignoring keys does, for a caller with its own resolver and its own partitioning
@@ -304,6 +313,13 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
          */
         public KafkaCloudEventSink build() {
             Map<String, Object> config = new HashMap<>(producerConfig);
+            Object configuredTransactionalId = config.get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+            if (configuredTransactionalId != null) {
+                throw new IllegalArgumentException("producerConfig sets \"" + ProducerConfig.TRANSACTIONAL_ID_CONFIG +
+                        "\" to \"" + configuredTransactionalId + "\", but " + KafkaCloudEventSink.class.getSimpleName() +
+                        " never calls initTransactions() or any other transaction lifecycle method, so every send " +
+                        "would be rejected or withheld indefinitely by a producer configured this way");
+            }
             Object configuredAcks = config.get(ProducerConfig.ACKS_CONFIG);
             if (configuredAcks == null) {
                 config.put(ProducerConfig.ACKS_CONFIG, "all");

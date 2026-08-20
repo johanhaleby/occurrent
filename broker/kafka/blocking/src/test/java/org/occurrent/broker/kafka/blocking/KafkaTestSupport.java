@@ -67,7 +67,8 @@ public abstract class KafkaTestSupport {
     }
 
     @AfterEach
-    protected void closeAdminClient() {
+    protected void deleteScratchTopicAndCloseAdminClient() throws Exception {
+        adminClient.deleteTopics(List.of(topic)).all().get(30, TimeUnit.SECONDS);
         adminClient.close();
     }
 

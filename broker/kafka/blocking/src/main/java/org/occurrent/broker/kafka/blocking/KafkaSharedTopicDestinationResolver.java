@@ -42,9 +42,14 @@ import static org.occurrent.broker.kafka.blocking.KafkaDestinations.streamIdOf;
  * types never share a topic to begin with. That guarantee also assumes the producer actually partitions by the
  * record key, which Kafka's default partitioner does, unless {@code producerConfig} sets
  * {@code partitioner.ignore.keys} to {@code true}, in which case every key including this resolver's is ignored
- * and {@link KafkaCloudEventSink.Builder#build()} warns about exactly that. {@link KafkaTopicPerTypeDestinationResolver}
- * is the documented alternative, for a deployment that wants per-type topics for retention or independent consumer
- * scaling and either has single-type streams or accepts that narrower guarantee.
+ * and {@link KafkaCloudEventSink.Builder#build()} warns about exactly that. It also assumes the topic's partition
+ * count stays put. Kafka hashes a key against the topic's current partition count, so increasing that count
+ * between two sends for the same stream id can remap it onto a different partition and silently break that
+ * stream's ordering from that point on. Choose the partition count before producing to this topic, and grow it
+ * later only once losing cross-partition order for whatever streams are still in flight at that moment is
+ * acceptable. {@link KafkaTopicPerTypeDestinationResolver} is the documented alternative, for a deployment that
+ * wants per-type topics for retention or independent consumer scaling and either has single-type streams or
+ * accepts that narrower guarantee.
  * <p>
  * The constructor takes the topic name. Nothing here invents one, the same reasoning ADR 133 decision 7 already
  * gives for refusing a parking bridge with no {@code parkingDestination} of its own. A default destination name is

@@ -103,6 +103,15 @@
         </dependency>
 
         <!-- Test -->
+        <!-- KafkaTopicPerTypeDestinationResolverTest and KafkaSharedTopicDestinationResolverTest build Filter and
+             Condition instances directly to exercise destinationsFor, but nothing in this module's main code
+             touches either, so it's declared test-scope rather than left to arrive transitively. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-filter</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-cloudevent-type-mapper-reflection</artifactId>
