@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 39
-updated_at: 2026-08-20T07:06:27Z
+revision: 40
+updated_at: 2026-08-20T10:55:00Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -18,6 +18,14 @@ definition_of_done:
   - "#740 closed at ship; #361 closed as duplicate of #740, never resolved separately"
   - "Memory checkpointed, sessions archived, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
 pending_actions:
+  - id: act-009
+    type: merge
+    target: "PR 869, CAS-pinned to a2d29bb41 (the worker's 4eb5de44 plus my one-commit ADR qualifier fix under the gate)"
+    expected: "PR 869 merged, merged head equals the pin, reset honesty on main"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-20T10:51:47Z
   - id: act-008
     type: merge
     target: "PR 863, CAS-pinned to b36229dd after the bite-verify confirmed the falsifiers fail when the behaviour breaks"
@@ -180,7 +188,7 @@ units:
   U5:
     issue: 740
     goal: "Acceptance and falsifier proofs: the seven-test suite from the plan (inversion, Mongo e2e cross-instance, abandoned-replay, post-reset in two variants, partial-visibility pin, empty-append, write-to-delivery fidelity)"
-    phase: BLOCKED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U4]
@@ -188,16 +196,16 @@ units:
     deliverables:
       - {check: pr_merged, ref: 863, met: true, evidence: "squash fa367096b, CAS pin b36229dd matched, branch deleted after tip==pin. Independent bite-verify reproduced three mutations with real failure output and audited the other five as sound"}
       - {check: manual_approval, ref: "post-reset non-lie falsifiers, both variants, delivered or formally re-scoped once the reset-replay determination lands", met: false, evidence: null}
-    blocking_on: ["U8 merging, then the post-reset falsifiers get written against startAt BEGINNING plus the WARN pin test"]
-    next_action: "DELIVERY 2026-08-19T09:5xZ: 7 of 8 items delivered with per-item mutation proofs, 5 Copilot rounds, final round clean, 26/26 green on b36229dd. Item 8 (post-reset non-lie, both variants) WITHHELD by the worker per the stop-on-real-defect rule: it reports that wiping the checkpoint and restarting the default Spring Boot Mongo composition does not replay at all, which is the premise the whole reset rule stands on. Two investigations dispatched: an Opus determination of harness-error vs pre-existing-model-behaviour vs genuine-gap, and a verify of whether the 7 delivered falsifiers actually bite. Merge decision waits on the second, item 8 and U6 unfreeze wait on the first"
-    last_meaningful_progress_at: 2026-08-20T06:30:00Z
+    blocking_on: []
+    next_action: "Worker resumed for ayi/u5b-post-reset-falsifiers (both reset variants against startAt BEGINNING, seeded from the 865 reproduction, plus the WARN pin). On its PR: gate, bite-verify, CAS merge"
+    last_meaningful_progress_at: 2026-08-20T10:55:00Z
     observed:
       pr_863: {head: 26328bf5835536c89cd2e71f796844b1cbe5bd60, branch: "ayi/u5-falsifier-suite", rollup: "26/26 SUCCESS", threads: "5 total, 5 unresolved (round 1, no suppressed block)", via: "gate reads after the reboot", at: 2026-08-19T08:05:00Z}
     assessment: "Subagent unit under Unattended. A contract finding here re-triggers a U6 pass. Carries from U2's adversarial verify: add the reactor write() resubscription test (same shape as ReactorMongoEventStoreDcbTest's resubscribing_the_same_append_publisher test, aimed at write())."
   U6:
     issue: 740
     goal: "Held docs branch docs/append-identity in occurrent-org.github.io, news-post mention coordinated with r34's release-notes branch, addedTags entry, the honest window bound"
-    phase: BLOCKED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U4]
@@ -205,15 +213,15 @@ units:
     deliverables:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/append-identity, met: true, evidence: "PR 73 open against docs main, held, docs.md read-your-writes section plus addedTags 0.34.0 entry plus news-post highlight; window-bound numbers (20s lease, 5s poll cap) independently verified by the orchestrator against the shipped code"}
       - {check: manual_approval, ref: "held docs PR review-clean, frozen only after U5 merges", met: false, evidence: null}
-    blocking_on: ["U5 merging, since a contract finding there could change what the honest window bound must say"]
-    next_action: "Docs work COMPLETE, all three follow-ups closed. Waiting on U5 to merge before the content freezes and the manual_approval deliverable can be met. Re-run a docs pass only if U5 surfaces a contract finding that changes what the window bound must say"
-    last_meaningful_progress_at: 2026-08-20T06:30:00Z
+    blocking_on: []
+    next_action: "Worker resumed for the PR 73 amendment (startAt dependency, rebuild procedure incl checkpoint removal, ADR alignment). Freeze lands when U5b merges"
+    last_meaningful_progress_at: 2026-08-20T10:55:00Z
     observed: {}
     assessment: "Subagent unit under Unattended. Held for release day; docs-repo merges are Johan's. Content freezes only after U5 merges, since a U5 contract finding re-triggers a docs pass."
   U8:
     issue: 865
     goal: "Reset honesty per Johan's 865 ruling: ADR 132's three corrections, startup WARN when recordAppliedAppends meets a non-replaying start position, Projection javadoc startAt dependency, WARN wiring tests both stacks, changelog line"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
