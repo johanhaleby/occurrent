@@ -489,6 +489,57 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
                 .hasMessageContaining("mix pattern-typed and literal");
     }
 
+    /**
+     * Proves this bridge survives a commit failure Kafka itself never marks retriable, rather than crashing or
+     * silently losing the record. max.poll.interval.ms is set low and the handler blocks past it on id-1's first
+     * delivery, so this Consumer is evicted from its own group by the time the handler returns and commitSync is
+     * attempted, throwing CommitFailedException. The rejoin that follows recovers this bridge on its own, Kafka's
+     * own committed-offset lookup on rejoin is what guarantees id-1 gets refetched here, not the rewind
+     * {@code processBatch(...)} applies on an escaped commit failure. An eviction always regains a
+     * fully lost assignment by re-reading the last committed offset, which the rewind is not needed to reproduce.
+     * The rewind exists for the narrower case a full eviction cannot exercise. A commit that fails while this
+     * Consumer's own group membership and assignment are never disturbed at all, which is not reproducible against
+     * a real broker without either mocking or fault injection this module does not otherwise use, so this proof
+     * is deliberately the closest one reachable without either, real resilience against a genuine commit failure,
+     * not a mutation-discriminating proof of the rewind line itself.
+     */
+    @Test
+    void a_commit_that_fails_permanently_does_not_crash_the_bridge_and_id_1_is_still_delivered_once_it_recovers() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, groupId,
+                ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false",
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest",
+                ConsumerConfig.GROUP_PROTOCOL_CONFIG, "classic",
+                ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, "3000");
+
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        AtomicInteger id1Attempts = new AtomicInteger();
+        model.subscribe("sub", cloudEvent -> {
+            if (cloudEvent.getId().equals("id-1") && id1Attempts.incrementAndGet() == 1) {
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
+
+        publishCloudEvent(topic, "stream-1", orderPlaced("id-1"));
+
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig, model, outcomeChannel)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                    assertThat(id1Attempts.get()).isGreaterThanOrEqualTo(2));
+            await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+        }
+    }
+
     private Map<String, Object> consumerConfig(String groupId) {
         return Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),

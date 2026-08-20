@@ -319,6 +319,23 @@ class KafkaCloudEventSinkTest extends KafkaTestSupport {
         }
     }
 
+    /**
+     * {@link KafkaDestination#topicIsPattern()} is {@code true} only from a custom {@code DestinationResolver},
+     * never from either shipped resolver's {@code destinationFor(CloudEvent)}, but nothing stopped one from
+     * returning a pattern-typed destination there by mistake, and {@code KafkaMessageFactory}'s writer would have
+     * published the regex text itself as a literal topic name had this not refused it first.
+     */
+    @Test
+    void publish_refuses_a_pattern_typed_destination_rather_than_publishing_to_its_regex_text_as_a_literal_topic() {
+        KafkaDestination patternDestination = KafkaDestination.ofPattern(topic + "-.*");
+        Map<String, Object> producerConfig = Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers());
+        try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfig, new FixedDestinationResolver(patternDestination)).build()) {
+            assertThatThrownBy(() -> sink.publish(orderPlaced("id-1")))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("pattern-typed");
+        }
+    }
+
     private static CloudEvent orderPlaced(String id) {
         return CloudEventBuilder.v1()
                 .withId(id)

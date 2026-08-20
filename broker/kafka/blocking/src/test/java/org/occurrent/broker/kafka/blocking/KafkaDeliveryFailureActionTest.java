@@ -17,8 +17,12 @@
 package org.occurrent.broker.kafka.blocking;
 
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerInterceptor;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.slf4j.LoggerFactory;
@@ -96,6 +100,45 @@ class KafkaDeliveryFailureActionTest {
                 parkingDestination, LoggerFactory.getLogger(getClass())))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+    }
+
+    /**
+     * {@code interceptor.classes} names the same key in both {@code ConsumerConfig} and {@code ProducerConfig},
+     * with a different expected interface on each side. A {@code ConsumerInterceptor} a caller configured for the
+     * bridge's own {@code Consumer} would otherwise carry straight into the parking producer's config too, where
+     * {@code ProducerConfig} eagerly instantiates it expecting a {@code ProducerInterceptor}, failing construction
+     * for a perfectly valid consumer-side setting that has nothing to do with parking.
+     */
+    @Test
+    void create_strips_a_colliding_interceptor_classes_key_rather_than_failing_construction() {
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:0",
+                ConsumerConfig.GROUP_ID_CONFIG, "test-group",
+                ConsumerConfig.INTERCEPTOR_CLASSES_CONFIG, NoOpConsumerInterceptor.class.getName());
+        KafkaDestination parkingDestination = KafkaDestination.of("parking-topic");
+
+        assertThatCode(() -> KafkaDeliveryFailureAction.create(consumerConfig, DeliveryFailurePolicy.PARK,
+                parkingDestination, LoggerFactory.getLogger(getClass())).close())
+                .doesNotThrowAnyException();
+    }
+
+    public static final class NoOpConsumerInterceptor implements ConsumerInterceptor<String, byte[]> {
+        @Override
+        public ConsumerRecords<String, byte[]> onConsume(ConsumerRecords<String, byte[]> records) {
+            return records;
+        }
+
+        @Override
+        public void onCommit(Map<TopicPartition, OffsetAndMetadata> offsets) {
+        }
+
+        @Override
+        public void close() {
+        }
+
+        @Override
+        public void configure(Map<String, ?> configs) {
+        }
     }
 
     /**

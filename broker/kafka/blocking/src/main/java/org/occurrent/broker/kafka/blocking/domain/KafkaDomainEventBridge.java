@@ -77,7 +77,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * {@code max.poll.interval.ms} (five minutes by default), which would leave this permanent, intentional stop
  * indistinguishable from a hung consumer for that whole window, log noise and a pointless rebalance included.
  * Closing sends Kafka's own clean group-departure request instead, so the next consumer in this group picks up
- * starting exactly at the triggering record's offset, the same one this bridge seeked back to and never committed
+ * starting exactly at the triggering record's offset, the same one this bridge sought back to and never committed
  * past. That departure is forced with {@link org.apache.kafka.clients.consumer.CloseOptions.GroupMembershipOperation#LEAVE_GROUP},
  * not the default {@link #close()} otherwise leaves in place, since a consumer configured with
  * {@code group.instance.id} for static membership keeps its assignment through an ordinary close by design, correct
@@ -276,7 +276,20 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
             }
         }
         if (!toCommit.isEmpty()) {
-            commitWithRetry(toCommit);
+            try {
+                commitWithRetry(toCommit);
+            } catch (RuntimeException e) {
+                // commitRetryStrategy exhausted, or the failure was never retriable to begin with. poll() already
+                // advanced this Consumer's own read position past every record in this batch, resolved or not, so
+                // without a rewind the next poll() would fetch past whatever never actually got committed here,
+                // and a later successful commit on a higher offset would then permanently skip it, the exact
+                // silent loss this bridge exists to prevent. Rewinding every partition this batch touched back to
+                // its own earliest fetched record undoes that advance, on top of whatever single-record seek
+                // already ran above, so the next poll() refetches and reprocesses this whole batch from the start
+                // instead of skipping the gap.
+                seekToEarliestFetched(records);
+                throw e;
+            }
         }
         if (permanentStop) {
             running = false;

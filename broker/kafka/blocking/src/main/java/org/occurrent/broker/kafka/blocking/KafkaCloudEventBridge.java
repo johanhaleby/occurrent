@@ -90,8 +90,12 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * backoff, attempts uncapped, until it succeeds or this bridge closes, the same retry shape
  * {@code KafkaCloudEventSink} uses for a publish. A crash during that retry leaves the offset exactly as uncommitted
  * as an ordinary crash would, so redelivery covers it. Nothing is acknowledged or skipped because a commit was being
- * retried. A non-retriable commit failure (the consumer fenced out of its group, for example) still propagates and
- * is logged, and this bridge tries again on the next poll rather than treating it as fatal.
+ * retried. A non-retriable commit failure (the consumer fenced out of its group, for example), or a
+ * {@link Builder#commitRetryStrategy(RetryStrategy)} narrower than the default exhausting its own attempts, still
+ * propagates and is logged, but not before every partition this batch touched is rewound back to its earliest
+ * fetched record first, undoing the read-position advance {@code poll()} already made regardless of whether the
+ * commit itself ever succeeded, so this bridge tries the whole batch again on the next poll rather than silently
+ * skipping whatever this commit never actually recorded.
  * <p>
  * <strong>Per-partition failure isolation.</strong> A record that does not resolve makes the consumer {@code seek}
  * back to that record's offset and this bridge stops processing that partition's remaining records for this poll,
@@ -259,7 +263,20 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             }
         }
         if (!toCommit.isEmpty()) {
-            commitWithRetry(toCommit);
+            try {
+                commitWithRetry(toCommit);
+            } catch (RuntimeException e) {
+                // commitRetryStrategy exhausted, or the failure was never retriable to begin with. poll() already
+                // advanced this Consumer's own read position past every record in this batch, resolved or not, so
+                // without a rewind the next poll() would fetch past whatever never actually got committed here,
+                // and a later successful commit on a higher offset would then permanently skip it, the exact
+                // silent loss this bridge exists to prevent. Rewinding every partition this batch touched back to
+                // its own earliest fetched record, the same seek seekToEarliestFetched(records) already applies
+                // for the paused case above, undoes that advance, so the next poll() refetches and reprocesses
+                // this whole batch from the start instead of skipping the gap.
+                seekToEarliestFetched(records);
+                throw e;
+            }
         }
     }
 

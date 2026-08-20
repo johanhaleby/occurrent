@@ -34,6 +34,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -67,6 +68,15 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
      * does not need its own tunable separate from the sink's.
      */
     private static final Duration PARK_ACKNOWLEDGEMENT_TIMEOUT = Duration.ofSeconds(5);
+
+    /**
+     * Keys {@code ConsumerConfig} and {@link ProducerConfig} both define with a different meaning, stripped from
+     * the copied producer config rather than carried over silently. {@link ProducerConfig#INTERCEPTOR_CLASSES_CONFIG}
+     * is the one known so far, since a class a caller configured as a {@code ConsumerInterceptor} for the bridge's
+     * own {@code Consumer} fails {@link KafkaProducer}'s construction outright, {@code ProducerConfig} eagerly
+     * instantiates every listed class expecting a {@code ProducerInterceptor} instead.
+     */
+    private static final Set<String> STRIPPED_COLLIDING_CONFIG_KEYS = Set.of(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG);
 
     public enum Outcome {
         /** Safe to stage this record's offset for the next commit. */
@@ -108,11 +118,16 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
      *                       background after this class has already given up and redelivered instead, which risks
      *                       parking the same record twice. Consumer-only keys left over from the copy (
      *                       {@code group.id}, {@code enable.auto.commit}, the deserializer classes, ...) are simply
-     *                       unused by a producer, not rejected. {@link ProducerConfig#TRANSACTIONAL_ID_CONFIG} is
-     *                       the one key refused rather than silently carried over, the same refusal
+     *                       unused by a producer, not rejected. Two keys get different treatment.
+     *                       {@link ProducerConfig#TRANSACTIONAL_ID_CONFIG} is refused outright, the same refusal
      *                       {@link KafkaCloudEventSink.Builder#build()} already applies to its own producer config,
      *                       since a transactional id would put the parking producer in transactional mode and this
      *                       class never calls {@code initTransactions()} or any other transaction lifecycle method.
+     *                       {@link ProducerConfig#INTERCEPTOR_CLASSES_CONFIG} is stripped silently instead, since a
+     *                       {@code ConsumerInterceptor} a caller configured for the bridge's own {@code Consumer}
+     *                       under that same key name fails {@link KafkaProducer}'s construction outright rather
+     *                       than being merely unused, {@code ProducerConfig} expects every listed class to be a
+     *                       {@code ProducerInterceptor} instead.
      */
     public static KafkaDeliveryFailureAction create(Map<String, Object> consumerConfig, DeliveryFailurePolicy policy,
                                                       @Nullable KafkaDestination parkingDestination, Logger log) {
@@ -130,6 +145,7 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
             return new KafkaDeliveryFailureAction(policy, null, null, log);
         }
         Map<String, Object> producerConfig = new HashMap<>(consumerConfig);
+        STRIPPED_COLLIDING_CONFIG_KEYS.forEach(producerConfig::remove);
         Object configuredTransactionalId = producerConfig.get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
         if (configuredTransactionalId != null) {
             throw new IllegalStateException("consumerConfig sets \"" + ProducerConfig.TRANSACTIONAL_ID_CONFIG +
