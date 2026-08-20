@@ -130,9 +130,14 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 assertThat(failedOnce).isTrue();
                 assertThat(saveAttempts.get()).isGreaterThan(2);
             } finally {
-                context.close();
+                // Nested, not sequential, so a failure closing the context does not skip shutting the forwarder
+                // subscription down too, the same reason its own close() methods close each resource in its own try.
+                try {
+                    context.close();
+                } finally {
+                    forwarderSubscription.shutdown();
+                }
             }
-            forwarderSubscription.shutdown();
         }
     }
 
@@ -162,93 +167,123 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
         Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
         ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, store::put);
 
-        try (RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build()) {
-            CloudEventForwarder forwarder = new CloudEventForwarder(forwarderSubscription, sink);
-            forwarder.forward("forward-orders-restart");
+        // Outer try/finally, not a bare statement after the block, so a failure anywhere inside
+        // (either boot, either context, either bridge) still shuts the forwarder subscription down
+        // rather than leaking its background subscription for the rest of the test run.
+        try {
+            try (RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build()) {
+                CloudEventForwarder forwarder = new CloudEventForwarder(forwarderSubscription, sink);
+                forwarder.forward("forward-orders-restart");
 
-            String orderIdBeforeRestart = "order-" + UUID.randomUUID();
+                String orderIdBeforeRestart = "order-" + UUID.randomUUID();
 
-            // Boot 1: build the queue, forward and process one order to completion, then tear the consumer down.
-            RoutingOutcomeChannel outcomeChannel1 = new RoutingOutcomeChannel();
-            PushSubscriptionModel pushModel1 = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel1);
-            RabbitMqCloudEventBridge bridge1 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel1, outcomeChannel1, queue)
-                    .resolver(resolver)
-                    .pollInterval(Duration.ofMillis(50))
-                    .build();
-            AnnotationConfigApplicationContext context1 = new AnnotationConfigApplicationContext();
-            context1.register(PropertiesConfig.class, OccurrentBlockingAnnotationConfiguration.class);
-            context1.registerBean("pushModel", PushSubscriptionModel.class, () -> pushModel1);
-            context1.registerBean("pushCatchupMarker", CheckpointStorage.class, () -> pushCatchupMarker);
-            context1.registerBean("positionOrderedReader", PositionOrderedReader.class, () -> eventStore);
-            context1.registerBean("cloudEventConverter", CloudEventConverter.class, () -> converter);
-            context1.registerBean("viewStateRepository", ViewStateRepository.class, () -> repository);
-            context1.registerBean("orderProjectionHolder", RestartProjectionHolder.class, RestartProjectionHolder::new);
-            context1.refresh();
+                // Boot 1: build the queue, forward and process one order to completion, then tear the consumer down.
+                // The bridge closes where this try-with-resources block ends, right after the context does in its own
+                // nested finally, which is also exactly the point the deliberate teardown belongs at. Writing it this
+                // way instead of two explicit close() calls after the await means a failure anywhere above, the
+                // context registration, refresh(), the writes, or the await itself, still closes both rather than
+                // leaking a running context and a live consumer for the rest of the test run.
+                RoutingOutcomeChannel outcomeChannel1 = new RoutingOutcomeChannel();
+                PushSubscriptionModel pushModel1 = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel1);
+                try (RabbitMqCloudEventBridge bridge1 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel1, outcomeChannel1, queue)
+                        .resolver(resolver)
+                        .pollInterval(Duration.ofMillis(50))
+                        .build()) {
+                    AnnotationConfigApplicationContext context1 = new AnnotationConfigApplicationContext();
+                    context1.register(PropertiesConfig.class, OccurrentBlockingAnnotationConfiguration.class);
+                    context1.registerBean("pushModel", PushSubscriptionModel.class, () -> pushModel1);
+                    context1.registerBean("pushCatchupMarker", CheckpointStorage.class, () -> pushCatchupMarker);
+                    context1.registerBean("positionOrderedReader", PositionOrderedReader.class, () -> eventStore);
+                    context1.registerBean("cloudEventConverter", CloudEventConverter.class, () -> converter);
+                    context1.registerBean("viewStateRepository", ViewStateRepository.class, () -> repository);
+                    context1.registerBean("orderProjectionHolder", RestartProjectionHolder.class, RestartProjectionHolder::new);
+                    try {
+                        context1.refresh();
 
-            eventStore.write(orderIdBeforeRestart, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdBeforeRestart, "Widget")));
-            eventStore.write(orderIdBeforeRestart, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderIdBeforeRestart)));
+                        eventStore.write(orderIdBeforeRestart, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdBeforeRestart, "Widget")));
+                        eventStore.write(orderIdBeforeRestart, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderIdBeforeRestart)));
 
-            await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
-                    assertThat(store.get(orderIdBeforeRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
+                        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                                assertThat(store.get(orderIdBeforeRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
+                    } finally {
+                        context1.close();
+                    }
+                }
 
-            context1.close();
-            bridge1.close();
+                // Written with the consumer already torn down and boot 2 not yet built, so this queues on the broker
+                // exactly like a real restart leaves work behind. The forwarder keeps running (it never stopped), but
+                // nothing is consuming queue until boot 2's bridge exists. Proving this arrives once boot 2 comes up,
+                // without a full replay, is the other half of "resumes", not just that catch-up itself is skipped.
+                String orderIdQueuedWhileConsumerWasDown = "order-" + UUID.randomUUID();
+                eventStore.write(orderIdQueuedWhileConsumerWasDown, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown, "Widget")));
+                eventStore.write(orderIdQueuedWhileConsumerWasDown, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown)));
 
-            // Written with the consumer already torn down and boot 2 not yet built, so this queues on the broker
-            // exactly like a real restart leaves work behind. The forwarder keeps running (it never stopped), but
-            // nothing is consuming queue until boot 2's bridge exists. Proving this arrives once boot 2 comes up,
-            // without a full replay, is the other half of "resumes", not just that catch-up itself is skipped.
-            String orderIdQueuedWhileConsumerWasDown = "order-" + UUID.randomUUID();
-            eventStore.write(orderIdQueuedWhileConsumerWasDown, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown, "Widget")));
-            eventStore.write(orderIdQueuedWhileConsumerWasDown, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown)));
+                // Waited out here, before boot 2 exists, not left to a race between the forwarder's own background
+                // publish and boot 2 becoming ready. Without this wait, boot 2 could come up before the forwarder had
+                // published either event, and then just consume them live as they arrived, proving nothing about
+                // backlog already sitting on the broker. At least 2, not exactly 2, for the same reason the overlap
+                // test does not pin the count either. The forwarder is at-least-once, so a lost confirm can legally
+                // land a duplicate here.
+                //
+                // Removing this wait was confirmed, not assumed, to open the race it guards against. Across five
+                // runs with the wait deleted, the queue held only one of the two messages at the moment boot 2
+                // started rather than both. That does not turn the test's own assertions red, because delivery is
+                // at-least-once and eventually consistent either way, live or from backlog, the order still reaches
+                // SHIPPED and the replay counter still reads zero. The queue depth check above is what exercises the
+                // backlog path rather than the final state, which is why it is a direct assertion and not incidental
+                // to one.
+                await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                        assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isGreaterThanOrEqualTo(2));
 
-            // Boot 2: a fresh model, a fresh bridge on the same queue, and a fresh Spring context, but the same
-            // catch-up marker and the same read-model store. A reader that counts its own replay calls proves the
-            // catch-up is skipped this time, not merely fast.
-            CountingPositionOrderedReader countingReader = new CountingPositionOrderedReader(eventStore);
-            RoutingOutcomeChannel outcomeChannel2 = new RoutingOutcomeChannel();
-            PushSubscriptionModel pushModel2 = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel2);
-            try (RabbitMqCloudEventBridge bridge2 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel2, outcomeChannel2, queue)
-                    .resolver(resolver)
-                    .pollInterval(Duration.ofMillis(50))
-                    .build()) {
-                AnnotationConfigApplicationContext context2 = new AnnotationConfigApplicationContext();
-                context2.register(PropertiesConfig.class, OccurrentBlockingAnnotationConfiguration.class);
-                context2.registerBean("pushModel", PushSubscriptionModel.class, () -> pushModel2);
-                context2.registerBean("pushCatchupMarker", CheckpointStorage.class, () -> pushCatchupMarker);
-                context2.registerBean("positionOrderedReader", PositionOrderedReader.class, () -> countingReader);
-                context2.registerBean("cloudEventConverter", CloudEventConverter.class, () -> converter);
-                context2.registerBean("viewStateRepository", ViewStateRepository.class, () -> repository);
-                context2.registerBean("orderProjectionHolder", RestartProjectionHolder.class, RestartProjectionHolder::new);
-                try {
-                    context2.refresh();
+                // Boot 2: a fresh model, a fresh bridge on the same queue, and a fresh Spring context, but the same
+                // catch-up marker and the same read-model store. A reader that counts its own replay calls proves the
+                // catch-up is skipped this time, not merely fast.
+                CountingPositionOrderedReader countingReader = new CountingPositionOrderedReader(eventStore);
+                RoutingOutcomeChannel outcomeChannel2 = new RoutingOutcomeChannel();
+                PushSubscriptionModel pushModel2 = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel2);
+                try (RabbitMqCloudEventBridge bridge2 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel2, outcomeChannel2, queue)
+                        .resolver(resolver)
+                        .pollInterval(Duration.ofMillis(50))
+                        .build()) {
+                    AnnotationConfigApplicationContext context2 = new AnnotationConfigApplicationContext();
+                    context2.register(PropertiesConfig.class, OccurrentBlockingAnnotationConfiguration.class);
+                    context2.registerBean("pushModel", PushSubscriptionModel.class, () -> pushModel2);
+                    context2.registerBean("pushCatchupMarker", CheckpointStorage.class, () -> pushCatchupMarker);
+                    context2.registerBean("positionOrderedReader", PositionOrderedReader.class, () -> countingReader);
+                    context2.registerBean("cloudEventConverter", CloudEventConverter.class, () -> converter);
+                    context2.registerBean("viewStateRepository", ViewStateRepository.class, () -> repository);
+                    context2.registerBean("orderProjectionHolder", RestartProjectionHolder.class, RestartProjectionHolder::new);
+                    try {
+                        context2.refresh();
 
-                    // The default startup mode waits for the catch-up before refresh() returns, so if it had
-                    // replayed, the counter would already be nonzero right here.
-                    assertThat(countingReader.replays()).isZero();
-                    assertThat(store.get(orderIdBeforeRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED");
+                        // The default startup mode waits for the catch-up before refresh() returns, so if it had
+                        // replayed, the counter would already be nonzero right here.
+                        assertThat(countingReader.replays()).isZero();
+                        assertThat(store.get(orderIdBeforeRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED");
 
-                    // The order queued while the consumer was down arrives now that boot 2's bridge is live,
-                    // delivered from the broker's own backlog rather than from a replay, since the catch-up
-                    // marker already said this feed was caught up before this order was ever written.
-                    await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
-                            assertThat(store.get(orderIdQueuedWhileConsumerWasDown)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
-                    assertThat(countingReader.replays()).isZero();
+                        // The order queued while the consumer was down arrives now that boot 2's bridge is live,
+                        // delivered from the broker's own backlog rather than from a replay, since the catch-up
+                        // marker already said this feed was caught up before this order was ever written.
+                        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                                assertThat(store.get(orderIdQueuedWhileConsumerWasDown)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
+                        assertThat(countingReader.replays()).isZero();
 
-                    String orderIdAfterRestart = "order-" + UUID.randomUUID();
-                    eventStore.write(orderIdAfterRestart, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdAfterRestart, "Gadget")));
-                    eventStore.write(orderIdAfterRestart, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderIdAfterRestart)));
+                        String orderIdAfterRestart = "order-" + UUID.randomUUID();
+                        eventStore.write(orderIdAfterRestart, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdAfterRestart, "Gadget")));
+                        eventStore.write(orderIdAfterRestart, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderIdAfterRestart)));
 
-                    await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
-                            assertThat(store.get(orderIdAfterRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
+                        await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                                assertThat(store.get(orderIdAfterRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
 
-                    assertThat(countingReader.replays()).isZero();
-                } finally {
-                    context2.close();
+                        assertThat(countingReader.replays()).isZero();
+                    } finally {
+                        context2.close();
+                    }
                 }
             }
+        } finally {
+            forwarderSubscription.shutdown();
         }
-        forwarderSubscription.shutdown();
     }
 
     @Configuration(proxyBeanMethods = false)

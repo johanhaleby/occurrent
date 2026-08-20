@@ -22,6 +22,7 @@ import com.mongodb.client.MongoClients;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.occurrent.application.converter.CloudEventConverter;
@@ -94,11 +95,42 @@ abstract class AbstractBrokerExampleTest {
         adminChannel.exchangeDeclare(exchange, "topic", true);
     }
 
+    // adminChannel is a channel on rabbitConnection, so separate @AfterEach methods for the two would work only by
+    // accident of whichever order JUnit happens to run them in. Closing the connection first leaves the channel
+    // already closed, and closing it again then throws AlreadyClosedException instead of the resource actually
+    // leaking. One method, each close in its own try, is what keeps "every resource gets a close attempt" true
+    // without depending on an order this class does not control, the same shape the bootstraps' own close()
+    // methods use for production code.
     @AfterEach
-    void closeMongoAndRabbit() throws Exception {
-        adminChannel.close();
-        rabbitConnection.close();
-        mongoClient.close();
+    void closeMongoAndRabbit() {
+        RuntimeException failure = null;
+        try {
+            adminChannel.close();
+        } catch (Exception e) {
+            failure = collectFailure(failure, e);
+        }
+        try {
+            rabbitConnection.close();
+        } catch (Exception e) {
+            failure = collectFailure(failure, e);
+        }
+        try {
+            mongoClient.close();
+        } catch (RuntimeException e) {
+            failure = collectFailure(failure, e);
+        }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    private static RuntimeException collectFailure(@Nullable RuntimeException first, Exception e) {
+        RuntimeException wrapped = e instanceof RuntimeException re ? re : new RuntimeException("Failed to close test infrastructure", e);
+        if (first == null) {
+            return wrapped;
+        }
+        first.addSuppressed(wrapped);
+        return first;
     }
 
     protected MongoEventStore newEventStore() {

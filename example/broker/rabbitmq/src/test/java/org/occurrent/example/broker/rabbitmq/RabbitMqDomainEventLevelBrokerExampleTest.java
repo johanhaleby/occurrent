@@ -186,9 +186,15 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                     assertThat(view.streamVersion()).isEqualTo(expectedMetadata.getStreamVersion());
                     assertThat(view.position()).isEqualTo(expectedMetadata.getPosition());
                 } finally {
-                    context.close();
+                    // Nested, not sequential, so a failure closing the context does not skip shutting the
+                    // forwarder subscription down too, the same reason its own close() methods close each
+                    // resource in its own try.
+                    try {
+                        context.close();
+                    } finally {
+                        forwarderSubscription.shutdown();
+                    }
                 }
-                forwarderSubscription.shutdown();
             }
         } finally {
             bridge.close();

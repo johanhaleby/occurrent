@@ -16,12 +16,14 @@
 
 package org.occurrent.example.broker.rabbitmq;
 
+import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqBridgeException;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
@@ -194,5 +196,85 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
             assertThat(pushModel.hasSubscriptions()).isTrue();
         }
         assertThat(pushModel.hasSubscriptions()).isFalse();
+    }
+
+    /**
+     * Proves {@code close()} still shuts the catch-up model and the forwarder down when the bridge's own channel
+     * fails to close, rather than the bridge's failure aborting the rest. The channel's {@code close()} is made to
+     * throw a plain {@link RuntimeException}, not one of the checked or {@link
+     * com.rabbitmq.client.ShutdownSignalException} failures {@link RabbitMqCloudEventBridge#close()} already treats
+     * as best effort, so the failure actually reaches the bootstrap uncaught instead of being swallowed before it
+     * gets there. {@code hasSubscriptions()} false afterward proves the catch-up model still ran, and nothing
+     * arriving from the probe proves the forwarder subscription still ran too, both despite the bridge going first
+     * and throwing.
+     */
+    @Test
+    void a_failure_closing_the_cloud_event_level_bootstraps_bridge_channel_still_closes_the_rest() throws Exception {
+        Connection failingChannelClose = failCloseOnSecondOpenChannel(rabbitConnection);
+        RabbitMqCloudEventLevelBootstrap app = RabbitMqCloudEventLevelBootstrap.start(mongoClient, failingChannelClose);
+        app.placeAndShipOneOrder(Duration.ofSeconds(20));
+        PushSubscriptionModel pushModel = app.pushModel();
+
+        assertThatThrownBy(app::close)
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("Simulated failure closing the bridge's channel");
+
+        assertThat(pushModel.hasSubscriptions()).isFalse();
+        assertNothingArrivesFromALeakedForwarder();
+    }
+
+    /**
+     * The domain-level twin of {@link #a_failure_closing_the_cloud_event_level_bootstraps_bridge_channel_still_closes_the_rest()}.
+     * The domain-level bootstrap has no separate push model to probe, so only the forwarder-leak probe applies here.
+     */
+    @Test
+    void a_failure_closing_the_domain_event_level_bootstraps_bridge_channel_still_closes_the_rest() throws Exception {
+        Connection failingChannelClose = failCloseOnSecondOpenChannel(rabbitConnection);
+        RabbitMqDomainEventLevelBootstrap app = RabbitMqDomainEventLevelBootstrap.start(mongoClient, failingChannelClose);
+        app.placeAndShipOneOrder(Duration.ofSeconds(20));
+
+        assertThatThrownBy(app::close)
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("Simulated failure closing the bridge's channel");
+
+        assertNothingArrivesFromALeakedForwarder();
+    }
+
+    /**
+     * Like {@link #failOnSecondOpenChannel(Connection)}, but the bridge's own channel opens normally, the same real
+     * channel {@code start(...)} would have gotten, wrapped only to fail its own no-argument {@code close()} call.
+     */
+    private static Connection failCloseOnSecondOpenChannel(Connection real) {
+        AtomicInteger openChannelCalls = new AtomicInteger();
+        InvocationHandler handler = (proxy, method, args) -> {
+            Object result;
+            try {
+                result = method.invoke(real, args);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+            if ("openChannel".equals(method.getName()) && method.getParameterCount() == 0
+                    && openChannelCalls.incrementAndGet() == 2
+                    && result instanceof Optional<?> maybeChannel && maybeChannel.isPresent()) {
+                return Optional.of(failingCloseChannel((Channel) maybeChannel.get()));
+            }
+            return result;
+        };
+        return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(), new Class<?>[]{Connection.class}, handler);
+    }
+
+    /** Delegates everything to {@code real} except the no-argument {@code close()}, which throws instead. */
+    private static Channel failingCloseChannel(Channel real) {
+        InvocationHandler handler = (proxy, method, args) -> {
+            if ("close".equals(method.getName()) && method.getParameterCount() == 0) {
+                throw new RuntimeException("Simulated failure closing the bridge's channel");
+            }
+            try {
+                return method.invoke(real, args);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+        };
+        return (Channel) Proxy.newProxyInstance(Channel.class.getClassLoader(), new Class<?>[]{Channel.class}, handler);
     }
 }

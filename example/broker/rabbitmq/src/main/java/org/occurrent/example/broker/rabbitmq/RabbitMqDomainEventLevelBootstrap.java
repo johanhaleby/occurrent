@@ -266,15 +266,47 @@ public final class RabbitMqDomainEventLevelBootstrap implements AutoCloseable {
         }
     }
 
+    /**
+     * Closes the bridge first, so nothing is consuming, then the forwarder, then the sink. Each of the three is
+     * closed in its own try, so one throwing does not skip the rest. The first failure is rethrown with every
+     * later one attached as a suppressed exception, which is what an {@link AutoCloseable} implementation owes
+     * its caller, every resource actually gets a close attempt regardless of what an earlier one did.
+     */
     @Override
     public void close() {
+        RuntimeException failure = null;
         try {
             bridge.close();
+        } catch (Exception e) {
+            failure = collectFailure(failure, e);
+        }
+        try {
             forwarderSubscription.shutdown();
+        } catch (RuntimeException e) {
+            failure = collectFailure(failure, e);
+        }
+        try {
             sink.close();
         } catch (Exception e) {
-            throw new RuntimeException("Failed to close " + RabbitMqDomainEventLevelBootstrap.class.getSimpleName(), e);
+            failure = collectFailure(failure, e);
         }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    // Wraps a checked close() failure as unchecked if it is not already, folds a second-or-later failure into the
+    // first as a suppressed exception instead of discarding it, and returns whichever exception the caller should
+    // eventually throw.
+    private static RuntimeException collectFailure(@Nullable RuntimeException first, Exception e) {
+        RuntimeException wrapped = e instanceof RuntimeException re
+                ? re
+                : new RuntimeException("Failed to close " + RabbitMqDomainEventLevelBootstrap.class.getSimpleName(), e);
+        if (first == null) {
+            return wrapped;
+        }
+        first.addSuppressed(wrapped);
+        return first;
     }
 
     public static void main(String[] args) throws Exception {
