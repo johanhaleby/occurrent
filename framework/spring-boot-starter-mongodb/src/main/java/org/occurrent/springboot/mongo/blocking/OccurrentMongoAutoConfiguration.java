@@ -224,6 +224,17 @@ public class OccurrentMongoAutoConfiguration<E> {
         return strategy;
     }
 
+    /**
+     * The {@link ComposedDefaultStartPosition} bean {@link #occurrentCompetingDurableSubscriptionModel} fills. A
+     * plain {@code @Bean} rather than {@code @ConditionalOnMissingBean}: an application has no reason to supply its
+     * own, since nothing public composes this stack's default subscription model outside this configuration, and
+     * the one caller that fills it is right below.
+     */
+    @Bean
+    public ComposedDefaultStartPosition occurrentComposedDefaultStartPosition() {
+        return new ComposedDefaultStartPosition();
+    }
+
     // @Primary so that a Subscribable injection point (for example the asynchronous subscription DSLs) resolves to
     // this asynchronous model rather than the register-only SynchronousSubscriptionModel, which is also a Subscribable.
     // Named rather than inferred because under SubscriptionMode.MANUAL the bean is a wrapper, and the @PreDestroy on
@@ -240,7 +251,13 @@ public class OccurrentMongoAutoConfiguration<E> {
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public SubscriptionModel occurrentCompetingDurableSubscriptionModel(MongoTemplate mongoTemplate, CheckpointStorage storage,
                                                                         OccurrentProperties occurrentProperties, EventStoreQueries eventStoreQueries, ObjectProvider<DcbEventStore> dcbEventStore,
-                                                                        ObjectProvider<CompetingConsumerStrategy> competingConsumerStrategyProvider, Environment environment) {
+                                                                        ObjectProvider<CompetingConsumerStrategy> competingConsumerStrategyProvider, Environment environment,
+                                                                        ComposedDefaultStartPosition composedDefaultStartPosition) {
+        // A default StartAt resolves to StartAt.subscriptionModelDefault() (see StartPositionSupport), which every
+        // shape this method composes (durable alone, or wrapped in stream/DCB/dual catch-up) classifies as live, the
+        // same as a checkpoint that is neither global nor time-based, so a wiped checkpoint changes nothing for it
+        // either (ADR 132 decision 7, issue 865).
+        composedDefaultStartPosition.defaultBypassesCatchup();
         // Resolved through the provider rather than taken as a parameter of its own, so several strategy beans with no
         // @Primary fail with the message that names the remedy instead of Spring's report of an unsatisfied parameter.
         // The strategy is forced here either way, since this model holds one for the life of the bean.

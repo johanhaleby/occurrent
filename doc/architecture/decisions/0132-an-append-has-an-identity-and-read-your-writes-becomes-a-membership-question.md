@@ -332,9 +332,11 @@ There is no clear at startup. An application that restarts with its checkpoint i
 records, which is correct because the read model is intact too, and both catch-up models classify a checkpoint that
 is neither global nor time-based as live. An application that restarts with a wiped checkpoint replays, and either
 the per-delivery check or the poll observes it, but only for a projection that declared a replaying start position
-(`startAt = BEGINNING`, or a global position of at least zero). The default start position bypasses the catch-up
-layer unconditionally. The checkpoint is never consulted, so wiping it changes nothing, and such a projection never
-replays and so never clears its own records on a rebuild.
+(`startAt = BEGINNING`, or a global position of at least zero). On Occurrent's own shipped composition, the default
+start position bypasses the catch-up layer unconditionally. The checkpoint is never consulted there, so wiping it
+changes nothing, and such a projection never replays and so never clears its own records on a rebuild. A custom
+composition's own default behavior is its own to declare, not something this framework can verify, so the same
+claim does not automatically extend to one.
 
 The alternative was a per-run key, an epoch or incarnation value that would make a rebuilt projection read a
 different set of records than its predecessor. It is the mechanism that could tell "this projection was rebuilt"
@@ -468,9 +470,10 @@ separately.
 
 - Read-your-writes answers for appends a projection applied since its last reset. A restart with an intact
   checkpoint is not a reset, so ordinary restarts, failovers and scale-outs cost nothing. A reset only happens
-  through a replay the projection's own configuration can actually perform. The default start position never
-  replays, so a projection left there never resets on a rebuild, and the operator step decision 9 prescribes is
-  what a wiped or rebuilt read model needs instead.
+  through a replay the projection's own configuration can actually perform. On Occurrent's own shipped composition
+  the default start position never replays, so a projection left there never resets on a rebuild, and the operator
+  step decision 9 prescribes is what a wiped or rebuilt read model needs instead. A custom composition's own default
+  behavior is its own to declare, so a startup warning naming this only fires where that behavior is actually known.
 - After a reset, waits for appends applied before it time out, because no replay writes a cleared record again and
   replay deliveries record nothing. The exception is a live redelivery of a pre-reset event, which records its
   identifier again like any other live event, so a broker that redelivers can bring one back. Any replay is a
