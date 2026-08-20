@@ -247,7 +247,7 @@ jobs:
           # event store and subscription model, so they need no container and cost almost nothing. `testing/mongodb`
           # is named separately in mongodb-native rather than riding along, because it does start a container. The
           # leaves are listed one by one for that reason, since the bare `testing` prefix would pull it back in here.
-          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck testing/junit-jupiter-blocking testing/junit-jupiter-reactor testing/spring-boot test-support broker/api/blocking broker/rabbitmq/blocking" }
+          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck testing/junit-jupiter-blocking testing/junit-jupiter-reactor testing/spring-boot test-support broker/api/blocking broker/rabbitmq/blocking broker/kafka/blocking" }
           # example modules run real MongoDB replica-set containers with timing-sensitive
           # Awaitility subscription-catchup tests. A single example shard started 12 containers
           # sequentially on one runner, which tipped those waits over. Split by container load

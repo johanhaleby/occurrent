@@ -34,6 +34,13 @@
             <artifactId>occurrent-subscription-core</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Filter and Condition appear directly in EventTypeNarrowing's own public API and its filter-tree walk,
+             so it's declared rather than left to arrive transitively through occurrent-subscription-core. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-filter</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <!-- Subscription appears directly in this module's own public API (the return type of every forward(...)
              method), so it's declared rather than left to arrive transitively through the durable module below. -->
         <dependency>
@@ -67,6 +74,11 @@
             <artifactId>jspecify</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- EventTypeNarrowing logs a warning through this directly, and nothing else in the module pulls it in. -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
 
         <!-- Test -->
         <dependency>
@@ -88,6 +100,11 @@
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

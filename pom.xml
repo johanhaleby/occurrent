@@ -130,6 +130,11 @@
                 <version>5.21.0</version>
             </dependency>
             <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>kafka-clients</artifactId>
+                <version>4.1.0</version>
+            </dependency>
+            <dependency>
                 <groupId>jakarta.annotation</groupId>
                 <artifactId>jakarta.annotation-api</artifactId>
                 <version>2.1.1</version>
@@ -468,6 +473,7 @@
                     <systemPropertyVariables>
                         <test.mongo.version>${integration-tests.mongo.version}</test.mongo.version>
                         <test.rabbitmq.version>${integration-tests.rabbitmq.version}</test.rabbitmq.version>
+                        <test.kafka.version>${integration-tests.kafka.version}</test.kafka.version>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>
@@ -568,6 +574,7 @@
                                 <excludeArtifact>application-service</excludeArtifact>
                                 <excludeArtifact>application</excludeArtifact>
                                 <excludeArtifact>broker-api</excludeArtifact>
+                                <excludeArtifact>broker-kafka</excludeArtifact>
                                 <excludeArtifact>broker-rabbitmq</excludeArtifact>
                                 <excludeArtifact>broker</excludeArtifact>
                                 <excludeArtifact>cloudevent-converter</excludeArtifact>

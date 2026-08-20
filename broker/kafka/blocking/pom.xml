@@ -18,15 +18,13 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>broker-rabbitmq</artifactId>
+        <artifactId>broker-kafka</artifactId>
         <groupId>org.occurrent</groupId>
         <version>${revision}</version>
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>occurrent-broker-rabbitmq-blocking</artifactId>
-
-    <name>${mavenProjectName}</name>
+    <artifactId>occurrent-broker-kafka-blocking</artifactId>
 
     <dependencies>
         <dependency>
@@ -39,7 +37,7 @@
             <artifactId>occurrent-cloudevent-type-mapper-api</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- CloudEventConverter appears directly in this module's own public API (RabbitMqDomainEventSink.using(...)),
+        <!-- CloudEventConverter appears directly in this module's own public API (KafkaDomainEventSink.using(...)),
              so it's declared rather than left to arrive transitively through occurrent-broker-api-blocking. -->
         <dependency>
             <groupId>org.occurrent</groupId>
@@ -54,8 +52,9 @@
             <artifactId>occurrent-subscription-core</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- EventMetadata appears directly in this module's own public API (RabbitMqDomainEventSink#publish), so
-             it's declared rather than left to arrive transitively through occurrent-broker-api-blocking. -->
+        <!-- EventMetadata appears directly in this module's own public API (KafkaDomainEventSink#publish) and the
+             resolver reads the streamid extension off a CloudEvent for keying, so it's declared rather than left
+             to arrive transitively through occurrent-broker-api-blocking. -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-cloudevents-extension</artifactId>
@@ -66,29 +65,16 @@
             <artifactId>occurrent-retry</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- RabbitMqCloudEventBridge holds a PushSubscriptionModel and reads the RoutingOutcome its PushObserver
-             reports, per ADR 133 decision 1. -->
         <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-subscription-push-blocking</artifactId>
-            <version>${project.version}</version>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
         </dependency>
-        <!-- RabbitMqDomainEventBridge holds a DomainEventFeed and calls its acceptCloudEvent(...), per ADR 133
-             decision 5. -->
+        <!-- The CloudEvents Kafka binary binding writer, so this module writes the same ce_-prefixed headers a
+             consumer built on cloudevents-kafka expects, instead of inventing its own mapping the way the
+             RabbitMQ module has to (there is no CloudEvents binding for AMQP 0-9-1). -->
         <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-projection-dsl-blocking</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>com.rabbitmq</groupId>
-            <artifactId>amqp-client</artifactId>
-        </dependency>
-        <!-- The bridges log a delivery failure action and a failed topology reconciliation. Declared directly
-             rather than relied on as a transitive of occurrent-subscription-push-blocking. -->
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
+            <groupId>io.cloudevents</groupId>
+            <artifactId>cloudevents-kafka</artifactId>
         </dependency>
         <!-- CloudEvent appears directly in this module's own public API (CloudEventSink, DestinationResolver), so
              it's declared rather than left to arrive transitively. -->
@@ -96,7 +82,7 @@
             <groupId>io.cloudevents</groupId>
             <artifactId>cloudevents-api</artifactId>
         </dependency>
-        <!-- RabbitMqDomainEventSink#publish(EventMetadata, E) builds a fresh CloudEvent to stamp the supplied
+        <!-- KafkaDomainEventSink#publish(EventMetadata, E) builds a fresh CloudEvent to stamp the supplied
              metadata onto, which needs the SDK's builder implementation rather than only its interfaces. -->
         <dependency>
             <groupId>io.cloudevents</groupId>
@@ -107,12 +93,17 @@
             <artifactId>jspecify</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- KafkaCloudEventSink.Builder#build() logs a warning through this directly, rather than relying on the
+             transitive kafka-clients already pulls in. -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
 
         <!-- Test -->
-        <!-- The walk that once lived here moved into EventTypeNarrowing's own module, so nothing in this
-             module's main code touches Filter or Condition any more. RabbitMqTopicExchangeDestinationResolverTest
-             still builds Filter/Condition instances directly to exercise that resolver's destinationsFor, so this
-             stays a test-scope dependency rather than being dropped. -->
+        <!-- KafkaTopicPerTypeDestinationResolverTest and KafkaSharedTopicDestinationResolverTest build Filter and
+             Condition instances directly to exercise destinationsFor, but nothing in this module's main code
+             touches either, so it's declared test-scope rather than left to arrive transitively. -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-filter</artifactId>
@@ -147,7 +138,7 @@
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>testcontainers-rabbitmq</artifactId>
+            <artifactId>testcontainers-kafka</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -158,20 +149,6 @@
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <!-- The bridge tests wait on asynchronous consumer delivery and the coarse lifecycle poll. -->
-        <dependency>
-            <groupId>org.awaitility</groupId>
-            <artifactId>awaitility</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <!-- A trivial PositionOrderedReader for the domain bridge tests' DomainEventFeed, which never actually
-             replays in these tests (they only feed acceptCloudEvent(...)), so an in-memory store is enough. -->
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-eventstore-inmemory</artifactId>
-            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

@@ -118,6 +118,11 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-broker-kafka-blocking</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>occurrent-broker-rabbitmq-blocking</artifactId>
                 <version>${project.version}</version>
             </dependency>
