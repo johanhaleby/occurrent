@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 83
+revision: 84
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -171,16 +171,16 @@ units:
   U6:
     issue: 417
     goal: "Kafka consume bridge: poll, reconstruct, Pushable.accept/DomainEventFeed, offset-commit-after-accept, topics from destinationsFor(filter), ordering caveats documented prominently; folds changelog"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U5, U11]
     session: null
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: issue_closed, ref: 417, met: false, evidence: null}
+      - {check: pr_merged, ref: 874, met: true, evidence: "squash 514faf462, CAS pin 1fff7dbb6 matched, tip==pin before branch delete"}
+      - {check: issue_closed, ref: 417, met: true, evidence: "closed with pointer comment after merge (PR body lacked a closing keyword)"}
     blocking_on: []
-    next_action: "GATE SEQUENCE STARTED 2026-08-20T~19:2xZ. Round 7 pushed at 1fff7dbb6, CI green, round-8 review clean above the bar: zero new comments, zero unresolved threads, three suppressed findings CARRIED TO U9 per the stop rule (the permanent stop's final commit can retry a coordinator outage unboundedly before the departure flags set, narrowing the immediate-departure promise in an outage window, consider softening that javadoc there too; and the poison backoff is skipped whenever another partition staged an offset, per-partition pause suggested, both bridges). Focused re-verify dispatched to the standing verifier: harnesses re-run against 1fff7dbb6 exactly (UnguardedLoop, Rewind, persistentCommitFailure, CloseFromHandler, Behaviour) plus the corrected javadoc sentences. On MERGE-SAFE: full gate facts, squash message through the writing gates, CAS merge pinned to 1fff7dbb6, then the completion routine derives U8 and U10 READY and dispatches both as subagents under Unattended. PRIOR: ROUND 7 ROUTED 2026-08-20T~19:3xZ. Round 6 pushed at 663f2619a, CI green, review clean except ONE suppressed finding routed as round 7: the permanent self-stop closes only the consumer, leaking the internally created parking producer, fix is closing failureAction in loop teardown with the existing per-resource discipline, both bridges checked, tested. Worker also told to deliver the three harness outputs proving the round-6 restructure (UnguardedLoopHarness b0/b1 handled, RewindHarness pass, persistentCommitFailure forward progress), which are the gate evidence. GATE PLAN on the next clean pass: re-run the verifier's harnesses against the final head via the still-alive verifier agent as a focused re-verify, then the full gate and CAS merge. PRIOR: VERIFIER RETURNED NOT MERGE-SAFE 2026-08-20T~18:5xZ, round 6 routed on its report. Demonstrated silent-hazard: the rewind wraps only the commit call, so a RuntimeException from the per-record loop (seeks included) escapes to the catch-all which polls from already-advanced positions, losing records on partitions the loop never reached (harness showed b0/b1 fetched, never delivered, committed past). Structural correction to round 4: on a pure commit failure the rewind has NO safety value (positions only ever sit past handled records) and converts persistent commit failure into an unbounded duplicate loop (220 vs 4 deliveries measured). The fix routes as one restructure: rewind guards the record loop, commit failure continues without rewind, comment justification corrected, proven with the verifier's own harnesses red-then-green. Also routed: two false javadoc sentences claiming delivery.timeout.ms bounds an accepted send from send() start (it runs from send() return, duplicate park remains possible); close() mid-batch destroys the batch commit via WakeupException in commitSync (fix or documented decline); poison-record spin with no backoff; the sink pattern-refusal hoist folded from the U9 carry. Verifier CONFIRMED claims a b d e f g h j, the LEAVE_GROUP static-member departure against shipped bytecode, the mapper Long and empty-data corrections against the real reader, and produced the red round 4 could not (rewind-removed fails its harness). U9 notes: CloudEvent bridge consumes during catch-up into the handover buffer, pre-existing and safe via store replay. PRIOR: ADVERSARIAL VERIFY DISPATCHED 2026-08-20T~18:0xZ (Opus, isolated worktree, pinned to 2d0e95259) after the round-6 review passed the stop rule: no new comments, zero unresolved threads, two suppressed findings both below the bar and CARRIED TO U9 (the sink validates pattern destinations inside executeWithRetry so a broad caller strategy can spin on the refusal instead of failing fast, and the park attempt can still exceed its budget in the background because delivery.timeout.ms only bounds after send() returns, a duplicate-park window). Verifier mandates: the escaped-commit rewind proven red-vs-green with a MockConsumer harness against shipped and rewind-removed code, the park-bound deduction checked algebraically and by harness including whether any prose overclaims the background send, then free attack across the close paths, LEAVE_GROUP static departure, wakeup semantics, mapper Long restoration and topicIsPattern publish reachability. On MERGE-SAFE: the gate. PRIOR: ROUND 5 DONE 2026-08-20T~17:4xZ, head 2d0e95259, parked on CI and review."
+    next_action: "DONE 2026-08-20T~19:5xZ. PR 874 CAS-merged as 514faf462 pinned to 1fff7dbb6 after seven worker rounds, two adversarial verify passes, and a clean gate (4/4 green on the exact head, zero unresolved threads, three below-bar suppressed findings carried to U9). The re-verify returned MERGE-SAFE with a rebuilt clean instrument after catching the worker's in-place edit of the shared harness predicate (vacuous whole-run check), the lesson is in lessons.md: hand workers a COPY of a verification harness, never the verifier's tree. U9 carries from U6: permanent-stop final commit can retry a coordinator outage unboundedly before departure flags set (soften or fix the immediate-departure javadoc); poison backoff skipped when another partition stages offsets (per-partition pause); the three substantive correctness fixes (record-loop rewind, commit-failure no-rewind, close-commit preservation) have no in-repo regression test for want of a consumer injection seam, worth an issue; WakeupException commit retry runs bare outside the retry strategy and can block close up to default.api.timeout.ms; sink pattern-refusal sits inside executeWithRetry (fixed in round 6, verify held). Branch deleted on tip==pin"
     last_meaningful_progress_at: 2026-08-18T04:44:26Z
     observed: {}
     assessment: "Sonnet/high chip. @KafkaSaga comment is future-module inspiration, out of remit."
@@ -203,7 +203,7 @@ units:
   U8:
     issue: 421
     goal: "Held docs branch in occurrent-org.github.io: six mandated sub-topics incl. Kafka ordering; addedTags per new heading; merge-order registration; AGENTS.md:91 late-joiner check; news-post coordination with r34's docs/0.34.0-release-notes"
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U3, U4, U5, U6, U7]
@@ -212,14 +212,14 @@ units:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: "held docs branch, base and name fixed at dispatch", met: false, evidence: null}
       - {check: manual_approval, ref: "review-clean, registered in the release merge order, rebased, addedTags present, late-joiner check done", met: false, evidence: null}
     blocking_on: []
-    next_action: "BASE IDENTIFIED AHEAD OF DISPATCH 2026-08-19T~08:0xZ by enumerating the docs repo: docs/802-push-observation-hook (held PR 69, 'Document the PushObserver hook on PushSubscriptionModel'), the only held branch documenting the push surface; the other four held branches are release notes, saga join removal, mongodb config keys and flow saga stepWindow, none of them push. U8 bases there, never docs main. MANDATORY EXTRA SCOPE, brk's own regression to repair: that branch documents PushObserver with the pre-U11 BOOLEAN contract, a lambda (cloudEvent, matched) -> { if (!matched) ... } plus prose about the match check and 'whether a subscription matched it', while the shipped interface after PR 850 is void observe(CloudEvent, RoutingOutcome) with DELIVERED, FILTERED and NOT_DELIVERABLE. The example does not compile against 0.34.0's own API and the branch is held for that very release, so U8 corrects it in the same branch it bases on, including the two reactor-side and feed-side paragraphs that lean on the boolean reading. r34 authored that branch but its epic is complete and its held PRs are Johan's release-day acts, so ownership sits with brk, which caused the break"
+    next_action: "DISPATCHED 2026-08-20T~19:5xZ as an isolated worktree subagent (Sonnet, Unattended vehicle per the Mode line), claim comment 5360573165 plus in-progress label on #421. Brief carries the base branch docs/802-push-observation-hook explicitly, the mandatory PushObserver boolean-to-RoutingOutcome repair, fresh clone never the shared checkout, the six mandated sub-topics grounded in shipped code and ADR 0133, NO starter section (U10 delivers that as a follow-up), kramdown writing gates, held-PR mechanics stacked on PR 69. PRIOR: BASE IDENTIFIED AHEAD OF DISPATCH 2026-08-19T~08:0xZ by enumerating the docs repo: docs/802-push-observation-hook (held PR 69, 'Document the PushObserver hook on PushSubscriptionModel'), the only held branch documenting the push surface; the other four held branches are release notes, saga join removal, mongodb config keys and flow saga stepWindow, none of them push. U8 bases there, never docs main. MANDATORY EXTRA SCOPE, brk's own regression to repair: that branch documents PushObserver with the pre-U11 BOOLEAN contract, a lambda (cloudEvent, matched) -> { if (!matched) ... } plus prose about the match check and 'whether a subscription matched it', while the shipped interface after PR 850 is void observe(CloudEvent, RoutingOutcome) with DELIVERED, FILTERED and NOT_DELIVERABLE. The example does not compile against 0.34.0's own API and the branch is held for that very release, so U8 corrects it in the same branch it bases on, including the two reactor-side and feed-side paragraphs that lean on the boolean reading. r34 authored that branch but its epic is complete and its held PRs are Johan's release-day acts, so ownership sits with brk, which caused the break"
     last_meaningful_progress_at: 2026-08-18T04:44:26Z
     observed: {}
     assessment: "Sonnet/medium chip. Depends on both transport tracks because the mandated scope includes Kafka partitioning/ordering, wider than the issue's explicit #414/#415/#419 line, deliberate. Docs-repo merges are Johan's. Maintainer declined community offers pending modules; that hold dissolves once U7 lands."
   U10:
     issue: 846
     goal: "Spring Boot auto-configuration for the broker modules: property-driven sinks and bridges for both transports, conditional-on-classpath split, starter conventions per #409/ADR 0072; extends the held docs branch with the starter wiring section, coordinated with U8"
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U4, U6]
@@ -228,7 +228,7 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 846, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch after U4 and U6 merge"
+    next_action: "DISPATCHED 2026-08-20T~19:5xZ as an isolated worktree subagent (Sonnet, Unattended vehicle per the Mode line), claim comment 5360572713 plus in-progress label on #846. Plan-first with plan_approval_venue orchestrator: first stop is the plan gate (module placement, property schema derived from the real hand-wiring experience, conditional-on-classpath split). Base origin/main with an explicit ancestor check on 514faf462. Starter-wiring docs section is part of its delivery, routed to U8's branch as a follow-up. PRIOR: Dispatch after U4 and U6 merge"
     last_meaningful_progress_at: 2026-08-18T05:18:00Z
     observed: {}
     assessment: "Adopted on Johan's ruling at the U1 design gate 2026-08-18 (own issue, in the 0.34.0 milestone, adopted by an orchestrator). Sonnet/high chip. @RabbitSaga/@KafkaSaga stay out of scope, a later layer."
