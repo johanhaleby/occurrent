@@ -113,6 +113,34 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         assertThat(warnings()).isEmpty();
     }
 
+    @Test
+    void a_composition_whose_replay_awareness_cannot_be_read_gets_exactly_one_warning_not_two() {
+        // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one): resolveEventStorePhase
+        // already warns that it cannot tell whether this composition replays. warnIfRecordingNeverResets must not
+        // also fire and claim the composition never replays, since it might genuinely be replaying and this
+        // registrar simply cannot say so.
+        Subscribable model = mock(Subscribable.class);
+        doReturn(java.util.Optional.empty()).when(model).capability(ReplayAwareSubscriptions.class);
+        Subscription subscription = mock(Subscription.class);
+        when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
+        when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(subscription);
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("defaultStartPositionProjection", DefaultStartPositionProjection.class, DefaultStartPositionProjection::new)
+                .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
+                .withBean("subscribable", Subscribable.class, () -> model)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).hasSize(1);
+                    assertThat(warnings().get(0).getFormattedMessage())
+                            .contains("does not expose")
+                            .doesNotContain("its resolved start position or composition never replays");
+                });
+    }
+
     private <P> void runWith(Class<P> projectionType, String beanName, java.util.function.Supplier<P> projectionFactory) {
         Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         // capability(...) is a default method, so a plain mock does not run its real instanceof check and must be

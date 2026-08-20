@@ -111,6 +111,28 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         assertThat(warnings()).isEmpty();
     }
 
+    @Test
+    void a_composition_whose_replay_awareness_cannot_be_read_does_not_warn_that_it_never_replays() {
+        // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one): it might
+        // genuinely be replaying, this registrar just cannot tell, so warnIfRecordingNeverResets must not claim it
+        // never replays.
+        Subscribable model = mock(Subscribable.class);
+        doReturn(java.util.Optional.empty()).when(model).capability(ReplayAwareSubscriptions.class);
+        when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(mock(Subscription.class));
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("defaultStartPositionProjection", DefaultStartPositionProjection.class, DefaultStartPositionProjection::new)
+                .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
+                .withBean(Subscriptions.class, () -> new Subscriptions<>(model, testEventConverter()))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).isEmpty();
+                });
+    }
+
     private <P> void runWith(Class<P> projectionType, String beanName, java.util.function.Supplier<P> projectionFactory) {
         Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         // capability(...) is a default method, so a plain mock does not run its real instanceof check and must be

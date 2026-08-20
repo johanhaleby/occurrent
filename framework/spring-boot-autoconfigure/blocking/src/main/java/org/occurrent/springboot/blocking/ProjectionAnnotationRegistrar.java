@@ -257,14 +257,19 @@ class ProjectionAnnotationRegistrar {
 
     // What a recording projection asks to learn whether it is replaying, and whether the scheduled poll can
     // usefully ask the same question (ADR 132 decision 7): never for a phase that can only ever answer live.
-    private record RecordingPhase(ReplayPhase phase, boolean registerWithPoll) {
+    // replayAwarenessUnknown is true when the composition simply could not say (no ReplayAwareSubscriptions found),
+    // as opposed to a composition that definitively has no catch-up layer or was never asked to use the one it has.
+    private record RecordingPhase(ReplayPhase phase, boolean registerWithPoll, boolean replayAwarenessUnknown) {
     }
 
     // ADR 132 decision 9's third case: a composition that can replay and can report its phase, but is wired so it
     // is never asked to (the resolved start position never replays, or the composition has no catch-up layer at
     // all). Recording still proceeds, since decision 9 allows it, but nothing ever clears it automatically.
-    private void warnIfRecordingNeverResets(String id, boolean recordAppliedAppends, boolean canReplay) {
-        if (recordAppliedAppends && !canReplay) {
+    // replayAwarenessUnknown is true only for a composition whose replay phase could not be read at all (a custom
+    // or third-party subscription model), where recording proceeds unprotected but this registrar cannot claim the
+    // composition never replays, since it might genuinely be replaying and simply cannot say so.
+    private void warnIfRecordingNeverResets(String id, boolean recordAppliedAppends, boolean canReplay, boolean replayAwarenessUnknown) {
+        if (recordAppliedAppends && !canReplay && !replayAwarenessUnknown) {
             log.warn(AppliedAppendRecordingRegistry.recordAppliedAppendsNeverResetsAutomatically(id));
         }
     }
@@ -276,7 +281,7 @@ class ProjectionAnnotationRegistrar {
     private RecordingPhase asynchronousSubscribablePhase(String id, SubscriptionModelCapability capability) {
         Optional<ReplayAwareSubscriptions> replayAware = ReplayAwareSubscriptions.findIn(capability);
         ReplayPhase phase = replayAware.<ReplayPhase>map(r -> () -> r.isCatchingUp(id)).orElseGet(ReplayPhase::neverReplays);
-        return new RecordingPhase(phase, replayAware.isPresent());
+        return new RecordingPhase(phase, replayAware.isPresent(), replayAware.isEmpty());
     }
 
     // Wraps materializedView in the applied-append recorder when the annotation asks for it, resolving the phase
@@ -290,7 +295,7 @@ class ProjectionAnnotationRegistrar {
             return materializedView;
         }
         RecordingPhase recording = asynchronousSubscribablePhase(id, capability);
-        warnIfRecordingNeverResets(id, true, replaysHistory && recording.registerWithPoll());
+        warnIfRecordingNeverResets(id, true, replaysHistory && recording.registerWithPoll(), recording.replayAwarenessUnknown());
         return wrapForRecording(annotation, id, materializedView, recording.phase(), recording.registerWithPoll());
     }
 
@@ -545,7 +550,7 @@ class ProjectionAnnotationRegistrar {
         }
         // Registers with the poll only when catchesUp: catchup = NONE never replays, so neverReplays() answers live
         // for good and a poll asking it repeatedly would find out nothing a single check would not.
-        warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), catchesUp);
+        warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), catchesUp, false);
         MaterializedView<E> materializedView = wrapForRecording(annotation, id, resolvedView, phase, catchesUp);
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ProjectionRunner<E> runner = stream ? ProjectionRunner.stream(subscribable, converter) : ProjectionRunner.agnostic(subscribable, converter);
@@ -614,7 +619,7 @@ class ProjectionAnnotationRegistrar {
         // replay lifecycle below, not the ReplayPhase wrapForRecording is given), so warnIfRecordingNeverResets
         // needs it before the view is wrapped.
         boolean catchesUp = annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;
-        warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), catchesUp);
+        warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), catchesUp, false);
         // Never registers with the poll: a domain feed's own ReplayAware lifecycle (forwarded to the recording
         // wrapper through CatchupProjectionFeed's instanceof probe) is this composition's only replay signal, so
         // neverReplays() is correct for the phase a poll would otherwise ask (ADR 132 decisions 8 and 12).
