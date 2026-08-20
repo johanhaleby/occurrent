@@ -36,9 +36,10 @@ import static java.util.Objects.requireNonNull;
  * {@code destinationsFor}.
  *
  * @param topic   The topic to publish to, or the topic name or pattern to bind against.
- * @param key     The message key, or {@code null} for none. {@code KafkaTopicPerTypeDestinationResolver} keys by
- *                the event's stream id and leaves this {@code null} when the event has none, which is why the
- *                component is nullable rather than defaulted to some other value.
+ * @param key     The message key, or {@code null} for none. Both shipped resolvers, {@code KafkaSharedTopicDestinationResolver}
+ *                and {@code KafkaTopicPerTypeDestinationResolver}, key by the event's stream id and leave this
+ *                {@code null} when the event has none, which is why the component is nullable rather than
+ *                defaulted to some other value.
  * @param headers Application headers to carry on the message, never {@code null} and empty rather than absent when
  *                there are none. No key may equal {@value #CONTENT_TYPE_HEADER} or start with
  *                {@value #HEADER_PREFIX}, the namespace the CloudEvents Kafka binary binding

@@ -698,3 +698,42 @@ shipped in a release before this PR, so there is no already-deployed message thi
 is natively either `null` or a zero-length `byte[]`, two states the wire itself already tells apart, so
 `cloudevents-kafka`'s binary writer does not need a marker header the way this mapping does to make up for AMQP's
 body having no way to be absent at all.
+
+## Amendment (2026-08-20): the default Kafka resolver is a shared topic, not one topic per type
+
+Decision 7's keying paragraph says a projection reading one stream needs that stream's events in order, and that
+stream-id keying delivers it, but it never names which topic or topics the keyed messages land on. The module that
+implemented decision 7 filled that gap with one topic per cloud event type, a choice #416's issue and the epic plan
+that built this module made, not something this ADR ever decided. That combination defeats decision 7's own stated
+purpose for the case an event-sourced stream mixing event types is built around. Two events of the same stream but
+different types are keyed identically, yet a topic-per-type resolver sends them to different topics entirely, so
+they were never on the same partition to begin with regardless of the key. `KafkaTopicPerTypeDestinationResolver`'s
+own javadoc was corrected earlier on this PR to state that narrower guarantee honestly, ordering within one stream
+and type pair rather than within a whole stream.
+
+A narrower documented guarantee is not the same thing as the right default. `AGENTS.md`'s isolation rule already
+makes the same point for a different mechanism, that a loss window narrow, documented and warn-logged is still a
+loss, and that a change narrowing one is a step on a recorded path to closing it, never the accepted end state. An
+application built against decision 7's own stated purpose, one stream in order, silently gets a weaker guarantee
+for a stream that is not single-typed, discoverable only by reading a resolver's javadoc rather than by anything
+failing. Making that honest was the right fix to land immediately, but it was never the fix for the topology
+choice underneath it.
+
+The two topologies are also asymmetric in how expensive it is to change your mind later. Shipping a shared topic as
+the default now, with topic-per-type kept as a documented opt-in, is additive. A deployment that wants per-type
+topics for retention or independent consumer scaling still gets them, by choosing that resolver explicitly.
+Shipping topic-per-type as the default and correcting it later is a breaking behavioural change for any deployment
+that has already created per-type topics and pointed consumers at them, since undoing it is a topology migration,
+not a code change on top of the same data.
+
+Johan delegated the choice with "do what's best long-term according to the principles of `AGENTS.md`," and the
+derivation above is that ruling. `KafkaSharedTopicDestinationResolver` is the new shipped default.
+`KafkaCloudEventSink` and `KafkaDomainEventSink`'s own documentation leads with it. It publishes every event to
+one topic given to its constructor, no default name invented, the same reasoning this decision already gives for
+refusing a parking bridge with no `parkingDestination` of its own, that a default destination name is precisely
+the thing an operator has to know. It keys by stream id when present and `null` otherwise, unchanged from what
+decision 7 already specifies. Its `destinationsFor` returns that one topic regardless of the filter it is asked
+to narrow, since with a single topic narrowing has nothing left to do and decision 5's rule that the feed remains
+the decider already covers the rest. `KafkaTopicPerTypeDestinationResolver` stays exactly as it is, unchanged in
+behaviour, the documented alternative for a deployment that wants per-type topics and either has single-type
+streams or accepts the narrower guarantee.

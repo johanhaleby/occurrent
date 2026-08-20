@@ -34,6 +34,7 @@ import org.testcontainers.kafka.KafkaContainer;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -96,6 +97,27 @@ public abstract class KafkaTestSupport {
         Header header = record.headers().lastHeader(key);
         assertThat(header).as("header \"" + key + "\"").isNotNull();
         return new String(header.value(), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Polls {@code recordTopic} with a fresh, uniquely-grouped consumer starting from the earliest offset, and
+     * asserts exactly {@code count} records are already there, in the order the broker returns them. Unlike
+     * {@link #consumeOneRecord(String)}, meant for a topic more than one record can land on, {@code count} greater
+     * than one included.
+     */
+    protected List<ConsumerRecord<String, byte[]>> consumeRecords(String recordTopic, int count) {
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, "test-consumer-" + recordTopic,
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        try (KafkaConsumer<String, byte[]> consumer = new KafkaConsumer<>(consumerConfig, new StringDeserializer(), new ByteArrayDeserializer())) {
+            consumer.subscribe(List.of(recordTopic));
+            ConsumerRecords<String, byte[]> records = consumer.poll(Duration.ofSeconds(10));
+            assertThat(records.count()).as("exactly " + count + " record(s) should already be on \"" + recordTopic + "\"").isEqualTo(count);
+            List<ConsumerRecord<String, byte[]>> result = new ArrayList<>();
+            records.forEach(result::add);
+            return result;
+        }
     }
 
     /**

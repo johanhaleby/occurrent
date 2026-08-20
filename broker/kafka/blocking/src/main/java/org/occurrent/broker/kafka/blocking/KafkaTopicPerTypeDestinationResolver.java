@@ -17,11 +17,9 @@
 package org.occurrent.broker.kafka.blocking;
 
 import io.cloudevents.CloudEvent;
-import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.api.blocking.EventTypeNarrowing;
-import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.subscription.SubscriptionFilter;
 
 import java.util.Optional;
@@ -30,11 +28,17 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.broker.kafka.blocking.KafkaDestinations.MAX_TOPIC_NAME_LENGTH;
+import static org.occurrent.broker.kafka.blocking.KafkaDestinations.isLegalTopicName;
+import static org.occurrent.broker.kafka.blocking.KafkaDestinations.streamIdOf;
 
 /**
- * The shipped {@link DestinationResolver} for Kafka: one topic per cloud event type, the topic name derived from
- * {@code topicPrefix} plus the type through a {@link CloudEventTypeMapper}, the same mapper an application already
- * uses to convert between a domain class and its cloud event type. Give it the exact mapper instance backing your
+ * The opt-in per-type {@link DestinationResolver} for Kafka, one topic per cloud event type, the topic name derived
+ * from {@code topicPrefix} plus the type through a {@link CloudEventTypeMapper}, the same mapper an application
+ * already uses to convert between a domain class and its cloud event type. {@link KafkaSharedTopicDestinationResolver}
+ * is the shipped default. Reach for this one instead when per-type topics buy something a shared topic cannot,
+ * retention tuned per type or independent consumer scaling per type, and either your streams carry a single event
+ * type each or you accept the narrower ordering guarantee below. Give it the exact mapper instance backing your
  * {@code CloudEventConverter}, so a publisher and a consumer agree by reading one mapping rather than by matching
  * two hand written strings.
  * <p>
@@ -49,16 +53,14 @@ import static java.util.Objects.requireNonNull;
  * stream go to two different topics and were never on the same partition to begin with. A projection or saga
  * reading a stream that carries only one event type gets full ordering this way. One reading a stream that mixes
  * several types does not, and has to tolerate or otherwise account for that, since this resolver's topology cannot
- * deliver it. The alternative this resolver actually offers by falling back to it, a {@code null} key, spreads
- * records across every partition instead and lets the topic's full partition count carry the throughput, at the
- * cost of giving up ordering entirely, even within one stream and type. A single fixed key used for every message
- * is neither alternative and is not what a caller wanting spread should reach for. Kafka hashes one key to exactly
- * one partition, so a fixed key sends every message on one topic, meaning every stream's events of that one type,
- * to the same partition, trading that topic's throughput away for order across every stream of that one type,
- * still not across types. Occurrent picks stream-id keying as the shipped default because a projection or saga
- * reading one single-typed stream is the common case this library is built around, but this is a topology choice
- * your deployment makes, not a fact about Kafka, and an application whose streams mix event types it needs ordered
- * against each other, or that wants a different tradeoff altogether, replaces this resolver with one of its own.
+ * deliver it, which is exactly why {@link KafkaSharedTopicDestinationResolver} is the default instead. The
+ * alternative this resolver actually offers by falling back to it, a {@code null} key, spreads records across
+ * every partition instead and lets the topic's full partition count carry the throughput, at the cost of giving up
+ * ordering entirely, even within one stream and type. A single fixed key used for every message is neither
+ * alternative and is not what a caller wanting spread should reach for. Kafka hashes one key to exactly one
+ * partition, so a fixed key sends every message on one topic, meaning every stream's events of that one type, to
+ * the same partition, trading that topic's throughput away for order across every stream of that one type, still
+ * not across types.
  * <p>
  * Both {@link #destinationFor(CloudEvent)} and {@link #destinationsFor(SubscriptionFilter)} round-trip the cloud
  * event type through {@code topicMapper}, {@code getCloudEventType(getDomainEventType(type))}, rather than trusting
@@ -67,19 +69,6 @@ import static java.util.Objects.requireNonNull;
  * than a signal to fall back on some default routing.
  */
 public final class KafkaTopicPerTypeDestinationResolver implements DestinationResolver<KafkaDestination> {
-
-    /**
-     * Kafka's own rule for a legal topic name, {@code [a-zA-Z0-9._-]}. Not exposed through the client's public API,
-     * so this resolver states it independently rather than depending on Kafka's {@code internals} package, and
-     * refuses a derived name that breaks it rather than silently truncating or rewriting a name a caller's
-     * {@code CloudEventTypeMapper} chose.
-     */
-    private static final Pattern LEGAL_TOPIC_NAME = Pattern.compile("[a-zA-Z0-9._-]+");
-
-    /**
-     * Kafka's own limit on a topic name's length.
-     */
-    private static final int MAX_TOPIC_NAME_LENGTH = 249;
 
     private final String topicPrefix;
     private final CloudEventTypeMapper<?> topicMapper;
@@ -150,27 +139,12 @@ public final class KafkaTopicPerTypeDestinationResolver implements DestinationRe
      * this same mapping later.
      */
     private static void requireLegalTopicName(String topic, String cloudEventType) {
-        if (topic.isEmpty() || topic.equals(".") || topic.equals("..")
-                || topic.length() > MAX_TOPIC_NAME_LENGTH || !LEGAL_TOPIC_NAME.matcher(topic).matches()) {
+        if (!isLegalTopicName(topic)) {
             throw new IllegalArgumentException("Cloud event type \"" + cloudEventType + "\" resolved to topic \"" +
                     topic + "\", which is not a legal Kafka topic name. A topic name must be 1-" + MAX_TOPIC_NAME_LENGTH +
                     " characters, may only contain letters, digits, '.', '_' and '-', and may not be \".\" or \"..\". " +
                     "A nested or inner domain event class is a common cause, since Class#getName() writes its " +
                     "enclosing class separator as '$'.");
         }
-    }
-
-    /**
-     * The event's {@code streamid} extension, or {@code null} when it has none. Read directly rather than through
-     * {@code OccurrentExtensionGetter.getStreamId}, which throws when the extension is absent instead of answering
-     * {@code null}, and an event published through {@code DomainEventSink.publish(E)} is documented to carry no
-     * stream identity at all.
-     */
-    private static @Nullable String streamIdOf(CloudEvent cloudEvent) {
-        if (!cloudEvent.getExtensionNames().contains(OccurrentCloudEventExtension.STREAM_ID)) {
-            return null;
-        }
-        Object streamId = cloudEvent.getExtension(OccurrentCloudEventExtension.STREAM_ID);
-        return streamId == null ? null : streamId.toString();
     }
 }

@@ -117,6 +117,51 @@ class KafkaCloudEventSinkTest extends KafkaTestSupport {
     }
 
     /**
+     * The property {@link KafkaSharedTopicDestinationResolver} exists to deliver. Two different event types of the
+     * same stream, keyed identically because they share a {@code streamid}, land on the exact same partition of
+     * the one shared topic, in the order they were published. Created with several partitions so this is not true
+     * by accident, the way it would be on {@link KafkaTestSupport}'s own single-partition scratch topic.
+     * {@link KafkaTopicPerTypeDestinationResolver} could never make this claim, since two types never even share a
+     * topic to begin with, let alone a partition.
+     */
+    @Test
+    void two_event_types_of_the_same_stream_land_on_one_partition_in_publish_order() throws Exception {
+        String sharedTopic = topic + "-shared";
+        try (AdminClient adminClient = AdminClient.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers()))) {
+            adminClient.createTopics(List.of(new NewTopic(sharedTopic, 6, (short) 1))).all().get(30, TimeUnit.SECONDS);
+        }
+        KafkaSharedTopicDestinationResolver resolver = new KafkaSharedTopicDestinationResolver(sharedTopic);
+        CloudEvent first = CloudEventBuilder.v1()
+                .withId("id-first")
+                .withSource(URI.create("urn:test"))
+                .withType(EventA.class.getName())
+                .withExtension("streamid", "stream-1")
+                .build();
+        CloudEvent second = CloudEventBuilder.v1()
+                .withId("id-second")
+                .withSource(URI.create("urn:test"))
+                .withType(EventB.class.getName())
+                .withExtension("streamid", "stream-1")
+                .build();
+
+        Map<String, Object> producerConfig = Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers());
+        try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfig, resolver).build()) {
+            sink.publish(first);
+            sink.publish(second);
+        }
+
+        List<ConsumerRecord<String, byte[]>> records = consumeRecords(sharedTopic, 2);
+        assertThat(records.get(0).partition())
+                .as("both events share a streamid, so they must land on the same partition of the shared topic")
+                .isEqualTo(records.get(1).partition());
+        assertThat(headerValue(records.get(0), "ce_id")).isEqualTo("id-first");
+        assertThat(headerValue(records.get(1), "ce_id")).isEqualTo("id-second");
+        assertThat(records.get(0).offset())
+                .as("the first published event must have the lower offset on that shared partition")
+                .isLessThan(records.get(1).offset());
+    }
+
+    /**
      * A record too large for {@code max.request.size} is a permanent failure, since resending the exact same
      * record can never make it smaller. The default {@link org.occurrent.retry.RetryStrategy} must never retry it,
      * or {@link KafkaCloudEventSink#publish(CloudEvent)} would keep retrying into the same failure and never
