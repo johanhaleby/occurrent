@@ -222,8 +222,10 @@ public @interface Projection {
      * a startup warning names it. A custom or third-party composition's own default behavior is its own to declare,
      * so this warning stays silent there rather than guessing. A {@link Source#PUSH} projection uses
      * {@link #catchup()} instead, and is unaffected either way. Set {@link #startAt()} to
-     * {@link StartPosition#BEGINNING} to have a rebuild replay and clear correctly, or clear stale memberships with
-     * an operator step instead.
+     * {@link StartPosition#BEGINNING} to have a rebuild replay and clear correctly, but clear its stored checkpoint
+     * too. The default {@link #resumeBehavior()} resumes from an existing checkpoint instead of replaying again, so
+     * a read model wiped without its checkpoint stays stale. Clear stale memberships with an operator step instead
+     * if a replay is not what you want.
      * <p>
      * Recording happens after the first handled event that carries an append id, not after every event the append
      * wrote. An append whose events this projection handles across several deliveries can therefore have
