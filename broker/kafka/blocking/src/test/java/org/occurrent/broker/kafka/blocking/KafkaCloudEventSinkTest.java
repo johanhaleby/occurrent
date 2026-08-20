@@ -267,12 +267,14 @@ class KafkaCloudEventSinkTest extends KafkaTestSupport {
     }
 
     /**
-     * {@code partitioner.ignore.keys} is legitimate for a caller with its own resolver, so
-     * {@link KafkaCloudEventSink.Builder#build()} only warns about it rather than refusing to build, the way it
-     * refuses a weaker {@code acks}.
+     * {@link KafkaOrderingPrerequisites} is the pure predicate, exhaustively tested on its own in
+     * {@code KafkaOrderingPrerequisitesTest} including per-leg mutation coverage. This class only proves the
+     * wiring, that {@link KafkaCloudEventSink.Builder#build()} actually calls the predicate against the
+     * {@code producerConfig} it was given and logs a warning rather than refusing to build, the way it refuses a
+     * weaker {@code acks}.
      */
     @Nested
-    class PartitionerIgnoreKeysWarning {
+    class OrderingPrerequisiteWarning {
 
         private ListAppender<ILoggingEvent> appender;
         private ch.qos.logback.classic.Logger logger;
@@ -292,7 +294,7 @@ class KafkaCloudEventSinkTest extends KafkaTestSupport {
         }
 
         @Test
-        void build_warns_when_producerConfig_ignores_record_keys() {
+        void build_warns_when_producerConfig_breaks_an_ordering_prerequisite() {
             KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic, ReflectionCloudEventTypeMapper.qualified());
             Map<String, Object> producerConfig = Map.of(
                     ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
@@ -308,81 +310,7 @@ class KafkaCloudEventSinkTest extends KafkaTestSupport {
         }
 
         @Test
-        void build_does_not_warn_when_partitioner_ignore_keys_is_left_unset() {
-            KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic, ReflectionCloudEventTypeMapper.qualified());
-            Map<String, Object> producerConfig = Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers());
-
-            try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfig, resolver).build()) {
-                assertThat(sink).isNotNull();
-            }
-
-            assertThat(appender.list).noneSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.WARN));
-        }
-    }
-
-    /**
-     * Disabling idempotence without also pinning {@code max.in.flight.requests.per.connection} to 1 risks
-     * reordering a retried batch after a later one that already succeeded, per Kafka's own configuration
-     * documentation for the two settings. Legitimate on a cluster whose ACLs do not grant idempotent-write
-     * permission, so {@link KafkaCloudEventSink.Builder#build()} only warns about it, the same shape as
-     * {@code partitioner.ignore.keys}.
-     */
-    @Nested
-    class IdempotenceWarning {
-
-        private ListAppender<ILoggingEvent> appender;
-        private ch.qos.logback.classic.Logger logger;
-
-        @BeforeEach
-        void attachAppender() {
-            LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
-            logger = context.getLogger(KafkaCloudEventSink.class);
-            appender = new ListAppender<>();
-            appender.start();
-            logger.addAppender(appender);
-        }
-
-        @AfterEach
-        void detachAppender() {
-            logger.detachAppender(appender);
-        }
-
-        @Test
-        void build_warns_when_idempotence_is_disabled_without_pinning_max_in_flight_requests_to_one() {
-            KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic, ReflectionCloudEventTypeMapper.qualified());
-            Map<String, Object> producerConfig = Map.of(
-                    ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
-                    ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "false");
-
-            try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfig, resolver).build()) {
-                assertThat(sink).isNotNull();
-            }
-
-            assertThat(appender.list)
-                    .filteredOn(event -> event.getLevel() == Level.WARN)
-                    .anySatisfy(event -> {
-                        assertThat(event.getFormattedMessage()).contains(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG);
-                        assertThat(event.getFormattedMessage()).contains(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
-                    });
-        }
-
-        @Test
-        void build_does_not_warn_when_idempotence_is_disabled_and_max_in_flight_requests_is_pinned_to_one() {
-            KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic, ReflectionCloudEventTypeMapper.qualified());
-            Map<String, Object> producerConfig = Map.of(
-                    ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
-                    ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "false",
-                    ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, "1");
-
-            try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfig, resolver).build()) {
-                assertThat(sink).isNotNull();
-            }
-
-            assertThat(appender.list).noneSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.WARN));
-        }
-
-        @Test
-        void build_does_not_warn_when_idempotence_is_left_unset() {
+        void build_does_not_warn_when_producerConfig_keeps_both_ordering_prerequisites() {
             KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic, ReflectionCloudEventTypeMapper.qualified());
             Map<String, Object> producerConfig = Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers());
 

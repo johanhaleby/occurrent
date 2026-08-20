@@ -39,19 +39,18 @@ import static org.occurrent.broker.kafka.blocking.KafkaDestinations.streamIdOf;
  * events in order, and Kafka only orders within one partition of one topic. Two events of the same stream but
  * different types share this topic and therefore the same partition, so they stay in order against each other the
  * way an event-sourced stream that mixes types actually needs, which a per-type topic can never deliver since two
- * types never share a topic to begin with. That guarantee also assumes the producer actually partitions by the
- * record key, which Kafka's default partitioner does, unless {@code producerConfig} sets
- * {@code partitioner.ignore.keys} to {@code true}, in which case every key including this resolver's is ignored
- * and {@link KafkaCloudEventSink.Builder#build()} warns about exactly that. It also assumes the topic's partition
+ * types never share a topic to begin with. That guarantee also rests on two things {@code producerConfig}
+ * controls and this resolver cannot enforce by itself, checked together as one unit by
+ * {@link KafkaOrderingPrerequisites} rather than as a list of individual settings. The producer's partitioner has
+ * to actually partition by the record key, and a batch retried after a failed send must never land after a later
+ * one that already succeeded on the same partition. {@link KafkaCloudEventSink.Builder#build()} warns, naming the
+ * specific setting responsible, whenever either one fails, so this javadoc states the two prerequisites rather
+ * than the settings currently known to break them. It also assumes the topic's partition
  * count stays put. Kafka hashes a key against the topic's current partition count, so increasing that count
  * between two sends for the same stream id can remap it onto a different partition and silently break that
  * stream's ordering from that point on. Choose the partition count before producing to this topic, and grow it
  * later only once losing cross-partition order for whatever streams are still in flight at that moment is
- * acceptable. It also assumes {@code producerConfig} keeps Kafka's own retry ordering guarantee intact. Setting
- * {@code enable.idempotence} to {@code false} without also pinning {@code max.in.flight.requests.per.connection}
- * to {@code 1} lets a batch retried after a failed send land after a later one that already succeeded, reordering
- * records on the one partition they share even when they are keyed correctly, and
- * {@link KafkaCloudEventSink.Builder#build()} warns about exactly that combination too.
+ * acceptable.
  * {@link KafkaTopicPerTypeDestinationResolver} is the documented alternative, for a deployment that wants
  * per-type topics for retention or independent consumer scaling and either has single-type streams or accepts
  * that narrower guarantee.
