@@ -181,7 +181,7 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
       - {check: issue_closed, ref: 417, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch after U5 merges; brief must carry the shared-topic default ruling (U6 consumes from the shared topic by default, per-type is the opt-in), the ack matrix, enable.auto.commit=false with per-record commits and seek-after-failure per ADR 133, and the typed-extension restoration to mirror on the Kafka read side"
+    next_action: "Dispatch after U5 merges; brief must carry the shared-topic default ruling (U6 consumes from the shared topic by default, per-type is the opt-in), the ack matrix, enable.auto.commit=false with per-record commits and seek-after-failure per ADR 133, and the typed-extension restoration to mirror on the Kafka read side RECORDED FOR THE BRIEF: KafkaDestination.topic() carries a documented dual meaning, a literal name from both resolvers destinationFor and the shared catchAll, but a REGEX PATTERN from the per-type catchAll, and nothing on the type discriminates; U6 must decide at its plan gate whether it subscribes by list or by pattern and whether an additive discriminator accessor is needed, rather than rediscovering this mid-implementation. Declined on PR 862 with that routing."
     last_meaningful_progress_at: 2026-08-18T04:44:26Z
     observed: {}
     assessment: "Sonnet/high chip. @KafkaSaga comment is future-module inspiration, out of remit."
