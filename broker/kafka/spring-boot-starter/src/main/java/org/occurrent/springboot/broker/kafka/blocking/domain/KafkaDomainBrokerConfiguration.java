@@ -23,6 +23,7 @@ import org.occurrent.broker.api.blocking.DomainEventSink;
 import org.occurrent.broker.kafka.blocking.KafkaDestination;
 import org.occurrent.broker.kafka.blocking.domain.KafkaDomainEventSink;
 import org.occurrent.springboot.broker.kafka.blocking.KafkaBrokerProperties;
+import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -50,17 +51,32 @@ public class KafkaDomainBrokerConfiguration {
      * itself {@code @Lazy} for the same "do not force a resolver requirement on a deployment that does not need
      * it" reason. Requesting the domain sink is what should trigger both, not merely being on the classpath.
      * <p>
-     * The {@code CloudEventSink} parameter is qualified by name because an application with both the Kafka and the
-     * RabbitMQ broker starter enabled has two {@code @Fallback} {@code CloudEventSink} beans on the classpath, with
-     * no {@code @Primary} to break the tie. Naming this starter's own bean directly keeps the wrapper bound to the
-     * Kafka sink regardless of what else is in the context.
+     * The {@code CloudEventSink} resolves by type first, through {@code cloudEventSinkProvider}, exactly what an
+     * unqualified injection point would do. That lets an application's own non-fallback {@code CloudEventSink}
+     * win here the same way it wins everywhere else, single starter or both. Only when type resolution is
+     * genuinely ambiguous, both the Kafka and the RabbitMQ starter's own {@code @Fallback} sink present and
+     * nothing else to break the tie, does {@link #resolveCloudEventSink} fall back to
+     * {@code ownCloudEventSinkProvider}, which names this starter's own bean directly. An earlier version named
+     * that bean unconditionally, which fixed the two-starter ambiguity but silently shadowed a genuine application
+     * override, since a literal bean-name lookup never runs {@code @Fallback} scoring at all.
      */
     @Bean
     @Lazy
     @Fallback
     @ConditionalOnBean(CloudEventConverter.class)
-    <E> DomainEventSink<E> occurrentKafkaDomainEventSink(@Qualifier("occurrentKafkaCloudEventSink") CloudEventSink cloudEventSink, CloudEventConverter<E> converter) {
-        return KafkaDomainEventSink.using(cloudEventSink, converter);
+    <E> DomainEventSink<E> occurrentKafkaDomainEventSink(ObjectProvider<CloudEventSink> cloudEventSinkProvider,
+                                                          @Qualifier("occurrentKafkaCloudEventSink") ObjectProvider<CloudEventSink> ownCloudEventSinkProvider,
+                                                          CloudEventConverter<E> converter) {
+        return KafkaDomainEventSink.using(resolveCloudEventSink(cloudEventSinkProvider, ownCloudEventSinkProvider), converter);
+    }
+
+    private static CloudEventSink resolveCloudEventSink(ObjectProvider<CloudEventSink> cloudEventSinkProvider,
+                                                          ObjectProvider<CloudEventSink> ownCloudEventSinkProvider) {
+        try {
+            return cloudEventSinkProvider.getObject();
+        } catch (NoUniqueBeanDefinitionException ambiguousBetweenBrokerStarters) {
+            return ownCloudEventSinkProvider.getObject();
+        }
     }
 
     @Bean
