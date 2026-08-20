@@ -249,7 +249,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: [U5, U6]
-    session: null
+    session: "subagent aa473d19fa8cb4757"
     deliverables:
       - {check: manual_approval, ref: "fixpoint clean under the stopping rule, or the cap reached and remainders routed to Johan as one structured ask", met: false, evidence: null}
     blocking_on: []
