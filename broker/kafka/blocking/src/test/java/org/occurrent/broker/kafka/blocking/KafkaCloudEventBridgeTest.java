@@ -437,10 +437,11 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
      * the loop thread's own next blocking call raises in, its own batch commit, not anything the handler itself
      * called. Without retrying that one commit, every record this batch already resolved, id-1 included, would
      * never be acknowledged at all and would replay in full the next time this bridge starts. Against this real,
-     * fast, local broker the underlying commit request often lands before the interrupt is even raised
-     * client-side, so this assertion alone does not reliably mutation-fail without the retry, the deterministic
-     * proof for that is the {@code CloseFromHandlerHarness} the epic's adversarial verifier built against a fake
-     * {@code Consumer} that never delivers a thrown {@code commitSync} call regardless of timing.
+     * fast, local broker the underlying commit request often completes on the broker side before the
+     * client-side interrupt is even raised, so this assertion alone does not reliably mutation-fail without the
+     * retry, the deterministic proof for that is the {@code CloseFromHandlerHarness} the epic's adversarial
+     * verifier built against a fake {@code Consumer} that never delivers a thrown {@code commitSync} call
+     * regardless of timing.
      */
     @Test
     void close_called_from_a_handler_running_on_the_loop_thread_returns_promptly_rather_than_joining_itself() throws Exception {

@@ -230,6 +230,13 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             } catch (RuntimeException e) {
                 log.warn("Failed to close the Kafka consumer cleanly during shutdown.", e);
             }
+            // This bridge has no permanent-stop path of its own today, but the loop can still exit here without
+            // close() ever having run, an uncaught Error escaping the try above, most notably. Closing
+            // failureAction here too, independently of the Consumer close above, means the parking producer it
+            // owns is never left open past this thread's own teardown. KafkaDeliveryFailureAction#close()
+            // already does nothing on a second call, so close() calling it again afterward, on an ordinary
+            // shutdown, is harmless.
+            failureAction.close();
         }
     }
 

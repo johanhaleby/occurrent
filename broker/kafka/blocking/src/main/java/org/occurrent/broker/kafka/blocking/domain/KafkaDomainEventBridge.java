@@ -233,6 +233,12 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
             } catch (RuntimeException e) {
                 log.warn("Failed to close the Kafka consumer cleanly during shutdown.", e);
             }
+            // A permanent stop never calls close() itself, nothing is coming back to trigger it, so the parking
+            // producer failureAction owns would otherwise leak until some other caller happens to close this
+            // bridge. Closed here too, independently of the Consumer close above, so one failing does not skip
+            // the other. KafkaDeliveryFailureAction#close() already does nothing on a second call, so close()
+            // calling it again afterward, on an ordinary shutdown, is harmless.
+            failureAction.close();
         }
     }
 

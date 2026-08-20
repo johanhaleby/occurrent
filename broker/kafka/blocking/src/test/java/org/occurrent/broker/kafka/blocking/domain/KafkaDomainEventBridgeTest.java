@@ -32,6 +32,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -47,6 +48,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 class KafkaDomainEventBridgeTest extends KafkaTestSupport {
@@ -449,11 +451,11 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
      * which the loop thread's own next blocking call raises in, its own batch commit, not anything the
      * projection itself called. Without retrying that one commit, every record this batch already resolved,
      * id-1 included, would never be acknowledged at all and would replay in full the next time this bridge
-     * starts. Against this real, fast, local broker the underlying commit request often lands before the
-     * interrupt is even raised client-side, so this assertion alone does not reliably mutation-fail without the
-     * retry, the deterministic proof for that is the {@code CloseFromHandlerHarness} the epic's adversarial
-     * verifier built against a fake {@code Consumer} that never delivers a thrown {@code commitSync} call
-     * regardless of timing.
+     * starts. Against this real, fast, local broker the underlying commit request often completes on the broker
+     * side before the client-side interrupt is even raised, so this assertion alone does not reliably
+     * mutation-fail without the retry, the deterministic proof for that is the {@code CloseFromHandlerHarness}
+     * the epic's adversarial verifier built against a fake {@code Consumer} that never delivers a thrown
+     * {@code commitSync} call regardless of timing.
      */
     @Test
     void close_called_from_a_projection_running_on_the_loop_thread_returns_promptly_rather_than_joining_itself() throws Exception {
@@ -566,6 +568,52 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
         } finally {
             bridge.close();
         }
+    }
+
+    /**
+     * A permanent stop never calls {@code close()} itself, so with {@link DeliveryFailurePolicy#PARK} configured,
+     * the parking producer {@code KafkaDeliveryFailureAction} owns has nothing else guaranteeing it ever closes.
+     * Reaches the private {@code failureAction} field, and its own private {@code parkingProducer} field, through
+     * reflection, then calls {@code send(...)} on it as a proxy for closed state, a {@code KafkaProducer} throws
+     * {@code IllegalStateException} from that call once closed, checked before any network access.
+     * {@code partitionsFor(...)} does not work for this, it never checks closed state at all. Never calls
+     * {@link KafkaDomainEventBridge#close()} on this bridge at all, proving the loop thread's own teardown closed
+     * it, not an explicit shutdown this test triggered.
+     */
+    @Test
+    void a_permanent_stop_closes_the_parking_producer_without_close_ever_being_called() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        String parkingTopic = createTopic(1);
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> {
+        }, Filter.data("amount", Condition.eq(42)));
+        feed.goLive("proj");
+
+        KafkaDomainEventBridge<TestOrderPlaced> bridge = KafkaDomainEventBridge.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(KafkaDestination.of(parkingTopic))
+                .build();
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertThat(consumerGroupMemberCount(groupId)).isEqualTo(1));
+
+        publish("stream-1", "id-1", "order-1");
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertThat(consumerGroupMemberCount(groupId)).isZero());
+
+        Field failureActionField = KafkaDomainEventBridge.class.getDeclaredField("failureAction");
+        failureActionField.setAccessible(true);
+        Object failureAction = failureActionField.get(bridge);
+        Field parkingProducerField = failureAction.getClass().getDeclaredField("parkingProducer");
+        parkingProducerField.setAccessible(true);
+        org.apache.kafka.clients.producer.Producer<String, byte[]> parkingProducer =
+                (org.apache.kafka.clients.producer.Producer<String, byte[]>) parkingProducerField.get(failureAction);
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertThatThrownBy(() -> parkingProducer.send(new org.apache.kafka.clients.producer.ProducerRecord<>(parkingTopic, "k", new byte[0])))
+                        .isInstanceOf(IllegalStateException.class));
     }
 
     private Map<String, Object> consumerConfig(String groupId) {
