@@ -20,8 +20,12 @@ package org.occurrent.broker.kafka.blocking;
  * A {@link KafkaCloudEventSink} publish that did not succeed. {@link KafkaPublishTimeoutException} is the specific
  * case where the publish could not be confirmed within the configured acknowledgement timeout, whether that is
  * because the broker never acknowledged an already-sent record or because the producer could not even enqueue the
- * send in time. This is everything else, a channel or connection failure the Kafka client reported outright rather
- * than one it merely timed out waiting on.
+ * send in time. This is everything else the Kafka client reported for that one attempt rather than merely timed
+ * out on, a record too large, an invalid topic name, an authorization failure the broker rejected the send for,
+ * any other failure {@code send()} raised synchronously or the acknowledgement future carried asynchronously, or
+ * the sending or waiting thread being interrupted. Kafka has no channel or connection abstraction the way
+ * RabbitMQ does, so unlike {@code RabbitMqPublishException} this is not a transport-level failure specifically,
+ * only whatever the client itself decided to report the attempt as.
  */
 public class KafkaPublishException extends RuntimeException {
 

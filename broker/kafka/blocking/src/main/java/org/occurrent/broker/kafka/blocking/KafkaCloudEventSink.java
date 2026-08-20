@@ -310,6 +310,18 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
          * ignores every record key when choosing a partition, and any resolver relying on keys for ordering, the
          * shipped {@code KafkaSharedTopicDestinationResolver} included, loses its ordering guarantee while nothing
          * else about the deployment looks unhealthy.
+         * <p>
+         * {@code producerConfig} explicitly setting {@link ProducerConfig#ENABLE_IDEMPOTENCE_CONFIG} to
+         * {@code false} without also pinning {@link ProducerConfig#MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION} to
+         * {@code 1} logs a warning too, the same {@code partitioner.ignore.keys} shape rather than a refusal,
+         * since idempotence is legitimately disabled on a cluster whose ACLs do not grant idempotent-write
+         * permission. Kafka's own configuration documentation states the interplay directly. With
+         * {@code enable.idempotence=false}, retrying a failed send while more than one request is already in
+         * flight on the connection risks a retried, earlier batch being appended after a later one that already
+         * succeeded, reordering records within the one partition they share regardless of how correctly they are
+         * keyed. {@code max.in.flight.requests.per.connection} defaults to more than one, so this is left unset
+         * as often as it is set, which is why the warning checks for it explicitly rather than assuming a caller
+         * who disables idempotence already pinned it.
          */
         public KafkaCloudEventSink build() {
             Map<String, Object> config = new HashMap<>(producerConfig);
@@ -335,6 +347,20 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
                                 "relying on record keys for it, the shipped KafkaSharedTopicDestinationResolver " +
                                 "included, loses its ordering guarantee.",
                         ProducerConfig.PARTITIONER_IGNORE_KEYS_CONFIG);
+            }
+            Object configuredIdempotence = config.get(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG);
+            if (configuredIdempotence != null && !Boolean.parseBoolean(String.valueOf(configuredIdempotence))) {
+                Object configuredMaxInFlight = config.get(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
+                boolean maxInFlightPinnedToOne = configuredMaxInFlight != null && "1".equals(String.valueOf(configuredMaxInFlight).trim());
+                if (!maxInFlightPinnedToOne) {
+                    log.warn("producerConfig sets \"{}\" to false without also pinning \"{}\" to 1, so a batch " +
+                                    "retried after a failed send can be appended after a later one that already " +
+                                    "succeeded, reordering records within the one partition they share even when " +
+                                    "they are keyed correctly. Any resolver relying on record-key ordering, the " +
+                                    "shipped KafkaSharedTopicDestinationResolver included, can see its events out " +
+                                    "of order as a result.",
+                            ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
+                }
             }
             config.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, acknowledgementTimeout.toMillis());
             Producer<String, byte[]> producer = new KafkaProducer<>(config, new StringSerializer(), new ByteArraySerializer());

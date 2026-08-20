@@ -47,9 +47,14 @@ import static org.occurrent.broker.kafka.blocking.KafkaDestinations.streamIdOf;
  * between two sends for the same stream id can remap it onto a different partition and silently break that
  * stream's ordering from that point on. Choose the partition count before producing to this topic, and grow it
  * later only once losing cross-partition order for whatever streams are still in flight at that moment is
- * acceptable. {@link KafkaTopicPerTypeDestinationResolver} is the documented alternative, for a deployment that
- * wants per-type topics for retention or independent consumer scaling and either has single-type streams or
- * accepts that narrower guarantee.
+ * acceptable. It also assumes {@code producerConfig} keeps Kafka's own retry ordering guarantee intact. Setting
+ * {@code enable.idempotence} to {@code false} without also pinning {@code max.in.flight.requests.per.connection}
+ * to {@code 1} lets a batch retried after a failed send land after a later one that already succeeded, reordering
+ * records on the one partition they share even when they are keyed correctly, and
+ * {@link KafkaCloudEventSink.Builder#build()} warns about exactly that combination too.
+ * {@link KafkaTopicPerTypeDestinationResolver} is the documented alternative, for a deployment that wants
+ * per-type topics for retention or independent consumer scaling and either has single-type streams or accepts
+ * that narrower guarantee.
  * <p>
  * The constructor takes the topic name. Nothing here invents one, the same reasoning ADR 133 decision 7 already
  * gives for refusing a parking bridge with no {@code parkingDestination} of its own. A default destination name is

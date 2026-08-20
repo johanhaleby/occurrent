@@ -320,6 +320,80 @@ class KafkaCloudEventSinkTest extends KafkaTestSupport {
         }
     }
 
+    /**
+     * Disabling idempotence without also pinning {@code max.in.flight.requests.per.connection} to 1 risks
+     * reordering a retried batch after a later one that already succeeded, per Kafka's own configuration
+     * documentation for the two settings. Legitimate on a cluster whose ACLs do not grant idempotent-write
+     * permission, so {@link KafkaCloudEventSink.Builder#build()} only warns about it, the same shape as
+     * {@code partitioner.ignore.keys}.
+     */
+    @Nested
+    class IdempotenceWarning {
+
+        private ListAppender<ILoggingEvent> appender;
+        private ch.qos.logback.classic.Logger logger;
+
+        @BeforeEach
+        void attachAppender() {
+            LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+            logger = context.getLogger(KafkaCloudEventSink.class);
+            appender = new ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+        }
+
+        @AfterEach
+        void detachAppender() {
+            logger.detachAppender(appender);
+        }
+
+        @Test
+        void build_warns_when_idempotence_is_disabled_without_pinning_max_in_flight_requests_to_one() {
+            KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic, ReflectionCloudEventTypeMapper.qualified());
+            Map<String, Object> producerConfig = Map.of(
+                    ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                    ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "false");
+
+            try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfig, resolver).build()) {
+                assertThat(sink).isNotNull();
+            }
+
+            assertThat(appender.list)
+                    .filteredOn(event -> event.getLevel() == Level.WARN)
+                    .anySatisfy(event -> {
+                        assertThat(event.getFormattedMessage()).contains(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG);
+                        assertThat(event.getFormattedMessage()).contains(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
+                    });
+        }
+
+        @Test
+        void build_does_not_warn_when_idempotence_is_disabled_and_max_in_flight_requests_is_pinned_to_one() {
+            KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic, ReflectionCloudEventTypeMapper.qualified());
+            Map<String, Object> producerConfig = Map.of(
+                    ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                    ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "false",
+                    ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, "1");
+
+            try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfig, resolver).build()) {
+                assertThat(sink).isNotNull();
+            }
+
+            assertThat(appender.list).noneSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.WARN));
+        }
+
+        @Test
+        void build_does_not_warn_when_idempotence_is_left_unset() {
+            KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(topic, ReflectionCloudEventTypeMapper.qualified());
+            Map<String, Object> producerConfig = Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers());
+
+            try (KafkaCloudEventSink sink = KafkaCloudEventSink.builder(producerConfig, resolver).build()) {
+                assertThat(sink).isNotNull();
+            }
+
+            assertThat(appender.list).noneSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.WARN));
+        }
+    }
+
     private static CloudEvent orderPlaced(String id) {
         return CloudEventBuilder.v1()
                 .withId(id)
