@@ -34,6 +34,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
@@ -108,10 +109,10 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
     }
 
     /**
-     * The resolver bean's own constructor needs a {@link CloudEventTypeMapper}, so if it were not {@code @Lazy},
-     * Spring would try to build it during singleton pre-instantiation whenever {@code exchange} is set, whether or
-     * not anything ever asks for a {@code CloudEventSink} or a resolver, and fail here where no type mapper bean is
-     * supplied.
+     * The resolver bean's own constructor needs a {@link CloudEventTypeMapper}, so without either
+     * {@code @ConditionalOnBean(CloudEventTypeMapper.class)} or {@code @Lazy}, Spring would try to build it during
+     * singleton pre-instantiation whenever {@code exchange} is set, whether or not anything ever asks for a
+     * {@code CloudEventSink} or a resolver, and fail here where no type mapper bean is supplied.
      */
     @Test
     void resolver_bean_stays_lazy_so_a_missing_type_mapper_does_not_break_startup() {
@@ -119,6 +120,27 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
                 .withBean(Connection.class, () -> mock(Connection.class))
                 .withPropertyValues("occurrent.broker.rabbitmq.exchange=orders")
                 .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    /**
+     * The bridge factory reaches the resolver through an {@code ObjectProvider}, and {@code getIfAvailable()}
+     * instantiates whatever bean definition it finds regardless of {@code @Lazy}. Without
+     * {@code @ConditionalOnBean(CloudEventTypeMapper.class)} excluding the bean definition itself when no type
+     * mapper exists, building a bridge that needs no resolver, one with {@code declare-topology=false} here, would
+     * fail through that lookup even though nothing about this bridge asked for a resolver.
+     */
+    @Test
+    void bridge_factory_builds_a_topology_free_bridge_even_when_the_exchange_resolver_cannot_be_built() {
+        contextRunner
+                .withBean(Connection.class, () -> mock(Connection.class))
+                .withPropertyValues(
+                        "occurrent.broker.rabbitmq.exchange=orders",
+                        "occurrent.broker.rabbitmq.bridge.declare-topology=false")
+                .run(context -> {
+                    RabbitMqCloudEventBridgeFactory factory = context.getBean(RabbitMqCloudEventBridgeFactory.class);
+                    assertThatCode(() -> factory.forQueue("orders-projection", new PushSubscriptionModel(), new RoutingOutcomeChannel()))
+                            .doesNotThrowAnyException();
+                });
     }
 
     @Test

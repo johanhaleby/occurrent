@@ -69,14 +69,20 @@ public class OccurrentRabbitMqAutoConfiguration {
      * {@code @Fallback} bean is excluded at dependency-resolution time whenever a non-fallback candidate exists,
      * the same pattern ADR 72 documents for the MongoDB starter's own {@code Default*Provider} beans.
      * <p>
-     * {@code @Lazy} for the same reason the {@code CloudEventSink} bean below is, an application whose {@code
-     * CloudEventTypeMapper} bean is missing, because it never publishes and supplies its own resolver instead,
-     * must not be forced to satisfy this bean's constructor just because {@code exchange} happens to be set.
+     * {@code @ConditionalOnBean(CloudEventTypeMapper.class)}: a bridge whose {@code declare-topology} is
+     * {@code false}, or whose caller supplies its own bindings, needs no resolver at all, and its factory reaches
+     * this bean through an {@code ObjectProvider}, whose {@code getIfAvailable()} instantiates whatever bean
+     * definition it finds regardless of {@code @Lazy}. Registering this bean only once a type mapper exists keeps
+     * that lookup returning cleanly empty instead of failing to build a resolver nothing asked for.
+     * <p>
+     * {@code @Lazy} for the same reason the {@code CloudEventSink} bean below is, so a deployment with both
+     * prerequisites present still only builds this resolver once something actually asks for it.
      */
     @Bean
     @Lazy
     @Fallback
     @Conditional(RabbitMqExchangeConfiguredCondition.class)
+    @ConditionalOnBean(CloudEventTypeMapper.class)
     RabbitMqTopicExchangeDestinationResolver occurrentRabbitMqDestinationResolver(RabbitMqBrokerProperties properties, CloudEventTypeMapper<?> typeMapper) {
         return new RabbitMqTopicExchangeDestinationResolver(properties.getExchange(), typeMapper);
     }
