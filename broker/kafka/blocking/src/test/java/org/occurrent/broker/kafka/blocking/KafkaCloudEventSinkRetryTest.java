@@ -22,6 +22,7 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.NotEnoughReplicasException;
+import org.apache.kafka.common.errors.RecordTooLargeException;
 import org.junit.jupiter.api.Test;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.retry.RetryStrategy;
@@ -166,6 +167,31 @@ class KafkaCloudEventSinkRetryTest {
         sink.publish(orderPlaced("id-1"));
 
         verify(producer, times(2)).send(any());
+    }
+
+    /**
+     * A record too large for {@code max.request.size} can never be made to fit by resending the exact same
+     * record, so Kafka marks {@link RecordTooLargeException} permanent rather than {@link org.apache.kafka.common.errors.RetriableException},
+     * and the default {@link RetryStrategy} must never retry it. Proved here by counting {@code send} invocations
+     * directly instead of timing {@link KafkaCloudEventSink#publish(CloudEvent)} against a real broker, since one
+     * attempt's own latency against a real broker varies with load and cannot itself prove a second attempt never
+     * happened, only a deliberately generous wall-clock guess could, and that guess is exactly what flaked under
+     * CI load. {@code KafkaCloudEventSinkTest} still proves the real client actually classifies a too-large
+     * record as {@link KafkaPublishException} rather than a timeout, this proves the retry loop honours that
+     * classification.
+     */
+    @Test
+    void a_permanent_failure_is_not_retried() {
+        Producer<String, byte[]> producer = mock(Producer.class);
+        when(producer.send(any())).thenThrow(new RecordTooLargeException("expected, record too large for max.request.size"));
+
+        KafkaCloudEventSink sink = sinkForTesting(producer, resolver, Duration.ofSeconds(5), defaultRetryStrategyForTesting());
+
+        assertThatThrownBy(() -> sink.publish(orderPlaced("id-1")))
+                .isInstanceOf(KafkaPublishException.class)
+                .isNotInstanceOf(KafkaPublishTimeoutException.class);
+
+        verify(producer, times(1)).send(any());
     }
 
     @Test

@@ -39,7 +39,6 @@ import org.slf4j.LoggerFactory;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -171,13 +170,17 @@ class KafkaCloudEventSinkTest extends KafkaTestSupport {
 
     /**
      * A record too large for {@code max.request.size} is a permanent failure, since resending the exact same
-     * record can never make it smaller. The default {@link org.occurrent.retry.RetryStrategy} must never retry it,
-     * or {@link KafkaCloudEventSink#publish(CloudEvent)} would keep retrying into the same failure and never
-     * return, which is checked here by asserting the call fails promptly rather than after the default's
-     * exponential backoff would have piled up.
+     * record can never make it smaller, proved here against the real client, that it comes back as
+     * {@link KafkaPublishException} rather than a timeout. Whether the default {@link org.occurrent.retry.RetryStrategy}
+     * actually honours that classification and never retries it is proved deterministically instead, by counting
+     * {@code send} invocations against a mocked {@link org.apache.kafka.clients.producer.Producer}, in
+     * {@code KafkaCloudEventSinkRetryTest.a_permanent_failure_is_not_retried}. A real broker's own attempt latency
+     * varies with load, so timing this end to end could only ever prove absence of a retry by a wall-clock margin
+     * wide enough to swallow that variance, which is what flaked under CI load rather than what this test is
+     * actually about.
      */
     @Test
-    void a_permanent_broker_side_failure_is_not_retried_and_publish_returns_promptly() {
+    void a_record_too_large_for_max_request_size_is_reported_as_a_permanent_failure() {
         Map<String, Object> producerConfig = Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
                 ProducerConfig.MAX_REQUEST_SIZE_CONFIG, "100");
@@ -190,15 +193,9 @@ class KafkaCloudEventSinkTest extends KafkaTestSupport {
                     .withData(new byte[10_000])
                     .build();
 
-            Instant before = Instant.now();
             assertThatThrownBy(() -> sink.publish(oversizedEvent))
                     .isInstanceOf(KafkaPublishException.class)
                     .isNotInstanceOf(KafkaPublishTimeoutException.class);
-            Duration elapsed = Duration.between(before, Instant.now());
-            assertThat(elapsed)
-                    .as("a record too large for max.request.size is never retriable, so this must fail on the " +
-                            "first attempt instead of retrying into the default's exponential backoff")
-                    .isLessThan(Duration.ofSeconds(1));
         }
     }
 
