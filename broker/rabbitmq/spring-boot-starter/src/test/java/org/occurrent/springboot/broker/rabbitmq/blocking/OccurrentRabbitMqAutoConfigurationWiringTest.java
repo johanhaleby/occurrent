@@ -133,8 +133,31 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
                 });
     }
 
+    /**
+     * A plain {@code @Import(OccurrentRabbitMqAutoConfiguration.class)} would let
+     * {@code @ConditionalOnBean(Connection.class)} run before {@link ConnectionSupplyingConfiguration}, declared
+     * after {@link EnabledConfiguration} here on purpose, registers its own {@code Connection} bean, making the
+     * whole starter silently disappear. This does not go through {@code AutoConfigurations.of(...)} the way the
+     * tests above do, since that helper's own import mechanism is not what a real application's
+     * {@code @EnableOccurrentRabbitMqBroker} goes through, only {@link OccurrentRabbitMqBrokerImportSelector} is.
+     */
+    @Test
+    void the_starter_activates_even_when_the_connection_bean_is_declared_after_the_enabling_configuration() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(EnabledConfiguration.class, ConnectionSupplyingConfiguration.class)
+                .run(context -> assertThat(context).hasSingleBean(RabbitMqCloudEventBridgeFactory.class));
+    }
+
     @Configuration(proxyBeanMethods = false)
     @EnableOccurrentRabbitMqBroker
     static class EnabledConfiguration {
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class ConnectionSupplyingConfiguration {
+        @Bean
+        Connection connection() {
+            return mock(Connection.class);
+        }
     }
 }

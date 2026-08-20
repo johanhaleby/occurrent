@@ -20,7 +20,6 @@ import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.kafka.blocking.KafkaCloudEventBridge;
 import org.occurrent.broker.kafka.blocking.KafkaDestination;
 import org.occurrent.broker.kafka.blocking.RoutingOutcomeChannel;
-import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.beans.factory.ObjectProvider;
 
@@ -46,16 +45,12 @@ class DefaultKafkaCloudEventBridgeFactory implements KafkaCloudEventBridgeFactor
                 .onDeliveryFailure(bridgeProperties.getOnDeliveryFailure())
                 .pollTimeout(bridgeProperties.getPollTimeout())
                 .closeTimeout(bridgeProperties.getCloseTimeout())
-                .commitRetryStrategy(retryStrategy(bridgeProperties.getCommitRetry()));
+                .commitRetryStrategy(KafkaClientConfigs.commitRetryStrategy(bridgeProperties.getCommitRetry()));
         DestinationResolver<KafkaDestination> resolver = resolverProvider.getIfAvailable();
         if (resolver != null) {
             builder.resolver(resolver);
         }
         bridgeProperties.getParkingDestination().toDestination().ifPresent(builder::parkingDestination);
         return builder;
-    }
-
-    static RetryStrategy.Retry retryStrategy(KafkaBrokerProperties.Retry retry) {
-        return RetryStrategy.exponentialBackoff(retry.getInitial(), retry.getMax(), retry.getMultiplier());
     }
 }

@@ -83,7 +83,7 @@ public class OccurrentKafkaAutoConfiguration {
         KafkaBrokerProperties.Retry retry = properties.getSink().getRetry();
         return KafkaCloudEventSink.builder(KafkaClientConfigs.producerConfig(properties), resolver)
                 .acknowledgementTimeout(properties.getSink().getAcknowledgementTimeout())
-                .retryStrategy(DefaultKafkaCloudEventBridgeFactory.retryStrategy(retry))
+                .retryStrategy(KafkaClientConfigs.publishRetryStrategy(retry))
                 .build();
     }
 

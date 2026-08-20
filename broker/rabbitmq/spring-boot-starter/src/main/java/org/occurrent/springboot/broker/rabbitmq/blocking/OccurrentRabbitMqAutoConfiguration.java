@@ -17,11 +17,15 @@
 package org.occurrent.springboot.broker.rabbitmq.blocking;
 
 import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ShutdownSignalException;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqPublishException;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqPublishTimeoutException;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqUnroutableEventException;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.broker.rabbitmq.blocking.domain.RabbitMqDomainBrokerConfiguration;
 import org.springframework.beans.factory.ObjectProvider;
@@ -38,8 +42,11 @@ import org.springframework.context.annotation.Lazy;
 /**
  * Property-driven construction of the RabbitMQ broker sink and consume bridges, per
  * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0133-a-broker-is-a-transport-for-the-push-feed-and-never-a-subscription-model.md">ADR 133</a>.
- * Enabled with {@link EnableOccurrentRabbitMqBroker}, the same {@code @Import}-based activation the MongoDB starter
- * uses, rather than Spring Boot's automatic classpath scanning.
+ * Enabled with {@link EnableOccurrentRabbitMqBroker}, an {@code @Import}-based activation like the MongoDB
+ * starter's {@code EnableOccurrent}, rather than Spring Boot's automatic classpath scanning, but reached through
+ * {@link OccurrentRabbitMqBrokerImportSelector} instead of a plain class import, so this class's own
+ * {@code @ConditionalOnBean(Connection.class)} sees the application's {@code Connection} bean, see that
+ * selector's own javadoc for why a plain import cannot guarantee that.
  * <p>
  * <strong>The {@link Connection} is the application's to supply, never this starter's to construct.</strong> The
  * hand-wired bootstrap this auto-configuration is modeled on already treats connection setup, host, port,
@@ -83,8 +90,23 @@ public class OccurrentRabbitMqAutoConfiguration {
         RabbitMqBrokerProperties.Retry retry = properties.getSink().getRetry();
         return RabbitMqCloudEventSink.builder(connection, resolver)
                 .acknowledgementTimeout(properties.getSink().getAcknowledgementTimeout())
-                .retryStrategy(RetryStrategy.exponentialBackoff(retry.getInitial(), retry.getMax(), retry.getMultiplier()))
+                .retryStrategy(publishRetryStrategy(retry))
                 .build();
+    }
+
+    /**
+     * The same predicate {@code RabbitMqCloudEventSink.Builder}'s own default retry strategy uses. Calling
+     * {@code retryStrategy(...)} replaces that default entirely, so applying the property-driven timing without
+     * this predicate would retry a permanent publish failure, an unroutable event or a channel this client has
+     * already closed, forever instead of surfacing it.
+     */
+    private static RetryStrategy.Retry publishRetryStrategy(RabbitMqBrokerProperties.Retry retry) {
+        return RetryStrategy.exponentialBackoff(retry.getInitial(), retry.getMax(), retry.getMultiplier())
+                .retryIf(throwable -> throwable instanceof RabbitMqPublishException publishException
+                        && !(publishException instanceof RabbitMqUnroutableEventException)
+                        && !(publishException instanceof RabbitMqPublishTimeoutException)
+                        && !(publishException.getCause() instanceof ShutdownSignalException)
+                        && !(publishException.getCause() instanceof InterruptedException));
     }
 
     /**

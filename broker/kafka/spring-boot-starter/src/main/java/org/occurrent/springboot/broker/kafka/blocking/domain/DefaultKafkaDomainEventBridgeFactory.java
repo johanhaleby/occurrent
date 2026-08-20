@@ -20,7 +20,6 @@ import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.kafka.blocking.KafkaDestination;
 import org.occurrent.broker.kafka.blocking.domain.KafkaDomainEventBridge;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
-import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.broker.kafka.blocking.KafkaBrokerProperties;
 import org.occurrent.springboot.broker.kafka.blocking.KafkaClientConfigs;
 import org.springframework.beans.factory.ObjectProvider;
@@ -43,12 +42,11 @@ class DefaultKafkaDomainEventBridgeFactory implements KafkaDomainEventBridgeFact
     public <E> KafkaDomainEventBridge.Builder<E> forGroup(String groupId, DomainEventFeed<E> feed) {
         KafkaBrokerProperties.Bridge bridgeProperties = properties.getBridge();
         Map<String, Object> consumerConfig = KafkaClientConfigs.consumerConfig(properties, groupId);
-        KafkaBrokerProperties.Retry retry = bridgeProperties.getCommitRetry();
         KafkaDomainEventBridge.Builder<E> builder = KafkaDomainEventBridge.builder(consumerConfig, feed)
                 .onDeliveryFailure(bridgeProperties.getOnDeliveryFailure())
                 .pollTimeout(bridgeProperties.getPollTimeout())
                 .closeTimeout(bridgeProperties.getCloseTimeout())
-                .commitRetryStrategy(RetryStrategy.exponentialBackoff(retry.getInitial(), retry.getMax(), retry.getMultiplier()));
+                .commitRetryStrategy(KafkaClientConfigs.commitRetryStrategy(bridgeProperties.getCommitRetry()));
         DestinationResolver<KafkaDestination> resolver = resolverProvider.getIfAvailable();
         if (resolver != null) {
             builder.resolver(resolver);

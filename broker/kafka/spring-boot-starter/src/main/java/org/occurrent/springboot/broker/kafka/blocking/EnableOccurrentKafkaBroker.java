@@ -27,12 +27,15 @@ import java.lang.annotation.Target;
 
 /**
  * Enables the Kafka broker auto-configuration, the same {@code @Import}-based activation {@code EnableOccurrent}
- * uses for the MongoDB starter.
+ * uses for the MongoDB starter. Imports through {@link OccurrentKafkaBrokerImportSelector} rather than the
+ * configuration class directly, so the domain sink's {@code @ConditionalOnBean(CloudEventConverter.class)} is
+ * evaluated after every regular configuration class in the context, the application's own
+ * {@code CloudEventConverter} bean included, is registered.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 @Inherited
-@Import(OccurrentKafkaAutoConfiguration.class)
+@Import(OccurrentKafkaBrokerImportSelector.class)
 public @interface EnableOccurrentKafkaBroker {
 }

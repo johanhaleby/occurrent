@@ -27,12 +27,15 @@ import java.lang.annotation.Target;
 
 /**
  * Enables the RabbitMQ broker auto-configuration, the same {@code @Import}-based activation
- * {@code EnableOccurrent} uses for the MongoDB starter.
+ * {@code EnableOccurrent} uses for the MongoDB starter. Imports through
+ * {@link OccurrentRabbitMqBrokerImportSelector} rather than the configuration class directly, so
+ * {@code @ConditionalOnBean(Connection.class)} is evaluated after every regular configuration class in the
+ * context, the application's own {@code Connection} bean included, is registered.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 @Inherited
-@Import(OccurrentRabbitMqAutoConfiguration.class)
+@Import(OccurrentRabbitMqBrokerImportSelector.class)
 public @interface EnableOccurrentRabbitMqBroker {
 }

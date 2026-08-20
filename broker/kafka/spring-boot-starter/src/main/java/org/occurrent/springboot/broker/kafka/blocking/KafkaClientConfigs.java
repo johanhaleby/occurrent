@@ -18,6 +18,10 @@ package org.occurrent.springboot.broker.kafka.blocking;
 
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.errors.RetriableException;
+import org.occurrent.broker.kafka.blocking.KafkaPublishException;
+import org.occurrent.broker.kafka.blocking.KafkaPublishTimeoutException;
+import org.occurrent.retry.RetryStrategy;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -61,5 +65,30 @@ public final class KafkaClientConfigs {
         config.put(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG, String.join(",", properties.getBootstrapServers()));
         config.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         return config;
+    }
+
+    /**
+     * The same {@code RetriableException}-only predicate {@code KafkaCloudEventBridge.Builder}'s and
+     * {@code KafkaDomainEventBridge.Builder}'s own default commit retry strategy uses. Calling
+     * {@code commitRetryStrategy(...)} replaces that default entirely, so applying the property-driven timing
+     * without this predicate would retry a permanent commit failure forever instead of surfacing it.
+     */
+    public static RetryStrategy.Retry commitRetryStrategy(KafkaBrokerProperties.Retry retry) {
+        return RetryStrategy.exponentialBackoff(retry.getInitial(), retry.getMax(), retry.getMultiplier())
+                .retryIf(throwable -> throwable instanceof RetriableException);
+    }
+
+    /**
+     * The same predicate {@code KafkaCloudEventSink.Builder}'s own default retry strategy uses, a
+     * {@link KafkaPublishException} that is not a {@link KafkaPublishTimeoutException} and whose cause Kafka
+     * itself marks {@link RetriableException}. Calling {@code retryStrategy(...)} replaces that default entirely,
+     * so applying the property-driven timing without this predicate would retry a permanent publish failure
+     * forever instead of surfacing it.
+     */
+    public static RetryStrategy.Retry publishRetryStrategy(KafkaBrokerProperties.Retry retry) {
+        return RetryStrategy.exponentialBackoff(retry.getInitial(), retry.getMax(), retry.getMultiplier())
+                .retryIf(throwable -> throwable instanceof KafkaPublishException publishException
+                        && !(publishException instanceof KafkaPublishTimeoutException)
+                        && publishException.getCause() instanceof RetriableException);
     }
 }
