@@ -73,6 +73,21 @@ pending_actions:
     safe_to_repeat: false
     issued_at: 2026-08-18T04:55:28Z
 units:
+  U14:
+    issue: null
+    goal: "Bump the broker clients this epic introduced past their open dependabot alerts: amqp-client 5.21.0 to 5.33.1 (3 high, 2 medium, 1 low) and kafka-clients 4.1.0 to 4.1.2 (1 CRITICAL OAUTHBEARER JWT validation, 1 high producer message corruption via buffer misrouting). All 8 open alerts on main are this epic's own dependencies, and releasable-as-is forbids shipping them"
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: [U5]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: 873, met: false, evidence: null}
+    blocking_on: []
+    next_action: "ORCHESTRATOR-AUTHORED two-line bump, PR 873 open with Copilot requested (verified bot id), body through the writing gates. Broker image version deliberately unchanged, the alerts are against the client jars. On green plus a clean review: the standard gate minus adversarial verify (a two-line version bump with the full Testcontainers matrix as its behavioural proof), then CAS merge. U6 and U7 rebase after, trivially, root pom only"
+    last_meaningful_progress_at: 2026-08-20T11:30:00Z
+    observed: {}
+    assessment: "Adopted under the epic's own authority, same as U13: the alerts exist only because brk added these dependencies, and the definition of done's releasable-as-is line covers them. Authored directly rather than via a worker, a two-line diff with CI as the verifier."
   U1:
     issue: 412
     goal: "ADR 0133: broker architecture, seams (EventDestination, DestinationResolver, sinks), module split, cross-transport convention section; three open decisions through the orchestrator gate (message binding, Spring Boot auto-config scope, #414 publish-vs-example presented honestly)"
