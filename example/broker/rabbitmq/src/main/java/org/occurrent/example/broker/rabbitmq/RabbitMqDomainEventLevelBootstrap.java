@@ -82,6 +82,17 @@ import java.util.concurrent.Executors;
  * {@code SHIPPED} with it. Override {@code mongoUri} only with another URI that also either sets
  * {@code directConnection=true} or advertises a host-reachable member address.
  * <p>
+ * The default {@code rabbitUri} carries no credentials, so the client falls back to RabbitMQ's default
+ * {@code guest} account. Verified on macOS with Colima, where the docker command above accepts that account over the
+ * published port with no extra step, which is what {@link #main(String[])} was actually run against. RabbitMQ
+ * restricts {@code guest} to connections it can recognise as loopback, and on native Linux Docker a host
+ * connection through a published port can arrive at the container from the Docker bridge address rather than one
+ * RabbitMQ recognises as loopback, which fails the login with {@code ACCESS_REFUSED}. This was not verified on
+ * that platform. If it bites, start the container with {@code -e RABBITMQ_DEFAULT_USER=broker-example -e
+ * RABBITMQ_DEFAULT_PASS=broker-example} instead, a named user is never subject to the loopback restriction, and
+ * carry the same credentials in {@code rabbitUri}, for example
+ * {@code amqp://broker-example:broker-example@localhost:5672}.
+ * <p>
  * The catch-up completion marker is in-memory, paired with the in-memory read model rather than with the durable
  * event store. Losing both together on a real restart is honest. A fresh run replays the store from the start and
  * rebuilds the read model to match. Pairing a durable marker with an in-memory read model instead would have the

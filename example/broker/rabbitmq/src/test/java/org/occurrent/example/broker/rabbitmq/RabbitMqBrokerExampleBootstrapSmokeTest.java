@@ -25,6 +25,7 @@ import org.occurrent.broker.rabbitmq.blocking.RabbitMqBridgeException;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
@@ -174,5 +175,24 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
         } finally {
             adminChannel.queueDelete(probeQueue);
         }
+    }
+
+    /**
+     * {@code close()} must shut the push model down itself. {@link RabbitMqCloudEventBridge} only ever holds the
+     * model it was given, it never shuts it down, on the ADR 133 grounds that a bridge does not own the model's
+     * lifecycle, so a bootstrap that only closed the bridge would leak the model on every successful run, not just
+     * a partial-construction failure. {@code hasSubscriptions()} is the direct, documented effect of
+     * {@code RegisteringSubscribable.shutdown()}, which clears every registration, so it is {@code false} only if
+     * the model was actually shut down rather than merely abandoned mid-registration.
+     */
+    @Test
+    void closing_the_cloud_event_level_bootstrap_shuts_the_push_model_down_too() throws Exception {
+        PushSubscriptionModel pushModel;
+        try (RabbitMqCloudEventLevelBootstrap app = RabbitMqCloudEventLevelBootstrap.start(mongoClient, rabbitConnection)) {
+            app.placeAndShipOneOrder(Duration.ofSeconds(20));
+            pushModel = app.pushModel();
+            assertThat(pushModel.hasSubscriptions()).isTrue();
+        }
+        assertThat(pushModel.hasSubscriptions()).isFalse();
     }
 }

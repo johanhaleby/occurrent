@@ -38,6 +38,7 @@ import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoCheckpointStorage;
@@ -86,6 +87,17 @@ import java.util.concurrent.Executors;
  * {@code SHIPPED} with it. Override {@code mongoUri} only with another URI that also either sets
  * {@code directConnection=true} or advertises a host-reachable member address.
  * <p>
+ * The default {@code rabbitUri} carries no credentials, so the client falls back to RabbitMQ's default
+ * {@code guest} account. Verified on macOS with Colima, where the docker command above accepts that account over the
+ * published port with no extra step, which is what {@link #main(String[])} was actually run against. RabbitMQ
+ * restricts {@code guest} to connections it can recognise as loopback, and on native Linux Docker a host
+ * connection through a published port can arrive at the container from the Docker bridge address rather than one
+ * RabbitMQ recognises as loopback, which fails the login with {@code ACCESS_REFUSED}. This was not verified on
+ * that platform. If it bites, start the container with {@code -e RABBITMQ_DEFAULT_USER=broker-example -e
+ * RABBITMQ_DEFAULT_PASS=broker-example} instead, a named user is never subject to the loopback restriction, and
+ * carry the same credentials in {@code rabbitUri}, for example
+ * {@code amqp://broker-example:broker-example@localhost:5672}.
+ * <p>
  * The catch-up completion marker is in-memory, paired with the in-memory read model rather than with the durable
  * event store. Losing both together on a real restart is honest. A fresh run replays the store from the start and
  * rebuilds the read model to match. Pairing a durable marker with an in-memory read model instead would have the
@@ -110,16 +122,21 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
     private final CloudEventConverter<OrderEvent> converter;
     private final DurableSubscriptionModel forwarderSubscription;
     private final RabbitMqCloudEventSink sink;
+    private final PushSubscriptionModel pushModel;
+    private final CatchupThenPushSubscriptionModel catchupThenPush;
     private final RabbitMqCloudEventBridge bridge;
     private final Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews;
 
     private RabbitMqCloudEventLevelBootstrap(MongoEventStore eventStore, CloudEventConverter<OrderEvent> converter,
                                               DurableSubscriptionModel forwarderSubscription, RabbitMqCloudEventSink sink,
+                                              PushSubscriptionModel pushModel, CatchupThenPushSubscriptionModel catchupThenPush,
                                               RabbitMqCloudEventBridge bridge, Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews) {
         this.eventStore = eventStore;
         this.converter = converter;
         this.forwarderSubscription = forwarderSubscription;
         this.sink = sink;
+        this.pushModel = pushModel;
+        this.catchupThenPush = catchupThenPush;
         this.bridge = bridge;
         this.orderStatusViews = orderStatusViews;
     }
@@ -148,6 +165,7 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
         // closes exactly that, in reverse order, before the failure reaches the caller.
         DurableSubscriptionModel forwarderSubscription = null;
         RabbitMqCloudEventSink sink = null;
+        CatchupThenPushSubscriptionModel catchupThenPush = null;
         RabbitMqCloudEventBridge bridge = null;
         try {
             NativeMongoSubscriptionModel forwarderSubscriptionModel = new NativeMongoSubscriptionModel(
@@ -164,7 +182,7 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
             // lost together on a real restart, so a fresh run genuinely replays rather than a durable marker
             // skipping a replay the read model never actually got. See the class javadoc.
             CheckpointStorage catchupMarker = new InMemoryCheckpointStorage();
-            CatchupThenPushSubscriptionModel catchupThenPush = new CatchupThenPushSubscriptionModel(eventStore, pushModel, catchupMarker);
+            catchupThenPush = new CatchupThenPushSubscriptionModel(eventStore, pushModel, catchupMarker);
 
             bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, outcomeChannel, QUEUE)
                     .resolver(resolver)
@@ -174,9 +192,10 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
             ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(orderStatusViews::get, orderStatusViews::put);
             ProjectionRunner.stream(catchupThenPush, converter).project(SUBSCRIPTION_ID, OrderStatusProjection.orderStatusProjection(), repository);
 
-            return new RabbitMqCloudEventLevelBootstrap(eventStore, converter, forwarderSubscription, sink, bridge, orderStatusViews);
+            return new RabbitMqCloudEventLevelBootstrap(eventStore, converter, forwarderSubscription, sink, pushModel, catchupThenPush, bridge, orderStatusViews);
         } catch (RuntimeException e) {
             closeQuietly(bridge, e);
+            closeQuietly(catchupThenPush, e);
             closeQuietly(forwarderSubscription, e);
             closeQuietly(sink, e);
             throw e;
@@ -196,7 +215,7 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
         }
     }
 
-    private static void closeQuietly(@Nullable DurableSubscriptionModel subscription, RuntimeException original) {
+    private static void closeQuietly(@Nullable SubscriptionModel subscription, RuntimeException original) {
         if (subscription == null) {
             return;
         }
@@ -212,6 +231,11 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
      */
     public Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews() {
         return orderStatusViews;
+    }
+
+    /** Package-private, for a test to confirm {@link #close()} actually shuts this down rather than leaking it. */
+    PushSubscriptionModel pushModel() {
+        return pushModel;
     }
 
     /**
@@ -247,10 +271,18 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
         }
     }
 
+    /**
+     * Closes the bridge first, so nothing is consuming, then the catch-up-then-live model {@code catchupThenPush}
+     * wraps (which shuts {@link #pushModel} down too, cascading), then the forwarder and the sink. A
+     * {@link RabbitMqCloudEventBridge} deliberately never shuts its {@link PushSubscriptionModel} down itself,
+     * since a bridge only ever holds the model, it does not own its lifecycle, so shutting it down here is this
+     * bootstrap's own job to do, not something closing the bridge already covers.
+     */
     @Override
     public void close() {
         try {
             bridge.close();
+            catchupThenPush.shutdown();
             forwarderSubscription.shutdown();
             sink.close();
         } catch (Exception e) {

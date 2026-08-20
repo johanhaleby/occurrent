@@ -61,10 +61,12 @@ public final class OrderStatusProjection {
 
     /**
      * The materialized read model, holding an order, its current status, and the
-     * {@link org.occurrent.cloudevents.EventMetadata} that the view's most recent field-bearing event arrived
-     * with, so a test can assert the round trip directly off the view instead of reaching into the bridge.
-     * {@code product} is {@code null} until {@code OrderPlaced} is folded, which a view created by an
-     * out-of-order {@code OrderShipped} has not seen yet.
+     * {@link org.occurrent.cloudevents.EventMetadata} {@code OrderPlaced} arrived with, so a test can assert the
+     * round trip directly off the view instead of reaching into the bridge. {@code OrderShipped} never overwrites
+     * it once {@code OrderPlaced} has folded, {@code withStatus} only changes {@code status}, so this is
+     * {@code OrderPlaced}'s metadata even when {@code OrderShipped} folds after it. The one exception is a view an
+     * out-of-order {@code OrderShipped} created with nothing placed yet. Until {@code OrderPlaced} arrives and
+     * fills {@code product} in, the metadata here is {@code OrderShipped}'s own.
      */
     public record OrderStatusView(String orderId, @Nullable String product, String status,
                                    @Nullable String streamId, long streamVersion, @Nullable Long position) {

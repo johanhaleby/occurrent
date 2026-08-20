@@ -75,9 +75,9 @@ class OrderStatusProjectionTest {
 
     /**
      * The fold-level tests above call {@link View#evolve} directly, which only ever returns a value, so a fold that
-     * answered {@code null} for {@code OrderShipped} would pass them too. The failure the round-4 review caught only
-     * shows up one layer up, where a real {@link ViewStateRepository} refuses to save that {@code null}, so this
-     * test drives the identical reordering through {@link Projections#materializedView} instead.
+     * answered {@code null} for {@code OrderShipped} would pass them too, and only fails one layer up, where a real
+     * {@link ViewStateRepository} refuses to save that {@code null}. This test drives the identical reordering
+     * through {@link Projections#materializedView} instead, to exercise that layer too.
      */
     @Test
     void order_shipped_arriving_before_order_placed_is_saved_and_then_filled_in_without_crashing() {
@@ -96,6 +96,52 @@ class OrderStatusProjectionTest {
         materializedView.update(metadataFor("stream-1", 1L, 11L), placed);
         assertThat(store.get(orderId).status()).isEqualTo("SHIPPED");
         assertThat(store.get(orderId).product()).isEqualTo("Widget");
+    }
+
+    @Test
+    void redelivering_order_shipped_after_it_already_shipped_changes_nothing() {
+        String orderId = "order-" + UUID.randomUUID();
+        OrderPlaced placed = new OrderPlaced(UUID.randomUUID().toString(), orderId, "Widget");
+        OrderShipped shipped = new OrderShipped(UUID.randomUUID().toString(), orderId);
+        EventMetadata metadata = metadataFor("stream-1", 0L, 10L);
+
+        OrderStatusProjection.OrderStatusView afterPlaced = view.evolve(null, metadata, placed);
+        OrderStatusProjection.OrderStatusView afterShipped = view.evolve(afterPlaced, EventMetadata.empty(), shipped);
+        OrderStatusProjection.OrderStatusView afterRedeliveredShipped = view.evolve(afterShipped, EventMetadata.empty(), shipped);
+
+        assertThat(afterRedeliveredShipped).isEqualTo(afterShipped);
+    }
+
+    /**
+     * A live broker queue delivers events for whichever order reaches it first, not grouped one order at a time,
+     * so two orders placed before either ships is the ordinary case, not an edge one. Drives it through
+     * {@link Projections#materializedView}, keyed by {@code orderId}, so each order's view comes from the
+     * repository under its own id rather than from folding two independent {@link View#evolve} calls that could
+     * never have shared state to begin with.
+     */
+    @Test
+    void two_orders_interleaved_through_the_same_materialized_view_do_not_cross_contaminate() {
+        String orderIdA = "order-" + UUID.randomUUID();
+        String orderIdB = "order-" + UUID.randomUUID();
+        OrderPlaced placedA = new OrderPlaced(UUID.randomUUID().toString(), orderIdA, "Widget");
+        OrderPlaced placedB = new OrderPlaced(UUID.randomUUID().toString(), orderIdB, "Gadget");
+        OrderShipped shippedA = new OrderShipped(UUID.randomUUID().toString(), orderIdA);
+        OrderShipped shippedB = new OrderShipped(UUID.randomUUID().toString(), orderIdB);
+
+        Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
+        ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, store::put);
+        MaterializedView<OrderEvent> materializedView = Projections.materializedView(OrderStatusProjection.orderStatusProjection(), repository);
+
+        // Interleaved: A placed, B placed, A shipped, B shipped, rather than each order finishing before the next starts.
+        materializedView.update(metadataFor("stream-a", 0L, 10L), placedA);
+        materializedView.update(metadataFor("stream-b", 0L, 11L), placedB);
+        materializedView.update(EventMetadata.empty(), shippedA);
+        materializedView.update(EventMetadata.empty(), shippedB);
+
+        assertThat(store.get(orderIdA).status()).isEqualTo("SHIPPED");
+        assertThat(store.get(orderIdA).product()).isEqualTo("Widget");
+        assertThat(store.get(orderIdB).status()).isEqualTo("SHIPPED");
+        assertThat(store.get(orderIdB).product()).isEqualTo("Gadget");
     }
 
     private static EventMetadata metadataFor(String streamId, long streamVersion, long position) {

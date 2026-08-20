@@ -48,6 +48,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -106,7 +107,18 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                         assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isEqualTo(2));
 
                 Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
-                ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, store::put);
+                // Counts saves for orderBeforeCatchup specifically. Folding the redelivered backlog's two
+                // events onto state that already reflects them is an idempotent no-op the view alone cannot
+                // tell apart from genuine dedup, but it still shows up here as a real difference. The count
+                // stays at the catch-up's own save if the feed actually skipped the redelivered copies, and
+                // climbs higher if it folded them again.
+                AtomicInteger foldsForOrderBeforeCatchup = new AtomicInteger();
+                ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, (id, view) -> {
+                    if (id.equals(orderBeforeCatchup)) {
+                        foldsForOrderBeforeCatchup.incrementAndGet();
+                    }
+                    store.put(id, view);
+                });
 
                 AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
                 context.register(PropertiesConfig.class, OccurrentBlockingAnnotationConfiguration.class);
@@ -122,6 +134,10 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                     // The default startup mode replays synchronously, so by the time refresh() returns the catch-up
                     // has already folded both events straight from the store, before the bridge ever touched them.
                     assertThat(store.get(orderBeforeCatchup)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED");
+                    // 1, not 2. A catch-up replay coalesces its reads and writes per key rather than paying one
+                    // save per event (see Projections.materializedView's own javadoc), so both of this order's
+                    // events fold into a single save here.
+                    assertThat(foldsForOrderBeforeCatchup).hasValue(1);
 
                     // The bridge's coarse poll now notices the feed is ready for live delivery and starts consuming
                     // the backlog it left untouched. Both messages arrive a second time, are recognised as already
@@ -134,6 +150,12 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                             assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero());
                     bridge.close();
                     assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero();
+                    // The redelivered backlog reached the feed a second time and was acknowledged, proven above,
+                    // but the count staying at 1 rather than climbing to 3 (the coalesced catch-up save plus one
+                    // more per redelivered event, since live delivery is not coalesced) is what proves the feed
+                    // recognised the redelivery as already delivered and did not fold it again, not the
+                    // acknowledgement alone.
+                    assertThat(foldsForOrderBeforeCatchup).hasValue(1);
                     bridge = RabbitMqDomainEventBridge.builder(rabbitConnection, feed, queue)
                             .resolver(resolver)
                             .pollInterval(Duration.ofMillis(50))
