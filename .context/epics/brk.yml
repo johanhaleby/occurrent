@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 79
+revision: 80
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -16,22 +16,6 @@ definition_of_done:
   - "#388 closed"
   - "Memory checkpointed, sessions archived at closeout, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
 pending_actions:
-  - id: act-007
-    type: dispatch-subagent
-    target: "U5 worktree subagent (Sonnet), Unattended vehicle; id in this session's task list"
-    expected: "plan gate stop with a PLAN ⌁[brk/U5#416] block; #416 claim comment 5337604969 and in-progress label read back"
-    status: VERIFIED
-    attempts: 1
-    safe_to_repeat: false
-    issued_at: 2026-08-19T04:49:00Z
-  - id: act-006
-    type: dispatch-subagent
-    target: "U4 worktree subagent (Sonnet), Unattended vehicle; id in this session's task list"
-    expected: "plan gate stop with a PLAN ⌁[brk/U4#415] block; #415 claim comment 5337604731 and in-progress label read back"
-    status: VERIFIED
-    attempts: 1
-    safe_to_repeat: false
-    issued_at: 2026-08-19T04:49:00Z
   - id: act-005
     type: dispatch-chip
     target: "U3 chip task_dca9fcca, title ⌁[brk/U3#414] RabbitMQ publish module · Sonnet/high"
@@ -187,7 +171,7 @@ units:
   U6:
     issue: 417
     goal: "Kafka consume bridge: poll, reconstruct, Pushable.accept/DomainEventFeed, offset-commit-after-accept, topics from destinationsFor(filter), ordering caveats documented prominently; folds changelog"
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: [U5, U11]
