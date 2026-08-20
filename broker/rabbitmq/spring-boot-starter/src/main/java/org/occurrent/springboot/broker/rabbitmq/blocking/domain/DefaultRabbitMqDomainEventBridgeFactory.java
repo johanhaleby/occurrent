@@ -51,10 +51,7 @@ class DefaultRabbitMqDomainEventBridgeFactory implements RabbitMqDomainEventBrid
         if (resolver != null) {
             builder.resolver(resolver);
         }
-        RabbitMqBrokerProperties.ParkingDestination parkingDestination = bridgeProperties.getParkingDestination();
-        if (parkingDestination.getExchange() != null && parkingDestination.getRoutingKey() != null) {
-            builder.parkingDestination(RabbitMqDestination.of(parkingDestination.getExchange(), parkingDestination.getRoutingKey()));
-        }
+        bridgeProperties.getParkingDestination().toDestination().ifPresent(builder::parkingDestination);
         return builder;
     }
 }

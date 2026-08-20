@@ -18,6 +18,7 @@ package org.occurrent.springboot.broker.kafka.blocking;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.broker.kafka.blocking.KafkaDestination;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
@@ -25,6 +26,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Configuration for the Kafka broker auto-configuration, every default copied from the builder default it
@@ -92,9 +94,11 @@ public class KafkaBrokerProperties {
 
         /**
          * Passthrough Kafka producer configuration beyond {@code bootstrap.servers}, for anything this starter
-         * does not otherwise expose, TLS and SASL settings included. {@code acks} and the serializers are always
-         * forced by {@code KafkaCloudEventSink.Builder#build()} regardless of what is set here, the same refusal
-         * that builder already makes for a caller constructing it directly.
+         * does not otherwise expose, TLS and SASL settings included. The serializers are always overwritten by
+         * {@code KafkaCloudEventSink.Builder#build()} regardless of what is set here. Leaving {@code acks} unset
+         * defaults it to {@code all}, and setting it to anything other than {@code all} or {@code -1} here makes
+         * {@code build()} refuse, the same refusal that builder already makes for a caller constructing it
+         * directly.
          */
         private Map<String, String> additionalProperties = new LinkedHashMap<>();
 
@@ -111,9 +115,11 @@ public class KafkaBrokerProperties {
 
         /**
          * Passthrough Kafka consumer configuration beyond {@code bootstrap.servers} and {@code group.id}, for
-         * anything this starter does not otherwise expose. {@code enable.auto.commit} is always forced to
-         * {@code false} regardless of what is set here, the same refusal the underlying bridge builders already
-         * make for a caller constructing one directly.
+         * anything this starter does not otherwise expose. {@code enable.auto.commit} defaults to {@code false}
+         * here, and setting it to anything else makes {@code build()} refuse, the same refusal the underlying
+         * bridge builders already make for a caller constructing one directly. {@code group.id} set here is
+         * ignored, since the bridge factory's own {@code groupId} argument always wins, see
+         * {@link KafkaClientConfigs}.
          */
         private Map<String, String> additionalProperties = new LinkedHashMap<>();
 
@@ -223,6 +229,19 @@ public class KafkaBrokerProperties {
 
         public void setTopic(@Nullable String topic) {
             this.topic = topic;
+        }
+
+        /**
+         * The configured destination, or empty when {@link #topic} is null or blank. A bridge factory calls this
+         * rather than checking the field itself, so a blank value from an unset placeholder in a property file is
+         * treated the same as an absent one instead of reaching {@code parkingDestination(...)} as a topic Kafka
+         * would only reject once the first failed delivery is parked.
+         */
+        public Optional<KafkaDestination> toDestination() {
+            if (topic == null || topic.isBlank()) {
+                return Optional.empty();
+            }
+            return Optional.of(KafkaDestination.of(topic));
         }
     }
 

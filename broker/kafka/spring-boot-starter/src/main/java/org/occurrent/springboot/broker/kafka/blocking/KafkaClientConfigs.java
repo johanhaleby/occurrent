@@ -24,10 +24,12 @@ import java.util.Map;
 
 /**
  * Builds the base {@code Map<String, Object>} {@code KafkaCloudEventSink.builder(...)} and the bridge builders
- * take, from {@link KafkaBrokerProperties}. Every entry here is a default a caller can still override by putting
- * the same key in {@code additional-properties}, since {@link Map#putAll} below applies the property-supplied
- * additions last. The underlying builders make their own final, unoverridable checks on {@code acks} and
- * {@code enable.auto.commit} regardless of what this produces.
+ * take, from {@link KafkaBrokerProperties}. {@code additional-properties} fills in anything else a caller wants
+ * and can override a seeded default such as {@link #consumerConfig}'s {@code enable.auto.commit}, since a caller
+ * deliberately setting that back should still reach the underlying builder's own refusal. It can never override
+ * {@code bootstrap.servers} or, for {@link #consumerConfig}, {@code group.id}, which are set last and always win.
+ * ADR 90 requires one consumer group per consumer, so letting a stray {@code additional-properties} entry collapse
+ * two different {@link #consumerConfig} calls onto the same group would be a correctness bug, not a convenience.
  * <p>
  * Public rather than package-private because the domain-level bridge factory in the sibling {@code .domain}
  * package needs it too. Java visibility has no notion of "package family", and duplicating this map-building logic
@@ -39,25 +41,25 @@ public final class KafkaClientConfigs {
     }
 
     public static Map<String, Object> producerConfig(KafkaBrokerProperties properties) {
-        Map<String, Object> config = new HashMap<>();
+        Map<String, Object> config = new HashMap<>(properties.getProducer().getAdditionalProperties());
         config.put(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG, String.join(",", properties.getBootstrapServers()));
-        config.putAll(properties.getProducer().getAdditionalProperties());
         return config;
     }
 
     /**
      * {@code enable.auto.commit} is seeded {@code false} here, matching what every bridge requires anyway, so an
      * application configuring nothing beyond {@code bootstrap-servers} and a group id gets a working consumer
-     * rather than a build-time refusal. {@code additional-properties} is still applied after, so a caller that
-     * deliberately sets it back to {@code true} gets the same refusal the underlying builder already makes for a
-     * caller constructing one directly, not a silently stripped override.
+     * rather than a build-time refusal. {@code additional-properties} is applied after that seed, so a caller that
+     * deliberately sets {@code enable.auto.commit} back to {@code true} still gets the same refusal the underlying
+     * builder already makes for a caller constructing one directly. {@code bootstrap.servers} and {@code group.id}
+     * are set after {@code additional-properties} instead, so neither can be overridden that way.
      */
     public static Map<String, Object> consumerConfig(KafkaBrokerProperties properties, String groupId) {
         Map<String, Object> config = new HashMap<>();
-        config.put(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG, String.join(",", properties.getBootstrapServers()));
         config.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
-        config.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         config.putAll(properties.getConsumer().getAdditionalProperties());
+        config.put(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG, String.join(",", properties.getBootstrapServers()));
+        config.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         return config;
     }
 }

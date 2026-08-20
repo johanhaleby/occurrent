@@ -18,9 +18,11 @@ package org.occurrent.springboot.broker.rabbitmq.blocking;
 
 import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
+import java.util.Optional;
 
 /**
  * Configuration for the RabbitMQ broker auto-configuration, every default copied from the builder default it
@@ -177,6 +179,19 @@ public class RabbitMqBrokerProperties {
 
         public void setRoutingKey(@Nullable String routingKey) {
             this.routingKey = routingKey;
+        }
+
+        /**
+         * The configured destination, or empty when either field is null or blank. A bridge factory calls this
+         * rather than checking the fields itself, so a blank value from an unset placeholder in a property file
+         * is treated the same as an absent one instead of reaching {@code parkingDestination(...)} as a
+         * half-configured value.
+         */
+        public Optional<RabbitMqDestination> toDestination() {
+            if (exchange == null || exchange.isBlank() || routingKey == null || routingKey.isBlank()) {
+                return Optional.empty();
+            }
+            return Optional.of(RabbitMqDestination.of(exchange, routingKey));
         }
     }
 

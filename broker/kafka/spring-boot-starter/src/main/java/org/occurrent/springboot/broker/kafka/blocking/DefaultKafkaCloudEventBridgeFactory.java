@@ -51,10 +51,7 @@ class DefaultKafkaCloudEventBridgeFactory implements KafkaCloudEventBridgeFactor
         if (resolver != null) {
             builder.resolver(resolver);
         }
-        String parkingTopic = bridgeProperties.getParkingDestination().getTopic();
-        if (parkingTopic != null) {
-            builder.parkingDestination(KafkaDestination.of(parkingTopic));
-        }
+        bridgeProperties.getParkingDestination().toDestination().ifPresent(builder::parkingDestination);
         return builder;
     }
 
