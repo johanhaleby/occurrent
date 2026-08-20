@@ -401,7 +401,10 @@ class ProjectionAnnotationRegistrar {
         if (structurallyNeverReplays) {
             return true;
         }
-        if (annotation.startAt() == org.occurrent.annotation.StartPosition.DEFAULT) {
+        if (annotation.startAt() == org.occurrent.annotation.StartPosition.DEFAULT && annotation.startAtGlobalPosition() < 0) {
+            // startAtGlobalPosition >= 0 overrides DEFAULT and replays from that position regardless
+            // (generateAgnosticStartAt/generateDcbStartAt check it first), so it must be excluded here too, or a
+            // projection that genuinely replays from an explicit position would get the never-replays warning.
             ComposedReplayPhase holder = applicationContext.getBeanProvider(ComposedReplayPhase.class).getIfAvailable();
             return holder != null && holder.isDefaultKnownLiveOnly();
         }

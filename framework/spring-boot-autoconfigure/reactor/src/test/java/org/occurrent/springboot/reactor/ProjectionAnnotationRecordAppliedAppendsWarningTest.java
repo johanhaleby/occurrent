@@ -128,6 +128,38 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     }
 
     @Test
+    void startAtGlobalPosition_does_not_warn_even_on_the_shipped_composition_because_it_overrides_default_and_genuinely_replays() {
+        // Same owner-registered fact as the test above, but startAtGlobalPosition = 0 takes precedence over the
+        // left-at-default startAt (generateAgnosticStartAt checks it first) and genuinely replays, so the DEFAULT
+        // branch of verifiedNeverReplays must not treat this as the live-only case.
+        Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
+        doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
+        when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(true);
+        Subscription subscription = mock(Subscription.class);
+        when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
+        when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(subscription);
+        ComposedReplayPhase composedReplayPhase = new ComposedReplayPhase();
+        composedReplayPhase.suppliedBy(model);
+        composedReplayPhase.defaultBypassesCatchup();
+        EventStore eventStore = mock(EventStore.class, withSettings().extraInterfaces(PositionOrderedReader.class));
+        when(((PositionOrderedReader) eventStore).writesPosition()).thenReturn(true);
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("startAtGlobalPositionProjection", StartAtGlobalPositionProjection.class, StartAtGlobalPositionProjection::new)
+                .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
+                .withBean("subscribable", Subscribable.class, () -> model)
+                .withBean(ComposedReplayPhase.class, () -> composedReplayPhase)
+                .withBean("eventStore", EventStore.class, () -> eventStore)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).isEmpty();
+                });
+    }
+
+    @Test
     void startAt_beginning_does_not_warn_because_a_rebuild_actually_replays_and_clears() {
         runWith(StartAtBeginningProjection.class, "startAtBeginningProjection", StartAtBeginningProjection::new);
 
@@ -330,6 +362,19 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
 
     static class StartAtNowProjection {
         @Projection(id = PROJECTION_ID, recordAppliedAppends = true, startAt = StartPosition.NOW)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    // startAt is left at its default value on purpose. startAtGlobalPosition >= 0 overrides it and replays from
+    // that position regardless (generateAgnosticStartAt checks it first), so this is a valid, genuinely replaying
+    // configuration that must not trip the DEFAULT branch of verifiedNeverReplays.
+    static class StartAtGlobalPositionProjection {
+        @Projection(id = PROJECTION_ID, recordAppliedAppends = true, startAtGlobalPosition = 0)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
                     .id(event -> "k")
