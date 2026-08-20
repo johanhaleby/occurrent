@@ -254,7 +254,7 @@ jobs:
           # (projection+forwarder ~5 vs domain ~7) to cut per-runner churn, keeping an in-run
           # retry as a backstop for residual timing flakiness.
           - { name: example-domain,              paths: "example/domain", args: "-Dsurefire.rerunFailingTestsCount=2" }
-          - { name: example-projection,          paths: "example/projection example/forwarder example/snapshot example/saga", args: "-Dsurefire.rerunFailingTestsCount=2" }
+          - { name: example-projection,          paths: "example/projection example/forwarder example/snapshot example/saga example/broker", args: "-Dsurefire.rerunFailingTestsCount=2" }
           - { name: subscription-util-blocking,  paths: "subscription/util/blocking subscription/synchronous/blocking subscription/push/blocking" }
           # `args` applies to every path in a shard, so the two `eventstore` lodgers are here rather
           # than in an `example` shard. Parking them next to a rerun flag they do not need would
