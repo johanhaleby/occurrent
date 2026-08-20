@@ -52,4 +52,42 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
             assertThat(view.status()).isEqualTo("SHIPPED");
         }
     }
+
+    /**
+     * Proves the in-memory catch-up marker and the in-memory read model actually stay paired, the round-4 review's
+     * catch. A stray durable marker beside an in-memory read model would have this order caught up once, by the
+     * first {@code start(...)}, then silently skipped by the second, since the marker would already claim the
+     * replay done. Both {@code start(...)} calls share this test's real Mongo, so the order is genuinely still
+     * there for the second one to replay.
+     */
+    @Test
+    void a_second_cloud_event_level_bootstrap_replays_an_order_the_first_one_placed_and_shipped() throws Exception {
+        OrderStatusProjection.OrderStatusView placedByFirstBoot;
+        try (RabbitMqCloudEventLevelBootstrap firstBoot = RabbitMqCloudEventLevelBootstrap.start(mongoClient, rabbitConnection)) {
+            placedByFirstBoot = firstBoot.placeAndShipOneOrder(Duration.ofSeconds(20));
+        }
+
+        try (RabbitMqCloudEventLevelBootstrap secondBoot = RabbitMqCloudEventLevelBootstrap.start(mongoClient, rabbitConnection)) {
+            OrderStatusProjection.OrderStatusView replayed = secondBoot.orderStatusViews().get(placedByFirstBoot.orderId());
+            assertThat(replayed).isNotNull();
+            assertThat(replayed.status()).isEqualTo("SHIPPED");
+        }
+    }
+
+    /**
+     * The domain-level twin of {@link #a_second_cloud_event_level_bootstrap_replays_an_order_the_first_one_placed_and_shipped()}.
+     */
+    @Test
+    void a_second_domain_event_level_bootstrap_replays_an_order_the_first_one_placed_and_shipped() throws Exception {
+        OrderStatusProjection.OrderStatusView placedByFirstBoot;
+        try (RabbitMqDomainEventLevelBootstrap firstBoot = RabbitMqDomainEventLevelBootstrap.start(mongoClient, rabbitConnection)) {
+            placedByFirstBoot = firstBoot.placeAndShipOneOrder(Duration.ofSeconds(20));
+        }
+
+        try (RabbitMqDomainEventLevelBootstrap secondBoot = RabbitMqDomainEventLevelBootstrap.start(mongoClient, rabbitConnection)) {
+            OrderStatusProjection.OrderStatusView replayed = secondBoot.orderStatusViews().get(placedByFirstBoot.orderId());
+            assertThat(replayed).isNotNull();
+            assertThat(replayed.status()).isEqualTo("SHIPPED");
+        }
+    }
 }

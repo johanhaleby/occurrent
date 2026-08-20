@@ -21,10 +21,14 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.dsl.projection.blocking.Projections;
+import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.View;
+import org.occurrent.dsl.view.ViewStateRepository;
 
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -33,6 +37,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * force through RabbitMQ can still be exercised directly. At-least-once delivery permits {@code OrderPlaced} to
  * arrive again after {@code OrderShipped} already landed, and permits {@code OrderShipped} to arrive before
  * {@code OrderPlaced} ever does.
+ * <p>
+ * {@link #order_shipped_arriving_before_order_placed_is_saved_and_then_filled_in_without_crashing()} drives the
+ * same reordering through {@link Projections#materializedView(org.occurrent.dsl.projection.Projection, ViewStateRepository)}
+ * and a real {@link ViewStateRepository}, not just {@link View#evolve}. A fold that answered {@code null} for
+ * {@code OrderShipped} passed every fold-level assertion here, since {@code View.evolve} just returns what the fold
+ * returns, and only broke once something actually called {@code repository.save(id, null)}.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class OrderStatusProjectionTest {
@@ -54,12 +64,38 @@ class OrderStatusProjectionTest {
     }
 
     @Test
-    void order_shipped_arriving_before_order_placed_produces_no_view() {
+    void order_shipped_arriving_before_order_placed_produces_a_shipped_view_with_no_product_yet() {
         OrderShipped shipped = new OrderShipped(UUID.randomUUID().toString(), "order-" + UUID.randomUUID());
 
-        OrderStatusProjection.OrderStatusView result = view.evolve(null, EventMetadata.empty(), shipped);
+        OrderStatusProjection.OrderStatusView result = view.evolve(null, metadataFor("stream-1", 0L, 10L), shipped);
 
-        assertThat(result).isNull();
+        assertThat(result.status()).isEqualTo("SHIPPED");
+        assertThat(result.product()).isNull();
+    }
+
+    /**
+     * The fold-level tests above call {@link View#evolve} directly, which only ever returns a value, so a fold that
+     * answered {@code null} for {@code OrderShipped} would pass them too. The failure the round-4 review caught only
+     * shows up one layer up, where a real {@link ViewStateRepository} refuses to save that {@code null}, so this
+     * test drives the identical reordering through {@link Projections#materializedView} instead.
+     */
+    @Test
+    void order_shipped_arriving_before_order_placed_is_saved_and_then_filled_in_without_crashing() {
+        String orderId = "order-" + UUID.randomUUID();
+        OrderShipped shipped = new OrderShipped(UUID.randomUUID().toString(), orderId);
+        OrderPlaced placed = new OrderPlaced(UUID.randomUUID().toString(), orderId, "Widget");
+
+        Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
+        ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, store::put);
+        MaterializedView<OrderEvent> materializedView = Projections.materializedView(OrderStatusProjection.orderStatusProjection(), repository);
+
+        materializedView.update(metadataFor("stream-1", 0L, 10L), shipped);
+        assertThat(store.get(orderId).status()).isEqualTo("SHIPPED");
+        assertThat(store.get(orderId).product()).isNull();
+
+        materializedView.update(metadataFor("stream-1", 1L, 11L), placed);
+        assertThat(store.get(orderId).status()).isEqualTo("SHIPPED");
+        assertThat(store.get(orderId).product()).isEqualTo("Widget");
     }
 
     private static EventMetadata metadataFor(String streamId, long streamVersion, long position) {

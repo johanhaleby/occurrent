@@ -26,14 +26,20 @@ import org.occurrent.dsl.projection.Projection;
  * fold, never the fold itself.
  * <p>
  * Every fold here is idempotent under redelivery, on purpose, including out of order. A catch-up replay and a live
- * broker redelivery can both reach the same stored event, and at-least-once delivery permits {@code OrderPlaced} to
- * arrive again after {@code OrderShipped} already landed, so neither handler trusts the event alone. {@code OrderPlaced}
- * only creates the view, it never overwrites an existing one, and {@code OrderShipped} only moves a view already at
- * {@code PLACED} to {@code SHIPPED}. Redelivering either event, in either order, leaves the view exactly where it was.
+ * broker redelivery can both reach the same stored event, and at-least-once delivery permits {@code OrderShipped}
+ * to arrive before {@code OrderPlaced} does, not only after it. Neither handler ever returns {@code null}.
+ * A {@link org.occurrent.dsl.view.ViewStateRepository} does not accept a {@code null} state, so a handler that
+ * answered {@code null} for an event it wanted to ignore would fail the save instead, which redelivers the same
+ * event forever and, at the bridge's default prefetch of one, blocks every later delivery behind it. {@code
+ * OrderShipped} with no view yet therefore records the shipment as its own view, {@code product} left {@code null}
+ * until {@code OrderPlaced} fills it in, rather than declining to answer. {@code OrderPlaced} always writes its own
+ * fields, including the metadata, but never regresses a status the view already reached. Redelivering either
+ * event, in either order, leaves the view at the same status it already had.
  * <p>
  * {@code OrderPlaced} is folded through the metadata-aware handler so the domain-level example can prove that the
  * stream id, stream version and global position survive the round trip through RabbitMQ's message headers, the
- * same {@link org.occurrent.cloudevents.EventMetadata} a catch-up replay would have handed it.
+ * same {@link org.occurrent.cloudevents.EventMetadata} a catch-up replay would have handed it. {@code OrderShipped}
+ * is folded through it too, for the same reason on the one path where it reaches the view first.
  */
 public final class OrderStatusProjection {
 
@@ -43,22 +49,24 @@ public final class OrderStatusProjection {
     public static Projection<OrderStatusView, OrderEvent, String> orderStatusProjection() {
         return Projection.<OrderStatusView, OrderEvent, String>builder(null)
                 .id(OrderEvent::orderId)
-                .on(OrderPlaced.class, (state, metadata, event) -> state == null
-                        ? new OrderStatusView(event.orderId(), event.product(), "PLACED",
+                .on(OrderPlaced.class, (state, metadata, event) -> new OrderStatusView(
+                        event.orderId(), event.product(), state == null ? "PLACED" : state.status(),
+                        metadata.getStreamId(), metadata.getStreamVersion(), metadata.getPosition()))
+                .on(OrderShipped.class, (state, metadata, event) -> state == null
+                        ? new OrderStatusView(event.orderId(), null, "SHIPPED",
                                 metadata.getStreamId(), metadata.getStreamVersion(), metadata.getPosition())
-                        : state)
-                .on(OrderShipped.class, (state, event) -> state != null && state.status().equals("PLACED")
-                        ? state.withStatus("SHIPPED")
-                        : state)
+                        : ("PLACED".equals(state.status()) ? state.withStatus("SHIPPED") : state))
                 .build();
     }
 
     /**
      * The materialized read model, holding an order, its current status, and the
-     * {@link org.occurrent.cloudevents.EventMetadata} that {@code OrderPlaced} arrived with, so a test can assert
-     * the round trip directly off the view instead of reaching into the bridge.
+     * {@link org.occurrent.cloudevents.EventMetadata} that the view's most recent field-bearing event arrived
+     * with, so a test can assert the round trip directly off the view instead of reaching into the bridge.
+     * {@code product} is {@code null} until {@code OrderPlaced} is folded, which a view created by an
+     * out-of-order {@code OrderShipped} has not seen yet.
      */
-    public record OrderStatusView(String orderId, String product, String status,
+    public record OrderStatusView(String orderId, @Nullable String product, String status,
                                    @Nullable String streamId, long streamVersion, @Nullable Long position) {
         OrderStatusView withStatus(String newStatus) {
             return new OrderStatusView(orderId, product, newStatus, streamId, streamVersion, position);

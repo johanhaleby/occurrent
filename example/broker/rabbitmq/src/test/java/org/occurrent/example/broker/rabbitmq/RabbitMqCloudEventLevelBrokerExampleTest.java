@@ -153,8 +153,12 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
         // down and rebuilt between them. The same catch-up-complete marker backs both boots, which is the
         // one thing a real consumer restart must preserve for resume (rather than replay) to be possible.
         CheckpointStorage pushCatchupMarker = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "push-catchup-checkpoints");
-        // The read-model store also survives the restart below, the same as a durable one would, so the assertions
-        // can tell "resumed with state intact" apart from "started fresh and got lucky".
+        // The read-model store also survives the restart below, by being the same Java object both boots share
+        // rather than a fresh one per boot, so the assertions can tell "resumed with state intact" apart from
+        // "started fresh and got lucky". That is also why the durable pushCatchupMarker above is safe to pair with
+        // a plain map here despite the rule the two bootstrap classes document. This simulated restart keeps both
+        // alive across the boundary, so neither ever outlives the other the way a real process restart would let
+        // the marker outlive an in-memory map recreated from nothing.
         Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
         ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, store::put);
 

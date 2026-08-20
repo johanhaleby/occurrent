@@ -68,6 +68,14 @@
             <artifactId>occurrent-subscription-durable-blocking</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- InMemoryCheckpointStorage, for the bootstraps' own catch-up completion marker. It pairs with the
+             in-memory read model, not with the durable event store, so both are lost together on a real restart
+             rather than one lying about what has already been replayed. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-inmemory</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-cloudevent-converter-jackson3</artifactId>

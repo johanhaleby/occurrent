@@ -38,6 +38,7 @@ import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
+import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
@@ -73,6 +74,14 @@ import java.util.concurrent.Executors;
  * run this class. It places and ships one order, waits for the read model to reach {@code SHIPPED}, and logs the
  * result, so the console shows the event travel the whole loop, from the store through the forwarder and the
  * broker to the bridge and the projection.
+ * <p>
+ * The catch-up completion marker is in-memory, paired with the in-memory read model rather than with the durable
+ * event store. Losing both together on a real restart is honest. A fresh run replays the store from the start and
+ * rebuilds the read model to match. Pairing a durable marker with an in-memory read model instead would have the
+ * marker survive a restart the read model does not, so a later catch-up skips a replay the read model never
+ * actually received, and every order projected before the restart stays permanently missing. A production
+ * deployment persists both the marker and the read model, in stores with the same lifetime, never just one of
+ * the two.
  *
  * @see RabbitMqDomainEventLevelBootstrap the domain-level half of the same example
  */
@@ -132,7 +141,10 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
 
         RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
         PushSubscriptionModel pushModel = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
-        CheckpointStorage catchupMarker = new NativeMongoCheckpointStorage(mongoClient.getDatabase(DATABASE_NAME), "push-catchup-checkpoints");
+        // In-memory, paired with the in-memory orderStatusViews below, not the durable event store. Both are lost
+        // together on a real restart, so a fresh run genuinely replays rather than a durable marker skipping a
+        // replay the read model never actually got. See the class javadoc.
+        CheckpointStorage catchupMarker = new InMemoryCheckpointStorage();
         CatchupThenPushSubscriptionModel catchupThenPush = new CatchupThenPushSubscriptionModel(eventStore, pushModel, catchupMarker);
 
         RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, outcomeChannel, QUEUE)
