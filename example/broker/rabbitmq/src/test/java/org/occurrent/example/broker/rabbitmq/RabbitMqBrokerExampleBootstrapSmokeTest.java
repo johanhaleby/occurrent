@@ -16,13 +16,26 @@
 
 package org.occurrent.example.broker.rabbitmq;
 
+import com.rabbitmq.client.Connection;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqBridgeException;
+import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
+import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
+import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.Duration;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Runs both {@link RabbitMqCloudEventLevelBootstrap} and {@link RabbitMqDomainEventLevelBootstrap} exactly as
@@ -54,11 +67,10 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
     }
 
     /**
-     * Proves the in-memory catch-up marker and the in-memory read model actually stay paired, the round-4 review's
-     * catch. A stray durable marker beside an in-memory read model would have this order caught up once, by the
-     * first {@code start(...)}, then silently skipped by the second, since the marker would already claim the
-     * replay done. Both {@code start(...)} calls share this test's real Mongo, so the order is genuinely still
-     * there for the second one to replay.
+     * Proves the in-memory catch-up marker and the in-memory read model actually stay paired. A stray durable
+     * marker beside an in-memory read model would have this order caught up once, by the first {@code start(...)},
+     * then silently skipped by the second, since the marker would already claim the replay done. Both
+     * {@code start(...)} calls share this test's real Mongo, so the order is genuinely still there to replay.
      */
     @Test
     void a_second_cloud_event_level_bootstrap_replays_an_order_the_first_one_placed_and_shipped() throws Exception {
@@ -88,6 +100,79 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
             OrderStatusProjection.OrderStatusView replayed = secondBoot.orderStatusViews().get(placedByFirstBoot.orderId());
             assertThat(replayed).isNotNull();
             assertThat(replayed.status()).isEqualTo("SHIPPED");
+        }
+    }
+
+    /**
+     * Proves that a failure partway through {@code start(...)} does not leak the forwarder subscription or the
+     * sink that already started before it. Failing the bridge's own channel open,
+     * the second {@code openChannel()} call on the connection (the first is the sink's), forces exactly that
+     * partial-construction failure without touching the bridge's own topology. If the forwarder subscription
+     * leaked, it would still be watching the store and would forward a fresh order to the exchange, so a queue
+     * bound directly to it, independent of the bridge that never got to declare its own, proves it did not.
+     */
+    @Test
+    void a_failure_partway_through_starting_the_cloud_event_level_bootstrap_closes_what_already_started() throws Exception {
+        Connection failingOnSecondChannel = failOnSecondOpenChannel(rabbitConnection);
+
+        assertThatThrownBy(() -> RabbitMqCloudEventLevelBootstrap.start(mongoClient, failingOnSecondChannel))
+                .isInstanceOf(RabbitMqBridgeException.class);
+
+        assertNothingArrivesFromALeakedForwarder();
+    }
+
+    /**
+     * The domain-level twin of {@link #a_failure_partway_through_starting_the_cloud_event_level_bootstrap_closes_what_already_started()}.
+     */
+    @Test
+    void a_failure_partway_through_starting_the_domain_event_level_bootstrap_closes_what_already_started() throws Exception {
+        Connection failingOnSecondChannel = failOnSecondOpenChannel(rabbitConnection);
+
+        assertThatThrownBy(() -> RabbitMqDomainEventLevelBootstrap.start(mongoClient, failingOnSecondChannel))
+                .isInstanceOf(RabbitMqBridgeException.class);
+
+        assertNothingArrivesFromALeakedForwarder();
+    }
+
+    /** A {@link Connection} that delegates everything to {@code real}, except its second no-argument
+     * {@code openChannel()} call, which it fails instead, simulating the bridge's own channel open failing
+     * while leaving the sink's earlier one, and everything built from it, already running. */
+    private static Connection failOnSecondOpenChannel(Connection real) {
+        AtomicInteger openChannelCalls = new AtomicInteger();
+        InvocationHandler handler = (proxy, method, args) -> {
+            if ("openChannel".equals(method.getName()) && method.getParameterCount() == 0
+                    && openChannelCalls.incrementAndGet() == 2) {
+                return Optional.empty();
+            }
+            try {
+                return method.invoke(real, args);
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+        };
+        return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(), new Class<?>[]{Connection.class}, handler);
+    }
+
+    /**
+     * Binds a fresh queue directly to the bootstraps' fixed exchange, writes a fresh order straight into the
+     * bootstraps' fixed database, the same one a leaked forwarder subscription would still be watching, and
+     * asserts nothing arrives. A live forwarder would publish it within milliseconds of the write, well inside
+     * the wait below.
+     */
+    private void assertNothingArrivesFromALeakedForwarder() throws Exception {
+        String probeQueue = "leak-probe-" + UUID.randomUUID();
+        adminChannel.queueDeclare(probeQueue, false, false, true, null);
+        adminChannel.queueBind(probeQueue, "broker-example", "#");
+        try {
+            CloudEventConverter<OrderEvent> converter = newConverter();
+            MongoEventStore eventStore = new MongoEventStore(mongoClient, "occurrent_broker_example", "events", new EventStoreConfig(TimeRepresentation.RFC_3339_STRING));
+            String orderId = "order-" + UUID.randomUUID();
+            eventStore.write(orderId, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderId, "Widget")));
+
+            Thread.sleep(2000);
+            assertThat(adminChannel.queueDeclarePassive(probeQueue).getMessageCount()).isZero();
+        } finally {
+            adminChannel.queueDelete(probeQueue);
         }
     }
 }

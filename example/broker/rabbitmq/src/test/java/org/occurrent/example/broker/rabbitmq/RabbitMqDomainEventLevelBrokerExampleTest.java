@@ -78,75 +78,95 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
         CheckpointStorage domainCatchupMarker = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "domain-catchup-checkpoints");
         DomainEventFeed<OrderEvent> feed = new DomainEventFeed<>(eventStore, converter, OrderEvent::eventId, domainCatchupMarker);
 
-        try (RabbitMqDomainEventBridge<OrderEvent> bridge = RabbitMqDomainEventBridge.builder(rabbitConnection, feed, queue)
+        RabbitMqDomainEventBridge<OrderEvent> bridge = RabbitMqDomainEventBridge.builder(rabbitConnection, feed, queue)
                 .resolver(resolver)
                 .pollInterval(Duration.ofMillis(50))
                 .build();
-             RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build()) {
+        // Not a try-with-resources, since bridge is reassigned partway through to a fresh instance on the same queue,
+        // which try-with-resources cannot express, so this closes whatever it currently refers to instead.
+        // close() is idempotent, so also closing it explicitly below to make an assertion meaningful costs nothing.
+        try {
+            try (RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build()) {
 
-            NativeMongoSubscriptionModel forwarderSubscriptionModel = new NativeMongoSubscriptionModel(
-                    mongoClient.getDatabase(databaseName), EVENTS_COLLECTION, TimeRepresentation.RFC_3339_STRING, Executors.newVirtualThreadPerTaskExecutor());
-            CheckpointStorage forwarderCheckpoints = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "forwarder-checkpoints");
-            DurableSubscriptionModel forwarderSubscription = new DurableSubscriptionModel(forwarderSubscriptionModel, forwarderCheckpoints);
-            CloudEventForwarder forwarder = new CloudEventForwarder(forwarderSubscription, sink);
-            forwarder.forward("forward-orders-domain");
+                NativeMongoSubscriptionModel forwarderSubscriptionModel = new NativeMongoSubscriptionModel(
+                        mongoClient.getDatabase(databaseName), EVENTS_COLLECTION, TimeRepresentation.RFC_3339_STRING, Executors.newVirtualThreadPerTaskExecutor());
+                CheckpointStorage forwarderCheckpoints = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "forwarder-checkpoints");
+                DurableSubscriptionModel forwarderSubscription = new DurableSubscriptionModel(forwarderSubscriptionModel, forwarderCheckpoints);
+                CloudEventForwarder forwarder = new CloudEventForwarder(forwarderSubscription, sink);
+                forwarder.forward("forward-orders-domain");
 
-            // Forwarded before anything is registered on the feed. RabbitMqDomainEventBridge.reconcileConsumption
-            // gates on feed.isReadyForLiveDelivery(), which is false until a catch-up reaches live, so these two
-            // messages queue up on the broker rather than being pulled off and buffered in memory.
-            String orderBeforeCatchup = "order-" + UUID.randomUUID();
-            eventStore.write(orderBeforeCatchup, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderBeforeCatchup, "Widget")));
-            eventStore.write(orderBeforeCatchup, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderBeforeCatchup)));
-
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                    assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isEqualTo(2));
-
-            Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
-            ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, store::put);
-
-            AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
-            context.register(PropertiesConfig.class, OccurrentBlockingAnnotationConfiguration.class);
-            // The registrar looks this bean up by type for every push projection it wires, a domain-fed one
-            // included, so it has to be present even though the fold itself never touches a CloudEvent.
-            context.registerBean("cloudEventConverter", CloudEventConverter.class, () -> converter);
-            context.registerBean("domainEventFeed", DomainEventFeed.class, () -> feed);
-            context.registerBean("viewStateRepository", ViewStateRepository.class, () -> repository);
-            context.registerBean("orderProjectionHolder", OrderProjectionHolder.class, OrderProjectionHolder::new);
-            try {
-                context.refresh();
-
-                // The default startup mode replays synchronously, so by the time refresh() returns the catch-up
-                // has already folded both events straight from the store, before the bridge ever touched them.
-                assertThat(store.get(orderBeforeCatchup)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED");
-
-                // The bridge's coarse poll now notices the feed is ready for live delivery and starts consuming
-                // the backlog it left untouched. Both messages arrive a second time, are recognised as already
-                // delivered and are not folded again (the view above is unaffected), but are still acknowledged.
-                // Closing the bridge first requeues anything still outstanding, so a nonzero count here would mean
-                // a redelivered message was never actually acknowledged, not that the check ran too early.
-                await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                        assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero());
-
-                // A second order, published only after the feed is already live. It never touches the catch-up
-                // replay, so its EventMetadata can only have reached the projection through the broker.
-                String orderAfterCatchup = "order-" + UUID.randomUUID();
-                CloudEvent placed = converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderAfterCatchup, "Gadget"));
-                eventStore.write(orderAfterCatchup, placed);
-                eventStore.write(orderAfterCatchup, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderAfterCatchup)));
+                // Forwarded before anything is registered on the feed. RabbitMqDomainEventBridge.reconcileConsumption
+                // gates on feed.isReadyForLiveDelivery(), which is false until a catch-up reaches live, so these two
+                // messages queue up on the broker rather than being pulled off and buffered in memory.
+                String orderBeforeCatchup = "order-" + UUID.randomUUID();
+                eventStore.write(orderBeforeCatchup, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderBeforeCatchup, "Widget")));
+                eventStore.write(orderBeforeCatchup, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderBeforeCatchup)));
 
                 await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                        assertThat(store.get(orderAfterCatchup)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
+                        assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isEqualTo(2));
 
-                CloudEvent persistedPlaced = eventStore.read(orderAfterCatchup).events().findFirst().orElseThrow();
-                EventMetadata expectedMetadata = EventMetadata.from(persistedPlaced);
-                OrderStatusProjection.OrderStatusView view = store.get(orderAfterCatchup);
-                assertThat(view.streamId()).isEqualTo(expectedMetadata.getStreamId());
-                assertThat(view.streamVersion()).isEqualTo(expectedMetadata.getStreamVersion());
-                assertThat(view.position()).isEqualTo(expectedMetadata.getPosition());
-            } finally {
-                context.close();
+                Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
+                ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, store::put);
+
+                AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
+                context.register(PropertiesConfig.class, OccurrentBlockingAnnotationConfiguration.class);
+                // The registrar looks this bean up by type for every push projection it wires, a domain-fed one
+                // included, so it has to be present even though the fold itself never touches a CloudEvent.
+                context.registerBean("cloudEventConverter", CloudEventConverter.class, () -> converter);
+                context.registerBean("domainEventFeed", DomainEventFeed.class, () -> feed);
+                context.registerBean("viewStateRepository", ViewStateRepository.class, () -> repository);
+                context.registerBean("orderProjectionHolder", OrderProjectionHolder.class, OrderProjectionHolder::new);
+                try {
+                    context.refresh();
+
+                    // The default startup mode replays synchronously, so by the time refresh() returns the catch-up
+                    // has already folded both events straight from the store, before the bridge ever touched them.
+                    assertThat(store.get(orderBeforeCatchup)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED");
+
+                    // The bridge's coarse poll now notices the feed is ready for live delivery and starts consuming
+                    // the backlog it left untouched. Both messages arrive a second time, are recognised as already
+                    // delivered and are not folded again (the view above is unaffected), but are still acknowledged.
+                    // A queue's ready count excludes a delivery still outstanding on a consumer, so a bare zero
+                    // here would not tell an ack apart from the bridge simply holding the message unacknowledged.
+                    // Closing this bridge first requeues anything it never acknowledged, which turns "zero" back
+                    // into a real proof, then a fresh bridge on the same queue takes over for the live order below.
+                    await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                            assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero());
+                    bridge.close();
+                    assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero();
+                    bridge = RabbitMqDomainEventBridge.builder(rabbitConnection, feed, queue)
+                            .resolver(resolver)
+                            .pollInterval(Duration.ofMillis(50))
+                            .build();
+
+                    // A second order, published only after the feed is already live. It never touches the catch-up
+                    // replay, so its EventMetadata can only have reached the projection through the broker.
+                    String orderAfterCatchup = "order-" + UUID.randomUUID();
+                    CloudEvent placed = converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderAfterCatchup, "Gadget"));
+                    eventStore.write(orderAfterCatchup, placed);
+                    eventStore.write(orderAfterCatchup, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderAfterCatchup)));
+
+                    await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                            assertThat(store.get(orderAfterCatchup)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
+
+                    // Same closed-then-checked shape as above, now proving the live order's delivery was itself
+                    // acknowledged rather than merely folded while still sitting unacknowledged on the bridge.
+                    bridge.close();
+                    assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero();
+
+                    CloudEvent persistedPlaced = eventStore.read(orderAfterCatchup).events().findFirst().orElseThrow();
+                    EventMetadata expectedMetadata = EventMetadata.from(persistedPlaced);
+                    OrderStatusProjection.OrderStatusView view = store.get(orderAfterCatchup);
+                    assertThat(view.streamId()).isEqualTo(expectedMetadata.getStreamId());
+                    assertThat(view.streamVersion()).isEqualTo(expectedMetadata.getStreamVersion());
+                    assertThat(view.position()).isEqualTo(expectedMetadata.getPosition());
+                } finally {
+                    context.close();
+                }
+                forwarderSubscription.shutdown();
             }
-            forwarderSubscription.shutdown();
+        } finally {
+            bridge.close();
         }
     }
 

@@ -21,6 +21,7 @@ import com.mongodb.client.MongoClients;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
@@ -70,6 +71,16 @@ import java.util.concurrent.Executors;
  * run this class. It places and ships one order, waits for the read model to reach {@code SHIPPED}, and logs the
  * result, so the console shows the event travel the whole loop, from the store through the forwarder and the
  * broker to the bridge and the projection.
+ * <p>
+ * {@code rs.initiate()} with no member list advertises the container's own hostname as the replica set member
+ * address, not {@code localhost}, and a driver doing ordinary replica set discovery switches to that unreachable
+ * hostname the moment it reads the config back. The default {@code mongoUri} therefore carries
+ * {@code directConnection=true}, which keeps the driver on the one address it was given instead of switching, the
+ * same fix a single-node dev replica set needs everywhere this pattern shows up. Verified end to end against the
+ * commands above from a clean container, with and without that parameter. The driver fails with an
+ * {@code UnknownHostException} on the container's own hostname without it, and this class runs the whole loop to
+ * {@code SHIPPED} with it. Override {@code mongoUri} only with another URI that also either sets
+ * {@code directConnection=true} or advertises a host-reachable member address.
  * <p>
  * The catch-up completion marker is in-memory, paired with the in-memory read model rather than with the durable
  * event store. Losing both together on a real restart is honest. A fresh run replays the store from the start and
@@ -127,30 +138,68 @@ public final class RabbitMqDomainEventLevelBootstrap implements AutoCloseable {
         // already exists, so the application declares it, on its own short-lived channel.
         declareExchange(rabbitConnection);
 
-        NativeMongoSubscriptionModel forwarderSubscriptionModel = new NativeMongoSubscriptionModel(
-                mongoClient.getDatabase(DATABASE_NAME), EVENTS_COLLECTION, TimeRepresentation.RFC_3339_STRING, Executors.newVirtualThreadPerTaskExecutor());
-        CheckpointStorage forwarderCheckpoints = new NativeMongoCheckpointStorage(mongoClient.getDatabase(DATABASE_NAME), "forwarder-checkpoints");
-        DurableSubscriptionModel forwarderSubscription = new DurableSubscriptionModel(forwarderSubscriptionModel, forwarderCheckpoints);
-        RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build();
-        CloudEventForwarder forwarder = new CloudEventForwarder(forwarderSubscription, sink);
-        forwarder.forward(SUBSCRIPTION_ID + "-forwarder");
+        // From here on, forwarder.forward(...) and the bridge builder each start a background subscription the
+        // instant they succeed, before this method has anywhere to return a handle to. A later step throwing
+        // (catch-up, the bridge) would otherwise leak whatever already started. The catch below closes exactly
+        // that, in reverse order, before the failure reaches the caller.
+        DurableSubscriptionModel forwarderSubscription = null;
+        RabbitMqCloudEventSink sink = null;
+        RabbitMqDomainEventBridge<OrderEvent> bridge = null;
+        try {
+            NativeMongoSubscriptionModel forwarderSubscriptionModel = new NativeMongoSubscriptionModel(
+                    mongoClient.getDatabase(DATABASE_NAME), EVENTS_COLLECTION, TimeRepresentation.RFC_3339_STRING, Executors.newVirtualThreadPerTaskExecutor());
+            CheckpointStorage forwarderCheckpoints = new NativeMongoCheckpointStorage(mongoClient.getDatabase(DATABASE_NAME), "forwarder-checkpoints");
+            forwarderSubscription = new DurableSubscriptionModel(forwarderSubscriptionModel, forwarderCheckpoints);
+            sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build();
+            CloudEventForwarder forwarder = new CloudEventForwarder(forwarderSubscription, sink);
+            forwarder.forward(SUBSCRIPTION_ID + "-forwarder");
 
-        // In-memory, paired with the in-memory orderStatusViews below, not the durable event store. Both are lost
-        // together on a real restart, so a fresh run genuinely replays rather than a durable marker skipping a
-        // replay the read model never actually got. See the class javadoc.
-        CheckpointStorage catchupMarker = new InMemoryCheckpointStorage();
-        DomainEventFeed<OrderEvent> feed = new DomainEventFeed<>(eventStore, converter, OrderEvent::eventId, catchupMarker);
+            // In-memory, paired with the in-memory orderStatusViews below, not the durable event store. Both are
+            // lost together on a real restart, so a fresh run genuinely replays rather than a durable marker
+            // skipping a replay the read model never actually got. See the class javadoc.
+            CheckpointStorage catchupMarker = new InMemoryCheckpointStorage();
+            DomainEventFeed<OrderEvent> feed = new DomainEventFeed<>(eventStore, converter, OrderEvent::eventId, catchupMarker);
 
-        Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews = new ConcurrentHashMap<>();
-        ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(orderStatusViews::get, orderStatusViews::put);
-        feed.register(SUBSCRIPTION_ID, OrderStatusProjection.orderStatusProjection(), repository);
-        feed.catchUp(SUBSCRIPTION_ID);
+            Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews = new ConcurrentHashMap<>();
+            ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(orderStatusViews::get, orderStatusViews::put);
+            feed.register(SUBSCRIPTION_ID, OrderStatusProjection.orderStatusProjection(), repository);
+            feed.catchUp(SUBSCRIPTION_ID);
 
-        RabbitMqDomainEventBridge<OrderEvent> bridge = RabbitMqDomainEventBridge.builder(rabbitConnection, feed, QUEUE)
-                .resolver(resolver)
-                .build();
+            bridge = RabbitMqDomainEventBridge.builder(rabbitConnection, feed, QUEUE)
+                    .resolver(resolver)
+                    .build();
 
-        return new RabbitMqDomainEventLevelBootstrap(eventStore, converter, forwarderSubscription, sink, bridge, orderStatusViews);
+            return new RabbitMqDomainEventLevelBootstrap(eventStore, converter, forwarderSubscription, sink, bridge, orderStatusViews);
+        } catch (RuntimeException e) {
+            closeQuietly(bridge, e);
+            closeQuietly(forwarderSubscription, e);
+            closeQuietly(sink, e);
+            throw e;
+        }
+    }
+
+    // Closes whatever of start()'s partially-built pieces is non-null, folding a failure closing it into the
+    // original exception instead of replacing it, since the original is the one the caller asked about.
+    private static void closeQuietly(@Nullable AutoCloseable closeable, RuntimeException original) {
+        if (closeable == null) {
+            return;
+        }
+        try {
+            closeable.close();
+        } catch (Exception closeFailure) {
+            original.addSuppressed(closeFailure);
+        }
+    }
+
+    private static void closeQuietly(@Nullable DurableSubscriptionModel subscription, RuntimeException original) {
+        if (subscription == null) {
+            return;
+        }
+        try {
+            subscription.shutdown();
+        } catch (RuntimeException closeFailure) {
+            original.addSuppressed(closeFailure);
+        }
     }
 
     /**
@@ -205,7 +254,7 @@ public final class RabbitMqDomainEventLevelBootstrap implements AutoCloseable {
     }
 
     public static void main(String[] args) throws Exception {
-        String mongoUri = System.getProperty("mongoUri", "mongodb://localhost:27017/?replicaSet=rs0");
+        String mongoUri = System.getProperty("mongoUri", "mongodb://localhost:27017/?replicaSet=rs0&directConnection=true");
         String rabbitUri = System.getProperty("rabbitUri", "amqp://localhost:5672");
 
         MongoClient mongoClient = MongoClients.create(mongoUri);
