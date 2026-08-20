@@ -255,6 +255,44 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
     }
 
     /**
+     * This bridge's own copy of the poison-record backoff proof. A record whose projection can never resolve makes
+     * every poll seek back to the exact offset it started at, with nothing staged to commit, the shape
+     * {@code processBatch}'s own comment calls a poison record. That path throws nothing the outer catch-all in
+     * {@code runLoop} could back off for on its own, so {@code processBatch} backs off for {@code pollTimeout}
+     * itself whenever a batch seeks back without staging anything. A generous {@code pollTimeout} here keeps the
+     * attempt count bounded over a fixed window. Without that backoff this loop would instead spin at the JVM's
+     * own maximum rate against a record that can never resolve. The CloudEvent-level bridge has its own version of
+     * this proof, but this bridge carries its own separate copy of the same loop, so a regression here would not
+     * fail that suite.
+     */
+    @Test
+    void a_poison_record_backs_off_at_pollTimeout_instead_of_spinning() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        publish("stream-1", "id-1", "order-1");
+
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        AtomicInteger attempts = new AtomicInteger();
+        MaterializedView<TestOrderPlaced> view = event -> {
+            attempts.incrementAndGet();
+            throw new RuntimeException("poison record, never resolves");
+        };
+        feed.register("proj", view, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        try (KafkaDomainEventBridge<TestOrderPlaced> bridge = KafkaDomainEventBridge.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(Duration.ofSeconds(2))
+                .build()) {
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(attempts.get()).isGreaterThanOrEqualTo(1));
+            Thread.sleep(4500);
+            // A record already sitting on the broker makes poll() return immediately, so without the backoff this
+            // loop iterates at its natural network round-trip cadence, comfortably double digits in 4500 ms. A
+            // 2 second backoff caps that same window to the first attempt plus at most one or two more.
+            assertThat(attempts.get()).isLessThanOrEqualTo(4);
+        }
+    }
+
+    /**
      * Proves the ADR's other half of the same rule on this bridge's own copy of the loop, "other partitions in the
      * same poll are unaffected, since their offsets are independent." Partition 0 gets a permanently-failing event,
      * partition 1 gets one that always succeeds. The second partition's offset still commits despite the first's
@@ -405,6 +443,17 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
      * projection call returns. {@code closeTimeout} is set far above what a prompt return should ever take, so a
      * regression here shows up as a slow {@code close()} well past this test's own assertion bound rather than a
      * flaky race against the timeout itself.
+     * <p>
+     * Also proves the batch this projection is part of still gets committed rather than lost. {@code close()}
+     * calling {@code wakeup()} while this thread is inside the projection arms exactly one pending interrupt,
+     * which the loop thread's own next blocking call raises in, its own batch commit, not anything the
+     * projection itself called. Without retrying that one commit, every record this batch already resolved,
+     * id-1 included, would never be acknowledged at all and would replay in full the next time this bridge
+     * starts. Against this real, fast, local broker the underlying commit request often lands before the
+     * interrupt is even raised client-side, so this assertion alone does not reliably mutation-fail without the
+     * retry, the deterministic proof for that is the {@code CloseFromHandlerHarness} the epic's adversarial
+     * verifier built against a fake {@code Consumer} that never delivers a thrown {@code commitSync} call
+     * regardless of timing.
      */
     @Test
     void close_called_from_a_projection_running_on_the_loop_thread_returns_promptly_rather_than_joining_itself() throws Exception {
@@ -432,6 +481,8 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
 
         assertThat(closedFromProjection.await(5, TimeUnit.SECONDS)).as("projection called close() in time").isTrue();
         assertThat(Duration.ofNanos(closeElapsedNanos.get())).isLessThan(Duration.ofSeconds(2));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
     }
 
     /**

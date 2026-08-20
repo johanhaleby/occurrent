@@ -204,12 +204,13 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                         break; // A permanent stop happened this batch. The finally below closes the Consumer.
                     }
                 } catch (RuntimeException e) {
-                    // A retriable commitSync failure already retries inside processBatch. This catches everything
-                    // else, a non-retriable one included, so one bad iteration never kills the only consume thread.
-                    // Backs off for pollTimeout first, since some failures (an authentication error, most notably)
-                    // can make poll() itself throw immediately on every call, and without this a persistent one
-                    // would otherwise spin this loop as fast as the JVM allows instead of at the cadence every
-                    // other path through this loop already keeps to.
+                    // A commitSync failure, retriable or not, is already handled inside processBatch and never
+                    // reaches here. This catches everything else, poll() itself throwing (an authentication error,
+                    // most notably) or a throw from the per-record loop (already rewound by processBatch before
+                    // rethrowing), so one bad iteration never kills the only consume thread. Backs off for
+                    // pollTimeout first, since a persistent poll() failure would otherwise spin this loop as fast
+                    // as the JVM allows instead of at the cadence every other path through this loop already
+                    // keeps to.
                     if (running) {
                         log.warn("The Kafka consume loop for group \"{}\" failed this iteration. Retrying after pollTimeout.",
                                 consumer.groupMetadata().groupId(), e);
@@ -247,48 +248,71 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         }
     }
 
+    // Best effort. One partition's seek throwing (a rebalance that just took it away, most often) must not stop
+    // every other partition in this batch from being rewound too, or the very failure this exists to route around
+    // would abort the rewind after the first partition it happens to hit, in whatever order records.partitions()
+    // iterates. A partition whose own seek keeps failing stays at risk until its assignment is resolved, but the
+    // rest of the batch is not held hostage to it.
     private void seekToEarliestFetched(ConsumerRecords<String, byte[]> records) {
         for (TopicPartition partition : records.partitions()) {
-            consumer.seek(partition, records.records(partition).get(0).offset());
+            try {
+                consumer.seek(partition, records.records(partition).get(0).offset());
+            } catch (RuntimeException e) {
+                log.warn("Failed to rewind partition {} back to its earliest fetched offset in this batch.", partition, e);
+            }
         }
     }
 
     // Returns false when a permanent stop occurred this batch. running is now false and the loop must exit rather
     // than poll again, closing the Consumer from its own finally as it does. Whatever resolved before the
     // permanent-stop trigger, in this partition or any other, is still committed first, exactly as an ordinary
-    // REDELIVER failure would leave it. If that commit itself throws, permanentStop is lost with the throw and
-    // running stays true, but the seek already happened, so the next poll refetches the same triggering record and
-    // reaches this same permanent stop again. Nothing here can commit past it in the meantime.
+    // REDELIVER failure would leave it. That commit failing no longer loses the permanent stop, it is applied
+    // below regardless, since the triggering record's own seek already happened either way and nothing about
+    // stopping for good depends on whether an unrelated, already-resolved record in the same batch got committed.
     private boolean processBatch(ConsumerRecords<String, byte[]> records) {
         Map<TopicPartition, OffsetAndMetadata> toCommit = new HashMap<>();
         boolean permanentStop = false;
-        for (TopicPartition partition : records.partitions()) {
-            for (ConsumerRecord<String, byte[]> record : records.records(partition)) {
-                HandleResult result = handleRecord(record, toCommit);
-                if (result == HandleResult.PERMANENT_STOP) {
-                    permanentStop = true;
-                    consumer.seek(partition, record.offset());
-                    break;
-                } else if (result == HandleResult.REDELIVER) {
-                    consumer.seek(partition, record.offset());
-                    break;
+        boolean seekBackHappened = false;
+        try {
+            for (TopicPartition partition : records.partitions()) {
+                for (ConsumerRecord<String, byte[]> record : records.records(partition)) {
+                    HandleResult result = handleRecord(record, toCommit);
+                    if (result == HandleResult.PERMANENT_STOP) {
+                        permanentStop = true;
+                        consumer.seek(partition, record.offset());
+                        break;
+                    } else if (result == HandleResult.REDELIVER) {
+                        consumer.seek(partition, record.offset());
+                        seekBackHappened = true;
+                        break;
+                    }
                 }
             }
+        } catch (RuntimeException e) {
+            // A throw here, a failing seek most often, means some record in this batch was never handed to the
+            // feed at all, on this partition or any partition the loop had not reached yet, while poll() already
+            // advanced every partition's position regardless of whether the loop ever got to it. Rewinding every
+            // partition this batch touched back to its own earliest fetched record undoes that advance, so the
+            // next poll() refetches and reprocesses this whole batch from the start instead of silently skipping
+            // whatever was never handled.
+            seekToEarliestFetched(records);
+            throw e;
         }
         if (!toCommit.isEmpty()) {
             try {
                 commitWithRetry(toCommit);
             } catch (RuntimeException e) {
-                // commitRetryStrategy exhausted, or the failure was never retriable to begin with. poll() already
-                // advanced this Consumer's own read position past every record in this batch, resolved or not, so
-                // without a rewind the next poll() would fetch past whatever never actually got committed here,
-                // and a later successful commit on a higher offset would then permanently skip it, the exact
-                // silent loss this bridge exists to prevent. Rewinding every partition this batch touched back to
-                // its own earliest fetched record undoes that advance, on top of whatever single-record seek
-                // already ran above, so the next poll() refetches and reprocesses this whole batch from the start
-                // instead of skipping the gap.
-                seekToEarliestFetched(records);
-                throw e;
+                // commitRetryStrategy exhausted, or the failure was never retriable to begin with. Unlike a throw
+                // from the loop above, nothing here needs a rewind. Every partition's position is already exactly
+                // where it should be, past the last record this batch actually handled, or at the seek-and-break
+                // point for one that failed, so the records a later successful commit would cover are precisely
+                // the ones this batch already delivered. Rewinding here would instead redeliver the whole batch
+                // again on every poll for as long as the commit keeps failing, forever under a persistent
+                // failure, for no safety this bridge does not already have. Logged and left for the loop to try
+                // again on its own next commit. A crash before that later commit succeeds is plain at-least-once
+                // redelivery, the same as any other crash between a poll's deliveries and its commit.
+                log.warn("Failed to commit for group \"{}\" after this batch resolved. Retrying on a later commit.",
+                        consumer.groupMetadata().groupId(), e);
             }
         }
         if (permanentStop) {
@@ -296,13 +320,33 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
             permanentlyStopped = true;
             return false;
         }
+        if (seekBackHappened && toCommit.isEmpty()) {
+            // A poison record. Every partition that fetched anything ended in a seek back to the exact offset it
+            // started this poll at, so the next poll() would refetch and redeliver the identical record
+            // immediately. Backing off for pollTimeout keeps that at this loop's normal cadence instead of
+            // spinning it at the JVM's own maximum rate against a record that can never resolve. Skipped when
+            // this batch is stopping for good instead, since nothing gains from delaying an exit already
+            // underway.
+            sleepUninterruptibly(pollTimeout);
+        }
         return true;
     }
 
     // Retries a retriable commitSync failure with commitRetryStrategy, attempts uncapped by the default, until it
     // succeeds or this bridge closes (running turns false). A non-retriable failure propagates immediately.
     private void commitWithRetry(Map<TopicPartition, OffsetAndMetadata> toCommit) {
-        executeWithRetry(() -> consumer.commitSync(toCommit), __ -> running, commitRetryStrategy).run();
+        try {
+            executeWithRetry(() -> consumer.commitSync(toCommit), __ -> running, commitRetryStrategy).run();
+        } catch (WakeupException e) {
+            // close() calling wakeup() while this thread was between blocking calls, most often a handler that
+            // just called close() on itself, arms exactly this: the next blocking call raises it, and that next
+            // call is this batch's own commitSync, not anything the caller of that blocking call chose to
+            // interrupt. Every record in this batch already resolved, so losing this commit to a signal that was
+            // never actually about the commit itself would replay the whole batch on the next start for no
+            // reason. Kafka documents wakeup() as arming a single pending interrupt, consumed by the first
+            // blocking call it raises in, so retrying the same commit once more proceeds normally.
+            consumer.commitSync(toCommit);
+        }
     }
 
     // Sleeps for duration, restoring the interrupt flag rather than propagating it, since the loop thread has

@@ -67,11 +67,17 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
      * cluster before it ever returns a {@code Future}, so {@link #park(ProducerRecord)} measures that elapsed
      * time and waits only what remains of this bound for the confirm, rather than granting the full duration
      * again and letting one attempt stall this bridge's only consume loop for roughly twice as long as this
-     * documents. {@link #create(Map, DeliveryFailurePolicy, KafkaDestination, Logger)} also configures the
-     * parking producer's {@code delivery.timeout.ms} and {@code request.timeout.ms} to this same bound, so an
-     * accepted send cannot still be retrying in the background past it either. Fixed rather than configurable,
-     * matching {@link KafkaCloudEventSink}'s own default, since a failure policy is a coarse operational choice
-     * that does not need its own tunable separate from the sink's.
+     * documents. This bounds how long the consume loop itself waits, not how long the underlying send can still
+     * be in flight for. {@link #create(Map, DeliveryFailurePolicy, KafkaDestination, Logger)} also configures the
+     * parking producer's {@code delivery.timeout.ms} and {@code request.timeout.ms} to this same bound, but
+     * {@code delivery.timeout.ms} clocks from when {@code send()} returns, not from when it was called, so a
+     * {@code send()} that itself consumed most of {@code max.block.ms} before returning can still complete in the
+     * background after this bound has already elapsed and {@link #park(ProducerRecord)} has already chosen
+     * {@link Outcome#REDELIVER}. A duplicate park is possible in that case, not eliminated by this bound, and is
+     * accepted rather than guarded against, the same way at-least-once delivery already requires every handler
+     * downstream of this bridge to tolerate a repeat. Fixed rather than configurable, matching
+     * {@link KafkaCloudEventSink}'s own default, since a failure policy is a coarse operational choice that does
+     * not need its own tunable separate from the sink's.
      */
     private static final Duration PARK_ACKNOWLEDGEMENT_TIMEOUT = Duration.ofSeconds(5);
 
@@ -119,10 +125,11 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
      *                       reaches the parking topic too, not only the topic this bridge consumes from. A handful
      *                       of producer-specific settings are then forced on top, {@code acks=all} and
      *                       {@code max.block.ms}, {@code delivery.timeout.ms} and {@code request.timeout.ms} all
-     *                       bounded by {@link #PARK_ACKNOWLEDGEMENT_TIMEOUT}, so a park publish is a genuine single
-     *                       attempt within that bound rather than one that can still be quietly retrying in the
-     *                       background after this class has already given up and redelivered instead, which risks
-     *                       parking the same record twice. Consumer-only keys left over from the copy (
+     *                       bounded by {@link #PARK_ACKNOWLEDGEMENT_TIMEOUT}, so this class itself never waits
+     *                       past that bound for a park to confirm, see {@link #PARK_ACKNOWLEDGEMENT_TIMEOUT}'s own
+     *                       javadoc for why an accepted send can still complete in the background after that wait
+     *                       gives up, a duplicate park this bounding does not eliminate. Consumer-only keys left
+     *                       over from the copy (
      *                       {@code group.id}, {@code enable.auto.commit}, the deserializer classes, ...) are simply
      *                       unused by a producer, not rejected. Two keys get different treatment.
      *                       {@link ProducerConfig#TRANSACTIONAL_ID_CONFIG} is refused outright, the same refusal

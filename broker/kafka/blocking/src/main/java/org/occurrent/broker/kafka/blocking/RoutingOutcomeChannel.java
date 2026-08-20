@@ -48,10 +48,10 @@ import static java.util.Objects.requireNonNull;
  * Delegates to another {@link PushObserver}, {@link PushObserver#noop()} by default, so an application with its own
  * diagnostics keeps them instead of having to choose between this wiring and its own observer.
  * <p>
- * A byte-for-byte duplicate of {@code org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel} rather than a
- * shared class, since the wiring is per-transport by ADR 133 decision 1 and this module has no dependency on the
- * RabbitMQ one to reuse its copy from. Not worth promoting into {@code occurrent-broker-api-blocking} for two
- * transports. Reconsider if a third one needs it too.
+ * Logic-identical to {@code org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel}, its package and the
+ * transport-specific names in its javadoc aside, rather than a shared class, since the wiring is per-transport by
+ * ADR 133 decision 1 and this module has no dependency on the RabbitMQ one to reuse its copy from. Not worth
+ * promoting into {@code occurrent-broker-api-blocking} for two transports. Reconsider if a third one needs it too.
  */
 public final class RoutingOutcomeChannel implements PushObserver {
 
