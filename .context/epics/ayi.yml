@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 41
-updated_at: 2026-08-20T10:59:02Z
+revision: 42
+updated_at: 2026-08-20T12:09:51Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -197,7 +197,7 @@ units:
       - {check: pr_merged, ref: 863, met: true, evidence: "squash fa367096b, CAS pin b36229dd matched, branch deleted after tip==pin. Independent bite-verify reproduced three mutations with real failure output and audited the other five as sound"}
       - {check: manual_approval, ref: "post-reset non-lie falsifiers, both variants, delivered or formally re-scoped once the reset-replay determination lands", met: false, evidence: null}
     blocking_on: []
-    next_action: "Worker resumed for ayi/u5b-post-reset-falsifiers (both reset variants against startAt BEGINNING, seeded from the 865 reproduction, plus the WARN pin). On its PR: gate, bite-verify, CAS merge"
+    next_action: "PR 875 open, checks running (ci-wait). On delivery: gate, bite-verify on the new falsifiers, CAS merge, then the U6 freeze and the U7 fixpoint"
     last_meaningful_progress_at: 2026-08-20T10:55:00Z
     observed:
       pr_863: {head: 26328bf5835536c89cd2e71f796844b1cbe5bd60, branch: "ayi/u5-falsifier-suite", rollup: "26/26 SUCCESS", threads: "5 total, 5 unresolved (round 1, no suppressed block)", via: "gate reads after the reboot", at: 2026-08-19T08:05:00Z}
