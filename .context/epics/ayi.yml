@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
 revision: 39
-updated_at: 2026-08-20T07:35:00Z
+updated_at: 2026-08-20T07:06:27Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -221,7 +221,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "Round-4 scope question RULED 2026-08-20T07:3xZ: the WARN's DEFAULT case rests on an owner-registered fact (starters register that their composition routes DEFAULT past catch-up, reactor via ComposedReplayPhase's known-fact side, blocking via a minimal fill-once holder), never an annotation-only predicate. Custom-composition DEFAULT stays silent, documented. Worker implementing; cap applies after its next round"
+    next_action: "Round-4 scope question RULED 2026-08-20T07:06Z: the WARN's DEFAULT case rests on an owner-registered fact (starters register that their composition routes DEFAULT past catch-up, reactor via ComposedReplayPhase's known-fact side, blocking via a minimal fill-once holder), never an annotation-only predicate. Custom-composition DEFAULT stays silent, documented. Worker implementing; cap applies after its next round"
     last_meaningful_progress_at: 2026-08-20T05:58:44Z
     observed:
       pr_869: {head: 05b178f3d7b64f39409178cd0f638302111236c7, branch: "ayi/u8-reset-honesty", rollup: "0fail running", review: "not yet arrived", via: "monitor PR-OPENED", at: 2026-08-20T05:58:44Z}
