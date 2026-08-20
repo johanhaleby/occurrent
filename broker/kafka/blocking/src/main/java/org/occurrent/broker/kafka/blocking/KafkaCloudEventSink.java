@@ -154,6 +154,7 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
         }
 
         Future<RecordMetadata> future;
+        long sendStartedAtNanos = System.nanoTime();
         try {
             future = producer.send(record);
         } catch (org.apache.kafka.common.errors.TimeoutException e) {
@@ -174,8 +175,18 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
             throw new KafkaPublishException("Failed to send to topic \"" + destination.topic() + "\"", e);
         }
 
+        // send() above can itself consume up to acknowledgementTimeout, so this wait only gets what remains,
+        // not the full duration again, or one attempt could take up to twice the configured timeout. A budget
+        // already spent by send() waits zero here, since Future#get(0, ...) checks once and fails immediately
+        // rather than blocking.
+        Duration elapsedSending = Duration.ofNanos(System.nanoTime() - sendStartedAtNanos);
+        Duration remainingForAcknowledgement = acknowledgementTimeout.minus(elapsedSending);
+        if (remainingForAcknowledgement.isNegative()) {
+            remainingForAcknowledgement = Duration.ZERO;
+        }
+
         try {
-            future.get(acknowledgementTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            future.get(remainingForAcknowledgement.toMillis(), TimeUnit.MILLISECONDS);
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             if (cause instanceof org.apache.kafka.common.errors.TimeoutException timeoutCause) {

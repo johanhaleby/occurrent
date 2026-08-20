@@ -31,6 +31,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.URI;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -39,6 +40,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
@@ -111,6 +113,36 @@ class KafkaCloudEventSinkRetryTest {
         assertThat(publishing.isAlive())
                 .as("publish should have returned promptly once the future completed")
                 .isFalse();
+    }
+
+    /**
+     * The bug the suppressed Copilot finding named: {@code send()} and the acknowledgement wait each got the full
+     * {@code acknowledgementTimeout} independently, so an attempt whose {@code send()} consumed most of the budget
+     * could still take up to twice the configured duration before {@link KafkaCloudEventSink#publish(CloudEvent)}
+     * throws. A mocked {@code send()} that sleeps for most of a one-second budget, then hands back a future that
+     * never completes, proves the fixed behaviour, the whole attempt still finishes close to that one second
+     * rather than close to two.
+     */
+    @Test
+    void an_attempt_whose_send_consumes_most_of_the_budget_still_times_out_within_the_configured_total() throws Exception {
+        Producer<String, byte[]> producer = mock(Producer.class);
+        Duration acknowledgementTimeout = Duration.ofSeconds(1);
+        Duration sendDelay = Duration.ofMillis(800);
+        when(producer.send(any())).thenAnswer(invocation -> {
+            Thread.sleep(sendDelay.toMillis());
+            return new CompletableFuture<RecordMetadata>();
+        });
+
+        KafkaCloudEventSink sink = sinkForTesting(producer, resolver, acknowledgementTimeout, defaultRetryStrategyForTesting());
+
+        Instant before = Instant.now();
+        assertThatThrownBy(() -> sink.publish(orderPlaced("id-1"))).isInstanceOf(KafkaPublishTimeoutException.class);
+        Duration elapsed = Duration.between(before, Instant.now());
+
+        assertThat(elapsed)
+                .as("one attempt must stay close to the configured acknowledgementTimeout, not double it by " +
+                        "giving send() and the acknowledgement wait the full duration each")
+                .isLessThan(acknowledgementTimeout.plus(Duration.ofMillis(400)));
     }
 
     @Test
