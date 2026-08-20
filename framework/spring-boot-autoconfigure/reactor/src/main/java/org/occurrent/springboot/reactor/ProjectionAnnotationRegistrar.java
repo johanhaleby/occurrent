@@ -233,12 +233,14 @@ class ProjectionAnnotationRegistrar {
             ReplayPhaseResolution recordingResolution = annotation.recordAppliedAppends()
                     ? resolveEventStorePhase(id, fluxSubscriptionModel instanceof SubscriptionModelCapability capability ? capability : null)
                     : null;
-            // The unknown-capability suppression only applies when this projection's own start position would
-            // actually ask the composition to replay (replaysHistory). When it never asks (DEFAULT or NOW), the
-            // projection never replays regardless of what the composition could do, so that fact is worth the
-            // warning either way.
+            // The unknown-capability suppression stands down only for an explicit NOW, since StartAt.now() is a
+            // documented, composition-independent contract (subscribe at this moment, no replay) every Subscribable
+            // must honor. DEFAULT resolves to DcbStartAt.subscriptionModelDefault() instead, a marker whose actual
+            // behavior a genuinely unobservable composition is free to interpret however it wants, so DEFAULT does
+            // not earn the same override. An unknown composition left there might still replay.
+            boolean explicitlyNow = annotation.startAt() == org.occurrent.annotation.StartPosition.NOW;
             warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), replaysHistory && recordingResolution != null && recordingResolution.registerWithPoll(),
-                    replaysHistory && recordingResolution != null && recordingResolution.replayAwarenessUnknown());
+                    !explicitlyNow && recordingResolution != null && recordingResolution.replayAwarenessUnknown());
             var subscription = projectDcb(runner, id, annotation, dcbProjection, resolveStore(annotation, id), startAt, recordingResolution);
             if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
                 subscription.waitUntilStarted().block();
@@ -268,12 +270,14 @@ class ProjectionAnnotationRegistrar {
                 StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
                 startPositionSupport.applyStartupWorkarounds();
                 ReplayPhaseResolution recordingResolution = annotation.recordAppliedAppends() ? resolveEventStorePhase(id, subscribable) : null;
-                // The unknown-capability suppression only applies when this projection's own start position would
-                // actually ask the composition to replay (replaysHistory). When it never asks (DEFAULT or NOW), the
-                // projection never replays regardless of what the composition could do, so that fact is worth the
-                // warning either way.
+                // The unknown-capability suppression stands down only for an explicit NOW, since StartAt.now() is a
+                // documented, composition-independent contract (subscribe at this moment, no replay) every
+                // Subscribable must honor. DEFAULT resolves to StartAt.subscriptionModelDefault() instead, a marker
+                // whose actual behavior a genuinely unobservable composition is free to interpret however it wants,
+                // so DEFAULT does not earn the same override. An unknown composition left there might still replay.
+                boolean explicitlyNow = annotation.startAt() == org.occurrent.annotation.StartPosition.NOW;
                 warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), replaysHistory && recordingResolution != null && recordingResolution.registerWithPoll(),
-                        replaysHistory && recordingResolution != null && recordingResolution.replayAwarenessUnknown());
+                        !explicitlyNow && recordingResolution != null && recordingResolution.replayAwarenessUnknown());
                 var subscription = projectAgnosticOrStream(runner, id, annotation, projection, resolveStore(annotation, id), startAt, recordingResolution);
                 if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
                     subscription.waitUntilStarted().block();

@@ -114,16 +114,40 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     }
 
     @Test
-    void the_default_start_position_still_warns_that_it_never_replays_even_when_the_composition_cannot_say_whether_it_would() {
-        // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one): the default start
-        // position never asks it to replay regardless of what the composition could do, so that fact holds and is
-        // worth its own warning alongside resolveEventStorePhase's "cannot tell" one, not instead of it.
+    void the_default_start_position_does_not_claim_it_never_replays_when_the_composition_cannot_say_whether_it_would() {
+        // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one): DEFAULT resolves
+        // to StartAt.subscriptionModelDefault(), a marker whose actual behavior this specific, unobservable
+        // composition is free to interpret however it wants, so it might genuinely replay. Only resolveEventStorePhase's
+        // own "cannot tell" warning fires here, the same as the BEGINNING case below.
         Subscribable model = unobservableModel();
 
         new ApplicationContextRunner()
                 .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
                 .withUserConfiguration(TestConfiguration.class)
                 .withBean("defaultStartPositionProjection", DefaultStartPositionProjection.class, DefaultStartPositionProjection::new)
+                .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
+                .withBean("subscribable", Subscribable.class, () -> model)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).hasSize(1);
+                    assertThat(warnings().get(0).getFormattedMessage())
+                            .contains("does not expose")
+                            .doesNotContain("its resolved start position or composition never replays");
+                });
+    }
+
+    @Test
+    void startAt_now_still_warns_that_it_never_replays_even_when_the_composition_cannot_say_whether_it_would() {
+        // Unlike DEFAULT, an explicit NOW resolves to StartAt.now(), a documented, composition-independent contract
+        // (subscribe at this moment, no replay) every Subscribable must honor regardless of whether it also exposes
+        // ReplayAwareSubscriptions, so that fact holds and is worth its own warning alongside resolveEventStorePhase's
+        // "cannot tell" one, not instead of it.
+        Subscribable model = unobservableModel();
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("startAtNowProjection", StartAtNowProjection.class, StartAtNowProjection::new)
                 .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
                 .withBean("subscribable", Subscribable.class, () -> model)
                 .run(context -> {
@@ -246,6 +270,16 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
 
     static class StartAtBeginningProjection {
         @Projection(id = PROJECTION_ID, recordAppliedAppends = true, startAt = StartPosition.BEGINNING)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    static class StartAtNowProjection {
+        @Projection(id = PROJECTION_ID, recordAppliedAppends = true, startAt = StartPosition.NOW)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
                     .id(event -> "k")

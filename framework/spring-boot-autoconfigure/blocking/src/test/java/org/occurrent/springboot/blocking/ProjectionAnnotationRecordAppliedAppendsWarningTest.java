@@ -112,16 +112,37 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     }
 
     @Test
-    void the_default_start_position_still_warns_that_it_never_replays_even_when_the_composition_cannot_say_whether_it_would() {
-        // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one): the default
-        // start position never asks it to replay regardless of what the composition could do, so that fact holds
-        // and is worth warning about even though the composition itself cannot say whether it would have replayed.
+    void the_default_start_position_does_not_claim_it_never_replays_when_the_composition_cannot_say_whether_it_would() {
+        // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one): DEFAULT resolves
+        // to StartAt.subscriptionModelDefault(), a marker whose actual behavior this specific, unobservable
+        // composition is free to interpret however it wants, so it might genuinely replay. Blocking has no separate
+        // "cannot tell" warning of its own, so this case stays silent, the same as the BEGINNING case below.
         Subscribable model = unobservableModel();
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
                 .withUserConfiguration(TestConfiguration.class)
                 .withBean("defaultStartPositionProjection", DefaultStartPositionProjection.class, DefaultStartPositionProjection::new)
+                .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
+                .withBean(Subscriptions.class, () -> new Subscriptions<>(model, testEventConverter()))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).isEmpty();
+                });
+    }
+
+    @Test
+    void startAt_now_still_warns_that_it_never_replays_even_when_the_composition_cannot_say_whether_it_would() {
+        // Unlike DEFAULT, an explicit NOW resolves to StartAt.now(), a documented, composition-independent contract
+        // (subscribe at this moment, no replay) every Subscribable must honor regardless of whether it also exposes
+        // ReplayAwareSubscriptions, so that fact holds and is worth warning about even though the composition
+        // itself cannot say whether it would otherwise have replayed.
+        Subscribable model = unobservableModel();
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("startAtNowProjection", StartAtNowProjection.class, StartAtNowProjection::new)
                 .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
                 .withBean(Subscriptions.class, () -> new Subscriptions<>(model, testEventConverter()))
                 .run(context -> {
@@ -228,6 +249,16 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
 
     static class StartAtBeginningProjection {
         @Projection(id = PROJECTION_ID, recordAppliedAppends = true, startAt = StartPosition.BEGINNING)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    static class StartAtNowProjection {
+        @Projection(id = PROJECTION_ID, recordAppliedAppends = true, startAt = StartPosition.NOW)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
                     .id(event -> "k")
