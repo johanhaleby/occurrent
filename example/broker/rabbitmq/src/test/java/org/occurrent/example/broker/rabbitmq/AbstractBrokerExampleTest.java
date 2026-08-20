@@ -74,7 +74,10 @@ abstract class AbstractBrokerExampleTest {
     @BeforeEach
     void openMongoAndRabbit() throws Exception {
         String scratch = UUID.randomUUID().toString().replace("-", "");
-        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + "." + scratch);
+        // getReplicaSetUrl(databaseName), not the no-arg overload plus "." + scratch. A dot after the URL names a
+        // collection inside the container's one shared database, not a new database, so every test would read and
+        // write the same database and see each other's events.
+        ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(scratch));
         mongoClient = MongoClients.create(connectionString);
         databaseName = requireNonNull(connectionString.getDatabase());
 

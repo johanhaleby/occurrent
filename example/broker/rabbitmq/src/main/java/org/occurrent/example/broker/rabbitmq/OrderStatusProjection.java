@@ -25,11 +25,11 @@ import org.occurrent.dsl.projection.Projection;
  * register this same descriptor, so what differs between the two example tests is only how the event reaches the
  * fold, never the fold itself.
  * <p>
- * Every fold here is idempotent under redelivery, on purpose. A catch-up replay and a live broker redelivery can
- * both reach the same stored event, and ADR 133's consequences say a projection that receives it twice has to land
- * on the same state as one that received it once. {@code OrderPlaced} sets every field outright rather than
- * accumulating, and {@code OrderShipped} sets a fixed status rather than incrementing anything, so folding either
- * one a second time changes nothing.
+ * Every fold here is idempotent under redelivery, on purpose, including out of order. A catch-up replay and a live
+ * broker redelivery can both reach the same stored event, and at-least-once delivery permits {@code OrderPlaced} to
+ * arrive again after {@code OrderShipped} already landed, so neither handler trusts the event alone. {@code OrderPlaced}
+ * only creates the view, it never overwrites an existing one, and {@code OrderShipped} only moves a view already at
+ * {@code PLACED} to {@code SHIPPED}. Redelivering either event, in either order, leaves the view exactly where it was.
  * <p>
  * {@code OrderPlaced} is folded through the metadata-aware handler so the domain-level example can prove that the
  * stream id, stream version and global position survive the round trip through RabbitMQ's message headers, the
@@ -43,10 +43,13 @@ public final class OrderStatusProjection {
     public static Projection<OrderStatusView, OrderEvent, String> orderStatusProjection() {
         return Projection.<OrderStatusView, OrderEvent, String>builder(null)
                 .id(OrderEvent::orderId)
-                .on(OrderPlaced.class, (state, metadata, event) -> new OrderStatusView(
-                        event.orderId(), event.product(), "PLACED",
-                        metadata.getStreamId(), metadata.getStreamVersion(), metadata.getPosition()))
-                .on(OrderShipped.class, (state, event) -> state.withStatus("SHIPPED"))
+                .on(OrderPlaced.class, (state, metadata, event) -> state == null
+                        ? new OrderStatusView(event.orderId(), event.product(), "PLACED",
+                                metadata.getStreamId(), metadata.getStreamVersion(), metadata.getPosition())
+                        : state)
+                .on(OrderShipped.class, (state, event) -> state != null && state.status().equals("PLACED")
+                        ? state.withStatus("SHIPPED")
+                        : state)
                 .build();
     }
 
