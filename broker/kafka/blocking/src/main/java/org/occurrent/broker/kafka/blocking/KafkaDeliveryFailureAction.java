@@ -18,7 +18,6 @@ package org.occurrent.broker.kafka.blocking;
 
 import io.cloudevents.CloudEvent;
 import io.cloudevents.kafka.KafkaMessageFactory;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
@@ -51,19 +50,21 @@ import static java.util.Objects.requireNonNull;
  * it has one, so the bridge's poll loop stages this record's offset for the next commit exactly as it would for a
  * successful delivery. A failed park (the parking topic unreachable, the acknowledgement wait expiring, ...) reports
  * {@link #REDELIVER} instead, the same as a plain {@code REDELIVER} policy, so a park that goes nowhere never loses
- * the original: nothing commits past this record until it is somewhere it can be read from again.
+ * the original. Nothing commits past this record until it is somewhere it can be read from again.
  * <p>
  * Unlike {@code RabbitMqDeliveryFailureAction}, this holds no dedicated confirm-publisher wrapper. A RabbitMQ
  * publisher confirm is correlated across the whole channel, which is why {@code RabbitMqConfirmPublisher} exists to
- * track that per publish; a Kafka {@code Producer.send(...)} already returns a {@code Future} correlated to that one
+ * track that per publish. A Kafka {@code Producer.send(...)} already returns a {@code Future} correlated to that one
  * record on its own, so this class talks to a small internally-owned {@link Producer} directly.
  */
 public final class KafkaDeliveryFailureAction implements AutoCloseable {
 
     /**
-     * How long a park publish waits for its confirm. Fixed rather than configurable, matching
-     * {@link KafkaCloudEventSink}'s own default, since a failure policy is a coarse operational choice that does not
-     * need its own tunable separate from the sink's.
+     * How long a park publish waits for its confirm, and, since {@link #create(Map, DeliveryFailurePolicy, KafkaDestination, Logger)}
+     * also configures the parking producer's {@code delivery.timeout.ms} and {@code request.timeout.ms} to this same
+     * bound, how long the publish itself is allowed to still be in flight for. Fixed rather than configurable,
+     * matching {@link KafkaCloudEventSink}'s own default, since a failure policy is a coarse operational choice that
+     * does not need its own tunable separate from the sink's.
      */
     private static final Duration PARK_ACKNOWLEDGEMENT_TIMEOUT = Duration.ofSeconds(5);
 
@@ -90,32 +91,52 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
     /**
      * Builds the action for {@code policy}, and the parking {@link Producer} it publishes through when
      * {@code policy} is {@link DeliveryFailurePolicy#PARK} and {@code parkingDestination} is given. Refuses when
-     * {@code policy} is {@code PARK} and {@code parkingDestination} is {@code null}. No parking resource is opened
-     * at all when {@code policy} is not {@code PARK}, even if {@code parkingDestination} happens to be given anyway.
+     * {@code policy} is {@code PARK} and {@code parkingDestination} is {@code null}, and when it is given but
+     * {@link KafkaDestination#topicIsPattern()}: a pattern is meant for {@code Consumer.subscribe(Pattern)}, never
+     * for publishing, and using its regex text as a literal producer topic either fails on every park (most
+     * patterns are not legal topic names) or silently publishes to a topic nobody meant to name. No parking
+     * resource is opened at all when {@code policy} is not {@code PARK}, even if {@code parkingDestination} happens
+     * to be given anyway.
      *
-     * @param consumerConfig Read only for {@link ConsumerConfig#BOOTSTRAP_SERVERS_CONFIG}, reused to build the
-     *                       parking producer's own minimal config (forced {@code acks=all}, no retry, a single
-     *                       attempt bounded by {@link #PARK_ACKNOWLEDGEMENT_TIMEOUT}).
+     * @param consumerConfig The bridge's own consumer configuration, copied as the base for the parking producer's
+     *                       configuration so a cluster secured with {@code security.protocol}, SASL or SSL settings
+     *                       reaches the parking topic too, not only the topic this bridge consumes from. A handful
+     *                       of producer-specific settings are then forced on top: {@code acks=all}, and
+     *                       {@code max.block.ms}, {@code delivery.timeout.ms} and {@code request.timeout.ms} all
+     *                       bounded by {@link #PARK_ACKNOWLEDGEMENT_TIMEOUT}, so a park publish is a genuine single
+     *                       attempt within that bound rather than one that can still be quietly retrying in the
+     *                       background after this class has already given up and redelivered instead, which risks
+     *                       parking the same record twice. Consumer-only keys left over from the copy (
+     *                       {@code group.id}, {@code enable.auto.commit}, the deserializer classes, ...) are unused
+     *                       by a producer and logged as such rather than rejected.
      */
     public static KafkaDeliveryFailureAction create(Map<String, Object> consumerConfig, DeliveryFailurePolicy policy,
                                                       @Nullable KafkaDestination parkingDestination, Logger log) {
-        if (policy == DeliveryFailurePolicy.PARK && parkingDestination == null) {
-            throw new IllegalStateException("A parkingDestination is required when onDeliveryFailure(PARK) is set");
+        if (policy == DeliveryFailurePolicy.PARK) {
+            if (parkingDestination == null) {
+                throw new IllegalStateException("A parkingDestination is required when onDeliveryFailure(PARK) is set");
+            }
+            if (parkingDestination.topicIsPattern()) {
+                throw new IllegalStateException("parkingDestination \"" + parkingDestination.topic() + "\" is " +
+                        "pattern-typed (topicIsPattern() is true), meant for subscribing, never for publishing. " +
+                        "PARK needs a literal topic name to park a failed delivery to.");
+            }
         }
         if (policy != DeliveryFailurePolicy.PARK) {
             return new KafkaDeliveryFailureAction(policy, null, null, log);
         }
-        Map<String, Object> producerConfig = new HashMap<>();
-        producerConfig.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, consumerConfig.get(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG));
+        Map<String, Object> producerConfig = new HashMap<>(consumerConfig);
         producerConfig.put(ProducerConfig.ACKS_CONFIG, "all");
         producerConfig.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, PARK_ACKNOWLEDGEMENT_TIMEOUT.toMillis());
+        producerConfig.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, (int) PARK_ACKNOWLEDGEMENT_TIMEOUT.toMillis());
+        producerConfig.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, (int) PARK_ACKNOWLEDGEMENT_TIMEOUT.toMillis() - 1000);
         Producer<String, byte[]> parkingProducer = new KafkaProducer<>(producerConfig, new StringSerializer(), new ByteArraySerializer());
         return new KafkaDeliveryFailureAction(policy, parkingProducer, parkingDestination, log);
     }
 
     /**
-     * Applies this failure action to {@code record}, rebuilt as {@code cloudEvent}. Never itself commits or seeks;
-     * only reports which the caller should do.
+     * Applies this failure action to {@code record}, rebuilt as {@code cloudEvent}. Never itself commits or seeks.
+     * Only reports which the caller should do.
      */
     public Outcome apply(ConsumerRecord<String, byte[]> record, CloudEvent cloudEvent) {
         requireNonNull(cloudEvent, "cloudEvent cannot be null");

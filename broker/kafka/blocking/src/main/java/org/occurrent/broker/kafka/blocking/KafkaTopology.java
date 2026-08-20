@@ -35,7 +35,7 @@ import static java.util.Objects.requireNonNull;
  * {@code RabbitMqTopology} gives for itself. Public because the domain bridge lives in a sub-package of this one.
  * <p>
  * Unlike {@code RabbitMqTopology}, this does not declare anything on a broker, since a Kafka bridge never creates a
- * topic; it only decides what to subscribe to. {@link #subscribe(Consumer, Set)} is the other half: it reads
+ * topic. It only decides what to subscribe to. {@link #subscribe(Consumer, Set)} is the other half. It reads
  * {@link KafkaDestination#topicIsPattern()} across the resolved set to decide between
  * {@code Consumer.subscribe(Collection)} and {@code Consumer.subscribe(Pattern)}, the discriminator PR 862 deferred
  * to this unit's own plan gate.
@@ -52,7 +52,7 @@ public final class KafkaTopology {
             return topics;
         }
         DestinationResolver<KafkaDestination> nonNullResolver = requireNonNull(resolver,
-                "A resolver, or explicit topics(...), is required");
+                "A resolver, or explicit bindings(...), is required");
         if (bindingFilter != null) {
             return nonNullResolver.destinationsFor(bindingFilter).orElseGet(() -> Set.of(nonNullResolver.catchAllDestination()));
         }
@@ -66,7 +66,7 @@ public final class KafkaTopology {
      * {@link #topicsToSubscribe(DestinationResolver, SubscriptionFilter, Set)}: {@code destinationsFor(...)} never
      * returns a pattern-typed destination on either shipped resolver, and {@code catchAllDestination()} is always
      * exactly one destination. A set mixing literal and pattern-typed destinations is only reachable through a
-     * misused explicit {@code topics(...)} escape hatch, and is refused here rather than guessed at.
+     * misused explicit {@code bindings(...)} escape hatch, and is refused here rather than guessed at.
      */
     public static void subscribe(Consumer<String, byte[]> consumer, Set<KafkaDestination> destinations) {
         long patternCount = destinations.stream().filter(KafkaDestination::topicIsPattern).count();
@@ -77,7 +77,7 @@ public final class KafkaTopology {
         } else {
             throw new IllegalStateException("The resolved topics mix pattern-typed and literal destinations (" +
                     destinations + "), which cannot be subscribed to as one Kafka subscription. This only happens " +
-                    "through an explicit topics(...) call mixing KafkaDestination.of(...) and " +
+                    "through an explicit bindings(...) call mixing KafkaDestination.of(...) and " +
                     "KafkaDestination.ofPattern(...) destinations; use one or the other, not both.");
         }
     }

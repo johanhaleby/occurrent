@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The domain bridge's twin of {@code KafkaCloudEventBridgeBuildFailureTest}. Every refusal happens before a
- * {@code Consumer} is ever constructed, so none of these need a real or mocked broker; see that class's own
+ * {@code Consumer} is ever constructed, so none of these need a real or mocked broker. See that class's own
  * javadoc for why an empty {@code bootstrap.servers} proves the refusal ran first.
  */
 class KafkaDomainEventBridgeBuildFailureTest {
@@ -51,6 +51,20 @@ class KafkaDomainEventBridgeBuildFailureTest {
         assertThatThrownBy(builder::build)
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("parkingDestination");
+    }
+
+    @Test
+    void onDeliveryFailure_PARK_with_a_pattern_typed_parkingDestination_is_refused() {
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+
+        KafkaDomainEventBridge.Builder<TestOrderPlaced> builder = KafkaDomainEventBridge.builder(validConsumerConfig(), feed)
+                .bindings(Set.of(KafkaDestination.of("topic")))
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(KafkaDestination.ofPattern("prefix-.*"));
+
+        assertThatThrownBy(builder::build)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("pattern-typed");
     }
 
     @Test

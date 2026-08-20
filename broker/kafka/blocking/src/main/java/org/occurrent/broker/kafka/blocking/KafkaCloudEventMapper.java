@@ -54,7 +54,7 @@ import static java.util.Objects.requireNonNull;
  * absent data. ADR 133's second amendment already establishes that a Kafka record's value natively tells the two
  * states apart, present-but-empty and absent, without needing a marker header the way AMQP does, but that claim
  * only holds if something actually reads {@link ConsumerRecord#value()} to use the distinction, and the library's
- * own {@code toEvent()} does not. This mapper does: when the record's raw value is non-null and empty, and the
+ * own {@code toEvent()} does not. This mapper does. When the record's raw value is non-null and empty, and the
  * event {@code toEvent()} built has no data, it overrides the data with an explicit empty {@link BytesCloudEventData}
  * instead of leaving it absent.
  * <p>

@@ -145,8 +145,8 @@ public abstract class KafkaTestSupport {
 
     /**
      * Creates an additional topic with {@code partitionCount} partitions, beyond the one-partition scratch topic
-     * {@link #topic} already is, for a test proving cross-partition independence. Not torn down automatically;
-     * callers that need cleanup do it themselves, mirroring how {@link #topic} is the only topic this class manages
+     * {@link #topic} already is, for a test proving cross-partition independence. Not torn down automatically.
+     * Callers that need cleanup do it themselves, mirroring how {@link #topic} is the only topic this class manages
      * the lifecycle of.
      */
     protected String createTopic(int partitionCount) throws Exception {
@@ -167,7 +167,7 @@ public abstract class KafkaTestSupport {
     /**
      * Deletes a topic {@link #createTopic(int)} or {@link #createNamedTopic(String, int)} created, for a test that
      * needs more than the one scratch topic {@link #topic} already is (which {@link #deleteScratchTopicAndCloseAdminClient()}
-     * tears down on its own). Best effort; a failure here is swallowed rather than failing the test, since it only
+     * tears down on its own). Best effort. A failure here is swallowed rather than failing the test, since it only
      * ever runs during cleanup.
      */
     protected void deleteTopic(String name) {
@@ -181,7 +181,7 @@ public abstract class KafkaTestSupport {
      * Reads back the offset {@code groupId} has committed for {@code topicPartition}, through
      * {@link AdminClient#listConsumerGroupOffsets(String)}, which reads a group's committed offsets without
      * joining it. {@code null} when nothing has been committed yet. This is how every commit claim in the bridge
-     * tests is proven: a committed offset read back from the broker, never the absence of a record arriving
+     * tests is proven. A committed offset read back from the broker, never the absence of a record arriving
      * somewhere else, which on Kafka proves nothing on its own unless bounded by something observable.
      * <p>
      * Deliberately not a throwaway {@code KafkaConsumer.committed(...)} call built with its own {@code group.id}:

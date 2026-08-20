@@ -39,6 +39,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -133,7 +135,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
                 .build()) {
             publishCloudEvent(topic, "stream-1", orderPlaced("id-1"));
 
-            // No subscription registered yet: give the coarse poll several chances to (wrongly) consume, then
+            // No subscription registered yet. Give the coarse poll several chances to (wrongly) consume, then
             // confirm nothing committed and nothing was handled.
             Thread.sleep(POLL_TIMEOUT.toMillis() * 10);
             assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isNull();
@@ -209,7 +211,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
      * records." Three events land on the topic's one partition, in order, before the bridge ever starts consuming,
      * so all three are available in the bridge's very first {@code poll()} call. The middle one fails on every
      * attempt. If the bridge kept walking the batch past it, the third event would eventually be handled and its
-     * offset committed; instead it stays untouched for as long as the middle one keeps failing.
+     * offset committed. Instead it stays untouched for as long as the middle one keeps failing.
      */
     @Test
     void after_a_seek_the_bridge_stops_processing_that_partitions_remaining_polled_records_for_this_poll() throws Exception {
@@ -245,7 +247,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     /**
      * Proves the ADR's other half of the same rule: "other partitions in the same poll are unaffected, since their
      * offsets are independent." Partition 0 gets a permanently-failing event, partition 1 gets one that always
-     * succeeds; the second partition's offset still commits despite the first's failure in the same poll batch.
+     * succeeds. The second partition's offset still commits despite the first's failure in the same poll batch.
      */
     @Test
     void a_failure_on_one_partition_does_not_block_committing_another_partitions_progress_in_the_same_poll() throws Exception {
@@ -257,8 +259,10 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
         List<String> handled = new CopyOnWriteArrayList<>();
+        AtomicInteger idFailsAttempts = new AtomicInteger();
         model.subscribe("sub", cloudEvent -> {
             if (cloudEvent.getId().equals("id-fails")) {
+                idFailsAttempts.incrementAndGet();
                 throw new RuntimeException("always fails");
             }
             handled.add(cloudEvent.getId());
@@ -271,6 +275,9 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly("id-succeeds"));
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
                     assertThat(committedOffset(groupId, new TopicPartition(twoPartitionTopic, 1))).isEqualTo(1L));
+            // Proves partition 0 was genuinely reached and kept failing, not merely never touched. The null commit
+            // below is only meaningful once id-fails is known to have actually been retried more than once.
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(idFailsAttempts.get()).isGreaterThanOrEqualTo(2));
             assertThat(committedOffset(groupId, new TopicPartition(twoPartitionTopic, 0))).isNull();
         }
     }
@@ -332,6 +339,56 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
     }
 
     /**
+     * Proves the {@code Consumer} thread-ownership property directly: {@link KafkaCloudEventBridge#close()} never
+     * touches the {@code Consumer} itself, only the loop thread's own {@code finally} block does, reached once its
+     * current work actually finishes. A handler that blocks well past {@link KafkaCloudEventBridge.Builder#closeTimeout(Duration)}
+     * proves both halves: {@code close()} returns promptly, at the join timeout, rather than waiting for the
+     * handler, and the consumer group has not departed yet at that point, since nothing has closed its
+     * {@code Consumer}. Only once the handler is released does the loop thread finish its own iteration and reach
+     * its {@code finally}, and only then does the group show a clean departure.
+     */
+    @Test
+    void close_returns_at_the_join_timeout_and_the_consumer_only_closes_once_the_loop_thread_finishes() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        CountDownLatch handlerEntered = new CountDownLatch(1);
+        CountDownLatch releaseHandler = new CountDownLatch(1);
+        model.subscribe("sub", cloudEvent -> {
+            handlerEntered.countDown();
+            try {
+                assertThat(releaseHandler.await(5, TimeUnit.SECONDS)).as("test released the handler in time").isTrue();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .closeTimeout(Duration.ofMillis(200))
+                .build();
+        publishCloudEvent(topic, "stream-1", orderPlaced("id-1"));
+        assertThat(handlerEntered.await(5, TimeUnit.SECONDS)).as("handler entered").isTrue();
+
+        long closeStartedAtNanos = System.nanoTime();
+        bridge.close();
+        Duration closeElapsed = Duration.ofNanos(System.nanoTime() - closeStartedAtNanos);
+        // Well under the handler's own wait, proving close() did not block on it.
+        assertThat(closeElapsed).isLessThan(Duration.ofSeconds(3));
+
+        // The loop thread is still inside the handler, so nothing has closed its Consumer yet, this caller thread
+        // included. The group is still exactly as joined as it was before close() was ever called.
+        assertThat(consumerGroupMemberCount(groupId)).isEqualTo(1);
+
+        releaseHandler.countDown();
+
+        // Only once the handler returns does the loop thread finish this iteration, notice running is now false,
+        // and reach its own finally, closing the Consumer and departing the group cleanly.
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(consumerGroupMemberCount(groupId)).isZero());
+    }
+
+    /**
      * {@link EventA} is the top-level fixture {@code KafkaTopicPerTypeDestinationResolverTest} already declares in
      * this package, reused here rather than redeclared, since a nested class's qualified name would carry a
      * {@code $} that {@link KafkaTopicPerTypeDestinationResolver} refuses as an illegal topic name.
@@ -389,7 +446,7 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         String topicB = prefix + "TypeB";
         createNamedTopic(topicA, 1);
         createNamedTopic(topicB, 1);
-        // catchAllDestination() never consults the type mapper, so any valid one works here; qualified() needs no
+        // catchAllDestination() never consults the type mapper, so any valid one works here. qualified() needs no
         // reference class the way simple(...) would.
         KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver(prefix, ReflectionCloudEventTypeMapper.qualified());
 

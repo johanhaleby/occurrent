@@ -51,6 +51,21 @@ class KafkaCloudEventBridgeBuildFailureTest {
     }
 
     @Test
+    void onDeliveryFailure_PARK_with_a_pattern_typed_parkingDestination_is_refused() {
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+
+        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(validConsumerConfig(), model, outcomeChannel)
+                .bindings(Set.of(KafkaDestination.of("topic")))
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(KafkaDestination.ofPattern("prefix-.*"));
+
+        assertThatThrownBy(builder::build)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("pattern-typed");
+    }
+
+    @Test
     void no_resolver_and_no_explicit_bindings_is_refused() {
         RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);

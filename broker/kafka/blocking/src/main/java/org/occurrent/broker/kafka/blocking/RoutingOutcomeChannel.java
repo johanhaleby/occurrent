@@ -51,7 +51,7 @@ import static java.util.Objects.requireNonNull;
  * A byte-for-byte duplicate of {@code org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel} rather than a
  * shared class, since the wiring is per-transport by ADR 133 decision 1 and this module has no dependency on the
  * RabbitMQ one to reuse its copy from. Not worth promoting into {@code occurrent-broker-api-blocking} for two
- * transports; reconsider if a third one needs it too.
+ * transports. Reconsider if a third one needs it too.
  */
 public final class RoutingOutcomeChannel implements PushObserver {
 

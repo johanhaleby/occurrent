@@ -112,7 +112,7 @@ class KafkaCloudEventMapperTest extends KafkaTestSupport {
 
     @Test
     void a_record_the_cloudevents_reader_cannot_parse_throws() {
-        // No ce_specversion, ce_id, ce_source or ce_type at all: the reader has nothing to build a CloudEvent from.
+        // No ce_specversion, ce_id, ce_source or ce_type at all. The reader has nothing to build a CloudEvent from.
         ConsumerRecord<String, byte[]> record = record(new byte[0], Map.of());
 
         assertThatThrownBy(() -> KafkaCloudEventMapper.toCloudEvent(record)).isInstanceOf(RuntimeException.class);
@@ -120,7 +120,7 @@ class KafkaCloudEventMapperTest extends KafkaTestSupport {
 
     /**
      * Anchors the round trip against a record {@link KafkaCloudEventSink} actually produced, through a real broker,
-     * rather than only against records this test builds by hand. Proves both halves at once: the sink's own
+     * rather than only against records this test builds by hand. Proves both halves at once. The sink's own
      * present-but-empty write (see its own tests for the plain byte-content proof) and this mapper's read-side fix
      * agree with each other on the same wire record.
      */

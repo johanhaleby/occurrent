@@ -23,6 +23,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.RetriableException;
 import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -34,6 +35,7 @@ import org.occurrent.broker.kafka.blocking.KafkaDeliveryFailureAction;
 import org.occurrent.broker.kafka.blocking.KafkaDestination;
 import org.occurrent.broker.kafka.blocking.KafkaTopology;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnreadableLiveFilterException;
@@ -44,15 +46,15 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.Objects.requireNonNull;
+import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * Bridges a Kafka topic into a {@link DomainEventFeed}, the domain-level consume side ADR 133 decision 5 describes.
  * Rebuilds each record as a {@link CloudEvent} through {@link KafkaCloudEventMapper} and calls
  * {@link DomainEventFeed#acceptCloudEvent(CloudEvent)}, which is where the matching, the decoding and the delivery
- * all happen; this bridge does no filtering of its own, since the feed is the only thing that can decide per ADR 133
+ * all happen. This bridge does no filtering of its own, since the feed is the only thing that can decide per ADR 133
  * decision 5.
  * <p>
  * <strong>Acknowledgement</strong> follows the {@link RoutingOutcome} {@code acceptCloudEvent(...)} returns, exactly
@@ -66,24 +68,32 @@ import static java.util.Objects.requireNonNull;
  * registration, and the same exception instance is thrown again on every later call. On catching it, this bridge
  * logs the failure, seeks the consumer back to the triggering record exactly as a {@link DeliveryFailurePolicy#REDELIVER}
  * failure would, commits whatever else resolved in the same poll (other partitions, and earlier records in the same
- * partition), and then <strong>closes its own {@code Consumer} and stops for good</strong>, rather than committing
- * past the triggering record or looping the poll again. Closing here, immediately, is deliberate: a
- * {@code Consumer} that keeps its assignment but stops polling is evicted from the group only after
+ * partition), and then <strong>sets this bridge to stop for good</strong>, rather than committing past the
+ * triggering record or looping the poll again. The poll loop thread then closes its own {@code Consumer} as it
+ * exits, the same single exit path {@link #close()} itself uses, so the permanent stop survives whether or not that
+ * commit above succeeds on the first attempt. See the thread-ownership paragraph below. Stopping here, immediately,
+ * is deliberate. A {@code Consumer} that keeps its assignment but stops polling is evicted from the group only after
  * {@code max.poll.interval.ms} (five minutes by default), which would leave this permanent, intentional stop
  * indistinguishable from a hung consumer for that whole window, log noise and a pointless rebalance included.
- * Closing sends Kafka's own clean group-departure request immediately instead, so the next consumer in this group
- * picks up starting exactly at the triggering record's offset, the same one this bridge seeked back to and never
- * committed past. The triggering record is not requeued anywhere and not parked; parking would still publish and
- * then commit past it, and this must never commit past it at all. It stays exactly where the last successful commit
- * left it until an operator fixes the registration and starts a new bridge, or a rebalance hands this group's
- * partitions to another consumer, so the event survives rather than being lost.
+ * Closing sends Kafka's own clean group-departure request instead, so the next consumer in this group picks up
+ * starting exactly at the triggering record's offset, the same one this bridge seeked back to and never committed
+ * past. The triggering record is not requeued anywhere and not parked. Parking would still publish and then commit
+ * past it, and this must never commit past it at all. It stays exactly where the last successful commit left it
+ * until an operator fixes the registration and starts a new bridge, or a rebalance hands this group's partitions to
+ * another consumer, so the event survives rather than being lost.
  * <p>
  * <strong>One dedicated thread owns the {@code Consumer} end to end</strong>, unlike {@code RabbitMqDomainEventBridge}'s
  * split between a scheduler thread and an AMQP callback thread. A Kafka {@code Consumer} is not thread-safe, so this
  * bridge runs one loop, on one thread, that polls, decides the coarse lifecycle gate, feeds the feed, and commits.
  * See {@code KafkaCloudEventBridge}'s class javadoc for why {@link Builder#pollTimeout(Duration)} serves both the
- * poll bound and the lifecycle recheck cadence, and for the commit-batching design and what a crash between a
- * poll's deliveries and its commit costs; both apply here unchanged.
+ * poll bound and the lifecycle recheck cadence, and for the commit-batching design, the commit retry, and what a
+ * crash between a poll's deliveries and its commit costs. All of that applies here unchanged.
+ * <p>
+ * <strong>Only the loop thread itself ever closes the {@code Consumer}</strong>, the same rule and the same reason
+ * {@code KafkaCloudEventBridge} states: {@link #close()} only signals and waits, the actual {@code Consumer.close()}
+ * call lives in the loop thread's own {@code finally} block, reached whether the loop exits because {@link #close()}
+ * was called or because of the permanent stop above, so a caller thread never touches the {@code Consumer} while
+ * the loop thread might still be inside a poll, a handler, or a commit.
  * <p>
  * <strong>Coarse lifecycle.</strong> Before every poll, this bridge reads {@link DomainEventFeed#hasProjection()}
  * and {@link DomainEventFeed#isReadyForLiveDelivery()} and pauses or resumes its own assignment to match, consuming
@@ -100,7 +110,7 @@ import static java.util.Objects.requireNonNull;
  * rebalance reason {@code KafkaCloudEventBridge} states, and the same rewind-to-earliest-fetched it applies to a
  * record its very first, pre-pause fetch can still return applies here too.
  * <p>
- * <strong>Ordering.</strong> See {@code KafkaCloudEventBridge}'s own class javadoc; the same caveat applies here
+ * <strong>Ordering.</strong> See {@code KafkaCloudEventBridge}'s own class javadoc. The same caveat applies here
  * unchanged, since it is a property of the transport, not of which level a bridge feeds.
  */
 public final class KafkaDomainEventBridge<E> implements AutoCloseable {
@@ -111,20 +121,28 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         RESOLVED, REDELIVER, PERMANENT_STOP
     }
 
+    /**
+     * A {@code commitSync} failure Kafka itself marks retriable is retried under this, attempts uncapped, until it
+     * succeeds or this bridge closes. Same shape as {@code KafkaCloudEventBridge}'s own, see its class javadoc.
+     */
+    private static final RetryStrategy COMMIT_RETRY_STRATEGY = RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)
+            .retryIf(throwable -> throwable instanceof RetriableException);
+
     private final KafkaConsumer<String, byte[]> consumer;
     private final DomainEventFeed<E> feed;
     private final Duration pollTimeout;
+    private final Duration closeTimeout;
     private final KafkaDeliveryFailureAction failureAction;
     private final Thread loopThread;
-    private final AtomicBoolean consumerClosed = new AtomicBoolean(false);
 
     private volatile boolean running = true;
 
     private KafkaDomainEventBridge(KafkaConsumer<String, byte[]> consumer, DomainEventFeed<E> feed, Duration pollTimeout,
-                                    KafkaDeliveryFailureAction failureAction, String groupId) {
+                                    Duration closeTimeout, KafkaDeliveryFailureAction failureAction, String groupId) {
         this.consumer = consumer;
         this.feed = feed;
         this.pollTimeout = pollTimeout;
+        this.closeTimeout = closeTimeout;
         this.failureAction = failureAction;
         this.loopThread = new Thread(this::runLoop, "kafka-domainevent-bridge-" + groupId);
         this.loopThread.setDaemon(true);
@@ -145,33 +163,46 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
     private void runLoop() {
         try {
             while (running) {
-                boolean shouldConsume = feed.hasProjection() && feed.isReadyForLiveDelivery();
-                reconcilePauseResume(shouldConsume);
-                ConsumerRecords<String, byte[]> records;
                 try {
-                    records = consumer.poll(pollTimeout);
-                } catch (WakeupException e) {
-                    continue; // running is re-checked at the top of the loop; false here means close() woke it up to exit.
-                }
-                if (records.isEmpty()) {
-                    continue;
-                }
-                if (!shouldConsume) {
-                    // See KafkaCloudEventBridge's own runLoop for why this rewind matters: pause(...) above can
-                    // only pause an assignment that already exists, and the very first poll() of a fresh Consumer
-                    // is what creates that assignment. A record fetched in that same call, before pause ever had a
-                    // chance to apply, must not be silently dropped, since poll() already advanced this Consumer's
-                    // own read position past it.
-                    seekToEarliestFetched(records);
-                    continue;
-                }
-                if (!processBatch(records)) {
-                    break; // A permanent stop happened this batch; the Consumer is already closed.
+                    boolean shouldConsume = feed.hasProjection() && feed.isReadyForLiveDelivery();
+                    reconcilePauseResume(shouldConsume);
+                    ConsumerRecords<String, byte[]> records;
+                    try {
+                        records = consumer.poll(pollTimeout);
+                    } catch (WakeupException e) {
+                        continue; // running is re-checked at the top of the loop. False here means close() woke it up to exit.
+                    }
+                    if (records.isEmpty()) {
+                        continue;
+                    }
+                    if (!shouldConsume) {
+                        // See KafkaCloudEventBridge's own runLoop for why this rewind matters. pause(...) above can
+                        // only pause an assignment that already exists, and the very first poll() of a fresh
+                        // Consumer is what creates that assignment. A record fetched in that same call, before
+                        // pause ever had a chance to apply, must not be silently dropped, since poll() already
+                        // advanced this Consumer's own read position past it.
+                        seekToEarliestFetched(records);
+                        continue;
+                    }
+                    if (!processBatch(records)) {
+                        break; // A permanent stop happened this batch. The finally below closes the Consumer.
+                    }
+                } catch (RuntimeException e) {
+                    // A retriable commitSync failure already retries inside processBatch. This catches everything
+                    // else, a non-retriable one included, so one bad iteration never kills the only consume thread.
+                    if (running) {
+                        log.warn("The Kafka consume loop for group \"{}\" failed this iteration. Retrying on the next poll.",
+                                consumer.groupMetadata().groupId(), e);
+                    }
                 }
             }
-        } catch (RuntimeException e) {
-            if (running) {
-                log.error("The Kafka consume loop for group \"{}\" stopped unexpectedly.", consumer.groupMetadata().groupId(), e);
+        } finally {
+            // Only this thread ever closes the Consumer, see the class javadoc. Reached whether the loop above
+            // exits because running turned false or because of the permanent-stop break.
+            try {
+                consumer.close(closeTimeout);
+            } catch (RuntimeException e) {
+                log.warn("Failed to close the Kafka consumer cleanly during shutdown.", e);
             }
         }
     }
@@ -194,9 +225,12 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         }
     }
 
-    // Returns false when a permanent stop occurred this batch: the Consumer is already closed and the loop must
-    // exit rather than poll again. Whatever resolved before the permanent-stop trigger, in this partition or any
-    // other, is still committed first, exactly as an ordinary REDELIVER failure would leave it.
+    // Returns false when a permanent stop occurred this batch. running is now false and the loop must exit rather
+    // than poll again, closing the Consumer from its own finally as it does. Whatever resolved before the
+    // permanent-stop trigger, in this partition or any other, is still committed first, exactly as an ordinary
+    // REDELIVER failure would leave it. If that commit itself throws, permanentStop is lost with the throw and
+    // running stays true, but the seek already happened, so the next poll refetches the same triggering record and
+    // reaches this same permanent stop again. Nothing here can commit past it in the meantime.
     private boolean processBatch(ConsumerRecords<String, byte[]> records) {
         Map<TopicPartition, OffsetAndMetadata> toCommit = new HashMap<>();
         boolean permanentStop = false;
@@ -214,14 +248,19 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
             }
         }
         if (!toCommit.isEmpty()) {
-            consumer.commitSync(toCommit);
+            commitWithRetry(toCommit);
         }
         if (permanentStop) {
             running = false;
-            closeConsumerOnce();
             return false;
         }
         return true;
+    }
+
+    // Retries a retriable commitSync failure with COMMIT_RETRY_STRATEGY, attempts uncapped, until it succeeds or
+    // this bridge closes (running turns false). A non-retriable failure propagates immediately.
+    private void commitWithRetry(Map<TopicPartition, OffsetAndMetadata> toCommit) {
+        executeWithRetry(() -> consumer.commitSync(toCommit), __ -> running, COMMIT_RETRY_STRATEGY).run();
     }
 
     private HandleResult handleRecord(ConsumerRecord<String, byte[]> record, Map<TopicPartition, OffsetAndMetadata> toCommit) {
@@ -271,19 +310,12 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         toCommit.put(new TopicPartition(record.topic(), record.partition()), new OffsetAndMetadata(record.offset() + 1));
     }
 
-    private void closeConsumerOnce() {
-        if (consumerClosed.compareAndSet(false, true)) {
-            try {
-                consumer.close(Duration.ofSeconds(30));
-            } catch (RuntimeException e) {
-                log.warn("Failed to close the Kafka consumer cleanly during shutdown.", e);
-            }
-        }
-    }
-
     /**
-     * Stops the poll loop and closes the {@code Consumer} (and, with {@link DeliveryFailurePolicy#PARK}, the
-     * parking producer) this bridge created, if an {@link UnreadableLiveFilterException} has not already done so.
+     * Signals the poll loop to stop, if a permanent stop has not already done so, and waits up to
+     * {@link Builder#closeTimeout(Duration)} for it to finish, then closes the parking producer this bridge
+     * created, if {@link DeliveryFailurePolicy#PARK} was configured. Never closes the {@code Consumer} itself. See
+     * the class javadoc for why, and for what a loop thread still busy past the wait means for when the
+     * {@code Consumer} actually closes.
      */
     @Override
     public void close() {
@@ -291,14 +323,13 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         try {
             consumer.wakeup();
         } catch (RuntimeException ignored) {
-            // Already closed by a permanent stop; nothing left to wake up.
+            // Already closed by a permanent stop's own loop-thread finally. Nothing left to wake up.
         }
         try {
-            loopThread.join(Duration.ofSeconds(30).toMillis());
+            loopThread.join(closeTimeout.toMillis());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        closeConsumerOnce();
         failureAction.close();
     }
 
@@ -311,6 +342,7 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         private DeliveryFailurePolicy deliveryFailurePolicy = DeliveryFailurePolicy.REDELIVER;
         private @Nullable KafkaDestination parkingDestination;
         private Duration pollTimeout = Duration.ofSeconds(1);
+        private Duration closeTimeout = Duration.ofSeconds(30);
 
         private Builder(Map<String, Object> consumerConfig, DomainEventFeed<E> feed) {
             requireNonNull(consumerConfig, "consumerConfig cannot be null");
@@ -331,7 +363,7 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
          * Narrows the subscribed topics to {@link DestinationResolver#destinationsFor(SubscriptionFilter)} for this
          * filter, falling back to {@link DestinationResolver#catchAllDestination()} when the resolver cannot derive
          * one. Requires {@link #resolver(DestinationResolver)}. Per ADR 133 decision 5, this filter narrows what
-         * arrives; it must be at least as inclusive as the registered projection's own replay filter, or events the
+         * arrives. It must be at least as inclusive as the registered projection's own replay filter, or events the
          * projection would have accepted never arrive at all.
          */
         public Builder<E> bindingFilter(SubscriptionFilter bindingFilter) {
@@ -342,8 +374,8 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         /**
          * Subscribes to exactly these destinations instead of deriving any from a resolver, the explicit escape
          * hatch for a subscription scheme a resolver cannot express. Only {@code topic()} and
-         * {@code topicIsPattern()} are read; a key or headers on a given destination are ignored. Every destination
-         * must agree on {@link KafkaDestination#topicIsPattern()}; {@link #build()} refuses a set mixing literal
+         * {@code topicIsPattern()} are read. A key or headers on a given destination are ignored. Every destination
+         * must agree on {@link KafkaDestination#topicIsPattern()}. {@link #build()} refuses a set mixing literal
          * and pattern-typed destinations.
          */
         public Builder<E> bindings(Set<KafkaDestination> bindings) {
@@ -384,12 +416,33 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
             return this;
         }
 
+        /**
+         * How long {@link KafkaDomainEventBridge#close()} waits for the poll loop thread to finish before
+         * returning anyway. Thirty seconds by default. Only that thread ever closes the {@code Consumer}, see the
+         * class javadoc, so a loop thread still busy past this wait, most often a slow handler, means
+         * {@code close()} returns before the {@code Consumer} is actually closed. It still closes as soon as that
+         * work finishes.
+         */
+        public Builder<E> closeTimeout(Duration closeTimeout) {
+            requireNonNull(closeTimeout, "closeTimeout cannot be null");
+            if (closeTimeout.toMillis() <= 0) {
+                throw new IllegalArgumentException("closeTimeout must be at least 1 millisecond, was " + closeTimeout);
+            }
+            this.closeTimeout = closeTimeout;
+            return this;
+        }
+
         public KafkaDomainEventBridge<E> build() {
             if (bindings == null && resolver == null) {
                 throw new IllegalStateException("A resolver(...), or explicit bindings(...), is required");
             }
             if (deliveryFailurePolicy == DeliveryFailurePolicy.PARK && parkingDestination == null) {
                 throw new IllegalStateException("A parkingDestination is required when onDeliveryFailure(PARK) is set");
+            }
+            if (deliveryFailurePolicy == DeliveryFailurePolicy.PARK && parkingDestination.topicIsPattern()) {
+                throw new IllegalStateException("parkingDestination \"" + parkingDestination.topic() + "\" is " +
+                        "pattern-typed (topicIsPattern() is true), meant for subscribing, never for publishing. " +
+                        "PARK needs a literal topic name to park a failed delivery to.");
             }
             Object groupId = consumerConfig.get(ConsumerConfig.GROUP_ID_CONFIG);
             if (groupId == null) {
@@ -412,7 +465,7 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                 failureAction = KafkaDeliveryFailureAction.create(consumerConfig, deliveryFailurePolicy, parkingDestination, log);
                 Set<KafkaDestination> destinations = KafkaTopology.topicsToSubscribe(resolver, bindingFilter, bindings);
                 KafkaTopology.subscribe(consumer, destinations);
-                KafkaDomainEventBridge<E> bridge = new KafkaDomainEventBridge<>(consumer, feed, pollTimeout, failureAction, groupId.toString());
+                KafkaDomainEventBridge<E> bridge = new KafkaDomainEventBridge<>(consumer, feed, pollTimeout, closeTimeout, failureAction, groupId.toString());
                 bridge.loopThread.start();
                 return bridge;
             } catch (RuntimeException e) {

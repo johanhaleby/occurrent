@@ -25,7 +25,8 @@ import java.util.Map;
 import static java.util.Objects.requireNonNull;
 
 /**
- * Where an event goes on Kafka: a topic, a message key and application headers. Publishing uses every component. A
+ * The topic, message key and application headers describing where an event goes on Kafka. Publishing uses every
+ * component. A
  * consumer declaring a binding uses only the topic, so a
  * {@link DestinationResolver#destinationsFor(org.occurrent.subscription.SubscriptionFilter)} result leaves
  * {@code key} and {@code headers} empty, the same convention {@code RabbitMqDestination} follows for its own
@@ -40,7 +41,7 @@ import static java.util.Objects.requireNonNull;
  * {@code destinationsFor}. {@link #topicIsPattern()} is the discriminator a consumer reads to tell the two apart
  * without guessing from the string's shape, which a legal literal topic name (itself allowed to contain
  * {@code .}, a regex metacharacter) cannot support. {@code false} on every destination this record's own factories
- * produce; only {@link #ofPattern(String)} sets it, and only {@code KafkaTopicPerTypeDestinationResolver}'s
+ * produce. Only {@link #ofPattern(String)} sets it, and only {@code KafkaTopicPerTypeDestinationResolver}'s
  * catch-all uses that factory.
  *
  * @param topic          The topic to publish to, or the topic name or pattern to bind against. See
@@ -56,10 +57,12 @@ import static java.util.Objects.requireNonNull;
  *                       themselves, since a colliding key would silently overwrite one of them, {@code streamid}
  *                       included, without anything failing.
  * @param topicIsPattern Whether {@code topic} is a Kafka topic-matching pattern rather than a literal topic name.
- *                       {@code false} for every destination produced by {@link #of(String)}, {@link #of(String, String)}
- *                       or {@link #withHeaders(Map)}. A consumer built on this destination subscribes by pattern
- *                       when this is {@code true} and by literal topic name otherwise, never guessing from
- *                       {@code topic}'s own content.
+ *                       {@code false} for every destination produced by {@link #of(String)} or
+ *                       {@link #of(String, String)}. {@code true} only from {@link #ofPattern(String)}.
+ *                       {@link #withHeaders(Map)} carries whatever value the destination it copies already had,
+ *                       neither factory. A consumer built on this destination subscribes by pattern when this is
+ *                       {@code true} and by literal topic name otherwise, never guessing from {@code topic}'s own
+ *                       content.
  */
 public record KafkaDestination(String topic, @Nullable String key, Map<String, String> headers,
                                 boolean topicIsPattern) implements EventDestination {
