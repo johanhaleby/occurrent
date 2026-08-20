@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 40
-updated_at: 2026-08-20T10:55:00Z
+revision: 41
+updated_at: 2026-08-20T11:25:00Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -214,7 +214,7 @@ units:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: docs/append-identity, met: true, evidence: "PR 73 open against docs main, held, docs.md read-your-writes section plus addedTags 0.34.0 entry plus news-post highlight; window-bound numbers (20s lease, 5s poll cap) independently verified by the orchestrator against the shipped code"}
       - {check: manual_approval, ref: "held docs PR review-clean, frozen only after U5 merges", met: false, evidence: null}
     blocking_on: []
-    next_action: "Worker resumed for the PR 73 amendment (startAt dependency, rebuild procedure incl checkpoint removal, ADR alignment). Freeze lands when U5b merges"
+    next_action: "Amendment DELIVERED (PR 73 commit a79ac59, verified against 59854d0f directly, gates and Jekyll build clean, and the worker rightly declined to claim the blocking structural WARN case the shipped code does not wire). Waiting only on U5b's merge for the freeze, then the manual_approval deliverable"
     last_meaningful_progress_at: 2026-08-20T10:55:00Z
     observed: {}
     assessment: "Subagent unit under Unattended. Held for release day; docs-repo merges are Johan's. Content freezes only after U5 merges, since a U5 contract finding re-triggers a docs pass."
