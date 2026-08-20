@@ -19,6 +19,8 @@ package org.occurrent.springboot.mongo.blocking;
 import com.mongodb.ConnectionString;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import org.occurrent.testing.mongodb.OccurrentMongoFlush;
+import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -88,6 +90,11 @@ class ProjectionAnnotationRecordAppliedAppendsResetMongoTest {
     @Test
     void an_ordinary_reset_clears_appends_recorded_before_it_and_a_replay_never_resurrects_them() {
         String databaseName = "record-applied-appends-ordinary-reset";
+        // mongoDBContainer.withReuse(true) keeps the container, and this fixed database name, alive across separate
+        // test-suite runs on the same machine, so without a flush a repeat local run would layer this run's writes
+        // on top of the last one's. OccurrentMongoFlush empties collections rather than dropping the database, which
+        // would invalidate the change stream this test's own live subscription depends on.
+        flushDatabase(databaseName);
         AppendId preResetAppendId;
         try (ConfigurableApplicationContext firstIncarnation = SpringApplication.run(RecordingProjectionApplication.class, bootArgs(databaseName))) {
             EventStore eventStore = firstIncarnation.getBean(EventStore.class);
@@ -126,6 +133,10 @@ class ProjectionAnnotationRecordAppliedAppendsResetMongoTest {
     @Test
     void a_filtered_rebuild_whose_replay_delivers_no_matching_event_is_still_cleared_by_the_scheduled_poll() {
         String databaseName = "record-applied-appends-filtered-rebuild";
+        // Flushed for the same reason as the ordinary-reset test above, and doubly so here: this test pads the
+        // backlog with roughly 180MB per run, so an unflushed reused container would grow that database without
+        // bound across repeat runs.
+        flushDatabase(databaseName);
         AppendId staleAppendId;
         try (ConfigurableApplicationContext firstIncarnation = SpringApplication.run(FilteredRecordingProjectionApplication.class, bootArgs(databaseName))) {
             AppliedAppendStore appliedAppendStore = firstIncarnation.getBean(AppliedAppendStore.class);
@@ -176,6 +187,10 @@ class ProjectionAnnotationRecordAppliedAppendsResetMongoTest {
      * the application used ({@code ReplicaSetReadyMongoDBContainer.getReplicaSetUrl(databaseName)} scopes the
      * database name), not the raw {@code databaseName}, which would inspect an unrelated, empty database.
      */
+    private static void flushDatabase(String databaseName) {
+        OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer, databaseName)).run();
+    }
+
     private static void deleteCheckpoint(String databaseName, String subscriptionId) {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl(databaseName));
         try (MongoClient client = MongoClients.create(connectionString)) {
