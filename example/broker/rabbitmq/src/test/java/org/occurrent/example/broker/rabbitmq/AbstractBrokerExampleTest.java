@@ -103,21 +103,30 @@ abstract class AbstractBrokerExampleTest {
     // methods use for production code.
     @AfterEach
     void closeMongoAndRabbit() {
+        // Null-guarded, since a failure partway through openMongoAndRabbit leaves whichever field it had not
+        // reached yet still null. Closing unconditionally would add a NullPointerException here on top of that
+        // real failure instead of just leaving this method with nothing to do for the field that never got set.
         RuntimeException failure = null;
-        try {
-            adminChannel.close();
-        } catch (Exception e) {
-            failure = collectFailure(failure, e);
+        if (adminChannel != null) {
+            try {
+                adminChannel.close();
+            } catch (Exception e) {
+                failure = collectFailure(failure, e);
+            }
         }
-        try {
-            rabbitConnection.close();
-        } catch (Exception e) {
-            failure = collectFailure(failure, e);
+        if (rabbitConnection != null) {
+            try {
+                rabbitConnection.close();
+            } catch (Exception e) {
+                failure = collectFailure(failure, e);
+            }
         }
-        try {
-            mongoClient.close();
-        } catch (RuntimeException e) {
-            failure = collectFailure(failure, e);
+        if (mongoClient != null) {
+            try {
+                mongoClient.close();
+            } catch (RuntimeException e) {
+                failure = collectFailure(failure, e);
+            }
         }
         if (failure != null) {
             throw failure;

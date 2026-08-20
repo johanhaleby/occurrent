@@ -51,6 +51,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -97,11 +98,21 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
             // to instead of redelivering it, the order would never reach SHIPPED.
             AtomicBoolean failedOnce = new AtomicBoolean(false);
             AtomicInteger saveAttempts = new AtomicInteger();
+            // The exact view the failed save attempt tried to write, saved here so a later save can be checked for
+            // content equality against it rather than merely counted. The forwarder is at-least-once, so a legal
+            // duplicate of the other event could also push the count up without the failed delivery itself ever
+            // coming back, and only a genuine redelivery of the same message produces an identical view again.
+            AtomicReference<OrderStatusProjection.OrderStatusView> failedAttemptView = new AtomicReference<>();
+            AtomicInteger redeliveredSaveAttempts = new AtomicInteger();
             Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
             ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, (id, value) -> {
                 saveAttempts.incrementAndGet();
                 if (failedOnce.compareAndSet(false, true)) {
+                    failedAttemptView.set(value);
                     throw new RuntimeException("Simulated read-model failure while saving " + id);
+                }
+                if (value.equals(failedAttemptView.get())) {
+                    redeliveredSaveAttempts.incrementAndGet();
                 }
                 store.put(id, value);
             });
@@ -126,8 +137,11 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                         assertThat(store.get(orderId)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
 
-                // The redelivery is what proves the message was not lost rather than merely never having failed.
+                // redeliveredSaveAttempts is what proves the specific failed delivery came back, not just that some
+                // save happened again. A bridge that dropped the failed delivery instead of redelivering it could
+                // still reach SHIPPED and a save count above 2 off the forwarder's own legal duplicates alone.
                 assertThat(failedOnce).isTrue();
+                assertThat(redeliveredSaveAttempts.get()).isGreaterThanOrEqualTo(1);
                 assertThat(saveAttempts.get()).isGreaterThan(2);
             } finally {
                 // Nested, not sequential, so a failure closing the context does not skip shutting the forwarder

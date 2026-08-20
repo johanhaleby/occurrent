@@ -313,38 +313,22 @@ public final class RabbitMqDomainEventLevelBootstrap implements AutoCloseable {
         String mongoUri = System.getProperty("mongoUri", "mongodb://localhost:27017/?replicaSet=rs0&directConnection=true");
         String rabbitUri = System.getProperty("rabbitUri", "amqp://localhost:5672");
 
-        // mongoClient is not inside the guarded block below, since the block needs both clients already built to
-        // guard anything. If opening rabbitConnection fails, this catch is the only thing that closes mongoClient.
-        MongoClient mongoClient = MongoClients.create(mongoUri);
-        Connection rabbitConnection;
-        try {
-            ConnectionFactory connectionFactory = new ConnectionFactory();
-            connectionFactory.setUri(rabbitUri);
-            rabbitConnection = connectionFactory.newConnection();
-        } catch (Exception e) {
-            mongoClient.close();
-            throw e;
-        }
-        try (RabbitMqDomainEventLevelBootstrap app = RabbitMqDomainEventLevelBootstrap.start(mongoClient, rabbitConnection)) {
+        // All three resources in one try-with-resources, not a hand-rolled finally, so the language's own
+        // suppression rules apply. Closing in reverse declaration order means app closes before either client
+        // still underneath it does, and a failure closing a client becomes a suppressed exception on whatever the
+        // try body itself threw instead of replacing it. A hand-rolled finally that itself throws has no such
+        // rule, it silently discards the body's own exception.
+        try (MongoClient mongoClient = MongoClients.create(mongoUri);
+             Connection rabbitConnection = newRabbitConnection(rabbitUri);
+             RabbitMqDomainEventLevelBootstrap app = RabbitMqDomainEventLevelBootstrap.start(mongoClient, rabbitConnection)) {
             OrderStatusProjection.OrderStatusView view = app.placeAndShipOneOrder(Duration.ofSeconds(30));
             log.info("Order placed, forwarded to RabbitMQ, bridged back, and projected: {}", view);
-        } finally {
-            // Same per-resource discipline close() uses, so a throw from rabbitConnection.close() does not skip
-            // mongoClient.close() too.
-            RuntimeException failure = null;
-            try {
-                rabbitConnection.close();
-            } catch (Exception e) {
-                failure = collectFailure(failure, e);
-            }
-            try {
-                mongoClient.close();
-            } catch (RuntimeException e) {
-                failure = collectFailure(failure, e);
-            }
-            if (failure != null) {
-                throw failure;
-            }
         }
+    }
+
+    private static Connection newRabbitConnection(String rabbitUri) throws Exception {
+        ConnectionFactory connectionFactory = new ConnectionFactory();
+        connectionFactory.setUri(rabbitUri);
+        return connectionFactory.newConnection();
     }
 }

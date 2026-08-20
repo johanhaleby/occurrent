@@ -41,8 +41,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@link #order_shipped_arriving_before_order_placed_is_saved_and_then_filled_in_without_crashing()} drives the
  * same reordering through {@link Projections#materializedView(org.occurrent.dsl.projection.Projection, ViewStateRepository)}
  * and a real {@link ViewStateRepository}, not just {@link View#evolve}. A fold that answered {@code null} for
- * {@code OrderShipped} passed every fold-level assertion here, since {@code View.evolve} just returns what the fold
- * returns, and only broke once something actually called {@code repository.save(id, null)}.
+ * {@code OrderShipped} would fail {@link #order_shipped_arriving_before_order_placed_produces_a_shipped_view_with_no_product_yet()}
+ * too, since that test dereferences the fold's result immediately. This test exists to exercise the real
+ * production path instead, where a real {@link ViewStateRepository} enforces that {@code save} is never called
+ * with {@code null}.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class OrderStatusProjectionTest {
@@ -74,10 +76,11 @@ class OrderStatusProjectionTest {
     }
 
     /**
-     * The fold-level tests above call {@link View#evolve} directly, which only ever returns a value, so a fold that
-     * answered {@code null} for {@code OrderShipped} would pass them too, and only fails one layer up, where a real
-     * {@link ViewStateRepository} refuses to save that {@code null}. This test drives the identical reordering
-     * through {@link Projections#materializedView} instead, to exercise that layer too.
+     * {@link #order_shipped_arriving_before_order_placed_produces_a_shipped_view_with_no_product_yet()} already
+     * fails if the fold answers {@code null} for {@code OrderShipped}, since it dereferences the result immediately.
+     * This test exists for a different reason. It drives the identical reordering through
+     * {@link Projections#materializedView} and a real {@link ViewStateRepository} instead, to prove {@code save} is
+     * never called with {@code null}, the contract a real deployment depends on.
      */
     @Test
     void order_shipped_arriving_before_order_placed_is_saved_and_then_filled_in_without_crashing() {
