@@ -57,11 +57,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * The CloudEvent-level half of the broker example: {@code CloudEventForwarder} publishes to RabbitMQ,
+ * The CloudEvent-level half of the broker example. {@code CloudEventForwarder} publishes to RabbitMQ,
  * {@code RabbitMqCloudEventBridge} bridges the queue into a {@code PushSubscriptionModel}, and a
  * {@code @Projection(source = PUSH)} keeps a read model up to date from it. Proves the two parts of ADR 133's
- * contract that a fake in the middle cannot: a handler that throws does not lose the message, and a restarted
- * application resumes from the broker instead of replaying its whole history again.
+ * contract that a fake in the middle cannot prove on its own. A handler that throws does not lose the message, and
+ * a restarted application resumes from the broker instead of replaying its whole history again.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest {

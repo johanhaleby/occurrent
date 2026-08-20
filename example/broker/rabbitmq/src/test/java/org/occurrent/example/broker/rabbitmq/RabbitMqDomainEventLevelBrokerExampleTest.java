@@ -53,7 +53,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * The domain-level half of the broker example: {@code CloudEventForwarder} publishes to RabbitMQ,
+ * The domain-level half of the broker example. {@code CloudEventForwarder} publishes to RabbitMQ,
  * {@code RabbitMqDomainEventBridge} bridges the queue into a {@code DomainEventFeed}, and a
  * {@code @Projection(source = PUSH)} keeps a read model up to date directly from domain events, never decoding a
  * {@code CloudEvent} on the fold's own side.
@@ -127,7 +127,7 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                 await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                         assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero());
 
-                // A second order, published only after the feed is already live: it never touches the catch-up
+                // A second order, published only after the feed is already live. It never touches the catch-up
                 // replay, so its EventMetadata can only have reached the projection through the broker.
                 String orderAfterCatchup = "order-" + UUID.randomUUID();
                 CloudEvent placed = converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderAfterCatchup, "Gadget"));
