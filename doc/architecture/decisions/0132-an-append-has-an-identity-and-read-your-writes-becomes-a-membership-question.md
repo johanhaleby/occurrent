@@ -333,7 +333,8 @@ records, which is correct because the read model is intact too, and both catch-u
 is neither global nor time-based as live. An application that restarts with a wiped checkpoint replays, and either
 the per-delivery check or the poll observes it, but only for a projection that declared a replaying start position
 (`startAt = BEGINNING`, or a global position of at least zero). On Occurrent's own shipped composition, the default
-start position bypasses the catch-up layer unconditionally. The checkpoint is never consulted there, so wiping it
+start position with no global start position set bypasses the catch-up layer. Setting `startAtGlobalPosition` to
+zero or above takes precedence over it and replays from that position. The checkpoint is never consulted there, so wiping it
 changes nothing, and such a projection never replays and so never clears its own records on a rebuild. A custom
 composition's own default behavior is its own to declare, not something this framework can verify, so the same
 claim does not automatically extend to one.
@@ -389,8 +390,8 @@ The operator step in both cases is the store's own `clear(projectionId)`, which 
 untrue answer in the meantime expires with the retention time in decision 11.
 
 A third case belongs beside those two. A composition that can replay and can report its phase honestly, but is
-wired so it is never asked to. `StartPosition.DEFAULT` and `NOW` both put an otherwise catch-up-capable composition
-here, since neither ever asks it to replay. `isCatchingUp` answers false truthfully, not through a never-replays
+wired so it is never asked to. `StartPosition.DEFAULT` with no global start position set and `NOW` both put an otherwise catch-up-capable
+composition here, since neither ever asks it to replay. `isCatchingUp` answers false truthfully, not through a never-replays
 fallback, because this projection's own configuration never invokes the replay the composition is capable of. The
 consequence matches the other two regardless. Recording proceeds, no automatic clear ever engages, and the operator
 step above is what closes it.
@@ -471,7 +472,8 @@ separately.
 - Read-your-writes answers for appends a projection applied since its last reset. A restart with an intact
   checkpoint is not a reset, so ordinary restarts, failovers and scale-outs cost nothing. A reset only happens
   through a replay the projection's own configuration can actually perform. On Occurrent's own shipped composition
-  the default start position never replays, so a projection left there never resets on a rebuild, and the operator
+  the default start position with no global start position set never replays, so a projection left there never
+  resets on a rebuild, and the operator
   step decision 9 prescribes is what a wiped or rebuilt read model needs instead. A custom composition's own default
   behavior is its own to declare, so a startup warning naming this only fires where that behavior is actually known.
 - After a reset, waits for appends applied before it time out, because no replay writes a cleared record again and
