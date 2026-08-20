@@ -310,8 +310,9 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
          * idempotence with a caller's own retry policy all do, for a deployment with its own partitioning and
          * retry story, so refusing any of them would forbid a valid configuration. It is still worth a warning,
          * since {@link KafkaSharedTopicDestinationResolver}'s whole default status rests on stream-id keying
-         * actually ordering records, and either leg failing loses that silently, with nothing else about the
-         * deployment looking unhealthy.
+         * actually ordering records for whatever calls {@link #publish(io.cloudevents.CloudEvent)} concurrently,
+         * this builder has no way to see whether its caller ever does, and either leg failing loses that silently
+         * for the caller that does, with nothing else about the deployment looking unhealthy.
          */
         public KafkaCloudEventSink build() {
             Map<String, Object> config = new HashMap<>(producerConfig);
@@ -332,9 +333,10 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
                         "succeed for a send the broker never durably stored");
             }
             KafkaOrderingPrerequisites.brokenOrderingGuarantee(config).ifPresent(causes ->
-                    log.warn("producerConfig sets {}, so this sink's per-key ordering guarantee no longer holds. " +
-                            "Any resolver relying on record keys for ordering, the shipped " +
-                            "KafkaSharedTopicDestinationResolver included, can see its events land out of order.", causes));
+                    log.warn("producerConfig sets {}, so this sink's per-key ordering guarantee no longer holds for " +
+                            "a caller that publishes to it concurrently. Any resolver relying on record keys for " +
+                            "ordering, the shipped KafkaSharedTopicDestinationResolver included, can see its " +
+                            "events land out of order under concurrent use.", causes));
             config.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, acknowledgementTimeout.toMillis());
             Producer<String, byte[]> producer = new KafkaProducer<>(config, new StringSerializer(), new ByteArraySerializer());
             return new KafkaCloudEventSink(producer, resolver, acknowledgementTimeout, retryStrategy);

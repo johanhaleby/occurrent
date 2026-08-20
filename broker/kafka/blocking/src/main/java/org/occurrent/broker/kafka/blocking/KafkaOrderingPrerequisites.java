@@ -31,6 +31,15 @@ import java.util.Optional;
  * of how correctly {@link KafkaSharedTopicDestinationResolver} or {@link KafkaTopicPerTypeDestinationResolver}
  * derived that key, so a new Kafka setting discovered to break one of them is a new way to fail the same leg, not
  * a reason to add a third check.
+ * <p>
+ * The order either leg protects is the order one producer is actually asked to send records in, not some order
+ * imposed on top of the caller. A caller whose own publishes are sequential, the next {@link KafkaCloudEventSink#publish(io.cloudevents.CloudEvent)}
+ * only starting once the previous one already returned, hands the producer that same order, and both legs holding
+ * is what keeps the producer from disturbing it on the way out. A caller that instead calls
+ * {@code publish} for the same sink from more than one thread at once never gave those calls a relative order to
+ * begin with, so no producer setting restores one afterward. Whichever thread's record actually reaches the
+ * producer's accumulator first wins, and that race is Kafka's own accumulator, not something either leg closes or
+ * claims to.
  */
 final class KafkaOrderingPrerequisites {
 
@@ -58,7 +67,16 @@ final class KafkaOrderingPrerequisites {
      * {@link KafkaCloudEventSink.Builder#build()} never returns for that combination, Kafka's own construction
      * already refuses it. Effectively disabled idempotence still keeps ordering when
      * {@code max.in.flight.requests.per.connection} is pinned to {@code 1}, since only one request is ever
-     * outstanding for a retry to overtake.
+     * outstanding on this producer's one connection for a retry to overtake. That pin says nothing about two
+     * different threads calling {@code publish} on this sink at once, each is its own caller with its own record
+     * on its own path into the accumulator, and the pin only ever orders requests already queued behind one
+     * another, never decides which of two concurrent callers gets there first. A retriable failure only backs off
+     * and retries once the failed send's outcome is already fully known, {@code KafkaCloudEventSink.publishOnce}
+     * only throws after {@code Future#get} for the previous attempt has itself returned, so one caller's own
+     * retries never overlap that same caller's later attempt on this producer regardless of this leg. What the pin
+     * and idempotence protect against instead is a second, genuinely concurrent {@code publish} call from another
+     * thread landing on the accumulator while the first caller's retry is still backing off, since nothing about
+     * that second call was ever ordered after the first to begin with.
      */
     static Optional<String> brokenOrderingGuarantee(Map<String, Object> config) {
         List<String> causes = new ArrayList<>();
