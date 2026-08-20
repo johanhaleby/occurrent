@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
 revision: 38
-updated_at: 2026-08-20T05:20:00Z
+updated_at: 2026-08-20T05:58:44Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -222,9 +222,9 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
     next_action: "PR 869 open, checks running (ci-wait). Worker owns the review rounds; on delivery: gate, verify, CAS merge, then U5 resumes and U6 amends"
-    last_meaningful_progress_at: 2026-08-20T05:20:00Z
+    last_meaningful_progress_at: 2026-08-20T05:58:44Z
     observed:
-      pr_869: {head: 05b178f3d7b64f39409178cd0f638302111236c7, branch: "ayi/u8-reset-honesty", rollup: "0fail running", review: "not yet arrived", via: "monitor PR-OPENED", at: 2026-08-20T05:20:00Z}
+      pr_869: {head: 05b178f3d7b64f39409178cd0f638302111236c7, branch: "ayi/u8-reset-honesty", rollup: "0fail running", review: "not yet arrived", via: "monitor PR-OPENED", at: 2026-08-20T05:58:44Z}
     assessment: "Adopted mid-epic from U5's withheld item 8 and the 865 investigation. Johan's ruling 2026-08-20: default stays live-only, replay stays opt-in and must remain possible (it is, BEGINNING is proven), remedy is WARN plus corrected claims, not refusal."
   U7:
     issue: 740
