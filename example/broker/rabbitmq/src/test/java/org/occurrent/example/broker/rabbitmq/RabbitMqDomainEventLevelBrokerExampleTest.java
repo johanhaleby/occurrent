@@ -45,6 +45,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -100,14 +101,19 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                 // gates on feed.isReadyForLiveDelivery(), which is false until a catch-up reaches live, so these two
                 // messages queue up on the broker rather than being pulled off and buffered in memory.
                 String orderBeforeCatchup = "order-" + UUID.randomUUID();
-                eventStore.write(orderBeforeCatchup, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderBeforeCatchup, "Widget")));
-                eventStore.write(orderBeforeCatchup, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderBeforeCatchup)));
+                OrderPlaced placedBeforeCatchup = new OrderPlaced(UUID.randomUUID().toString(), orderBeforeCatchup, "Widget");
+                OrderShipped shippedBeforeCatchup = new OrderShipped(UUID.randomUUID().toString(), orderBeforeCatchup);
+                eventStore.write(orderBeforeCatchup, converter.toCloudEvent(placedBeforeCatchup));
+                eventStore.write(orderBeforeCatchup, converter.toCloudEvent(shippedBeforeCatchup));
 
-                // At least two, not exactly two. The forwarder is at-least-once by its own contract, so a publish
-                // whose confirm the sink never saw, even though RabbitMQ actually took it, retries and can legally
-                // land a duplicate here. Pinning this to exactly 2 would turn that legal duplicate into a flake.
+                // Keyed on the two distinct event ids, not a raw count. The forwarder is at-least-once by its own
+                // contract, so a publish whose confirm the sink never saw, even though RabbitMQ actually took it,
+                // retries and can legally redeliver either one, which would satisfy a bare count of 2 without both
+                // events actually being there. distinctEventIdsOnQueue dedupes by id, so any number of copies of
+                // the same event still reads as one id, and this only turns green once both are genuinely present.
+                Set<String> expectedIdsBeforeCatchup = Set.of(placedBeforeCatchup.eventId(), shippedBeforeCatchup.eventId());
                 await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                        assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isGreaterThanOrEqualTo(2));
+                        assertThat(distinctEventIdsOnQueue(queue)).isEqualTo(expectedIdsBeforeCatchup));
 
                 Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
                 // Counts saves for orderBeforeCatchup specifically. Folding the redelivered backlog's two

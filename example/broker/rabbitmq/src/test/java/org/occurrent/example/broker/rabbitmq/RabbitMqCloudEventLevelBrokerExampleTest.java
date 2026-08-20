@@ -46,6 +46,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -97,16 +98,14 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
             // to be, then succeeds on every write after. If the bridge lost the message that failing write belonged
             // to instead of redelivering it, the order would never reach SHIPPED.
             AtomicBoolean failedOnce = new AtomicBoolean(false);
-            AtomicInteger saveAttempts = new AtomicInteger();
             // The exact view the failed save attempt tried to write, saved here so a later save can be checked for
             // content equality against it rather than merely counted. The forwarder is at-least-once, so a legal
-            // duplicate of the other event could also push the count up without the failed delivery itself ever
+            // duplicate of the other event could satisfy a raw save count without the failed delivery itself ever
             // coming back, and only a genuine redelivery of the same message produces an identical view again.
             AtomicReference<OrderStatusProjection.OrderStatusView> failedAttemptView = new AtomicReference<>();
             AtomicInteger redeliveredSaveAttempts = new AtomicInteger();
             Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
             ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, (id, value) -> {
-                saveAttempts.incrementAndGet();
                 if (failedOnce.compareAndSet(false, true)) {
                     failedAttemptView.set(value);
                     throw new RuntimeException("Simulated read-model failure while saving " + id);
@@ -139,10 +138,11 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
 
                 // redeliveredSaveAttempts is what proves the specific failed delivery came back, not just that some
                 // save happened again. A bridge that dropped the failed delivery instead of redelivering it could
-                // still reach SHIPPED and a save count above 2 off the forwarder's own legal duplicates alone.
+                // still reach SHIPPED off the forwarder's own legal duplicate of the other event alone, a raw save
+                // count above some threshold cannot rule that out, only a save matching the failed attempt's exact
+                // content can.
                 assertThat(failedOnce).isTrue();
                 assertThat(redeliveredSaveAttempts.get()).isGreaterThanOrEqualTo(1);
-                assertThat(saveAttempts.get()).isGreaterThan(2);
             } finally {
                 // Nested, not sequential, so a failure closing the context does not skip shutting the forwarder
                 // subscription down too, the same reason its own close() methods close each resource in its own try.
@@ -229,25 +229,30 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 // nothing is consuming queue until boot 2's bridge exists. Proving this arrives once boot 2 comes up,
                 // without a full replay, is the other half of "resumes", not just that catch-up itself is skipped.
                 String orderIdQueuedWhileConsumerWasDown = "order-" + UUID.randomUUID();
-                eventStore.write(orderIdQueuedWhileConsumerWasDown, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown, "Widget")));
-                eventStore.write(orderIdQueuedWhileConsumerWasDown, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown)));
+                OrderPlaced placedWhileConsumerWasDown = new OrderPlaced(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown, "Widget");
+                OrderShipped shippedWhileConsumerWasDown = new OrderShipped(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown);
+                eventStore.write(orderIdQueuedWhileConsumerWasDown, converter.toCloudEvent(placedWhileConsumerWasDown));
+                eventStore.write(orderIdQueuedWhileConsumerWasDown, converter.toCloudEvent(shippedWhileConsumerWasDown));
 
                 // Waited out here, before boot 2 exists, not left to a race between the forwarder's own background
                 // publish and boot 2 becoming ready. Without this wait, boot 2 could come up before the forwarder had
                 // published either event, and then just consume them live as they arrived, proving nothing about
-                // backlog already sitting on the broker. At least 2, not exactly 2, for the same reason the overlap
-                // test does not pin the count either. The forwarder is at-least-once, so a lost confirm can legally
-                // land a duplicate here.
+                // backlog already sitting on the broker.
+                //
+                // Keyed on the two distinct event ids, not a raw count, since the forwarder is at-least-once and a
+                // lost confirm can legally redeliver either one, which would satisfy a bare count of 2 without both
+                // events actually being there. distinctEventIdsOnQueue dedupes by id, so any number of copies of
+                // the same event still reads as one id, and this only turns green once both are genuinely present.
                 //
                 // Removing this wait was confirmed, not assumed, to open the race it guards against. Across five
-                // runs with the wait deleted, the queue held only one of the two messages at the moment boot 2
-                // started rather than both. That does not turn the test's own assertions red, because delivery is
-                // at-least-once and eventually consistent either way, live or from backlog, the order still reaches
-                // SHIPPED and the replay counter still reads zero. The queue depth check above is what exercises the
-                // backlog path rather than the final state, which is why it is a direct assertion and not incidental
-                // to one.
+                // runs with the wait deleted, the queue held only one of the two ids at the moment boot 2 started
+                // rather than both. That does not turn the test's own final-state assertions red, because delivery
+                // is at-least-once and eventually consistent either way, live or from backlog, the order still
+                // reaches SHIPPED and the replay counter still reads zero. This wait is what exercises the backlog
+                // path rather than the final state, which is why it is a direct assertion and not incidental to one.
+                Set<String> expectedIdsWhileConsumerWasDown = Set.of(placedWhileConsumerWasDown.eventId(), shippedWhileConsumerWasDown.eventId());
                 await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                        assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isGreaterThanOrEqualTo(2));
+                        assertThat(distinctEventIdsOnQueue(queue)).isEqualTo(expectedIdsWhileConsumerWasDown));
 
                 // Boot 2: a fresh model, a fresh bridge on the same queue, and a fresh Spring context, but the same
                 // catch-up marker and the same read-model store. A reader that counts its own replay calls proves the

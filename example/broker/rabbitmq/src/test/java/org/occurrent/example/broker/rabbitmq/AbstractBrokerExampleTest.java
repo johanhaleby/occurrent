@@ -22,6 +22,8 @@ import com.mongodb.client.MongoClients;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
+import com.rabbitmq.client.GetResponse;
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,6 +31,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.jackson3.JacksonCloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
 import org.occurrent.eventstore.mongodb.nativedriver.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
@@ -40,7 +43,12 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import tools.jackson.databind.ObjectMapper;
 
+import java.io.IOException;
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static java.util.Objects.requireNonNull;
@@ -169,6 +177,28 @@ abstract class AbstractBrokerExampleTest {
      */
     protected RabbitMqTopicExchangeDestinationResolver newResolver(CloudEventTypeMapper<OrderEvent> typeMapper) {
         return new RabbitMqTopicExchangeDestinationResolver(exchange, typeMapper);
+    }
+
+    /**
+     * The distinct {@link CloudEvent} ids currently sitting on {@code queueName}, read without disturbing them. A
+     * raw message count cannot tell a genuinely distinct event apart from the forwarder's own legal republish of
+     * one it already sent, since a duplicate is the identical event arriving twice, not a new one. This drains the
+     * queue with {@code basicGet}, decodes each message's id with the same {@link RabbitMqCloudEventMapper} the
+     * sink and both bridges already use, then requeues every message it read before returning, so a test polling
+     * this in an {@code await} sees the same queue a real consumer would.
+     */
+    protected Set<String> distinctEventIdsOnQueue(String queueName) throws IOException {
+        Set<String> ids = new HashSet<>();
+        List<Long> deliveryTags = new ArrayList<>();
+        GetResponse response;
+        while ((response = adminChannel.basicGet(queueName, false)) != null) {
+            ids.add(RabbitMqCloudEventMapper.toCloudEvent(response.getProps(), response.getBody()).getId());
+            deliveryTags.add(response.getEnvelope().getDeliveryTag());
+        }
+        for (long deliveryTag : deliveryTags) {
+            adminChannel.basicNack(deliveryTag, false, true);
+        }
+        return ids;
     }
 
     /**
