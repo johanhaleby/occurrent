@@ -40,9 +40,9 @@ import static java.util.Objects.requireNonNull;
  * {@code RabbitMqDestination}'s {@code routingKey} already doubles as a binding pattern when it comes back from
  * {@code destinationsFor}. {@link #topicIsPattern()} is the discriminator a consumer reads to tell the two apart
  * without guessing from the string's shape, which a legal literal topic name (itself allowed to contain
- * {@code .}, a regex metacharacter) cannot support. {@code false} on every destination this record's own factories
- * produce. Only {@link #ofPattern(String)} sets it, and only {@code KafkaTopicPerTypeDestinationResolver}'s
- * catch-all uses that factory.
+ * {@code .}, a regex metacharacter) cannot support. {@code false} on every destination {@link #of(String)} and
+ * {@link #of(String, String)} produce. Only {@link #ofPattern(String)} sets it to {@code true}, and only
+ * {@code KafkaTopicPerTypeDestinationResolver}'s catch-all uses that factory.
  *
  * @param topic          The topic to publish to, or the topic name or pattern to bind against. See
  *                       {@link #topicIsPattern()} for which one this is.

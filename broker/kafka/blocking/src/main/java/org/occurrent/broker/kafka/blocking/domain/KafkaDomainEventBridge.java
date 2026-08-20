@@ -369,6 +369,12 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
      * created, if {@link DeliveryFailurePolicy#PARK} was configured. Never closes the {@code Consumer} itself. See
      * the class javadoc for why, and for what a loop thread still busy past the wait means for when the
      * {@code Consumer} actually closes.
+     * <p>
+     * Called from the loop thread itself, most often a projection reacting to what it was just delivered by
+     * closing this bridge, this skips the join. The loop thread can never finish this same iteration while
+     * blocked waiting for itself, so joining here would only wait out the full timeout for nothing, and the loop
+     * thread's own {@code finally} block still closes the {@code Consumer} once this call returns and the loop
+     * next notices {@code running} is false.
      */
     @Override
     public void close() {
@@ -378,10 +384,12 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         } catch (RuntimeException ignored) {
             // Already closed by a permanent stop's own loop-thread finally. Nothing left to wake up.
         }
-        try {
-            loopThread.join(closeTimeout.toMillis());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        if (Thread.currentThread() != loopThread) {
+            try {
+                loopThread.join(closeTimeout.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
         failureAction.close();
     }

@@ -42,6 +42,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -386,6 +388,41 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         // Only once the handler returns does the loop thread finish this iteration, notice running is now false,
         // and reach its own finally, closing the Consumer and departing the group cleanly.
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(consumerGroupMemberCount(groupId)).isZero());
+    }
+
+    /**
+     * A handler that calls {@link KafkaCloudEventBridge#close()} runs on the loop thread itself, so
+     * {@code loopThread.join(closeTimeout)} would join the calling thread and stall the full {@code closeTimeout}
+     * before returning, even though the loop thread's own {@code finally} block cannot run until this same
+     * handler call returns. {@code closeTimeout} is set far above what a prompt return should ever take, so a
+     * regression here shows up as a slow {@code close()} well past this test's own assertion bound rather than a
+     * flaky race against the timeout itself.
+     */
+    @Test
+    void close_called_from_a_handler_running_on_the_loop_thread_returns_promptly_rather_than_joining_itself() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        AtomicReference<KafkaCloudEventBridge> bridgeRef = new AtomicReference<>();
+        AtomicLong closeElapsedNanos = new AtomicLong(-1);
+        CountDownLatch closedFromHandler = new CountDownLatch(1);
+        model.subscribe("sub", cloudEvent -> {
+            long startedAtNanos = System.nanoTime();
+            bridgeRef.get().close();
+            closeElapsedNanos.set(System.nanoTime() - startedAtNanos);
+            closedFromHandler.countDown();
+        });
+
+        KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .closeTimeout(Duration.ofSeconds(10))
+                .build();
+        bridgeRef.set(bridge);
+        publishCloudEvent(topic, "stream-1", orderPlaced("id-1"));
+
+        assertThat(closedFromHandler.await(5, TimeUnit.SECONDS)).as("handler called close() in time").isTrue();
+        assertThat(Duration.ofNanos(closeElapsedNanos.get())).isLessThan(Duration.ofSeconds(2));
     }
 
     /**

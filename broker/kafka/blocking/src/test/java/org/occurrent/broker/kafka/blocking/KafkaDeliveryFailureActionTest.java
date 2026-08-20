@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -147,6 +148,19 @@ class KafkaDeliveryFailureActionTest {
      * within {@code max.block.ms}/{@code delivery.timeout.ms}, both bounded by the same
      * {@code PARK_ACKNOWLEDGEMENT_TIMEOUT} {@code create(...)} configures. Waits out that bound (five seconds) to
      * prove the catch branch itself runs, not merely that it exists.
+     * <p>
+     * Also proves the total wall-clock bound {@code park(ProducerRecord)} now applies, {@code send()} plus its
+     * confirm together, comfortably below what the pre-fix doubling would have allowed (roughly ten seconds,
+     * {@code max.block.ms} then the full {@code PARK_ACKNOWLEDGEMENT_TIMEOUT} again for the confirm wait). This
+     * specific unreachable-broker scenario has {@code send()} itself throw the {@code TimeoutException} directly,
+     * so {@code park(ProducerRecord)} never reaches its {@code future.get(...)} call at all here, which means
+     * this timing assertion cannot mutation-fail by reverting the elapsed-time deduction alone. That deduction's
+     * own bound holds by construction instead, {@code remainingForAcknowledgement} is
+     * {@code PARK_ACKNOWLEDGEMENT_TIMEOUT} minus whatever {@code send()} already spent, floored at zero, both
+     * clocked from the same instant, so the total can never exceed {@code PARK_ACKNOWLEDGEMENT_TIMEOUT} plus
+     * negligible method-call overhead regardless of how that budget splits between the two calls. Forcing a real
+     * broker to make {@code send()} itself consume a meaningful, non-zero share of that budget without also
+     * throwing would need network-level fault injection this module does not otherwise use.
      */
     @Test
     void a_park_publish_that_never_completes_redelivers_instead_of_losing_the_record() {
@@ -160,9 +174,12 @@ class KafkaDeliveryFailureActionTest {
             ConsumerRecord<String, byte[]> record = new ConsumerRecord<>("source-topic", 0, 0L, "key",
                     "value".getBytes());
 
+            long startedAtNanos = System.nanoTime();
             KafkaDeliveryFailureAction.Outcome outcome = action.applyToUndecodable(record);
+            Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAtNanos);
 
             assertThat(outcome).isEqualTo(KafkaDeliveryFailureAction.Outcome.REDELIVER);
+            assertThat(elapsed).isLessThan(Duration.ofSeconds(7));
         } finally {
             action.close();
         }

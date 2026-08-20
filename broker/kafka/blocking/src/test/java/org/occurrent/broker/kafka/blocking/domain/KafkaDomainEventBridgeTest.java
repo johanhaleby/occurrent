@@ -43,6 +43,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -394,6 +396,42 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
         releaseHandler.countDown();
 
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(consumerGroupMemberCount(groupId)).isZero());
+    }
+
+    /**
+     * A projection that calls {@link KafkaDomainEventBridge#close()} runs on the loop thread itself, so
+     * {@code loopThread.join(closeTimeout)} would join the calling thread and stall the full {@code closeTimeout}
+     * before returning, even though the loop thread's own {@code finally} block cannot run until this same
+     * projection call returns. {@code closeTimeout} is set far above what a prompt return should ever take, so a
+     * regression here shows up as a slow {@code close()} well past this test's own assertion bound rather than a
+     * flaky race against the timeout itself.
+     */
+    @Test
+    void close_called_from_a_projection_running_on_the_loop_thread_returns_promptly_rather_than_joining_itself() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        AtomicReference<KafkaDomainEventBridge<TestOrderPlaced>> bridgeRef = new AtomicReference<>();
+        AtomicLong closeElapsedNanos = new AtomicLong(-1);
+        CountDownLatch closedFromProjection = new CountDownLatch(1);
+        MaterializedView<TestOrderPlaced> view = event -> {
+            long startedAtNanos = System.nanoTime();
+            bridgeRef.get().close();
+            closeElapsedNanos.set(System.nanoTime() - startedAtNanos);
+            closedFromProjection.countDown();
+        };
+        feed.register("proj", view, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        KafkaDomainEventBridge<TestOrderPlaced> bridge = KafkaDomainEventBridge.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .closeTimeout(Duration.ofSeconds(10))
+                .build();
+        bridgeRef.set(bridge);
+        publish("stream-1", "id-1", "order-1");
+
+        assertThat(closedFromProjection.await(5, TimeUnit.SECONDS)).as("projection called close() in time").isTrue();
+        assertThat(Duration.ofNanos(closeElapsedNanos.get())).isLessThan(Duration.ofSeconds(2));
     }
 
     /**

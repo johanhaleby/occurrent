@@ -36,6 +36,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -61,11 +62,16 @@ import static java.util.Objects.requireNonNull;
 public final class KafkaDeliveryFailureAction implements AutoCloseable {
 
     /**
-     * How long a park publish waits for its confirm, and, since {@link #create(Map, DeliveryFailurePolicy, KafkaDestination, Logger)}
-     * also configures the parking producer's {@code delivery.timeout.ms} and {@code request.timeout.ms} to this same
-     * bound, how long the publish itself is allowed to still be in flight for. Fixed rather than configurable,
-     * matching {@link KafkaCloudEventSink}'s own default, since a failure policy is a coarse operational choice that
-     * does not need its own tunable separate from the sink's.
+     * The total wall-clock bound on one park attempt, {@code send()} and its confirm together, not the confirm
+     * wait alone. {@code send()} can itself consume up to {@code max.block.ms} waiting for a usable view of the
+     * cluster before it ever returns a {@code Future}, so {@link #park(ProducerRecord)} measures that elapsed
+     * time and waits only what remains of this bound for the confirm, rather than granting the full duration
+     * again and letting one attempt stall this bridge's only consume loop for roughly twice as long as this
+     * documents. {@link #create(Map, DeliveryFailurePolicy, KafkaDestination, Logger)} also configures the
+     * parking producer's {@code delivery.timeout.ms} and {@code request.timeout.ms} to this same bound, so an
+     * accepted send cannot still be retrying in the background past it either. Fixed rather than configurable,
+     * matching {@link KafkaCloudEventSink}'s own default, since a failure policy is a coarse operational choice
+     * that does not need its own tunable separate from the sink's.
      */
     private static final Duration PARK_ACKNOWLEDGEMENT_TIMEOUT = Duration.ofSeconds(5);
 
@@ -204,9 +210,21 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
     }
 
     private Outcome park(ProducerRecord<String, byte[]> parkRecord) {
+        long sendStartedAtNanos = System.nanoTime();
         try {
-            requireNonNull(parkingProducer).send(parkRecord)
-                    .get(PARK_ACKNOWLEDGEMENT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            Future<?> future = requireNonNull(parkingProducer).send(parkRecord);
+            // send() above can itself consume up to max.block.ms waiting for a usable view of the cluster, so
+            // this wait only gets what remains of PARK_ACKNOWLEDGEMENT_TIMEOUT, not the full duration again, or
+            // a metadata outage could stall this bridge's only consume loop roughly twice the documented bound.
+            // A budget already spent by send() waits zero here, since Future#get(0, ...) checks once and fails
+            // immediately rather than blocking, the same accounting KafkaCloudEventSink.publishOnce(CloudEvent)
+            // already applies to its own acknowledgementTimeout.
+            Duration elapsedSending = Duration.ofNanos(System.nanoTime() - sendStartedAtNanos);
+            Duration remainingForAcknowledgement = PARK_ACKNOWLEDGEMENT_TIMEOUT.minus(elapsedSending);
+            if (remainingForAcknowledgement.isNegative()) {
+                remainingForAcknowledgement = Duration.ZERO;
+            }
+            future.get(remainingForAcknowledgement.toMillis(), TimeUnit.MILLISECONDS);
         } catch (ExecutionException | TimeoutException | RuntimeException e) {
             log.warn("Failed to park a record nothing consumed. Redelivering it instead of losing it.", e);
             return Outcome.REDELIVER;
