@@ -65,6 +65,20 @@
             <artifactId>occurrent-retry</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- KafkaCloudEventBridge holds a PushSubscriptionModel and reads the RoutingOutcome its PushObserver
+             reports, per ADR 133 decision 1. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-subscription-push-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- KafkaDomainEventBridge holds a DomainEventFeed and calls its acceptCloudEvent(...), per ADR 133
+             decision 5. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-projection-dsl-blocking</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-clients</artifactId>
@@ -149,6 +163,20 @@
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- The bridge tests wait on asynchronous consumer delivery and the coarse lifecycle poll. -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- A trivial PositionOrderedReader for the domain bridge tests' DomainEventFeed, which never actually
+             replays in these tests (they only feed acceptCloudEvent(...)), so an in-memory store is enough. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-inmemory</artifactId>
+            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

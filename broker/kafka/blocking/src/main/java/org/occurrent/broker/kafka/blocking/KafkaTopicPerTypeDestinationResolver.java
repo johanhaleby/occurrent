@@ -115,11 +115,13 @@ public final class KafkaTopicPerTypeDestinationResolver implements DestinationRe
      * A Kafka topic-matching pattern, {@code topicPrefix} followed by {@code .*}, covering every topic this
      * resolver's type-per-topic mapping could ever derive. Meant for
      * {@code KafkaConsumer.subscribe(java.util.regex.Pattern)}, not for publishing, since there is no one topic
-     * that receives every event under a topic-per-type mapping.
+     * that receives every event under a topic-per-type mapping. Returned through {@link KafkaDestination#ofPattern(String)},
+     * so {@link KafkaDestination#topicIsPattern()} is {@code true} on the result, unlike every other destination
+     * this resolver derives.
      */
     @Override
     public KafkaDestination catchAllDestination() {
-        return KafkaDestination.of(Pattern.quote(topicPrefix) + ".*");
+        return KafkaDestination.ofPattern(Pattern.quote(topicPrefix) + ".*");
     }
 
     private <T> String canonicalTopic(String cloudEventType) {

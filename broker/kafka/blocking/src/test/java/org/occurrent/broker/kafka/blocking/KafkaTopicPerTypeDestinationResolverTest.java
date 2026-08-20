@@ -83,6 +83,7 @@ class KafkaTopicPerTypeDestinationResolverTest {
         assertThat(destination.topic()).isEqualTo("\\Qmy-topic-\\E.*");
         assertThat(destination.key()).isNull();
         assertThat(destination.headers()).isEmpty();
+        assertThat(destination.topicIsPattern()).isTrue();
     }
 
     @Test
