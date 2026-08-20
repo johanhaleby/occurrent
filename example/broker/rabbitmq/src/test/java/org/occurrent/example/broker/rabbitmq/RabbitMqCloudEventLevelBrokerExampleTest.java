@@ -1,0 +1,278 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.occurrent.example.broker.rabbitmq;
+
+import io.cloudevents.CloudEvent;
+import org.junit.jupiter.api.DisplayNameGeneration;
+import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
+import org.junit.jupiter.api.Test;
+import org.occurrent.annotation.Projection;
+import org.occurrent.annotation.Source;
+import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
+import org.occurrent.broker.api.blocking.CloudEventForwarder;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
+import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
+import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
+import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
+import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.springboot.blocking.OccurrentBlockingAnnotationConfiguration;
+import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
+import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoCheckpointStorage;
+import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Configuration;
+
+import java.time.Duration;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+
+/**
+ * The CloudEvent-level half of the broker example: {@code CloudEventForwarder} publishes to RabbitMQ,
+ * {@code RabbitMqCloudEventBridge} bridges the queue into a {@code PushSubscriptionModel}, and a
+ * {@code @Projection(source = PUSH)} keeps a read model up to date from it. Proves the two parts of ADR 133's
+ * contract that a fake in the middle cannot: a handler that throws does not lose the message, and a restarted
+ * application resumes from the broker instead of replaying its whole history again.
+ */
+@DisplayNameGeneration(ReplaceUnderscores.class)
+class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest {
+
+    @Test
+    void a_handler_that_throws_does_not_lose_the_message() throws Exception {
+        CloudEventConverter<OrderEvent> converter = newConverter();
+        CloudEventTypeMapper<OrderEvent> typeMapper = newTypeMapper();
+        RabbitMqTopicExchangeDestinationResolver resolver = newResolver(typeMapper);
+        MongoEventStore eventStore = newEventStore();
+
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel pushModel = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, outcomeChannel, queue)
+                .resolver(resolver)
+                .pollInterval(Duration.ofMillis(50))
+                .build();
+             RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build()) {
+
+            NativeMongoSubscriptionModel forwarderSubscriptionModel = new NativeMongoSubscriptionModel(
+                    mongoClient.getDatabase(databaseName), EVENTS_COLLECTION, org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING,
+                    Executors.newVirtualThreadPerTaskExecutor());
+            CheckpointStorage forwarderCheckpoints = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "forwarder-checkpoints");
+            DurableSubscriptionModel forwarderSubscription = new DurableSubscriptionModel(forwarderSubscriptionModel, forwarderCheckpoints);
+            CloudEventForwarder forwarder = new CloudEventForwarder(forwarderSubscription, sink);
+            forwarder.forward("forward-orders-no-loss");
+
+            // The read model store fails the very first write it is asked to make, whichever event that turns out
+            // to be, then succeeds on every write after. If the bridge lost the message that failing write belonged
+            // to instead of redelivering it, the order would never reach SHIPPED.
+            AtomicBoolean failedOnce = new AtomicBoolean(false);
+            AtomicInteger saveAttempts = new AtomicInteger();
+            Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
+            ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, (id, value) -> {
+                saveAttempts.incrementAndGet();
+                if (failedOnce.compareAndSet(false, true)) {
+                    throw new RuntimeException("Simulated read-model failure while saving " + id);
+                }
+                store.put(id, value);
+            });
+
+            CheckpointStorage pushCatchupMarker = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "push-catchup-checkpoints");
+
+            AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
+            context.register(PropertiesConfig.class, OccurrentBlockingAnnotationConfiguration.class);
+            context.registerBean("pushModel", PushSubscriptionModel.class, () -> pushModel);
+            context.registerBean("pushCatchupMarker", CheckpointStorage.class, () -> pushCatchupMarker);
+            context.registerBean("positionOrderedReader", PositionOrderedReader.class, () -> eventStore);
+            context.registerBean("cloudEventConverter", CloudEventConverter.class, () -> converter);
+            context.registerBean("viewStateRepository", ViewStateRepository.class, () -> repository);
+            context.registerBean("orderProjectionHolder", NoLossProjectionHolder.class, NoLossProjectionHolder::new);
+            try {
+                context.refresh();
+
+                String orderId = "order-" + UUID.randomUUID();
+                eventStore.write(orderId, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderId, "Widget")));
+                eventStore.write(orderId, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderId)));
+
+                await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                        assertThat(store.get(orderId)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
+
+                // The redelivery is what proves the message was not lost rather than merely never having failed.
+                assertThat(failedOnce).isTrue();
+                assertThat(saveAttempts.get()).isGreaterThan(2);
+            } finally {
+                context.close();
+            }
+            forwarderSubscription.shutdown();
+        }
+    }
+
+    @Test
+    void a_restart_resumes_from_the_broker_without_replaying_the_whole_history() throws Exception {
+        CloudEventConverter<OrderEvent> converter = newConverter();
+        CloudEventTypeMapper<OrderEvent> typeMapper = newTypeMapper();
+        RabbitMqTopicExchangeDestinationResolver resolver = newResolver(typeMapper);
+        MongoEventStore eventStore = newEventStore();
+
+        NativeMongoSubscriptionModel forwarderSubscriptionModel = new NativeMongoSubscriptionModel(
+                mongoClient.getDatabase(databaseName), EVENTS_COLLECTION, org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING,
+                Executors.newVirtualThreadPerTaskExecutor());
+        CheckpointStorage forwarderCheckpoints = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "forwarder-checkpoints");
+        DurableSubscriptionModel forwarderSubscription = new DurableSubscriptionModel(forwarderSubscriptionModel, forwarderCheckpoints);
+        // The same catch-up-complete marker backs both "boots" below, which is the one thing a real restart must
+        // preserve for resume (rather than replay) to be possible at all.
+        CheckpointStorage pushCatchupMarker = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "push-catchup-checkpoints");
+        // The read-model store also survives the restart below, the same as a durable one would, so the assertions
+        // can tell "resumed with state intact" apart from "started fresh and got lucky".
+        Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
+        ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, store::put);
+
+        try (RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build()) {
+            CloudEventForwarder forwarder = new CloudEventForwarder(forwarderSubscription, sink);
+            forwarder.forward("forward-orders-restart");
+
+            String orderIdBeforeRestart = "order-" + UUID.randomUUID();
+
+            // Boot 1: build the queue, forward and process one order to completion, then tear the application down.
+            RoutingOutcomeChannel outcomeChannel1 = new RoutingOutcomeChannel();
+            PushSubscriptionModel pushModel1 = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel1);
+            RabbitMqCloudEventBridge bridge1 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel1, outcomeChannel1, queue)
+                    .resolver(resolver)
+                    .pollInterval(Duration.ofMillis(50))
+                    .build();
+            AnnotationConfigApplicationContext context1 = new AnnotationConfigApplicationContext();
+            context1.register(PropertiesConfig.class, OccurrentBlockingAnnotationConfiguration.class);
+            context1.registerBean("pushModel", PushSubscriptionModel.class, () -> pushModel1);
+            context1.registerBean("pushCatchupMarker", CheckpointStorage.class, () -> pushCatchupMarker);
+            context1.registerBean("positionOrderedReader", PositionOrderedReader.class, () -> eventStore);
+            context1.registerBean("cloudEventConverter", CloudEventConverter.class, () -> converter);
+            context1.registerBean("viewStateRepository", ViewStateRepository.class, () -> repository);
+            context1.registerBean("orderProjectionHolder", RestartProjectionHolder.class, RestartProjectionHolder::new);
+            context1.refresh();
+
+            eventStore.write(orderIdBeforeRestart, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdBeforeRestart, "Widget")));
+            eventStore.write(orderIdBeforeRestart, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderIdBeforeRestart)));
+
+            await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                    assertThat(store.get(orderIdBeforeRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
+
+            context1.close();
+            bridge1.close();
+
+            // Boot 2: a fresh model, a fresh bridge on the same queue, and a fresh Spring context, but the same
+            // catch-up marker and the same read-model store. A reader that counts its own replay calls proves the
+            // catch-up is skipped this time, not merely fast.
+            CountingPositionOrderedReader countingReader = new CountingPositionOrderedReader(eventStore);
+            RoutingOutcomeChannel outcomeChannel2 = new RoutingOutcomeChannel();
+            PushSubscriptionModel pushModel2 = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel2);
+            try (RabbitMqCloudEventBridge bridge2 = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel2, outcomeChannel2, queue)
+                    .resolver(resolver)
+                    .pollInterval(Duration.ofMillis(50))
+                    .build()) {
+                AnnotationConfigApplicationContext context2 = new AnnotationConfigApplicationContext();
+                context2.register(PropertiesConfig.class, OccurrentBlockingAnnotationConfiguration.class);
+                context2.registerBean("pushModel", PushSubscriptionModel.class, () -> pushModel2);
+                context2.registerBean("pushCatchupMarker", CheckpointStorage.class, () -> pushCatchupMarker);
+                context2.registerBean("positionOrderedReader", PositionOrderedReader.class, () -> countingReader);
+                context2.registerBean("cloudEventConverter", CloudEventConverter.class, () -> converter);
+                context2.registerBean("viewStateRepository", ViewStateRepository.class, () -> repository);
+                context2.registerBean("orderProjectionHolder", RestartProjectionHolder.class, RestartProjectionHolder::new);
+                try {
+                    context2.refresh();
+
+                    // The default startup mode waits for the catch-up before refresh() returns, so if it had
+                    // replayed, the counter would already be nonzero right here.
+                    assertThat(countingReader.replays()).isZero();
+                    assertThat(store.get(orderIdBeforeRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED");
+
+                    String orderIdAfterRestart = "order-" + UUID.randomUUID();
+                    eventStore.write(orderIdAfterRestart, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdAfterRestart, "Gadget")));
+                    eventStore.write(orderIdAfterRestart, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderIdAfterRestart)));
+
+                    await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                            assertThat(store.get(orderIdAfterRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
+
+                    assertThat(countingReader.replays()).isZero();
+                } finally {
+                    context2.close();
+                }
+            }
+        }
+        forwarderSubscription.shutdown();
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class PropertiesConfig {
+    }
+
+    static class NoLossProjectionHolder {
+        @Projection(id = "order-status-no-loss", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<OrderStatusProjection.OrderStatusView, OrderEvent, String> projection() {
+            return OrderStatusProjection.orderStatusProjection();
+        }
+    }
+
+    static class RestartProjectionHolder {
+        @Projection(id = "order-status-restart", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<OrderStatusProjection.OrderStatusView, OrderEvent, String> projection() {
+            return OrderStatusProjection.orderStatusProjection();
+        }
+    }
+
+    /** Counts how many times a catch-up replay actually reads from the store, so a skipped catch-up is provable. */
+    private static final class CountingPositionOrderedReader implements PositionOrderedReader {
+        private final PositionOrderedReader delegate;
+        private final AtomicInteger replayCount = new AtomicInteger();
+
+        CountingPositionOrderedReader(PositionOrderedReader delegate) {
+            this.delegate = delegate;
+        }
+
+        int replays() {
+            return replayCount.get();
+        }
+
+        @Override
+        public Stream<CloudEvent> readInPositionOrder(org.occurrent.filter.Filter filter, org.occurrent.eventstore.api.PositionRange range) {
+            replayCount.incrementAndGet();
+            return delegate.readInPositionOrder(filter, range);
+        }
+
+        @Override
+        public long currentPosition() {
+            return delegate.currentPosition();
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return delegate.writesPosition();
+        }
+    }
+}
