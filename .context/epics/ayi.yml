@@ -235,9 +235,9 @@ units:
     depends_on: []
     session: "subagent a45cc01390e9e20cf"
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 869, met: true, evidence: "squash 59854d0f, CAS pin a2d29bb41 matched, branch deleted after tip==pin. Round 7 remainder deferred as 871 with the outcome posted; the gate fixed the ADR corrections own global-position overclaim pre-merge"}
     blocking_on: []
-    next_action: "Round-4 scope question RULED 2026-08-20T07:06Z: the WARN's DEFAULT case rests on an owner-registered fact (starters register that their composition routes DEFAULT past catch-up, reactor via ComposedReplayPhase's known-fact side, blocking via a minimal fill-once holder), never an annotation-only predicate. Custom-composition DEFAULT stays silent, documented. Worker implementing; cap applies after its next round"
+    next_action: "none. Session archiving batches at closeout"
     last_meaningful_progress_at: 2026-08-20T05:58:44Z
     observed:
       pr_869: {head: 05b178f3d7b64f39409178cd0f638302111236c7, branch: "ayi/u8-reset-honesty", rollup: "0fail running", review: "not yet arrived", via: "monitor PR-OPENED", at: 2026-08-20T05:58:44Z}
