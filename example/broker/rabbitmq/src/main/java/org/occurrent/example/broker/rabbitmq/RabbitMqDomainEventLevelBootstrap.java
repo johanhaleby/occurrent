@@ -313,16 +313,38 @@ public final class RabbitMqDomainEventLevelBootstrap implements AutoCloseable {
         String mongoUri = System.getProperty("mongoUri", "mongodb://localhost:27017/?replicaSet=rs0&directConnection=true");
         String rabbitUri = System.getProperty("rabbitUri", "amqp://localhost:5672");
 
+        // mongoClient is not inside the guarded block below, since the block needs both clients already built to
+        // guard anything. If opening rabbitConnection fails, this catch is the only thing that closes mongoClient.
         MongoClient mongoClient = MongoClients.create(mongoUri);
-        ConnectionFactory connectionFactory = new ConnectionFactory();
-        connectionFactory.setUri(rabbitUri);
-        Connection rabbitConnection = connectionFactory.newConnection();
+        Connection rabbitConnection;
+        try {
+            ConnectionFactory connectionFactory = new ConnectionFactory();
+            connectionFactory.setUri(rabbitUri);
+            rabbitConnection = connectionFactory.newConnection();
+        } catch (Exception e) {
+            mongoClient.close();
+            throw e;
+        }
         try (RabbitMqDomainEventLevelBootstrap app = RabbitMqDomainEventLevelBootstrap.start(mongoClient, rabbitConnection)) {
             OrderStatusProjection.OrderStatusView view = app.placeAndShipOneOrder(Duration.ofSeconds(30));
             log.info("Order placed, forwarded to RabbitMQ, bridged back, and projected: {}", view);
         } finally {
-            rabbitConnection.close();
-            mongoClient.close();
+            // Same per-resource discipline close() uses, so a throw from rabbitConnection.close() does not skip
+            // mongoClient.close() too.
+            RuntimeException failure = null;
+            try {
+                rabbitConnection.close();
+            } catch (Exception e) {
+                failure = collectFailure(failure, e);
+            }
+            try {
+                mongoClient.close();
+            } catch (RuntimeException e) {
+                failure = collectFailure(failure, e);
+            }
+            if (failure != null) {
+                throw failure;
+            }
         }
     }
 }
