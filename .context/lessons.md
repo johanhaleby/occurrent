@@ -1497,3 +1497,9 @@ I checked a reviewer's blocker by reading files in the worker's worktree with `s
 The finding was real. `git show 8dd8b0273:<path>` shows the readiness check AFTER the accept, exactly as the reviewer said; the working tree showed it before. No harm followed only because the worker had independently found and fixed the same race in `a728f31af` and declined merely the duplicate thread.
 
 Rule: when verifying any claim about a pushed head, read `git show <sha>:<path>`. A worker's worktree is dirty by default while it is mid-round, and `git log -1` tells you nothing about the state of the files you are about to read.
+
+## Workers background long test runs no matter how often the brief forbids it (brk, 2026-08-20)
+
+Both active workers hit the backgrounded-wait trap in the same hour, one parking on a module suite mid-round for the second time, one parking mid-MUTATION with a deliberately broken test file on disk while waiting for a notification that never comes. The second case is the dangerous shape: a killed session there hands the next worker a mutation indistinguishable from real code.
+
+The brief rule ("run builds in the foreground") is evidently not enough on its own, because a long Testcontainers run tempts the worker to background it and "come back". Two mitigations that work: state in the brief that a turn has NO deadline and a twenty-minute foreground run is fine, and state the specific mutation rule, that a mutation cycle (break, red, restore, diff against the copy, green) is ATOMIC within one turn, never split across a wait. The orchestrator's fallback stays the same: any worker report ending with "waiting for the background run" gets an immediate wake-up naming the dead wait.
