@@ -31,8 +31,11 @@ import static org.occurrent.broker.kafka.blocking.KafkaDestinations.streamIdOf;
 /**
  * The shipped default {@link DestinationResolver} for Kafka. Every event goes to one topic you name, keyed by the
  * event's {@code streamid} extension when it has one and {@code null} otherwise, exactly the keying
- * {@link KafkaTopicPerTypeDestinationResolver} also uses. One topic is what makes stream-id keying actually deliver
- * the guarantee ADR 133 decision 7 states for it. A projection or saga reading one stream needs that stream's
+ * {@link KafkaTopicPerTypeDestinationResolver} also uses. An event with no {@code streamid}, exactly what
+ * {@code DomainEventSink.publish(E)} produces per decision 4, gets no ordering guarantee at all. Kafka's own
+ * partitioner spreads a {@code null} key across every partition on its own, so that event's place relative to any
+ * other is given up rather than kept. One topic is what makes stream-id keying actually deliver the guarantee ADR
+ * 133 decision 7 states for it. A projection or saga reading one stream needs that stream's
  * events in order, and Kafka only orders within one partition of one topic. Two events of the same stream but
  * different types share this topic and therefore the same partition, so they stay in order against each other the
  * way an event-sourced stream that mixes types actually needs, which a per-type topic can never deliver since two
