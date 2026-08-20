@@ -19,11 +19,14 @@ package org.occurrent.springboot.broker.rabbitmq.blocking.domain;
 import com.rabbitmq.client.Connection;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.broker.api.blocking.CloudEventSink;
 import org.occurrent.broker.api.blocking.DomainEventSink;
 import org.occurrent.springboot.broker.rabbitmq.blocking.EnableOccurrentRabbitMqBroker;
+import org.occurrent.springboot.broker.rabbitmq.blocking.RabbitMqBrokerProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Fallback;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -61,6 +64,45 @@ class RabbitMqDomainBrokerConfigurationWiringTest {
         @Bean
         CloudEventConverter<Object> cloudEventConverter() {
             return mock(CloudEventConverter.class);
+        }
+    }
+
+    /**
+     * Targets {@link RabbitMqDomainBrokerConfiguration} directly rather than the full auto-configuration, so
+     * resolving the two competing {@code CloudEventSink} beans below never has to open a real RabbitMQ channel the
+     * way building the auto-configured sink otherwise would.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void the_domain_sink_binds_to_its_own_cloud_event_sink_even_when_a_competing_fallback_exists() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(PrerequisiteSupplyingConfiguration.class, TwoFallbackCloudEventSinksConfiguration.class, RabbitMqDomainBrokerConfiguration.class)
+                .run(context -> assertThat(context.getBean(DomainEventSink.class)).isNotNull());
+    }
+
+    /**
+     * Two {@code @Fallback} {@code CloudEventSink} beans, standing in for the RabbitMQ and the Kafka starter's own
+     * sink beans, the situation an application enabling both broker starters together ends up in. Built directly
+     * here rather than through {@code OccurrentRabbitMqAutoConfiguration}, so this test needs neither a real
+     * RabbitMQ channel nor a real Kafka connection to reach the same ambiguity.
+     */
+    @Configuration(proxyBeanMethods = false)
+    static class TwoFallbackCloudEventSinksConfiguration {
+        @Bean
+        RabbitMqBrokerProperties rabbitMqBrokerProperties() {
+            return new RabbitMqBrokerProperties();
+        }
+
+        @Bean(name = "occurrentRabbitMqCloudEventSink")
+        @Fallback
+        CloudEventSink correctCloudEventSink() {
+            return mock(CloudEventSink.class);
+        }
+
+        @Bean
+        @Fallback
+        CloudEventSink competingCloudEventSink() {
+            return mock(CloudEventSink.class);
         }
     }
 }

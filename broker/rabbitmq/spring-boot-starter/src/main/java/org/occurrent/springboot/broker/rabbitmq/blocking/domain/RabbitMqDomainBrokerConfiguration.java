@@ -25,6 +25,7 @@ import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
 import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventSink;
 import org.occurrent.springboot.broker.rabbitmq.blocking.RabbitMqBrokerProperties;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -49,12 +50,17 @@ public class RabbitMqDomainBrokerConfiguration {
      * {@code @Lazy}: instantiating this pulls in the {@code CloudEventSink} bean as a dependency, and that bean is
      * itself {@code @Lazy} for the same "do not force a resolver requirement on a deployment that does not need
      * it" reason. Requesting the domain sink is what should trigger both, not merely being on the classpath.
+     * <p>
+     * The {@code CloudEventSink} parameter is qualified by name because an application with both the RabbitMQ and
+     * the Kafka broker starter enabled has two {@code @Fallback} {@code CloudEventSink} beans on the classpath,
+     * with no {@code @Primary} to break the tie. Naming this starter's own bean directly keeps the wrapper bound to
+     * the RabbitMQ sink regardless of what else is in the context.
      */
     @Bean
     @Lazy
     @Fallback
     @ConditionalOnBean(CloudEventConverter.class)
-    <E> DomainEventSink<E> occurrentRabbitMqDomainEventSink(CloudEventSink cloudEventSink, CloudEventConverter<E> converter) {
+    <E> DomainEventSink<E> occurrentRabbitMqDomainEventSink(@Qualifier("occurrentRabbitMqCloudEventSink") CloudEventSink cloudEventSink, CloudEventConverter<E> converter) {
         return RabbitMqDomainEventSink.using(cloudEventSink, converter);
     }
 

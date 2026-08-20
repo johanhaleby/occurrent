@@ -57,13 +57,15 @@ public class OccurrentKafkaAutoConfiguration {
     /**
      * The zero-config {@link DestinationResolver} a sink or a bridge factory falls back to when the application
      * declares none, active once {@code occurrent.broker.kafka.topic} is set. {@code @Fallback} rather than
-     * {@code @ConditionalOnMissingBean}: this configuration is activated by {@link EnableOccurrentKafkaBroker}'s
-     * plain {@code @Import}, so a {@code @ConditionalOnMissingBean} condition can be evaluated before the
-     * application's own resolver bean is registered and let both through, the same import-ordering gap ADR 72
-     * documents for the MongoDB starter's own {@code Default*Provider} beans. A {@code @Fallback} bean is excluded at
-     * dependency-resolution time instead, which registration order cannot affect.
+     * {@code @ConditionalOnMissingBean}, a {@code @Fallback} bean is excluded at dependency-resolution time whenever
+     * a non-fallback candidate exists, the same pattern ADR 72 documents for the MongoDB starter's own
+     * {@code Default*Provider} beans.
+     * <p>
+     * {@code @Lazy} for the same reason the {@code CloudEventSink} bean below is, so being on the classpath with
+     * {@code topic} set never forces this bean to build before something actually asks for it.
      */
     @Bean
+    @Lazy
     @Fallback
     @ConditionalOnProperty(prefix = "occurrent.broker.kafka", name = "topic")
     KafkaSharedTopicDestinationResolver occurrentKafkaDestinationResolver(KafkaBrokerProperties properties) {

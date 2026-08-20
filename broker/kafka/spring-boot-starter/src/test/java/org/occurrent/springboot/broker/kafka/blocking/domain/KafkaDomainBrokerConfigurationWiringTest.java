@@ -18,11 +18,13 @@ package org.occurrent.springboot.broker.kafka.blocking.domain;
 
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.broker.api.blocking.CloudEventSink;
 import org.occurrent.broker.api.blocking.DomainEventSink;
 import org.occurrent.springboot.broker.kafka.blocking.EnableOccurrentKafkaBroker;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Fallback;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -53,11 +55,35 @@ class KafkaDomainBrokerConfigurationWiringTest {
     static class EnabledConfiguration {
     }
 
+    /**
+     * Simulates the RabbitMQ starter's own {@code @Fallback} {@code CloudEventSink} being active alongside this
+     * one, the situation an application enabling both broker starters together ends up in.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void the_domain_sink_binds_to_its_own_cloud_event_sink_even_when_a_competing_fallback_exists() {
+        new ApplicationContextRunner()
+                .withPropertyValues(
+                        "occurrent.broker.kafka.bootstrap-servers=localhost:19092",
+                        "occurrent.broker.kafka.topic=orders")
+                .withUserConfiguration(EnabledConfiguration.class, CloudEventConverterSupplyingConfiguration.class, CompetingCloudEventSinkConfiguration.class)
+                .run(context -> assertThat(context.getBean(DomainEventSink.class)).isNotNull());
+    }
+
     @Configuration(proxyBeanMethods = false)
     static class CloudEventConverterSupplyingConfiguration {
         @Bean
         CloudEventConverter<Object> cloudEventConverter() {
             return mock(CloudEventConverter.class);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class CompetingCloudEventSinkConfiguration {
+        @Bean
+        @Fallback
+        CloudEventSink competingCloudEventSink() {
+            return mock(CloudEventSink.class);
         }
     }
 }

@@ -64,13 +64,16 @@ public class OccurrentRabbitMqAutoConfiguration {
     /**
      * The zero-config {@link DestinationResolver} a sink or a bridge factory falls back to when the application
      * declares none, active once {@code occurrent.broker.rabbitmq.exchange} is set. {@code @Fallback} rather than
-     * {@code @ConditionalOnMissingBean}: this configuration is activated by {@link EnableOccurrentRabbitMqBroker}'s
-     * plain {@code @Import}, so a {@code @ConditionalOnMissingBean} condition can be evaluated before the
-     * application's own resolver bean is registered and let both through, the same import-ordering gap ADR 72
-     * documents for the MongoDB starter's own {@code Default*Provider} beans. A {@code @Fallback} bean is excluded at
-     * dependency-resolution time instead, which registration order cannot affect.
+     * {@code @ConditionalOnMissingBean}, a {@code @Fallback} bean is excluded at dependency-resolution time whenever
+     * a non-fallback candidate exists, the same pattern ADR 72 documents for the MongoDB starter's own
+     * {@code Default*Provider} beans.
+     * <p>
+     * {@code @Lazy} for the same reason the {@code CloudEventSink} bean below is, an application whose {@code
+     * CloudEventTypeMapper} bean is missing, because it never publishes and supplies its own resolver instead,
+     * must not be forced to satisfy this bean's constructor just because {@code exchange} happens to be set.
      */
     @Bean
+    @Lazy
     @Fallback
     @ConditionalOnProperty(prefix = "occurrent.broker.rabbitmq", name = "exchange")
     RabbitMqTopicExchangeDestinationResolver occurrentRabbitMqDestinationResolver(RabbitMqBrokerProperties properties, CloudEventTypeMapper<?> typeMapper) {

@@ -79,6 +79,20 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
                 });
     }
 
+    /**
+     * The resolver bean's own constructor needs a {@link CloudEventTypeMapper}, so if it were not {@code @Lazy},
+     * Spring would try to build it during singleton pre-instantiation whenever {@code exchange} is set, whether or
+     * not anything ever asks for a {@code CloudEventSink} or a resolver, and fail here where no type mapper bean is
+     * supplied.
+     */
+    @Test
+    void resolver_bean_stays_lazy_so_a_missing_type_mapper_does_not_break_startup() {
+        contextRunner
+                .withBean(Connection.class, () -> mock(Connection.class))
+                .withPropertyValues("occurrent.broker.rabbitmq.exchange=orders")
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
     @Test
     void requesting_the_sink_without_a_resolver_fails_loud_naming_the_missing_bean() {
         contextRunner.withBean(Connection.class, () -> mock(Connection.class)).run(context ->
