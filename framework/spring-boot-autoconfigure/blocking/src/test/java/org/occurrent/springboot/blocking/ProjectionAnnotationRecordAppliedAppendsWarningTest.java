@@ -112,14 +112,11 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     }
 
     @Test
-    void a_composition_whose_replay_awareness_cannot_be_read_does_not_warn_that_it_never_replays() {
-        // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one): it might
-        // genuinely be replaying, this registrar just cannot tell, so warnIfRecordingNeverResets must not claim it
-        // never replays.
-        Subscribable model = mock(Subscribable.class);
-        doReturn(java.util.Optional.empty()).when(model).capability(ReplayAwareSubscriptions.class);
-        when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
+    void the_default_start_position_still_warns_that_it_never_replays_even_when_the_composition_cannot_say_whether_it_would() {
+        // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one): the default
+        // start position never asks it to replay regardless of what the composition could do, so that fact holds
+        // and is worth warning about even though the composition itself cannot say whether it would have replayed.
+        Subscribable model = unobservableModel();
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -129,8 +126,39 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .withBean(Subscriptions.class, () -> new Subscriptions<>(model, testEventConverter()))
                 .run(context -> {
                     assertThat(context).hasNotFailed();
+                    assertThat(warnings()).hasSize(1);
+                    assertThat(warnings().get(0).getFormattedMessage())
+                            .contains(PROJECTION_ID)
+                            .contains("never replays");
+                });
+    }
+
+    @Test
+    void startAt_beginning_on_a_composition_whose_replay_awareness_cannot_be_read_does_not_claim_it_never_replays() {
+        // Here the projection's own configuration does ask for a replay (startAt = BEGINNING), so whether it ever
+        // actually happens depends entirely on a composition this registrar cannot read. Claiming it never replays
+        // would be false, since it might genuinely be replaying right now, so this stays silent, the same silent
+        // fallback this combination already had before recordAppliedAppendsNeverResetsAutomatically existed.
+        Subscribable model = unobservableModel();
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("startAtBeginningProjection", StartAtBeginningProjection.class, StartAtBeginningProjection::new)
+                .withBean(AppliedAppendStore.class, AppliedAppendStore::inMemory)
+                .withBean(Subscriptions.class, () -> new Subscriptions<>(model, testEventConverter()))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
                     assertThat(warnings()).isEmpty();
                 });
+    }
+
+    private static Subscribable unobservableModel() {
+        Subscribable model = mock(Subscribable.class);
+        doReturn(java.util.Optional.empty()).when(model).capability(ReplayAwareSubscriptions.class);
+        when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(mock(Subscription.class));
+        return model;
     }
 
     private <P> void runWith(Class<P> projectionType, String beanName, java.util.function.Supplier<P> projectionFactory) {

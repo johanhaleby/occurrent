@@ -233,8 +233,12 @@ class ProjectionAnnotationRegistrar {
             ReplayPhaseResolution recordingResolution = annotation.recordAppliedAppends()
                     ? resolveEventStorePhase(id, fluxSubscriptionModel instanceof SubscriptionModelCapability capability ? capability : null)
                     : null;
+            // The unknown-capability suppression only applies when this projection's own start position would
+            // actually ask the composition to replay (replaysHistory). When it never asks (DEFAULT or NOW), the
+            // projection never replays regardless of what the composition could do, so that fact is worth the
+            // warning either way.
             warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), replaysHistory && recordingResolution != null && recordingResolution.registerWithPoll(),
-                    recordingResolution != null && recordingResolution.replayAwarenessUnknown());
+                    replaysHistory && recordingResolution != null && recordingResolution.replayAwarenessUnknown());
             var subscription = projectDcb(runner, id, annotation, dcbProjection, resolveStore(annotation, id), startAt, recordingResolution);
             if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
                 subscription.waitUntilStarted().block();
@@ -264,8 +268,12 @@ class ProjectionAnnotationRegistrar {
                 StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
                 startPositionSupport.applyStartupWorkarounds();
                 ReplayPhaseResolution recordingResolution = annotation.recordAppliedAppends() ? resolveEventStorePhase(id, subscribable) : null;
+                // The unknown-capability suppression only applies when this projection's own start position would
+                // actually ask the composition to replay (replaysHistory). When it never asks (DEFAULT or NOW), the
+                // projection never replays regardless of what the composition could do, so that fact is worth the
+                // warning either way.
                 warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), replaysHistory && recordingResolution != null && recordingResolution.registerWithPoll(),
-                        recordingResolution != null && recordingResolution.replayAwarenessUnknown());
+                        replaysHistory && recordingResolution != null && recordingResolution.replayAwarenessUnknown());
                 var subscription = projectAgnosticOrStream(runner, id, annotation, projection, resolveStore(annotation, id), startAt, recordingResolution);
                 if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
                     subscription.waitUntilStarted().block();

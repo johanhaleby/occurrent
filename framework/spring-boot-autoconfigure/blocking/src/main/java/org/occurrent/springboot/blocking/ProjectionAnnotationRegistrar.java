@@ -295,7 +295,10 @@ class ProjectionAnnotationRegistrar {
             return materializedView;
         }
         RecordingPhase recording = asynchronousSubscribablePhase(id, capability);
-        warnIfRecordingNeverResets(id, true, replaysHistory && recording.registerWithPoll(), recording.replayAwarenessUnknown());
+        // The unknown-capability suppression only applies when this projection's own start position would actually
+        // ask the composition to replay (replaysHistory). When it never asks (DEFAULT or NOW), the projection never
+        // replays regardless of what the composition could do, so that fact is worth the warning either way.
+        warnIfRecordingNeverResets(id, true, replaysHistory && recording.registerWithPoll(), replaysHistory && recording.replayAwarenessUnknown());
         return wrapForRecording(annotation, id, materializedView, recording.phase(), recording.registerWithPoll());
     }
 

@@ -114,17 +114,11 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     }
 
     @Test
-    void a_composition_whose_replay_awareness_cannot_be_read_gets_exactly_one_warning_not_two() {
-        // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one): resolveEventStorePhase
-        // already warns that it cannot tell whether this composition replays. warnIfRecordingNeverResets must not
-        // also fire and claim the composition never replays, since it might genuinely be replaying and this
-        // registrar simply cannot say so.
-        Subscribable model = mock(Subscribable.class);
-        doReturn(java.util.Optional.empty()).when(model).capability(ReplayAwareSubscriptions.class);
-        Subscription subscription = mock(Subscription.class);
-        when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
-        when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(subscription);
+    void the_default_start_position_still_warns_that_it_never_replays_even_when_the_composition_cannot_say_whether_it_would() {
+        // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one): the default start
+        // position never asks it to replay regardless of what the composition could do, so that fact holds and is
+        // worth its own warning alongside resolveEventStorePhase's "cannot tell" one, not instead of it.
+        Subscribable model = unobservableModel();
 
         new ApplicationContextRunner()
                 .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
@@ -134,11 +128,47 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .withBean("subscribable", Subscribable.class, () -> model)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
+                    assertThat(warnings()).hasSize(2);
+                    assertThat(warnings()).anySatisfy(event -> assertThat(event.getFormattedMessage()).contains("does not expose"));
+                    assertThat(warnings()).anySatisfy(event -> assertThat(event.getFormattedMessage())
+                            .contains("its resolved start position or composition never replays"));
+                });
+    }
+
+    @Test
+    void startAt_beginning_on_a_composition_whose_replay_awareness_cannot_be_read_does_not_claim_it_never_replays() {
+        // Here the projection's own configuration does ask for a replay (startAt = BEGINNING), so whether it ever
+        // actually happens depends entirely on a composition this registrar cannot read. resolveEventStorePhase's
+        // "cannot tell" warning already covers that ambiguity, and warnIfRecordingNeverResets must not also claim
+        // the composition never replays, since it might genuinely be replaying right now.
+        Subscribable model = unobservableModel();
+        EventStore eventStore = mock(EventStore.class, withSettings().extraInterfaces(PositionOrderedReader.class));
+        when(((PositionOrderedReader) eventStore).writesPosition()).thenReturn(true);
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("startAtBeginningProjection", StartAtBeginningProjection.class, StartAtBeginningProjection::new)
+                .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
+                .withBean("subscribable", Subscribable.class, () -> model)
+                .withBean("eventStore", EventStore.class, () -> eventStore)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
                     assertThat(warnings()).hasSize(1);
                     assertThat(warnings().get(0).getFormattedMessage())
                             .contains("does not expose")
                             .doesNotContain("its resolved start position or composition never replays");
                 });
+    }
+
+    private static Subscribable unobservableModel() {
+        Subscribable model = mock(Subscribable.class);
+        doReturn(java.util.Optional.empty()).when(model).capability(ReplayAwareSubscriptions.class);
+        Subscription subscription = mock(Subscription.class);
+        when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
+        when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(subscription);
+        return model;
     }
 
     private <P> void runWith(Class<P> projectionType, String beanName, java.util.function.Supplier<P> projectionFactory) {
