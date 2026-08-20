@@ -233,6 +233,7 @@ class ProjectionAnnotationRegistrar {
             ReplayPhaseResolution recordingResolution = annotation.recordAppliedAppends()
                     ? resolveEventStorePhase(id, fluxSubscriptionModel instanceof SubscriptionModelCapability capability ? capability : null)
                     : null;
+            warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), replaysHistory && recordingResolution != null && recordingResolution.registerWithPoll());
             var subscription = projectDcb(runner, id, annotation, dcbProjection, resolveStore(annotation, id), startAt, recordingResolution);
             if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
                 subscription.waitUntilStarted().block();
@@ -262,6 +263,7 @@ class ProjectionAnnotationRegistrar {
                 StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
                 startPositionSupport.applyStartupWorkarounds();
                 ReplayPhaseResolution recordingResolution = annotation.recordAppliedAppends() ? resolveEventStorePhase(id, subscribable) : null;
+                warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), replaysHistory && recordingResolution != null && recordingResolution.registerWithPoll());
                 var subscription = projectAgnosticOrStream(runner, id, annotation, projection, resolveStore(annotation, id), startAt, recordingResolution);
                 if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
                     subscription.waitUntilStarted().block();
@@ -361,6 +363,15 @@ class ProjectionAnnotationRegistrar {
     }
 
     private record ReplayPhaseResolution(ReplayPhase phase, boolean registerWithPoll) {
+    }
+
+    // ADR 132 decision 9's third case: a composition that can replay and can report its phase, but is wired so it
+    // is never asked to (the resolved start position never replays, or the composition has no catch-up layer at
+    // all). Recording still proceeds, since decision 9 allows it, but nothing ever clears it automatically.
+    private void warnIfRecordingNeverResets(String id, boolean recordAppliedAppends, boolean canReplay) {
+        if (recordAppliedAppends && !canReplay) {
+            log.warn(AppliedAppendRecordingRegistry.recordAppliedAppendsNeverResetsAutomatically(id));
+        }
     }
 
     // Wraps update so it records every applied append. Caller only calls this once it has already decided recording
@@ -466,6 +477,7 @@ class ProjectionAnnotationRegistrar {
                 recordingResolution = new ReplayPhaseResolution(ReplayPhase.neverReplays(), false);
             }
         }
+        warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), recordingResolution != null && recordingResolution.registerWithPoll());
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ReactiveProjectionRunner<E> runner = stream ? ReactiveProjectionRunner.stream(subscribable, converter) : ReactiveProjectionRunner.agnostic(subscribable, converter);
         Object store = resolveStore(annotation, id);
@@ -498,6 +510,10 @@ class ProjectionAnnotationRegistrar {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         Object store = resolveStore(annotation, id);
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
+        // Computed early: catchesUp is what actually decides whether this projection replays (it drives the view-DSL
+        // replay lifecycle below, not a ReplayPhase), and warnIfRecordingNeverResets needs it before the fold is built.
+        boolean catchesUp = annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;
+        warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), catchesUp);
         Runnable registerOnFeed;
         if (!annotation.recordAppliedAppends() && store instanceof ViewStateRepository) {
             registerOnFeed = () -> feed.register(id, projection, (ViewStateRepository<S, ID>) store);
@@ -526,7 +542,6 @@ class ProjectionAnnotationRegistrar {
             Filter replayFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
             registerOnFeed = () -> feed.register(id, effectiveFold, replayFilter);
         }
-        boolean catchesUp = annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;
         if (subscriptionsStartOnTheirOwn(applicationContext)) {
             registerOnFeed.run();
             if (catchesUp) {

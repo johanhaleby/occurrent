@@ -216,6 +216,11 @@ public @interface Projection {
      * 6 through 9. Configure the store's retention, the wait's poll pacing, and this feature's own replay-detection
      * poll under {@code occurrent.projection.applied-append}.
      * <p>
+     * Whether a rebuilt read model clears its recorded memberships automatically depends on {@link #startAt()} as
+     * well as the composition. The default start position never replays, so a projection left there records but
+     * never clears on its own, and a startup warning names it. Set {@link #startAt()} to {@link StartPosition#BEGINNING}
+     * to have a rebuild replay and clear correctly, or clear stale memberships with an operator step instead.
+     * <p>
      * Recording happens after the first handled event that carries an append id, not after every event the append
      * wrote. An append whose events this projection handles across several deliveries can therefore have
      * {@code hasApplied}/{@code waitUntilApplied} answer {@code true} while some of those deliveries are still

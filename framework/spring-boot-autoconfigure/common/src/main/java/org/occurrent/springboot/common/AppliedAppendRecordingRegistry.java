@@ -148,4 +148,14 @@ public final class AppliedAppendRecordingRegistry {
         return new IllegalArgumentException(("@Projection '%s' cannot combine recordAppliedAppends = true with mode = SYNCHRONOUS: " +
                 "a synchronous projection already updates inside the write and answers read-your-writes without it.").formatted(projectionId));
     }
+
+    /**
+     * The startup WARN a {@code recordAppliedAppends = true} registrar logs when the resolved start position or
+     * composition never replays (ADR 132 decision 9's third case), worded identically on both stacks so the two
+     * never drift apart.
+     */
+    public static String recordAppliedAppendsNeverResetsAutomatically(String projectionId) {
+        return ("@Projection '%s' sets recordAppliedAppends = true, but its resolved start position or composition never replays, " +
+                "so its recorded memberships survive a read-model rebuild until the TTL evicts them or an operator clears them.").formatted(projectionId);
+    }
 }
