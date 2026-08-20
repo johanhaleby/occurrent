@@ -60,6 +60,11 @@ import java.util.concurrent.Executors;
  * <a href="https://github.com/johanhaleby/occurrent/issues/846">#846</a>, and this class wires the same interfaces
  * that starter will eventually configure.
  * <p>
+ * The bridge is built, declaring the queue and its bindings, before the catch-up replay below starts, not after.
+ * Declare where events will land before replaying what will land there, since the forwarder is already running by
+ * then and a replay can take a while on a large store. Building the bridge after would leave every event the
+ * forwarder publishes during that whole window unroutable until the binding finally exists.
+ * <p>
  * {@link #main(String[])} needs a real MongoDB single-node replica set and a real RabbitMQ, not Testcontainers.
  * Start both with:
  * <pre>{@code
@@ -174,11 +179,19 @@ public final class RabbitMqDomainEventLevelBootstrap implements AutoCloseable {
             Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews = new ConcurrentHashMap<>();
             ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(orderStatusViews::get, orderStatusViews::put);
             feed.register(SUBSCRIPTION_ID, OrderStatusProjection.orderStatusProjection(), repository);
-            feed.catchUp(SUBSCRIPTION_ID);
 
+            // The bridge builder declares the queue and its bindings before this returns. Building it before the
+            // catch-up below, not after, means the exchange already has somewhere to route to for the whole
+            // replay, however long that runs. Building it after would leave the forwarder publishing into an
+            // exchange nothing is bound to for that entire window, RabbitMQ returning every one of those publishes
+            // unroutable, the sink treating that as a failed publish, and the forwarder retrying the same event
+            // until the binding finally exists. No event is lost, since the checkpoint never advances past a
+            // failed publish, but the startup would be needlessly noisy. See the class javadoc.
             bridge = RabbitMqDomainEventBridge.builder(rabbitConnection, feed, QUEUE)
                     .resolver(resolver)
                     .build();
+
+            feed.catchUp(SUBSCRIPTION_ID);
 
             return new RabbitMqDomainEventLevelBootstrap(eventStore, converter, forwarderSubscription, sink, bridge, orderStatusViews);
         } catch (RuntimeException e) {

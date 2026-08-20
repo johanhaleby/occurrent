@@ -103,8 +103,11 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                 eventStore.write(orderBeforeCatchup, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderBeforeCatchup, "Widget")));
                 eventStore.write(orderBeforeCatchup, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderBeforeCatchup)));
 
+                // At least two, not exactly two. The forwarder is at-least-once by its own contract, so a publish
+                // whose confirm the sink never saw, even though RabbitMQ actually took it, retries and can legally
+                // land a duplicate here. Pinning this to exactly 2 would turn that legal duplicate into a flake.
                 await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                        assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isEqualTo(2));
+                        assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isGreaterThanOrEqualTo(2));
 
                 Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
                 // Counts saves for orderBeforeCatchup specifically. Folding the redelivered backlog's two

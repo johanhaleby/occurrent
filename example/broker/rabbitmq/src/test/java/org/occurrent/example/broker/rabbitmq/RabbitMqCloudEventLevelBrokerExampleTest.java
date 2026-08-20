@@ -194,6 +194,14 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
             context1.close();
             bridge1.close();
 
+            // Written with the consumer already torn down and boot 2 not yet built, so this queues on the broker
+            // exactly like a real restart leaves work behind. The forwarder keeps running (it never stopped), but
+            // nothing is consuming queue until boot 2's bridge exists. Proving this arrives once boot 2 comes up,
+            // without a full replay, is the other half of "resumes", not just that catch-up itself is skipped.
+            String orderIdQueuedWhileConsumerWasDown = "order-" + UUID.randomUUID();
+            eventStore.write(orderIdQueuedWhileConsumerWasDown, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown, "Widget")));
+            eventStore.write(orderIdQueuedWhileConsumerWasDown, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderIdQueuedWhileConsumerWasDown)));
+
             // Boot 2: a fresh model, a fresh bridge on the same queue, and a fresh Spring context, but the same
             // catch-up marker and the same read-model store. A reader that counts its own replay calls proves the
             // catch-up is skipped this time, not merely fast.
@@ -219,6 +227,13 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                     // replayed, the counter would already be nonzero right here.
                     assertThat(countingReader.replays()).isZero();
                     assertThat(store.get(orderIdBeforeRestart)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED");
+
+                    // The order queued while the consumer was down arrives now that boot 2's bridge is live,
+                    // delivered from the broker's own backlog rather than from a replay, since the catch-up
+                    // marker already said this feed was caught up before this order was ever written.
+                    await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
+                            assertThat(store.get(orderIdQueuedWhileConsumerWasDown)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
+                    assertThat(countingReader.replays()).isZero();
 
                     String orderIdAfterRestart = "order-" + UUID.randomUUID();
                     eventStore.write(orderIdAfterRestart, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderIdAfterRestart, "Gadget")));
