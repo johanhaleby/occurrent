@@ -24,7 +24,6 @@ import org.occurrent.springboot.broker.kafka.blocking.domain.KafkaDomainBrokerCo
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
@@ -56,10 +55,11 @@ public class OccurrentKafkaAutoConfiguration {
 
     /**
      * The zero-config {@link DestinationResolver} a sink or a bridge factory falls back to when the application
-     * declares none, active once {@code occurrent.broker.kafka.topic} is set. {@code @Fallback} rather than
-     * {@code @ConditionalOnMissingBean}, a {@code @Fallback} bean is excluded at dependency-resolution time whenever
-     * a non-fallback candidate exists, the same pattern ADR 72 documents for the MongoDB starter's own
-     * {@code Default*Provider} beans.
+     * declares none, active once {@code occurrent.broker.kafka.topic} is set, checked through
+     * {@link KafkaTopicConfiguredCondition} rather than a plain {@code @ConditionalOnProperty}, see that
+     * condition's own javadoc for why. {@code @Fallback} rather than {@code @ConditionalOnMissingBean}, a
+     * {@code @Fallback} bean is excluded at dependency-resolution time whenever a non-fallback candidate exists,
+     * the same pattern ADR 72 documents for the MongoDB starter's own {@code Default*Provider} beans.
      * <p>
      * {@code @Lazy} for the same reason the {@code CloudEventSink} bean below is, so being on the classpath with
      * {@code topic} set never forces this bean to build before something actually asks for it.
@@ -67,7 +67,7 @@ public class OccurrentKafkaAutoConfiguration {
     @Bean
     @Lazy
     @Fallback
-    @ConditionalOnProperty(prefix = "occurrent.broker.kafka", name = "topic")
+    @Conditional(KafkaTopicConfiguredCondition.class)
     KafkaSharedTopicDestinationResolver occurrentKafkaDestinationResolver(KafkaBrokerProperties properties) {
         return new KafkaSharedTopicDestinationResolver(properties.getTopic());
     }

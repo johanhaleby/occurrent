@@ -158,10 +158,10 @@ class RabbitMqDomainBrokerAutoConfigurationIntegrationTest {
             return new TestOrderPlaced(new String(data));
         }
 
-        // The fully qualified class name, not an arbitrary string: ReflectionCloudEventTypeMapper.qualified(),
+        // The fully qualified class name, not an arbitrary string. ReflectionCloudEventTypeMapper.qualified(),
         // configured on the auto-configured resolver this sink publishes through, round-trips this type through
-        // Class.forName(...) on every publish, and a name it cannot resolve throws, which the sink's default
-        // retry strategy then retries forever rather than failing this test outright.
+        // Class.forName(...) on every publish, and a name it cannot resolve throws immediately rather than
+        // delivering the event.
         @Override
         public String getCloudEventType(Class<? extends TestOrderPlaced> type) {
             return TestOrderPlaced.class.getName();

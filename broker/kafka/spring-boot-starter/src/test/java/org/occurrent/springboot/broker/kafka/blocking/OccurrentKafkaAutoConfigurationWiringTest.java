@@ -82,6 +82,32 @@ class OccurrentKafkaAutoConfigurationWiringTest {
                 });
     }
 
+    /**
+     * A plain {@code @ConditionalOnProperty} treats the literal value {@code false} as absent, even though
+     * {@code false} is a legal Kafka topic name. {@link KafkaTopicConfiguredCondition} activates on any nonblank
+     * value instead.
+     */
+    @Test
+    void resolver_bean_activates_for_a_topic_literally_named_false() {
+        contextRunner.withPropertyValues(
+                        "occurrent.broker.kafka.bootstrap-servers=" + FAKE_BOOTSTRAP_SERVERS,
+                        "occurrent.broker.kafka.topic=false")
+                .run(context -> assertThat(context).hasSingleBean(org.occurrent.broker.kafka.blocking.KafkaSharedTopicDestinationResolver.class));
+    }
+
+    /**
+     * A plain {@code @ConditionalOnProperty} treats an empty value as present, which would build a resolver for a
+     * blank topic name here, one that later fails when a bridge tries to subscribe to it.
+     * {@link KafkaTopicConfiguredCondition} requires a nonblank value.
+     */
+    @Test
+    void resolver_bean_does_not_activate_for_a_blank_topic() {
+        contextRunner.withPropertyValues(
+                        "occurrent.broker.kafka.bootstrap-servers=" + FAKE_BOOTSTRAP_SERVERS,
+                        "occurrent.broker.kafka.topic=")
+                .run(context -> assertThat(context).doesNotHaveBean(org.occurrent.broker.kafka.blocking.KafkaSharedTopicDestinationResolver.class));
+    }
+
     @Test
     void a_user_supplied_cloud_event_sink_takes_precedence_over_the_fallback() {
         CloudEventSink userSink = mock(CloudEventSink.class);

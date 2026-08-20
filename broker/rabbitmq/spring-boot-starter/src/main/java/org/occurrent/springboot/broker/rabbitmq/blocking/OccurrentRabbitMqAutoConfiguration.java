@@ -32,9 +32,9 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Fallback;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Lazy;
@@ -63,10 +63,11 @@ public class OccurrentRabbitMqAutoConfiguration {
 
     /**
      * The zero-config {@link DestinationResolver} a sink or a bridge factory falls back to when the application
-     * declares none, active once {@code occurrent.broker.rabbitmq.exchange} is set. {@code @Fallback} rather than
-     * {@code @ConditionalOnMissingBean}, a {@code @Fallback} bean is excluded at dependency-resolution time whenever
-     * a non-fallback candidate exists, the same pattern ADR 72 documents for the MongoDB starter's own
-     * {@code Default*Provider} beans.
+     * declares none, active once {@code occurrent.broker.rabbitmq.exchange} is set, checked through
+     * {@link RabbitMqExchangeConfiguredCondition} rather than a plain {@code @ConditionalOnProperty}, see that
+     * condition's own javadoc for why. {@code @Fallback} rather than {@code @ConditionalOnMissingBean}, a
+     * {@code @Fallback} bean is excluded at dependency-resolution time whenever a non-fallback candidate exists,
+     * the same pattern ADR 72 documents for the MongoDB starter's own {@code Default*Provider} beans.
      * <p>
      * {@code @Lazy} for the same reason the {@code CloudEventSink} bean below is, an application whose {@code
      * CloudEventTypeMapper} bean is missing, because it never publishes and supplies its own resolver instead,
@@ -75,7 +76,7 @@ public class OccurrentRabbitMqAutoConfiguration {
     @Bean
     @Lazy
     @Fallback
-    @ConditionalOnProperty(prefix = "occurrent.broker.rabbitmq", name = "exchange")
+    @Conditional(RabbitMqExchangeConfiguredCondition.class)
     RabbitMqTopicExchangeDestinationResolver occurrentRabbitMqDestinationResolver(RabbitMqBrokerProperties properties, CloudEventTypeMapper<?> typeMapper) {
         return new RabbitMqTopicExchangeDestinationResolver(properties.getExchange(), typeMapper);
     }

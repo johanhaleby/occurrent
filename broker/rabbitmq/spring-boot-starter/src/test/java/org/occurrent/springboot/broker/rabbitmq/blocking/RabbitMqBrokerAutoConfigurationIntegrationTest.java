@@ -104,10 +104,10 @@ class RabbitMqBrokerAutoConfigurationIntegrationTest {
 
                     RabbitMqCloudEventBridge bridge = bridgeFactory.forQueue("test-queue-" + UUID.randomUUID(), model, outcomeChannel).build();
                     try {
-                        // The type has to be a resolvable fully qualified class name, not an arbitrary string:
+                        // The type has to be a resolvable fully qualified class name, not an arbitrary string.
                         // ReflectionCloudEventTypeMapper.qualified() round-trips it through Class.forName(...) on
-                        // every publish, and a name it cannot resolve throws, which the sink's default retry
-                        // strategy then retries forever rather than failing this test outright.
+                        // every publish, and a name it cannot resolve throws immediately rather than delivering
+                        // the event.
                         CloudEvent event = CloudEventBuilder.v1()
                                 .withId(UUID.randomUUID().toString())
                                 .withSource(URI.create("urn:occurrent:test"))

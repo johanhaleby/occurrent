@@ -80,6 +80,34 @@ class OccurrentRabbitMqAutoConfigurationWiringTest {
     }
 
     /**
+     * A plain {@code @ConditionalOnProperty} treats the literal value {@code false} as absent, even though
+     * {@code false} is a legal RabbitMQ exchange name. {@link RabbitMqExchangeConfiguredCondition} activates on
+     * any nonblank value instead.
+     */
+    @Test
+    void resolver_bean_activates_for_an_exchange_literally_named_false() {
+        contextRunner
+                .withBean(Connection.class, () -> mock(Connection.class))
+                .withBean(CloudEventTypeMapper.class, ReflectionCloudEventTypeMapper::qualified)
+                .withPropertyValues("occurrent.broker.rabbitmq.exchange=false")
+                .run(context -> assertThat(context).hasSingleBean(RabbitMqTopicExchangeDestinationResolver.class));
+    }
+
+    /**
+     * A plain {@code @ConditionalOnProperty} treats an empty value as present, which would build a resolver for a
+     * blank exchange name here, one that later fails when a bridge tries to bind it.
+     * {@link RabbitMqExchangeConfiguredCondition} requires a nonblank value.
+     */
+    @Test
+    void resolver_bean_does_not_activate_for_a_blank_exchange() {
+        contextRunner
+                .withBean(Connection.class, () -> mock(Connection.class))
+                .withBean(CloudEventTypeMapper.class, ReflectionCloudEventTypeMapper::qualified)
+                .withPropertyValues("occurrent.broker.rabbitmq.exchange=")
+                .run(context -> assertThat(context).doesNotHaveBean(RabbitMqTopicExchangeDestinationResolver.class));
+    }
+
+    /**
      * The resolver bean's own constructor needs a {@link CloudEventTypeMapper}, so if it were not {@code @Lazy},
      * Spring would try to build it during singleton pre-instantiation whenever {@code exchange} is set, whether or
      * not anything ever asks for a {@code CloudEventSink} or a resolver, and fail here where no type mapper bean is
