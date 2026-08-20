@@ -49,6 +49,7 @@ public final class ComposedReplayPhase {
     // the same way. See its javadoc.
     private volatile boolean supplied = false;
     private volatile @Nullable ReplayAwareSubscriptions replayAware;
+    private volatile boolean defaultBypassesCatchup = false;
 
     /**
      * Supplies the composed subscription model this instance answers for, {@code instanceof}-checked against
@@ -85,5 +86,26 @@ public final class ComposedReplayPhase {
             return Optional.of(ReplayPhase.neverReplays());
         }
         return Optional.of(() -> capability.isCatchingUp(subscriptionId));
+    }
+
+    /**
+     * Records, as a known fact, that {@link org.occurrent.annotation.StartPosition#DEFAULT} bypasses this
+     * composition's catch-up layer unconditionally: {@code StartAt.subscriptionModelDefault()} never replays here,
+     * the checkpoint is never consulted, so a wiped checkpoint changes nothing (ADR 132 decision 7). Called at most
+     * once, by the same bean method that calls {@link #suppliedBy}, since only the auto-configuration that composed
+     * this model actually knows how it resolves that marker. Never inferred here, and never assumed true for a
+     * composition an application supplied itself, whose own {@code DEFAULT} semantics are its own to declare.
+     */
+    public void defaultBypassesCatchup() {
+        this.defaultBypassesCatchup = true;
+    }
+
+    /**
+     * Whether {@link #defaultBypassesCatchup} was called for this composition. {@code false} until then, including
+     * for a composition an application supplied itself, so a warning keyed on this answers honestly rather than by
+     * inferring composition-specific behavior it cannot verify.
+     */
+    public boolean isDefaultKnownLiveOnly() {
+        return defaultBypassesCatchup;
     }
 }
