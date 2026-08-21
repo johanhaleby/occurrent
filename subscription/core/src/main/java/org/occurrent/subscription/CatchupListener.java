@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.dsl.projection;
+package org.occurrent.subscription;
 
 import org.jspecify.annotations.NullMarked;
 

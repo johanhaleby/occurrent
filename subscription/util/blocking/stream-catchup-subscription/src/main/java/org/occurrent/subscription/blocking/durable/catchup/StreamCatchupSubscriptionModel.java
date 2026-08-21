@@ -306,7 +306,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // written since it started. A recording projection records those and skips the history above it. Skipped when
         // the replay was truncated, since a history that stopped part way through is not a history that was read.
         if (shouldKeepReplaying(subscriptionId)) {
-            beginReconcile(subscriptionId);
+            historyRead(subscriptionId);
         }
 
         long reconciledThroughCount = numberOfEventsBeforeStartingCatchupSubscription;
@@ -451,7 +451,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(streamReader, windowSize);
         pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId),
                 (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, e -> GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e))),
-                catchupPhaseCache, () -> beginReconcile(subscriptionId));
+                catchupPhaseCache, () -> historyRead(subscriptionId));
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
         // time-based path above. An unlocked gap here is observable two ways, a lost cancellation, or a fresh

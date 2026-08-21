@@ -17,7 +17,7 @@
 package org.occurrent.subscription.api.reactor;
 
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.subscription.CatchupSnapshot;
+import org.occurrent.subscription.CatchupListener;
 
 /**
  * A reactive subscription model that replays history before it delivers live events, and can say which of its
@@ -51,54 +51,33 @@ public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
     boolean isCatchingUp(String subscriptionId);
 
     /**
-     * Whether {@code subscriptionId} is still being given the events that already existed when its replay started,
-     * rather than the ones written since. A catch-up usually has both parts. It reads the history it set out to read,
-     * then reconciles whatever arrived while it was doing that, and only then hands over, so this answers
-     * {@code false} while {@link #isCatchingUp(String)} still answers {@code true}.
+     * Registers {@code listener} for {@code subscriptionId}'s catch-up boundaries, replacing any listener already
+     * registered for that id, and answers whether this model sends them at all.
      * <p>
-     * The default answers {@link #isCatchingUp(String)}, which is the safe answer for a model that cannot tell the
-     * two apart. A recording projection then records nothing until the handover
+     * Told rather than asked, because a caller that samples this model has to work out what happened between two of
+     * its own readings, and a catch-up that started and finished in between looks like no catch-up at all. A model
+     * that sends them calls {@link CatchupListener#catchupStarted(Object)} before the catch-up delivers anything and
+     * {@link CatchupListener#historyRead(Object)} once the history it set out to read has been read, both naming
+     * that catch-up.
+     * <p>
+     * Register before subscribing. A listener registered after a catch-up has begun misses its start, and a
+     * recording projection behind it would then record the history that catch-up is replaying.
+     * <p>
+     * The default answers {@code false} and registers nothing, which is the honest answer for a model that cannot
+     * tell its catch-ups apart. A caller then falls back to polling {@link #isCatchingUp(String)}, which cannot tell
+     * the history a catch-up replays from what was written while it ran, so a recording projection behind such a
+     * model records nothing for the whole catch-up
      * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
-     * decision 6), which costs it the appends the reconciliation delivered, since for some of those the
-     * reconciliation is the only delivery they get. Override this if your model reconciles, and answer {@code false}
-     * once its history read is done.
+     * decision 6). Override it if your model replays.
      *
-     * @param subscriptionId The subscription to ask about.
-     * @return {@code true} while this id is reading history it already had.
+     * @param subscriptionId The subscription whose catch-ups the listener wants.
+     * @param listener       Told when a catch-up begins and when its history has been read.
+     * @return {@code true} when this model sends those, {@code false} when it does not and nothing was registered.
      */
-    default boolean isReplayingHistory(String subscriptionId) {
-        return isCatchingUp(subscriptionId);
+    default boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
+        return false;
     }
 
-    /**
-     * Which catch-up {@code subscriptionId} is in, as a value that changes when a new one starts and is {@code 0}
-     * when none is running. Lets a caller that only samples this model tell one catch-up from the next even when it
-     * never sampled the gap between them, which a poll routinely misses for a catch-up whose history read matches
-     * nothing.
-     * <p>
-     * The default cannot tell two catch-ups apart, since it has only {@link #isCatchingUp(String)} to go on. Override
-     * it alongside {@link #isReplayingHistory(String)} if your model replays.
-     *
-     * @param subscriptionId The subscription to ask about.
-     * @return A value that changes per catch-up, or {@code 0} while none is running.
-     */
-    default long catchupGeneration(String subscriptionId) {
-        return isCatchingUp(subscriptionId) ? 1L : 0L;
-    }
 
-    /**
-     * Everything a recorder needs about {@code subscriptionId}'s catch-up, read as one value under whatever the model
-     * uses to keep that state consistent. Prefer this to the three questions above when acting on the answer, because
-     * a catch-up can finish between two separate calls and produce a pair that never existed.
-     * <p>
-     * The default composes the three, which is honest for a model whose state is a single map read anyway, and is the
-     * one to override when yours is not.
-     *
-     * @param subscriptionId The subscription to ask about.
-     * @return One reading of this subscription's catch-up.
-     */
-    default CatchupSnapshot catchupSnapshot(String subscriptionId) {
-        boolean catchingUp = isCatchingUp(subscriptionId);
-        return catchingUp ? new CatchupSnapshot(true, isReplayingHistory(subscriptionId), catchupGeneration(subscriptionId)) : CatchupSnapshot.LIVE;
-    }
+
 }

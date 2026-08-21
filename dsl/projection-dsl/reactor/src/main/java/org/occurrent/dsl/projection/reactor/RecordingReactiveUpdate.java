@@ -17,10 +17,10 @@
 package org.occurrent.dsl.projection.reactor;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedAppendRecorder;
 import org.occurrent.dsl.projection.AppliedAppendStore;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.projection.internal.AppliedAppendRecording;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -56,10 +56,12 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
 
     private final BiFunction<EventMetadata, E, Mono<Void>> delegate;
     private final AppliedAppendRecording recording;
+    // The episode minted for the replay a pull feed is currently driving, so its completion names the same one.
+    private volatile @Nullable Object feedEpisode = null;
 
-    RecordingReactiveUpdate(BiFunction<EventMetadata, E, Mono<Void>> delegate, String projectionId, AppliedAppendStore store, ReplayPhase phase) {
+    RecordingReactiveUpdate(BiFunction<EventMetadata, E, Mono<Void>> delegate, String projectionId, AppliedAppendStore store) {
         this.delegate = requireNonNull(delegate, "delegate cannot be null");
-        this.recording = new AppliedAppendRecording(projectionId, store, phase);
+        this.recording = new AppliedAppendRecording(projectionId, store);
     }
 
     @Override
@@ -82,8 +84,13 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
     }
 
     @Override
-    public void replayObserved() {
-        recording.replayObserved();
+    public void catchupStarted(Object episode) {
+        recording.catchupStarted(episode);
+    }
+
+    @Override
+    public void historyRead(Object episode) {
+        recording.historyRead(episode);
     }
 
     @Override
@@ -92,22 +99,35 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
     }
 
     @Override
-    public boolean pollReplayPhase() {
-        return recording.pollReplayPhase();
+    public boolean pollForClear() {
+        return recording.pollForClear();
     }
 
+    // The replay lifecycle a pull feed drives, mapped onto the two catch-up signals. The feed does not mint an
+    // episode, so one is minted here, which is the same thing once per replay it starts. Both signals are I/O-free,
+    // so neither needs a scheduler hop.
     @Override
     public void replayStarted() {
         if (delegate instanceof ReactiveReplayAware replayAware) {
             replayAware.replayStarted();
         }
-        recording.replayStarted();
+        Object started = new Object();
+        feedEpisode = started;
+        recording.catchupStarted(started);
     }
 
     @Override
     public Mono<Void> replayCompleted() {
         Mono<Void> delegateCompletion = delegate instanceof ReactiveReplayAware replayAware ? replayAware.replayCompleted() : Mono.empty();
-        return delegateCompletion.then(Mono.<Void>fromRunnable(recording::replayCompleted).subscribeOn(Schedulers.boundedElastic()));
+        return delegateCompletion.then(Mono.<Void>fromRunnable(() -> {
+            Object started = feedEpisode;
+            if (started != null) {
+                recording.historyRead(started);
+            }
+            // A feed is not polled, so nothing else would retry a clear its replay left owed. This one call does
+            // reach the store, which is why it keeps the hop the signals themselves no longer need.
+            recording.retryPendingClear();
+        }).subscribeOn(Schedulers.boundedElastic()));
     }
 
     @Override
@@ -115,6 +135,6 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
         if (delegate instanceof ReactiveReplayAware replayAware) {
             replayAware.replayAbandoned();
         }
-        recording.replayAbandoned();
+        // No boundary for a replay that stopped part way through. The next one announces itself.
     }
 }

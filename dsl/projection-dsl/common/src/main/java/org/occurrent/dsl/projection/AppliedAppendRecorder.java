@@ -34,10 +34,39 @@ import org.jspecify.annotations.NullMarked;
  * append the wrapper recorded in the meantime.
  */
 @NullMarked
-public interface AppliedAppendRecorder extends CatchupListener {
+public interface AppliedAppendRecorder {
 
     /**
-     * Retries a clear already marked as owed by an earlier {@link CatchupListener#catchupStarted(Object)}, doing
+     * A catch-up has begun and has delivered nothing yet. The projection clears what it recorded before, and records
+     * nothing until {@link #historyRead(Object)} for the same {@code episode}.
+     * <p>
+     * Told rather than asked. A recorder that sampled its subscription model would have to work out what happened
+     * between two of its own readings, and a catch-up that started and finished in between would look like no
+     * catch-up at all
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
+     * decision 6). Whoever owns the catch-up calls this at the moment it begins one.
+     * <p>
+     * Returns promptly and does not throw, since it is called from the thread that registers the catch-up.
+     *
+     * @param episode Identifies this catch-up. Any object whose identity is unique to it, compared by identity and
+     *                never interpreted.
+     */
+    void catchupStarted(Object episode);
+
+    /**
+     * The history {@code episode} set out to read has been read, and what follows was written since it started. The
+     * projection records from here on, because for some of those events this catch-up is the only delivery they get.
+     * <p>
+     * Ignored for any episode other than the one currently held, which is what stops a catch-up that has lost its
+     * subscription from moving its replacement past a history the replacement has not read. Not sent at all for a
+     * history a stop truncated.
+     *
+     * @param episode The catch-up whose history has been read, as given to {@link #catchupStarted(Object)}.
+     */
+    void historyRead(Object episode);
+
+    /**
+     * Retries a clear already marked as owed by an earlier {@link #catchupStarted(Object)}, doing
      * nothing if none is owed. Never marks a new clear itself, so calling this on a projection that has not caught up
      * is a no-op rather than a spurious clear. The default no-op is for a caller (a test double, typically) that
      * never needs the retry.

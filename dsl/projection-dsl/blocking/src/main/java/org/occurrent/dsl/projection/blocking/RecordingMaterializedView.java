@@ -17,10 +17,10 @@
 package org.occurrent.dsl.projection.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedAppendRecorder;
 import org.occurrent.dsl.projection.AppliedAppendStore;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.projection.internal.AppliedAppendRecording;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ReplayAware;
@@ -52,9 +52,9 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
     // The episode minted for the replay a pull feed is currently driving, so its completion names the same one.
     private volatile @Nullable Object feedEpisode = null;
 
-    RecordingMaterializedView(MaterializedView<E> delegate, String projectionId, AppliedAppendStore store, ReplayPhase phase) {
+    RecordingMaterializedView(MaterializedView<E> delegate, String projectionId, AppliedAppendStore store) {
         this.delegate = requireNonNull(delegate, "delegate cannot be null");
-        this.recording = new AppliedAppendRecording(projectionId, store, phase);
+        this.recording = new AppliedAppendRecording(projectionId, store);
     }
 
     @Override
