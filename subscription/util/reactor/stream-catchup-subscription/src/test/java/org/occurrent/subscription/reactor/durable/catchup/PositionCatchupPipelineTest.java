@@ -25,14 +25,18 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
+import org.occurrent.subscription.internal.BoundedIdCache;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.test.StepVerifier;
 
 import java.net.URI;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
@@ -148,6 +152,44 @@ class PositionCatchupPipelineTest {
 
     // Maps a position to an event and answers head reads from a supplier so a test can hold the head still or keep it
     // advancing to simulate sustained writes.
+    // Two things make this test able to fail. The history has to be longer than concatMap's default prefetch of 32,
+    // and the action has to complete on another thread. With a synchronous action the drain runs inline with the
+    // emission, no queue ever builds, and the assertion holds wherever the announcement is made.
+    @Test
+    void the_history_is_fully_handled_before_the_reconciliation_is_announced() {
+        FakeReader reader = FakeReader.withEventsInRange(1, 64).head(64);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+        AtomicInteger handled = new AtomicInteger();
+        AtomicInteger handledWhenAnnounced = new AtomicInteger(-1);
+
+        StepVerifier.create(pipeline.replayApplying(0, new BoundedIdCache(1000), () -> true,
+                        event -> Mono.<Void>fromRunnable(handled::incrementAndGet).subscribeOn(Schedulers.single()),
+                        () -> handledWhenAnnounced.set(handled.get())))
+                .verifyComplete();
+
+        assertThat(handledWhenAnnounced).hasValue(64);
+    }
+
+    @Test
+    void a_stop_after_the_history_drained_reads_nothing_more_from_the_store() {
+        AtomicLong headReads = new AtomicLong();
+        FakeReader reader = FakeReader.withEventsInRange(1, 5).headSupplier(() -> {
+            headReads.incrementAndGet();
+            return 5L;
+        });
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+        AtomicBoolean keepReplaying = new AtomicBoolean(true);
+
+        StepVerifier.create(pipeline.replayApplying(0, new BoundedIdCache(1000), keepReplaying::get,
+                        event -> Mono.fromRunnable(() -> keepReplaying.set(false)),
+                        () -> {
+                        }))
+                .verifyComplete();
+
+        // One read, for the history. The reconciliation would have made a second one.
+        assertThat(headReads).hasValue(1);
+    }
+
     private static final class FakeReader implements CatchupReader {
         private final TreeMap<Long, CloudEvent> byPosition = new TreeMap<>();
         private LongSupplier head = () -> 0L;
