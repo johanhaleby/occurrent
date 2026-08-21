@@ -216,10 +216,17 @@ class CatchupThenPushSubscriptionModelTest {
         PushSubscriptionModel feed2 = new PushSubscriptionModel();
         sink.set(feed2);
         List<String> secondRun = new ArrayList<>();
-        new CatchupThenPushSubscriptionModel(store, feed2, marker)
-                .subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> secondRun.add(ce.getId()))
+        CatchupThenPushSubscriptionModel restarted = new CatchupThenPushSubscriptionModel(store, feed2, marker);
+        EpisodeLog log = new EpisodeLog();
+        restarted.listenForCatchup("proj", log);
+        restarted.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> secondRun.add(ce.getId()))
                 .waitUntilStarted();
         assertThat(secondRun).isEmpty();
+
+        // Both signals, even though no replay ran. This restart is the case that decides where the boundary goes:
+        // it skips the replay entirely and never reaches replayCompleted(), so a boundary placed there would leave
+        // the projection reading history for the rest of the model's life.
+        assertThat(log.signals()).containsExactly("started:0", "historyRead:0");
 
         // Only live events flow after the restart, resumed by the broker (here, the forwarding store).
         store.write("s1", List.of(cloudEvent("3", "Updated")));

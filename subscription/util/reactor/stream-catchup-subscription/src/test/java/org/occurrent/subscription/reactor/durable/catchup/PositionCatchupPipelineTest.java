@@ -170,6 +170,24 @@ class PositionCatchupPipelineTest {
         assertThat(handledWhenAnnounced).hasValue(64);
     }
 
+    // A history that stopped part way through is not a history that was read, so nothing may announce that it was.
+    // A recording projection told otherwise would record the rest of a rebuild it never finished as though it were
+    // live.
+    @Test
+    void a_truncated_history_never_announces_that_it_was_read() {
+        FakeReader reader = FakeReader.withEventsInRange(1, 10).head(10);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+        AtomicBoolean keepReplaying = new AtomicBoolean(true);
+        AtomicBoolean announced = new AtomicBoolean(false);
+
+        StepVerifier.create(pipeline.replayApplying(0, new BoundedIdCache(1000), keepReplaying::get,
+                        event -> Mono.fromRunnable(() -> keepReplaying.set(false)),
+                        () -> announced.set(true)))
+                .verifyComplete();
+
+        assertThat(announced).isFalse();
+    }
+
     @Test
     void a_stop_after_the_history_drained_reads_nothing_more_from_the_store() {
         AtomicLong headReads = new AtomicLong();

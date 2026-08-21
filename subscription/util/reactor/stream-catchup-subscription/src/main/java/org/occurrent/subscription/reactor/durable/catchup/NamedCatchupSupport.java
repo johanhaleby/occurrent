@@ -177,7 +177,10 @@ final class NamedCatchupSupport {
                                     () -> {
                                         CatchupListener boundaryListener = catchupListeners.get(subscriptionId);
                                         if (boundaryListener != null) {
-                                            boundaryListener.historyRead(state.episode.get());
+                                            // The launch this callback belongs to, not whatever the field holds
+                                            // by the time it runs, so a relaunch cannot end its predecessor's
+                                            // history read for it.
+                                            boundaryListener.historyRead(launched);
                                         }
                                     })
                             .thenMany(Flux.defer(() -> {

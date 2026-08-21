@@ -18,6 +18,8 @@ package org.occurrent.dsl.projection.blocking;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+
+import java.util.concurrent.atomic.AtomicReference;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedAppendRecorder;
 import org.occurrent.dsl.projection.AppliedAppendStore;
@@ -49,8 +51,9 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
 
     private final MaterializedView<E> delegate;
     private final AppliedAppendRecording recording;
-    // The episode minted for the replay a pull feed is currently driving, so its completion names the same one.
-    private volatile @Nullable Object feedEpisode = null;
+    // The replay a pull feed is currently driving. Taken rather than read when that replay ends, so a second
+    // ending sends nothing and an ending that arrives with no replay in flight sends nothing either.
+    private final AtomicReference<@Nullable Object> feedEpisode = new AtomicReference<>();
 
     RecordingMaterializedView(MaterializedView<E> delegate, String projectionId, AppliedAppendStore store) {
         this.delegate = requireNonNull(delegate, "delegate cannot be null");
@@ -111,7 +114,7 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
             replayAware.replayStarted();
         }
         Object started = new Object();
-        feedEpisode = started;
+        feedEpisode.set(started);
         recording.catchupStarted(started);
     }
 
@@ -120,7 +123,7 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
         if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayCompleted();
         }
-        Object started = feedEpisode;
+        Object started = feedEpisode.getAndSet(null);
         if (started != null) {
             recording.historyRead(started);
         }
@@ -138,7 +141,7 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
         // to this same view afterwards, which are applied and are recorded. The clear the replay owed stays owed.
         // A subscription model sends nothing here instead, since a stopped catch-up delivers nothing more until a
         // new one announces itself.
-        Object started = feedEpisode;
+        Object started = feedEpisode.getAndSet(null);
         if (started != null) {
             recording.historyRead(started);
         }

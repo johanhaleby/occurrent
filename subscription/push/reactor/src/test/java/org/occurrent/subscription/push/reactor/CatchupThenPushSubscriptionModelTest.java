@@ -186,10 +186,17 @@ class CatchupThenPushSubscriptionModelTest {
         // Restart: fresh feed and model, same reader and marker. The replay is skipped.
         PushSubscriptionModel feed2 = new PushSubscriptionModel();
         List<String> secondRun = new CopyOnWriteArrayList<>();
-        new CatchupThenPushSubscriptionModel(reader, feed2, marker)
-                .subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(secondRun))
+        CatchupThenPushSubscriptionModel restarted = new CatchupThenPushSubscriptionModel(reader, feed2, marker);
+        EpisodeLog log = new EpisodeLog();
+        restarted.listenForCatchup("proj", log);
+        restarted.subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(secondRun))
                 .waitUntilStarted().block();
         assertThat(secondRun).isEmpty();
+
+        // Both signals, even though no replay ran. This restart is the case that decides where the boundary goes:
+        // it skips the replay entirely and never reaches replayCompleted(), so a boundary placed there would leave
+        // the projection reading history for the rest of the model's life.
+        await().untilAsserted(() -> assertThat(log.signals()).containsExactly("started:0", "historyRead:0"));
 
         feed2.accept(cloudEvent("3", "Updated")).block();
         assertThat(secondRun).containsExactly("3");

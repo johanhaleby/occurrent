@@ -18,6 +18,8 @@ package org.occurrent.dsl.projection.reactor;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+
+import java.util.concurrent.atomic.AtomicReference;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedAppendRecorder;
 import org.occurrent.dsl.projection.AppliedAppendStore;
@@ -56,8 +58,9 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
 
     private final BiFunction<EventMetadata, E, Mono<Void>> delegate;
     private final AppliedAppendRecording recording;
-    // The episode minted for the replay a pull feed is currently driving, so its completion names the same one.
-    private volatile @Nullable Object feedEpisode = null;
+    // The replay a pull feed is currently driving. Taken rather than read when that replay ends, so a second
+    // ending sends nothing and an ending that arrives with no replay in flight sends nothing either.
+    private final AtomicReference<@Nullable Object> feedEpisode = new AtomicReference<>();
 
     RecordingReactiveUpdate(BiFunction<EventMetadata, E, Mono<Void>> delegate, String projectionId, AppliedAppendStore store) {
         this.delegate = requireNonNull(delegate, "delegate cannot be null");
@@ -112,7 +115,7 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
             replayAware.replayStarted();
         }
         Object started = new Object();
-        feedEpisode = started;
+        feedEpisode.set(started);
         recording.catchupStarted(started);
     }
 
@@ -120,7 +123,7 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
     public Mono<Void> replayCompleted() {
         Mono<Void> delegateCompletion = delegate instanceof ReactiveReplayAware replayAware ? replayAware.replayCompleted() : Mono.empty();
         return delegateCompletion.then(Mono.<Void>fromRunnable(() -> {
-            Object started = feedEpisode;
+            Object started = feedEpisode.getAndSet(null);
             if (started != null) {
                 recording.historyRead(started);
             }
@@ -139,7 +142,7 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
         // this same fold afterwards, which are applied and are recorded. The clear the replay owed stays owed.
         // A subscription model sends nothing here instead, since a stopped catch-up delivers nothing more until a
         // new one announces itself.
-        Object started = feedEpisode;
+        Object started = feedEpisode.getAndSet(null);
         if (started != null) {
             recording.historyRead(started);
         }

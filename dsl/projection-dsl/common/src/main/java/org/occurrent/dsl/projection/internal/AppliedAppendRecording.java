@@ -58,12 +58,6 @@ public final class AppliedAppendRecording {
     // that also declares it, on the same thread.
     private final Object clearLock = new Object();
     private volatile boolean pendingClear = false;
-    // True once a clear has already succeeded for the replay episode currently in progress. Decision 7 mandates a
-    // clear attempt on every delivery seen while replaying, not a repeat store.clear() call on every one of them.
-    // Without this, a replay of N events that all hit the per-delivery check runs N deleteMany round trips against
-    // an already-empty result instead of one. Reset whenever a live observation ends the episode, or an explicit
-    // replay-start signal begins one, so the next episode still gets its own clear.
-    private volatile boolean episodeCleared = false;
     // Tracks whether the current run of clear failures has already logged once at ERROR, so a clear stuck failing
     // for a while logs loudly exactly once and DEBUG on every retry after that, per ADR 132 decision 7.
     private volatile boolean clearFailureLogged = false;
@@ -115,7 +109,11 @@ public final class AppliedAppendRecording {
         requireNonNull(metadata, "metadata cannot be null");
         synchronized (clearLock) {
             if (readingHistory) {
-                ensureEpisodeCleared();
+                // The clear this catch-up owes, and nothing else. A history of N events clears once rather than
+                // running N deleteMany calls, because a clear that succeeds is no longer owed.
+                if (pendingClear) {
+                    attemptClear();
+                }
                 return;
             }
             if (pendingClear) {
@@ -127,17 +125,6 @@ public final class AppliedAppendRecording {
                 return;
             }
             doRecord(metadata);
-        }
-    }
-
-    // Assumes clearLock is already held by the caller.
-    private void ensureEpisodeCleared() {
-        if (!episodeCleared) {
-            pendingClear = true;
-            attemptClear();
-            if (!pendingClear) {
-                episodeCleared = true;
-            }
         }
     }
 
@@ -225,7 +212,6 @@ public final class AppliedAppendRecording {
         synchronized (clearLock) {
             this.episode = episode;
             readingHistory = true;
-            episodeCleared = false;
             pendingClear = true;
             // What a previous catch-up was holding describes a read model this one is rebuilding.
             dropAwaitingClear();

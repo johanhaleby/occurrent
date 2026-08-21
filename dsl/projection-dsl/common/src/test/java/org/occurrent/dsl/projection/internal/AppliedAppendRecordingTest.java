@@ -191,6 +191,23 @@ class AppliedAppendRecordingTest {
         assertThat(clears).hasSize(1);
     }
 
+    // A poll tick runs the clear the catch-up owes, and a delivery arriving afterwards must not run it again. The
+    // poll holds a projection at its fast interval for the whole catch-up, so a tick landing between two history
+    // deliveries is the ordinary interleaving rather than an unlucky one.
+    @Test
+    void a_poll_tick_during_the_history_leaves_nothing_for_the_next_delivery_to_clear_again() {
+        List<String> clears = new ArrayList<>();
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)));
+
+        recording.catchupStarted(new Object());
+        recording.pollForClear();
+        for (int i = 0; i < 1000; i++) {
+            recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        }
+
+        assertThat(clears).hasSize(1);
+    }
+
     @Test
     void a_second_catch_up_clears_again() {
         List<String> clears = new ArrayList<>();
