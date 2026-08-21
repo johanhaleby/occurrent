@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 64
-updated_at: 2026-08-21T17:45:44Z
+revision: 65
+updated_at: 2026-08-21T18:00:01Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -291,11 +291,11 @@ units:
     depends_on: []
     session: "chip task_22e97514, ListAgents name orchestrator-join-on-merge-660d54-1d (marker-confirmed by its gate message), worktree orchestrator-join-on-merge-660d54 (r34 orchestrator reuse), dispatched 2026-08-21T07:48:03Z, session resolves at start)"
     deliverables:
-      - {check: manual_approval, ref: "design gate: plan handed to the orchestrator, approved by Johan (revision 3 approved as dec-0016, second design round for the push-based start signal per dec-0019 pending)", met: false, evidence: "Plan revision 3 approved 2026-08-21T10:42:42Z (dec-0016) with four in-place amendments after three fresh-context passes. Johan ruled scope (code fix, push models in) and delegated docs, decided append-identity only"}
+      - {check: manual_approval, ref: "design gate: plan handed to the orchestrator, approved by Johan (revision 3 approved as dec-0016, second design round for the push-based start signal per dec-0019 approved as revision 7 plus six amendments, dec-0020, 2026-08-21T18:00:01Z)", met: true, evidence: "Plan revision 3 approved 2026-08-21T10:42:42Z (dec-0016) with four in-place amendments after three fresh-context passes. Johan ruled scope (code fix, push models in) and delegated docs, decided append-identity only"}
       - {check: pr_merged, ref: 892, met: false, evidence: null}
     blocking_on: []
-    next_action: "Revision 6 re-check 2026-08-21T17:45:44Z: item 5 holds, 2 and 6 text, 1 (reactor stacks have no shared registration lock, token drop is the only defence there), 3 (fallback adapter ownership and the clear-owed tick unspecified), 4 (per-episode buffer tag cannot cover a lost start) need changes. Revision 7 owed, targeted re-check of 1, 3, 4, then approval"
-    last_meaningful_progress_at: 2026-08-21T17:45:44Z
+    next_action: "IMPLEMENTING revision 7 (pushed signals with per-attempt token, sampling machinery deleted) on PR 892 at Sonnet/high since 2026-08-21T18:00:01Z. Gate: four facts on the final head, adversarial verify aimed at the token rule, the fallback adapter pacing, the pull-feed clear and the four named regression tests, Copilot round requested by me, CAS merge, monitor retires"
+    last_meaningful_progress_at: 2026-08-21T18:00:01Z
     observed:
       pr_892: {head: 09c2207795e5767e1fb84d04a21c021c05924939, branch: "ayi/u11-replay-window-recording", rollup: "27 green on c019e860, all three falsifier classes ran. was CONFLICTING after brk PR 889 (11b1fa91a), main merged in at e02f7a5f 2026-08-21T16:04:59Z, overlap on BlockingHandover, blocking CatchupThenPushSubscriptionModel and its test, blocking ProjectionAnnotationRegistrar, changelog", review: "four Copilot rounds, round 4 two threads plus one suppressed open, cap thread reasoned-declined, three earlier threads replied and resolved", delivery: "DELIVERY_RESULT blocked received 2026-08-21T15:26:34Z, invariant over one CatchupSnapshot, mutation proofs listed, address used api-review-verification-c3b0ea-e5", via: "monitor PR-DELTA", at: 2026-08-21T12:41:30Z}
     assessment: "Adopted by Johan's structured-ask ruling 2026-08-21 (dec-0012, code fix now over docs addendum and deferral). Reopens ADR 132 decision 6 before 0.34.0. Mechanism verified in code on both stacks by a fresh-context Opus pass, citations on #890."
