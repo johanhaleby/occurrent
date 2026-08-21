@@ -52,11 +52,13 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -138,7 +140,7 @@ class ProjectionAnnotationRecordAppliedAppendsResetMongoTest {
         // bound across repeat runs.
         flushDatabase(databaseName);
         AppendId staleAppendId;
-        try (ConfigurableApplicationContext firstIncarnation = SpringApplication.run(FilteredRecordingProjectionApplication.class, bootArgs(databaseName))) {
+        try (ConfigurableApplicationContext firstIncarnation = SpringApplication.run(FilteredRecordingProjectionApplication.class, filteredRebuildBootArgs(databaseName))) {
             AppliedAppendStore appliedAppendStore = firstIncarnation.getBean(AppliedAppendStore.class);
             // Padding: this projection's filter (NeverMatched.class) never matches any of these, but the catch-up
             // layer still has to scan through them to determine it has reached "now", giving the second incarnation's
@@ -167,7 +169,7 @@ class ProjectionAnnotationRecordAppliedAppendsResetMongoTest {
 
         deleteCheckpoint(databaseName, "filtered-recording-counter");
 
-        try (ConfigurableApplicationContext secondIncarnation = SpringApplication.run(FilteredRecordingProjectionApplication.class, bootArgs(databaseName))) {
+        try (ConfigurableApplicationContext secondIncarnation = SpringApplication.run(FilteredRecordingProjectionApplication.class, filteredRebuildBootArgs(databaseName))) {
             AppliedAppendStore appliedAppendStore = secondIncarnation.getBean(AppliedAppendStore.class);
 
             // No delivery of any kind can reach this projection's recording wrapper (the filter matches nothing),
@@ -199,20 +201,35 @@ class ProjectionAnnotationRecordAppliedAppendsResetMongoTest {
         }
     }
 
-    // The poll's initial interval is far below the shipped default (200ms): the filtered-rebuild test's replay
-    // genuinely finishes in tens of milliseconds even with a padded backlog (confirmed by instrumenting the poll
-    // directly during development, every tick at the shipped default observed replaying=false, none ever caught the
-    // window), so this test needs a poll fast enough to observe a transient state real production traffic would
-    // rarely make this brief.
     private static String[] bootArgs(String databaseName) {
         return new String[]{
                 "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
                 "--spring.main.web-application-type=none",
                 "--occurrent.event-store.capabilities=stream",
-                "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + databaseName,
-                "--occurrent.projection.applied-append.replay-poll.initial=5ms",
-                "--occurrent.projection.applied-append.replay-poll.max=1s"
+                "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + databaseName
         };
+    }
+
+    // Only the filtered-rebuild test gets this override, not the ordinary-reset test above, which registers its own
+    // recording poll too but never depends on the poll's pace: its property is driven entirely by per-delivery
+    // clearing, so widening its poll's blast radius would buy that test nothing.
+    //
+    // The poll's initial interval is far below the shipped default (200ms): the filtered-rebuild test's replay
+    // genuinely finishes in tens of milliseconds even with a padded backlog (confirmed by instrumenting the poll
+    // directly during development, every tick at the shipped default observed replaying=false, none ever caught the
+    // window), so this test needs a poll fast enough to observe a transient state real production traffic would
+    // rarely make this brief.
+    //
+    // Max is set equal to initial rather than left at the shipped default (5s). isCatchingUp is an in-memory check,
+    // so polling every 5ms for the whole 60-second wait costs nothing. Left to back off, the poll doubles its
+    // interval on every live tick and reaches the old 1s cap within about 8 ticks, so a scheduling delay under load
+    // that pushes those first few ticks past the (equally load-affected) catch-up window means the remaining 59
+    // seconds poll once a second, with no chance left to observe a phase that already ended.
+    private static String[] filteredRebuildBootArgs(String databaseName) {
+        return Stream.concat(Arrays.stream(bootArgs(databaseName)), Stream.of(
+                        "--occurrent.projection.applied-append.replay-poll.initial=5ms",
+                        "--occurrent.projection.applied-append.replay-poll.max=5ms"))
+                .toArray(String[]::new);
     }
 
     @SpringBootApplication
@@ -284,12 +301,9 @@ class ProjectionAnnotationRecordAppliedAppendsResetMongoTest {
     /** Handles only {@link NeverMatched}, an event type this test never constructs, so its derived subscription
      * filter matches nothing, live or replayed. */
     static class FilteredRecordingCounterProjection {
-        // BACKGROUND rather than the default: DEFAULT blocks SpringApplication.run() until catch-up finishes, and a
-        // filtered, zero-match replay over Mongo finishes well under the poll's fastest tick (confirmed by
-        // instrumenting the poll directly: every tick observed replaying=false, none ever caught it), so the
-        // per-instance registrar's own scheduler never gets a chance to run concurrently with the replay under
-        // DEFAULT. BACKGROUND moves the replay off the startup path onto its own thread, so it and the poll's
-        // scheduler actually overlap in wall-clock time, which is what this test needs to exercise.
+        // DEFAULT already resolves to non-blocking startup for a replaying projection
+        // (SubscriptionAnnotations.shouldWaitUntilStarted maps DEFAULT to !replaysHistory). Setting BACKGROUND here
+        // changes nothing. It only names that behavior for a reader who has not seen that resolution rule.
         @Projection(id = "filtered-recording-counter", recordAppliedAppends = true, storeName = "counterStore", startAt = StartPosition.BEGINNING, startupMode = StartupMode.BACKGROUND)
         org.occurrent.dsl.projection.Projection<Counter, TestEvent, String> counter() {
             return org.occurrent.dsl.projection.Projection.<Counter, TestEvent, String>builder(new Counter(0))
