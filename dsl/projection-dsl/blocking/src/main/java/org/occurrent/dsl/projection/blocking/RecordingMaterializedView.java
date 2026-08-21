@@ -49,6 +49,8 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
 
     private final MaterializedView<E> delegate;
     private final AppliedAppendRecording recording;
+    // The episode minted for the replay a pull feed is currently driving, so its completion names the same one.
+    private volatile @Nullable Object feedEpisode = null;
 
     RecordingMaterializedView(MaterializedView<E> delegate, String projectionId, AppliedAppendStore store, ReplayPhase phase) {
         this.delegate = requireNonNull(delegate, "delegate cannot be null");
@@ -82,8 +84,13 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
     }
 
     @Override
-    public void replayObserved() {
-        recording.replayObserved();
+    public void catchupStarted(Object episode) {
+        recording.catchupStarted(episode);
+    }
+
+    @Override
+    public void historyRead(Object episode) {
+        recording.historyRead(episode);
     }
 
     @Override
@@ -92,16 +99,20 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
     }
 
     @Override
-    public boolean pollReplayPhase() {
-        return recording.pollReplayPhase();
+    public boolean pollForClear() {
+        return recording.pollForClear();
     }
 
+    // The replay lifecycle a pull feed drives, mapped onto the two catch-up signals. The feed does not mint an
+    // episode, so one is minted here, which is the same thing once per replay it starts.
     @Override
     public void replayStarted() {
         if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayStarted();
         }
-        recording.replayStarted();
+        Object started = new Object();
+        feedEpisode = started;
+        recording.catchupStarted(started);
     }
 
     @Override
@@ -109,7 +120,13 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
         if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayCompleted();
         }
-        recording.replayCompleted();
+        Object started = feedEpisode;
+        if (started != null) {
+            recording.historyRead(started);
+        }
+        // A feed is not polled, so nothing else would retry a clear its replay left owed, and this call runs on a
+        // thread the engine already blocks on.
+        recording.retryPendingClear();
     }
 
     @Override
@@ -117,6 +134,6 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
         if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayAbandoned();
         }
-        recording.replayAbandoned();
+        // No boundary for a replay that stopped part way through. The next one announces itself.
     }
 }

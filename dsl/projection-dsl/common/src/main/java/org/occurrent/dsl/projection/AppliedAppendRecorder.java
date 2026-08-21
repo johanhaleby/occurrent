@@ -34,36 +34,24 @@ import org.jspecify.annotations.NullMarked;
  * append the wrapper recorded in the meantime.
  */
 @NullMarked
-public interface AppliedAppendRecorder {
+public interface AppliedAppendRecorder extends CatchupListener {
 
     /**
-     * This projection was seen replaying. Marks it as needing a clear and attempts the clear on the calling thread.
-     * Recording stays off until a clear succeeds, retried on every later call to this method, to
-     * {@link #retryPendingClear()}, to {@link #pollReplayPhase()}, or to the wrapper's normal update path, until one
-     * does.
-     */
-    void replayObserved();
-
-    /**
-     * Retries a clear already marked as owed by an earlier {@link #replayObserved()}, doing nothing if none is
-     * owed. Never marks a new clear itself, so calling this on a projection that has not replayed is a no-op
-     * rather than a spurious clear. The default no-op is for a caller (a test double, typically) that never needs
-     * the retry. The recording wrappers override it to reach the same state a normal update would retry through.
+     * Retries a clear already marked as owed by an earlier {@link CatchupListener#catchupStarted(Object)}, doing
+     * nothing if none is owed. Never marks a new clear itself, so calling this on a projection that has not caught up
+     * is a no-op rather than a spurious clear. The default no-op is for a caller (a test double, typically) that
+     * never needs the retry.
      */
     default void retryPendingClear() {
     }
 
     /**
-     * Re-checks whether this projection is currently replaying and reacts atomically with that check, marking a
-     * clear as owed and attempting it if so, or retrying one already owed if not, returning what the check found.
-     * This is what a poller should call on a schedule, rather than reading the phase itself first and dispatching to
-     * {@link #replayObserved()} or {@link #retryPendingClear()} from that separate reading: between the two, a live
-     * delivery can land and record a genuinely live append, which a {@link #replayObserved()} call made from the
-     * stale earlier reading would then wipe. The default no-op, returning {@code false}, is for a caller (a test
-     * double, typically) that never polls. The recording wrappers override it to check the phase they were built
-     * with, under the same lock the clear itself runs under.
+     * Retries an owed clear, writes whatever was waiting for it, and reports whether one is still owed. What a poller
+     * calls on a schedule, and what keeps a clear moving for a projection that has gone quiet: without it, a clear
+     * that failed while a catch-up ran would only be retried by the next delivery, and a projection that receives
+     * none would never record again. The default no-op, returning {@code false}, is for a caller that never polls.
      */
-    default boolean pollReplayPhase() {
+    default boolean pollForClear() {
         return false;
     }
 }
