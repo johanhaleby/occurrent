@@ -16,19 +16,40 @@
 
 package org.occurrent.springboot.broker.kafka.blocking;
 
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.context.ApplicationContext;
 
 import java.util.Collection;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 
 /**
  * The zero-config {@code readinessSource} {@link DefaultKafkaCloudEventBridgeFactory} pre-seeds every bridge with:
- * {@code true} for a subscription id no {@link CatchupThenPushSubscriptionModel} bean claims, and that bean's own
- * {@link CatchupThenPushSubscriptionModel#isReadyForLiveDelivery(String)} for one that does.
+ * {@code true} for a {@link PushSubscriptionModel} no {@link CatchupThenPushSubscriptionModel} wraps, and that
+ * wrapper's own {@link CatchupThenPushSubscriptionModel#isReadyForLiveDelivery(String)} for one that does.
  * <p>
- * Looked up by type and ownership, whether {@link CatchupThenPushSubscriptionModel#subscriptionIds()} contains the
- * id, rather than by the {@code "catchupThenPushSubscriptionModel-<id>"} bean-name convention the framework's
- * separate autoconfigure module owns, so this starter stays decoupled from that module, per ADR 133 decision 1.
+ * {@link #memoized(ApplicationContext, PushSubscriptionModel)} is what {@link DefaultKafkaCloudEventBridgeFactory}
+ * actually uses, and correlates by identity: it looks the wrapper up in the shared
+ * {@code occurrentCatchupThenPushSubscriptionModelsByLiveFeed} bean a framework {@code @Projection(source = PUSH)}
+ * or {@code @Saga(source = PUSH)} registration publishes (see that module's {@code CatchupThenPushWrapperRegistry}),
+ * keyed on the exact {@link PushSubscriptionModel} instance the bridge was built with, never on subscription id
+ * alone. ADR 102 allows two independent {@code CatchupThenPushSubscriptionModel} instances to subscribe under the
+ * same id, so an id-only lookup across every such bean in the context, {@link #isReady(ApplicationContext, String)}
+ * below, can answer for a bridge with an unrelated model's wrapper, permanently starving a healthy bridge if that
+ * unrelated wrapper's own catch-up has failed. When no identity match exists, this falls back to that same id-based
+ * scan, but only when it is itself unambiguous, exactly one wrapper bean claims the id, the shape a wrapper built
+ * and registered by hand outside the framework registrar still takes. Two or more claimants is the very ambiguity
+ * this correlation exists to resolve, so guessing among them is refused the same way no claimant at all is: both
+ * default to ready.
+ * <p>
+ * Looked up by a fixed bean name rather than a shared type, since this starter has no compile-time dependency on the
+ * framework autoconfigure module that publishes it, per ADR 133 decision 1's deliberate decoupling. Resolved lazily,
+ * on first use, and memoized once found, never eagerly at bridge-build time, so a wrapper the framework module
+ * publishes after this bridge is already built (bean initialization order is not guaranteed) is still picked up the
+ * first time a live event actually asks.
  * <p>
  * {@code readinessSource} is a pacing hint only, never a correctness dependency: {@code RoutingOutcome.DEFERRED}
  * is what a bridge falls back to for an event that arrives before catch-up is actually done, whatever this method
@@ -37,9 +58,19 @@ import java.util.Collection;
  */
 final class CatchupThenPushReadiness {
 
+    private static final String WRAPPERS_BY_LIVE_FEED_BEAN_NAME = "occurrentCatchupThenPushSubscriptionModelsByLiveFeed";
+
     private CatchupThenPushReadiness() {
     }
 
+    /**
+     * The id-only lookup: {@code true} for a subscription id no {@link CatchupThenPushSubscriptionModel} bean in
+     * the whole context claims, and the first such bean's own answer for one that does, in whatever order
+     * {@link ApplicationContext#getBeansOfType(Class)} returns them. Ambiguous whenever two wrappers share an id
+     * (ADR 102 permits exactly that), see the class javadoc. Kept for a caller with no {@link PushSubscriptionModel}
+     * reference in hand. {@link DefaultKafkaCloudEventBridgeFactory} itself no longer uses this, it asks
+     * {@link #memoized(ApplicationContext, PushSubscriptionModel)} instead, so it never crosses model identity.
+     */
     static boolean isReady(ApplicationContext applicationContext, String subscriptionId) {
         Collection<CatchupThenPushSubscriptionModel> wrappers = applicationContext.getBeansOfType(CatchupThenPushSubscriptionModel.class).values();
         for (CatchupThenPushSubscriptionModel wrapper : wrappers) {
@@ -48,5 +79,52 @@ final class CatchupThenPushReadiness {
             }
         }
         return true;
+    }
+
+    /**
+     * A {@code readinessSource} predicate correlated to {@code liveFeed} by identity, lazily resolved and memoized
+     * once found. See the class javadoc.
+     */
+    static Predicate<String> memoized(ApplicationContext applicationContext, PushSubscriptionModel liveFeed) {
+        AtomicReference<@Nullable CatchupThenPushSubscriptionModel> resolved = new AtomicReference<>();
+        return subscriptionId -> {
+            CatchupThenPushSubscriptionModel wrapper = resolved.get();
+            if (wrapper == null) {
+                wrapper = wrapperFor(applicationContext, liveFeed, subscriptionId);
+                if (wrapper != null) {
+                    resolved.set(wrapper);
+                }
+            }
+            return wrapper == null || wrapper.isReadyForLiveDelivery(subscriptionId);
+        };
+    }
+
+    // Identity match first, from the shared registry: the correct, unambiguous answer whenever the framework
+    // module published this exact liveFeed's own wrapper. Falling back to the id-based scan below, but only when
+    // it is itself unambiguous (exactly one CatchupThenPushSubscriptionModel bean in the whole context claims this
+    // id), covers a wrapper built and registered by hand, outside the framework registrar, the same shape
+    // CatchupThenPushReadinessTest and the auto-configuration integration test both exercise. Two or more beans
+    // claiming the same id is precisely the ambiguity this identity correlation exists to resolve. Guessing among
+    // them would reintroduce it, so that case, and no claimant at all, both default to ready instead.
+    @SuppressWarnings("unchecked")
+    private static @Nullable CatchupThenPushSubscriptionModel wrapperFor(ApplicationContext applicationContext, PushSubscriptionModel liveFeed, String subscriptionId) {
+        if (applicationContext.containsBean(WRAPPERS_BY_LIVE_FEED_BEAN_NAME)) {
+            Map<PushSubscriptionModel, CatchupThenPushSubscriptionModel> wrappersByLiveFeed =
+                    (Map<PushSubscriptionModel, CatchupThenPushSubscriptionModel>) applicationContext.getBean(WRAPPERS_BY_LIVE_FEED_BEAN_NAME, Map.class);
+            CatchupThenPushSubscriptionModel byIdentity = wrappersByLiveFeed.get(liveFeed);
+            if (byIdentity != null) {
+                return byIdentity;
+            }
+        }
+        CatchupThenPushSubscriptionModel unambiguousClaimant = null;
+        for (CatchupThenPushSubscriptionModel wrapper : applicationContext.getBeansOfType(CatchupThenPushSubscriptionModel.class).values()) {
+            if (wrapper.subscriptionIds().contains(subscriptionId)) {
+                if (unambiguousClaimant != null) {
+                    return null;
+                }
+                unambiguousClaimant = wrapper;
+            }
+        }
+        return unambiguousClaimant;
     }
 }

@@ -31,6 +31,21 @@ import java.lang.annotation.Target;
  * {@link OccurrentRabbitMqBrokerImportSelector} rather than the configuration class directly, so
  * {@code @ConditionalOnBean(Connection.class)} is evaluated after every regular configuration class in the
  * context, the application's own {@code Connection} bean included, is registered.
+ * <p>
+ * <strong>Requires a {@code com.rabbitmq.client.Connection} bean, which this starter never builds itself.</strong>
+ * {@code spring-boot-starter-amqp}, if it happens to be on the classpath too, does not supply one either, it
+ * registers a Spring AMQP {@code ConnectionFactory} instead, a different type this condition does not recognize.
+ * Declare the connection yourself, for example:
+ * <pre>{@code
+ * @Bean
+ * Connection rabbitMqConnection() throws IOException, TimeoutException {
+ *     ConnectionFactory connectionFactory = new ConnectionFactory();
+ *     connectionFactory.setUri("amqp://guest:guest@localhost:5672");
+ *     return connectionFactory.newConnection();
+ * }
+ * }</pre>
+ * Activating this annotation with no such bean present registers nothing and logs a {@code WARN} naming the
+ * missing bean, see {@link OccurrentRabbitMqBrokerImportSelector}.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)

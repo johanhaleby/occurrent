@@ -51,9 +51,15 @@ import org.springframework.context.annotation.Lazy;
  * <p>
  * <strong>The {@link Connection} is the application's to supply, never this starter's to construct.</strong> The
  * hand-wired bootstrap this auto-configuration is modeled on already treats connection setup, host, port,
- * credentials, TLS, as external to the broker modules, and duplicating that here would mean reimplementing what
- * {@code spring-boot-starter-amqp} already owns for a problem this auto-configuration was not asked to solve. This
- * whole configuration activates only once a {@link Connection} bean exists.
+ * credentials, TLS, as external to the broker modules, and duplicating that here would mean reimplementing
+ * connection setup for a problem this auto-configuration was not asked to solve.
+ * {@code spring-boot-starter-amqp}, if present on the classpath too, does not supply this bean: it registers a
+ * Spring AMQP {@code org.springframework.amqp.rabbit.connection.ConnectionFactory}, a different type this
+ * condition does not recognize. See {@link EnableOccurrentRabbitMqBroker}'s javadoc for the {@code @Bean Connection}
+ * an application declares itself. This whole configuration activates only once a {@link Connection} bean exists.
+ * Absent one, nothing here registers, and {@link OccurrentRabbitMqBrokerImportSelector}, the {@code @Enable} path,
+ * logs a {@code WARN} naming the missing bean instead, since this condition's own no-match is invisible without
+ * {@code --debug}.
  */
 @AutoConfiguration
 @ConditionalOnClass(RabbitMqCloudEventSink.class)

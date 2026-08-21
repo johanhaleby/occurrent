@@ -101,6 +101,41 @@ class OrderStatusProjectionTest {
         assertThat(store.get(orderId).product()).isEqualTo("Widget");
     }
 
+    /**
+     * ADR 133 decision 7: an event published through {@code publish(E)} carries no stream identity at all, so a
+     * consume bridge cannot assume {@link EventMetadata#getStreamId()}/{@link EventMetadata#getStreamVersion()}
+     * answer anything for every event it is fed. {@code EventMetadata.empty()} is exactly that shape.
+     * {@code OrderShipped} with no prior view read those unconditionally before this fix, throwing
+     * {@code NullPointerException} instead of folding.
+     */
+    @Test
+    void order_shipped_arriving_first_with_no_stream_metadata_still_folds_instead_of_throwing() {
+        OrderShipped shipped = new OrderShipped(UUID.randomUUID().toString(), "order-" + UUID.randomUUID());
+
+        OrderStatusProjection.OrderStatusView result = view.evolve(null, EventMetadata.empty(), shipped);
+
+        assertThat(result.status()).isEqualTo("SHIPPED");
+        assertThat(result.product()).isNull();
+        assertThat(result.streamId()).isNull();
+        assertThat(result.streamVersion()).isZero();
+    }
+
+    /**
+     * The same gap as {@link #order_shipped_arriving_first_with_no_stream_metadata_still_folds_instead_of_throwing()},
+     * on {@code OrderPlaced}'s own unconditional read, which every existing test above always fed full metadata.
+     */
+    @Test
+    void order_placed_with_no_stream_metadata_still_folds_instead_of_throwing() {
+        OrderPlaced placed = new OrderPlaced(UUID.randomUUID().toString(), "order-" + UUID.randomUUID(), "Widget");
+
+        OrderStatusProjection.OrderStatusView result = view.evolve(null, EventMetadata.empty(), placed);
+
+        assertThat(result.status()).isEqualTo("PLACED");
+        assertThat(result.product()).isEqualTo("Widget");
+        assertThat(result.streamId()).isNull();
+        assertThat(result.streamVersion()).isZero();
+    }
+
     @Test
     void redelivering_order_shipped_after_it_already_shipped_changes_nothing() {
         String orderId = "order-" + UUID.randomUUID();

@@ -40,6 +40,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnreadableLiveFilterException;
+import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,12 +72,16 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * feed carries was registered with a {@code data} payload filter this feed has no
  * {@link org.occurrent.filtermatching.DataFieldReader} for, a configuration error that cannot change without a new
  * registration, and the same exception instance is thrown again on every later call. On catching it, this bridge
- * logs the failure, seeks the consumer back to the triggering record exactly as a {@link DeliveryFailurePolicy#REDELIVER}
- * failure would, and then <strong>sets this bridge to stop for good before committing</strong> whatever else
- * resolved in the same poll (other partitions, and earlier records in the same partition), rather than committing
- * past the triggering record or looping the poll again. Setting the stop first, not after, means that commit is a
- * single best-effort attempt rather than a retry this bridge could get stuck behind, since it already reads this
- * bridge as stopped and never retries a failure past its first attempt. The poll loop thread then closes its own
+ * logs the failure and <strong>sets this bridge to stop for good before it even attempts to seek the consumer back
+ * to the triggering record</strong>, rather than after, and before committing whatever else resolved in the same
+ * poll (other partitions, and earlier records in the same partition), rather than committing past the triggering
+ * record or looping the poll again. That seek can itself throw, a rebalance that revoked the partition at the exact
+ * moment this record was permanently refused, most often, and the same as any other failing seek that failure is
+ * left to propagate rather than swallowed, but by the time it does, this bridge already reads as stopped for good,
+ * since nothing about stopping depends on that seek having succeeded: the record's offset was never committed
+ * either way. Setting the stop before the commit, specifically, means that commit is a single best-effort attempt
+ * rather than a retry this bridge could get stuck behind, since it already reads this bridge as stopped and never
+ * retries a failure past its first attempt. The poll loop thread then closes its own
  * {@code Consumer} as it exits, the same single exit path {@link #close()} itself uses, so the permanent stop
  * survives whether or not that commit succeeds. See the thread-ownership paragraph below. Stopping here,
  * immediately, is deliberate, and does not wait on Kafka to confirm the commit first. A {@code Consumer} that keeps
@@ -340,6 +345,18 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                     HandleResult result = handleRecord(record, toCommit);
                     if (result == HandleResult.PERMANENT_STOP) {
                         permanentStop = true;
+                        // Set immediately, before the seek below is even attempted, not only after this whole
+                        // per-record loop finishes (that used to happen 20-odd lines down, alongside permanentStop
+                        // itself). consumer.seek(...) here can throw, a rebalance that revoked this partition at
+                        // the exact moment this record was permanently refused, most often, and the outer catch
+                        // below rewinds and rethrows past this method entirely, the same as any other failing
+                        // seek. Without this reordering that rethrow would happen before running and
+                        // permanentlyStopped were ever set, silently reverting a permanent stop back to "still
+                        // running" for a record that can never become readable. Nothing about stopping for good
+                        // depends on this seek succeeding, the offset was never committed either way, so the seek
+                        // failing is allowed to propagate exactly as it always has. Only the ordering changes.
+                        running = false;
+                        permanentlyStopped = true;
                         consumer.seek(partition, record.offset());
                         break;
                     } else if (result == HandleResult.REDELIVER) {
@@ -359,14 +376,12 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
             seekToEarliestFetched(records);
             throw e;
         }
-        if (permanentStop) {
-            // Set before the commit below, not after, so commitWithRetry's own shutdown predicate already reads
-            // running as false on this call. That bounds a retriable failure here to the single best-effort
-            // attempt the class javadoc promises, instead of retrying uncapped against a coordinator outage while
-            // running was still true and leaving this bridge's promised immediate departure waiting on Kafka.
-            running = false;
-            permanentlyStopped = true;
-        }
+        // running and permanentlyStopped are already set, inside the loop above, the moment PERMANENT_STOP was
+        // decided, before that record's own seek was even attempted, not here. Reaching this point at all means
+        // that seek did not throw, since a throw would have propagated out of the try block above instead. Either
+        // way, both fields already read their final values before the commit below runs, which is what bounds a
+        // retriable commit failure here to the single best-effort attempt the class javadoc promises, instead of
+        // retrying uncapped against a coordinator outage while running still read true.
         if (!toCommit.isEmpty()) {
             try {
                 commitWithRetry(toCommit);
@@ -469,10 +484,21 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                     "new DomainEventFeed with a Filter that does not reference the field, or with a " +
                     "DataFieldReader that can read it.", e);
             return HandleResult.PERMANENT_STOP;
+        } catch (BlockingHandover.PreDispatchRefusalException e) {
+            // The registered projection's own catch-up-then-live handover has permanently failed. Permanent,
+            // exactly like UnreadableLiveFilterException above: stop the whole loop rather than commit or
+            // redeliver into the same refusal forever.
+            log.error("The projection registered on this feed has a permanently failed catch-up. Stopping this " +
+                    "bridge and leaving its consumer group rather than redelivering into the same refusal. The " +
+                    "triggering record's offset is left uncommitted so it survives for the next consumer once the " +
+                    "registration's catch-up is fixed and restarted.", e);
+            return HandleResult.PERMANENT_STOP;
         } catch (RuntimeException | AssertionError e) {
             // Either the projection handler itself threw, or the narrow registeredProjection() race the class
             // javadoc describes (an IllegalStateException that is not an UnreadableLiveFilterException). Both are
-            // ordinary failure-policy cases, unlike the permanent one caught above.
+            // ordinary failure-policy cases, unlike the permanent ones caught above.
+            log.warn("The projection registered on this feed failed for a record on topic \"{}\" partition {} " +
+                    "offset {}.", record.topic(), record.partition(), record.offset(), e);
             return toHandleResult(record, toCommit, failureAction.apply(record));
         }
         if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
@@ -485,6 +511,12 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
             // throttledUntilNanos pacing processBatch(..) already applies for a partition it stops early.
             return HandleResult.REDELIVER;
         }
+        // Unreachable today: DomainEventFeed#acceptCloudEvent never returns NOT_DELIVERABLE (see its own javadoc),
+        // it only ever returns FILTERED, DELIVERED or DEFERRED, or throws one of the two exceptions caught above.
+        // Kept as a defensive fallback rather than an assertion, so a future outcome this bridge does not yet know
+        // about still fails safe through the configured policy instead of silently landing nowhere.
+        log.warn("A record on topic \"{}\" partition {} offset {} was not deliverable.",
+                record.topic(), record.partition(), record.offset());
         return toHandleResult(record, toCommit, failureAction.apply(record));
     }
 

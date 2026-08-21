@@ -17,6 +17,8 @@
 package org.occurrent.example.broker.rabbitmq;
 
 import org.jspecify.annotations.Nullable;
+import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.Projection;
 
 /**
@@ -39,7 +41,12 @@ import org.occurrent.dsl.projection.Projection;
  * {@code OrderPlaced} is folded through the metadata-aware handler so the domain-level example can prove that the
  * stream id, stream version and global position survive the round trip through RabbitMQ's message headers, the
  * same {@link org.occurrent.cloudevents.EventMetadata} a catch-up replay would have handed it. {@code OrderShipped}
- * is folded through it too, for the same reason on the one path where it reaches the view first.
+ * is folded through it too, for the same reason on the one path where it reaches the view first. Neither handler
+ * assumes that metadata is actually there: ADR 133 decision 7 says an event published through {@code publish(E)}
+ * carries no stream identity at all, and a consume bridge has no guarantee the source it is fed from is even an
+ * Occurrent application. Both handlers read the stream id and version defensively rather than unconditionally, so
+ * such an event still folds a view instead of throwing and, at the bridge's default {@code REDELIVER} policy and
+ * prefetch of one, redelivering forever and blocking every later delivery behind it.
  */
 public final class OrderStatusProjection {
 
@@ -51,12 +58,28 @@ public final class OrderStatusProjection {
                 .id(OrderEvent::orderId)
                 .on(OrderPlaced.class, (state, metadata, event) -> new OrderStatusView(
                         event.orderId(), event.product(), state == null ? "PLACED" : state.status(),
-                        metadata.getStreamId(), metadata.getStreamVersion(), metadata.getPosition()))
+                        streamId(metadata), streamVersion(metadata), metadata.getPosition()))
                 .on(OrderShipped.class, (state, metadata, event) -> state == null
                         ? new OrderStatusView(event.orderId(), null, "SHIPPED",
-                                metadata.getStreamId(), metadata.getStreamVersion(), metadata.getPosition())
+                                streamId(metadata), streamVersion(metadata), metadata.getPosition())
                         : ("PLACED".equals(state.status()) ? state.withStatus("SHIPPED") : state))
                 .build();
+    }
+
+    // metadata.getStreamId()/getStreamVersion() throw when the stream extension is absent, which ADR 133 decision 7
+    // says a publish(E) event, one arriving with no stream identity at all, legitimately does. Read nullable here
+    // instead of unconditionally, so an event shaped that way folds a view with no stream identity recorded rather
+    // than failing the save, which would redeliver the same event forever and, at the bridge's default prefetch of
+    // one, block every later delivery behind it, the exact failure mode this class's own javadoc argues against.
+    private static @Nullable String streamId(EventMetadata metadata) {
+        return metadata.get(OccurrentCloudEventExtension.STREAM_ID);
+    }
+
+    // 0L stands in for "no stream version", the same way streamId() answers null. OrderStatusView.streamVersion is
+    // a primitive long, not a boxed Long, so there is no other way to represent absence in that field.
+    private static long streamVersion(EventMetadata metadata) {
+        Object streamVersion = metadata.get(OccurrentCloudEventExtension.STREAM_VERSION);
+        return streamVersion == null ? 0L : metadata.getStreamVersion();
     }
 
     /**

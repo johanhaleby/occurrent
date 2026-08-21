@@ -22,10 +22,11 @@ import org.occurrent.subscription.RoutingOutcome;
 
 /**
  * The reactive counterpart of the blocking {@code PushObserver}: told about every event
- * {@link PushSubscriptionModel#accept(CloudEvent)} is asked to deliver, before delivery is attempted, so a
- * misconfigured queue binding, a missing declared event type or a type-mapping typo can be told apart from a saga or
- * projection that received an event and chose not to act on it. {@code accept(...)} itself stays silent about all of
- * these by design, see ADR 104.
+ * {@link PushSubscriptionModel#accept(CloudEvent)} is asked to deliver, once the matched registration's action has
+ * run (or the model found no running, unpaused registration for it at all), so a misconfigured queue binding, a
+ * missing declared event type or a type-mapping typo can be told apart from a saga or projection that received an
+ * event and chose not to act on it. {@code accept(...)} itself stays silent about all of these by design, see ADR
+ * 104.
  * <p>
  * Called once per event, whether or not a handler ends up running. {@code outcome} is {@link RoutingOutcome#DELIVERED}
  * only when the model is running and a currently registered, unpaused subscription's filter accepted the event,
@@ -36,8 +37,9 @@ import org.occurrent.subscription.RoutingOutcome;
  * {@link RoutingOutcome#DELIVERED} once {@code accept(...)} has completed normally, and on
  * {@link RoutingOutcome#FILTERED}, where redelivering would loop forever against this same registration, since
  * the event is not this consumer's under the filter currently registered for it. It must never acknowledge on
- * {@link RoutingOutcome#NOT_DELIVERABLE}, which is why the three are kept
- * apart rather than collapsed back into a single flag. It shares the same filter evaluation the actual dispatch
+ * {@link RoutingOutcome#NOT_DELIVERABLE}, or on {@link RoutingOutcome#DEFERRED}, which is why
+ * {@link RoutingOutcome}'s values are kept apart rather than collapsed back into a single flag. It shares the same
+ * filter evaluation the actual dispatch
  * decision is made from, so the two can never disagree, and no lifecycle transition landing between the evaluation
  * and this call can change which outcome is reported.
  * <p>

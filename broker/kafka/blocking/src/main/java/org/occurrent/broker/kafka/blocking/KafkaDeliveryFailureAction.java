@@ -226,7 +226,16 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
             log.warn("Interrupted while parking a record nothing consumed. Redelivering it instead of losing it.", e);
             return Outcome.REDELIVER;
         }
+        log.warn("Parked a record nothing consumed to topic \"{}\" and staged the original's offset for commit.",
+                parkRecord.topic());
         return Outcome.RESOLVED;
+    }
+
+    /**
+     * The {@link DeliveryFailurePolicy} this action applies.
+     */
+    public DeliveryFailurePolicy policy() {
+        return policy;
     }
 
     /**

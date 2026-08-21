@@ -180,12 +180,16 @@ abstract class AbstractBrokerExampleTest {
     }
 
     /**
-     * The distinct {@link CloudEvent} ids currently sitting on {@code queueName}, read without disturbing them. A
-     * raw message count cannot tell a genuinely distinct event apart from the forwarder's own legal republish of
-     * one it already sent, since a duplicate is the identical event arriving twice, not a new one. This drains the
-     * queue with {@code basicGet}, decodes each message's id with the same {@link RabbitMqCloudEventMapper} the
-     * sink and both bridges already use, then requeues every message it read before returning, so a test polling
-     * this in an {@code await} sees the same queue a real consumer would.
+     * The distinct {@link CloudEvent} ids currently sitting on {@code queueName} and ready to be delivered. A raw
+     * message count cannot tell a genuinely distinct event apart from the forwarder's own legal republish of one it
+     * already sent, since a duplicate is the identical event arriving twice, not a new one. This drains the queue
+     * with {@code basicGet}, decodes each message's id with the same {@link RabbitMqCloudEventMapper} the sink and
+     * both bridges already use, then negatively acknowledges every message it read with requeue before returning.
+     * That is not "without disturbing them": {@code basicNack} sets each message's {@code redelivered} flag, which
+     * a plain publish never carries, and only requeues what {@code basicGet} could see in the first place. A
+     * delivery a real consumer is currently holding unacked, on a different channel, never shows up here at all,
+     * ready-count semantics, not "everything on the queue". A test asserting against a bridge that might still be
+     * consuming needs to account for that itself, closing the bridge first if it must see a truly settled count.
      */
     protected Set<String> distinctEventIdsOnQueue(String queueName) throws IOException {
         Set<String> ids = new HashSet<>();

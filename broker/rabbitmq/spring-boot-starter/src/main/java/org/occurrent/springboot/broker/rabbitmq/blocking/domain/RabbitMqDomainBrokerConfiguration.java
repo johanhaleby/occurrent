@@ -103,7 +103,10 @@ public class RabbitMqDomainBrokerConfiguration {
         try {
             return cloudEventSinkProvider.getObject();
         } catch (NoUniqueBeanDefinitionException ambiguous) {
-            if (Set.copyOf(ambiguous.getBeanNamesFound()).equals(STARTER_FALLBACK_SINK_BEAN_NAMES)) {
+            // getBeanNamesFound() can itself be null (the constructor overload taking a bare count rather than a
+            // name collection leaves it that way), which Set.copyOf(...) would NPE on rather than simply not
+            // matching. Not reachable through ObjectProvider.getObject() today, but checked rather than assumed.
+            if (ambiguous.getBeanNamesFound() != null && Set.copyOf(ambiguous.getBeanNamesFound()).equals(STARTER_FALLBACK_SINK_BEAN_NAMES)) {
                 return ownCloudEventSinkProvider.getObject();
             }
             throw ambiguous;

@@ -16,9 +16,12 @@
 
 package org.occurrent.broker.rabbitmq.blocking;
 
+import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.Delivery;
+import com.rabbitmq.client.Recoverable;
+import com.rabbitmq.client.RecoveryListener;
 import com.rabbitmq.client.ShutdownSignalException;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
@@ -26,6 +29,7 @@ import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.Logger;
@@ -40,6 +44,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongConsumer;
@@ -97,6 +102,45 @@ import static java.util.Objects.requireNonNull;
  * {@link Builder#pollInterval(Duration)} (or {@code prefetchCount} many, configured above the default) rather than
  * refusing and requeuing continuously for the whole replay. See {@link Builder#readinessSource(Predicate)} for how
  * to wire it.
+ * <p>
+ * <strong>A lifecycle {@link RoutingOutcome#NOT_DELIVERABLE} cancels this bridge's own consumer immediately, never
+ * sent through {@link DeliveryFailurePolicy}.</strong> {@code NOT_DELIVERABLE} also covers the sole subscription
+ * being paused, or the model not running at all, both a lifecycle state rather than a failure. This bridge's coarse
+ * poll only cancels the consumer up to one {@link Builder#pollInterval(Duration)} later, so a
+ * {@code pauseSubscription(...)} or {@code stop()} called from inside a handler can still hand this bridge a
+ * {@code NOT_DELIVERABLE} for a message already in flight. When {@link PushSubscriptionModel#subscriptionIds()} is
+ * empty, or the sole id is not {@link PushSubscriptionModel#isRunning(String)}, right after such an outcome, this
+ * bridge cancels its own consumer there and then, synchronously, rather than waiting for the next poll, and
+ * negatively acknowledges the triggering delivery with requeue. Cancelling first, not only nacking, matters: with
+ * the consumer left active a requeued message would be redelivered straight back to it at broker round-trip speed,
+ * since a model-level pause is invisible to RabbitMQ's own flow control, which is exactly the unpaced churn
+ * {@code DEFERRED}'s own held-and-released-once-per-poll pacing exists to avoid elsewhere. Cancelling removes the
+ * only consumer that message could be redelivered to, so one requeue is enough. It and every later message this
+ * bridge was never sent stay visibly on the source queue until the next poll notices the model running again and
+ * re-subscribes, rather than {@code PARK} or {@code REDELIVER} ever applying to a message nothing is actually wrong
+ * with.
+ * <p>
+ * <strong>A permanently failed catch-up stops this bridge, it does not park or redeliver into it.</strong> A
+ * {@link CatchupThenPushSubscriptionModel} wrapping {@code model} whose replay has permanently failed refuses every
+ * later live event with {@code BlockingHandover.PreDispatchRefusalException} rather than reporting
+ * {@code NOT_DELIVERABLE} through the normal routing path, since the underlying handover already knows that refusal
+ * is permanent. This bridge catches that exception by type ahead of the generic failure branch, logs at error once,
+ * stops consuming for good, and negatively acknowledges the triggering delivery with requeue, bypassing
+ * {@link DeliveryFailurePolicy} entirely the same way {@link RoutingOutcome#DEFERRED} already does, so it and every
+ * later message this bridge never gets to (its consumer is already cancelled) stay visibly on the source queue
+ * rather than being parked or committed into the same permanent refusal. {@code BlockingHandover} is an internal
+ * type. This bridge imports it anyway, narrowly, for this one {@code catch}, since the alternative (matching on the
+ * exception's message, or reporting {@code NOT_DELIVERABLE} through the normal path and treating every
+ * {@code NOT_DELIVERABLE} as potentially permanent) is both more fragile and slower to notice than catching the type
+ * the engine itself already throws for exactly this.
+ * <p>
+ * <strong>A delivery tag is invalidated across an automatic connection recovery.</strong> {@code connection}'s
+ * delivery tags restart at 1 on a fresh channel, so a tag captured before a recovery can silently identify a
+ * completely different message afterward. This bridge tracks a generation counter, bumped by a
+ * {@code RecoveryListener} on {@code connection} and by this bridge's own consumer shutdown callback, clears both
+ * held-tag deques on either (a dead channel already requeues whatever it was holding unacked, by itself), and
+ * refuses to acknowledge, negatively acknowledge or park a delivery tag whose generation no longer matches, logging
+ * at warn instead: the message is redelivered by the broker regardless, once the dead channel's requeue runs.
  */
 public final class RabbitMqCloudEventBridge implements AutoCloseable {
 
@@ -126,6 +170,24 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     // tag back to the front rather than only ever appending to the back. See handleDelivery and
     // releaseHeldDeferredDelivery.
     private final Deque<Long> heldDeferredDeliveryTags = new ConcurrentLinkedDeque<>();
+    // A REDELIVER-policy failure (a handler or filter that fails on every attempt, say) is held here instead of
+    // nacked on the spot, released the same way heldDeferredDeliveryTags is: a snapshot per pollInterval under
+    // consumeLock, via the same releaseHeldDeferredDelivery(Deque, LongConsumer) helper. Without this a poison
+    // message under REDELIVER (the default policy) would nack-and-redeliver as fast as the broker round-trips it,
+    // pinning the AMQP dispatch thread at prefetchCount(1) instead of being paced like DEFERRED already is. PARK
+    // is never held here: parking exists to move a failed delivery out of the retry loop, not to pace it, so it
+    // still applies immediately, through failureAction, from the point of failure.
+    private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
+    private volatile boolean permanentlyStopped;
+    // Bumped on every automatic connection recovery (a RecoveryListener registered on connection, in start(...))
+    // and every time consumeChannel's own consumer is shut down (the five-arg basicConsume's
+    // ConsumerShutdownSignalCallback, handleConsumerShutdown), so a delivery tag captured before either event is
+    // never mistaken for a tag on the channel that replaced it. RabbitMQ delivery tags restart at 1 on a fresh
+    // channel, so a stale tag, acted on after a recovery, can silently ack or nack a completely different message.
+    // Both held-tag deques are cleared on either bump too, rather than invalidated tag by tag: a dead channel
+    // already requeues everything it was holding unacked by itself, RabbitMQ's own guarantee, so there is nothing
+    // to nack for a stale generation, only bookkeeping to stop trusting.
+    private final AtomicLong channelGeneration = new AtomicLong(0);
 
     private RabbitMqCloudEventBridge(PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, Channel consumeChannel,
                                       String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction,
@@ -171,7 +233,57 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         } catch (IOException e) {
             throw new RabbitMqBridgeException("Failed to declare topology for queue \"" + queue + "\"", e);
         }
+        if (builder.connection instanceof Recoverable recoverableConnection) {
+            // Only a Recoverable connection (automatic recovery enabled, the client's default) ever needs this: one
+            // that never recovers automatically never hands this bridge a channel whose delivery tags silently
+            // reset out from under it, since a non-recoverable connection failure instead surfaces as this bridge's
+            // own consumer being cancelled, or the whole bridge failing outright.
+            recoverableConnection.addRecoveryListener(new RecoveryListener() {
+                @Override
+                public void handleRecovery(Recoverable recoverable) {
+                    invalidateChannelGeneration();
+                }
+
+                @Override
+                public void handleRecoveryStarted(Recoverable recoverable) {
+                    // Nothing to do yet: delivery tags are only meaningfully reset once recovery has actually
+                    // finished and a fresh channel and consumer are in place, not while recovery is still underway.
+                }
+            });
+        }
         scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    // See channelGeneration's own javadoc. Safe to call from any thread: the deques are already documented as
+    // concurrent-safe without consumeLock, and bumping an AtomicLong needs no external synchronization either.
+    private void invalidateChannelGeneration() {
+        channelGeneration.incrementAndGet();
+        heldDeferredDeliveryTags.clear();
+        heldFailedDeliveryTags.clear();
+    }
+
+    // Called back by consumeChannel itself when this bridge's own consumer is shut down, the five-arg
+    // basicConsume's ConsumerShutdownSignalCallback. Distinct from the connection-level RecoveryListener above:
+    // a channel-level error (a protocol violation this bridge caused, say) can shut down just this channel's
+    // consumer without the whole connection ever failing, and that too invalidates every delivery tag this bridge
+    // is holding, the same as a full connection recovery does.
+    private void handleConsumerShutdown(String shutdownConsumerTag, ShutdownSignalException signal) {
+        invalidateChannelGeneration();
+    }
+
+    // True when deliveryGeneration, captured at the start of a delivery, no longer matches this bridge's current
+    // channelGeneration: an automatic connection recovery, or this bridge's own consumer being shut down, happened
+    // while that delivery was still being processed. Its delivery tag no longer identifies anything meaningful on
+    // the channel that replaced it, so it must never be acked, nacked or parked.
+    private boolean isStaleGeneration(long deliveryGeneration) {
+        return deliveryGeneration != channelGeneration.get();
+    }
+
+    private void logStaleGeneration(long deliveryTag) {
+        log.warn("Delivery tag {} on queue \"{}\" belongs to a channel generation this bridge has since moved " +
+                "past (an automatic connection recovery, or a consumer shutdown, happened while this delivery was " +
+                "still in flight). Not acknowledging, negatively acknowledging or parking it; the broker already " +
+                "redelivers it once the dead channel's own unacked deliveries are requeued.", deliveryTag, queue);
     }
 
     // Coarse lifecycle control, per the class javadoc: consumes while the model has a running subscription and
@@ -187,16 +299,20 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         try {
             Set<String> subscriptionIds = model.subscriptionIds();
             String subscriptionId = subscriptionIds.isEmpty() ? null : subscriptionIds.iterator().next();
-            boolean shouldConsume = subscriptionId != null && model.isRunning(subscriptionId) && readinessSource.test(subscriptionId);
+            boolean shouldConsume = !permanentlyStopped && subscriptionId != null && model.isRunning(subscriptionId) && readinessSource.test(subscriptionId);
             consumeLock.lock();
             try {
+                if (permanentlyStopped) {
+                    return;
+                }
                 if (shouldConsume && consumerTag == null) {
-                    consumerTag = consumeChannel.basicConsume(queue, false, this::handleDelivery, this::handleCancel);
+                    consumerTag = consumeChannel.basicConsume(queue, false, this::handleDelivery, this::handleCancel, this::handleConsumerShutdown);
                 } else if (!shouldConsume && consumerTag != null) {
                     consumeChannel.basicCancel(consumerTag);
                     consumerTag = null;
                 }
                 releaseHeldDeferredDelivery();
+                releaseHeldFailedDelivery();
             } finally {
                 consumeLock.unlock();
             }
@@ -204,6 +320,18 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             log.warn("Failed to reconcile consumption for queue \"{}\" against the subscription model's running state. " +
                     "Retrying on the next poll.", queue, e);
         }
+    }
+
+    // True when the model's own lifecycle, not a delivery failure, is why the routing outcome most recently reported
+    // NOT_DELIVERABLE with no exception: the sole subscription paused, or the model not running at all (see
+    // RegisteringSubscribable.routeReportingMatch, which reports NOT_DELIVERABLE for both without ever throwing).
+    // Re-read after the fact rather than trusted from before the delivery, since a concurrent stop() or
+    // pauseSubscription() is exactly what can land between an earlier readinessSource check and this delivery's own
+    // routing decision.
+    private boolean isLifecycleNotDeliverable() {
+        Set<String> subscriptionIds = model.subscriptionIds();
+        String subscriptionId = subscriptionIds.isEmpty() ? null : subscriptionIds.iterator().next();
+        return subscriptionId == null || !model.isRunning(subscriptionId);
     }
 
     // Nacks (with requeue) a snapshot of what handleDelivery left held, if anything, bypassing DeliveryFailurePolicy
@@ -228,6 +356,12 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         releaseHeldDeferredDelivery(heldDeferredDeliveryTags, failureAction::redeliver);
     }
 
+    // Releases a REDELIVER-policy failure paced behind heldFailedDeliveryTags, the same mechanism and the same
+    // once-per-poll bound as releaseHeldDeferredDelivery() above, see that field's own javadoc.
+    private void releaseHeldFailedDelivery() {
+        releaseHeldDeferredDelivery(heldFailedDeliveryTags, failureAction::redeliver);
+    }
+
     // Package-private and static, parameterized on the deque and the release call, so this bridge's redelivery
     // bookkeeping is directly testable with a stub that throws on demand, no real Channel or broker required.
     static void releaseHeldDeferredDelivery(Deque<Long> heldDeferredDeliveryTags, LongConsumer redeliver) {
@@ -246,6 +380,27 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         }
     }
 
+    // Cancels this bridge's own consumer immediately, synchronously, from whichever thread calls this (the AMQP
+    // delivery callback thread, for a lifecycle NOT_DELIVERABLE, see handleDelivery), rather than waiting for
+    // reconcileConsumption's next poll to notice the model is no longer running. Unlike stopPermanently(), does not
+    // set permanentlyStopped: a lifecycle pause or stop can resume, and reconcileConsumption's own poll
+    // re-subscribes on its own once shouldConsume is true again.
+    private void cancelConsumingNow() {
+        consumeLock.lock();
+        try {
+            if (consumerTag != null) {
+                try {
+                    consumeChannel.basicCancel(consumerTag);
+                } catch (IOException e) {
+                    log.warn("Failed to cancel the consumer on queue \"{}\" after a lifecycle NOT_DELIVERABLE.", queue, e);
+                }
+                consumerTag = null;
+            }
+        } finally {
+            consumeLock.unlock();
+        }
+    }
+
     private void handleCancel(String cancelledConsumerTag) {
         consumeLock.lock();
         try {
@@ -259,24 +414,64 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
 
     private void handleDelivery(String deliveryConsumerTag, Delivery delivery) {
         long deliveryTag = delivery.getEnvelope().getDeliveryTag();
+        // Captured once, at the start, and checked again right before every point below that would act on
+        // deliveryTag (ack, nack, or hand it to failureAction), so a connection recovery or a consumer shutdown
+        // that lands while this delivery is being processed is caught before this bridge trusts a delivery tag
+        // that may since identify a completely different message on the channel that replaced this one. See
+        // channelGeneration's own javadoc.
+        long deliveryGeneration = channelGeneration.get();
         CloudEvent cloudEvent;
         try {
             cloudEvent = RabbitMqCloudEventMapper.toCloudEvent(delivery.getProperties(), delivery.getBody());
         } catch (RuntimeException e) {
-            log.warn("Failed to rebuild a CloudEvent from a message on queue \"{}\".", queue, e);
-            failureAction.apply(deliveryTag, delivery.getProperties(), delivery.getBody());
+            log.warn("Failed to rebuild a CloudEvent from a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
+            routeFailure(deliveryTag, deliveryGeneration, delivery.getProperties(), delivery.getBody());
             return;
         }
         try {
             model.acceptRedeliverable(cloudEvent);
+        } catch (BlockingHandover.PreDispatchRefusalException e) {
+            // A CatchupThenPushSubscriptionModel wrapping this bridge's model has a permanently failed catch-up.
+            // Permanent, exactly like an unreadable live filter: stop rather than park or redeliver into the same
+            // refusal forever. See the class javadoc.
+            outcomeChannel.takeLastOutcome();
+            log.error("A catch-up wrapping this bridge's model has permanently failed for queue \"{}\". Stopping " +
+                    "this bridge rather than parking or committing into the same refusal. Delivery tag {} is " +
+                    "negatively acknowledged with requeue so it stays visible on the queue until the wrapper's " +
+                    "catch-up is fixed and restarted.", queue, deliveryTag, e);
+            stopPermanently();
+            if (isStaleGeneration(deliveryGeneration)) {
+                logStaleGeneration(deliveryTag);
+            } else {
+                failureAction.redeliver(deliveryTag);
+            }
+            return;
         } catch (RuntimeException | AssertionError e) {
             // Catches AssertionError too, since a filter or the handler can throw one, and an uncaught Error here
             // would leave the delivery unacked and stall the consumer at prefetch one. Any other Error still propagates.
             outcomeChannel.takeLastOutcome();
-            failureAction.apply(deliveryTag, delivery.getProperties(), delivery.getBody());
+            log.warn("A filter or handler failed for a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
+            routeFailure(deliveryTag, deliveryGeneration, delivery.getProperties(), delivery.getBody());
+            return;
+        }
+        if (isStaleGeneration(deliveryGeneration)) {
+            outcomeChannel.takeLastOutcome();
+            logStaleGeneration(deliveryTag);
             return;
         }
         RoutingOutcome outcome = outcomeChannel.takeLastOutcome();
+        if (outcome == null) {
+            // Only reachable when model was constructed with a different RoutingOutcomeChannel than the one this
+            // bridge reads, a wiring defect ADR 133 decision 1 requires against, not an ordinary delivery failure.
+            // Named explicitly rather than falling into the generic "not deliverable" branch below, which would
+            // say nothing about the actual cause.
+            log.error("No RoutingOutcome was captured for a message on queue \"{}\", delivery tag {}. This model " +
+                    "was very likely constructed with a different RoutingOutcomeChannel than the one this bridge " +
+                    "reads; both must be the exact same instance, per RoutingOutcomeChannel's own javadoc.",
+                    queue, deliveryTag);
+            routeFailure(deliveryTag, deliveryGeneration, delivery.getProperties(), delivery.getBody());
+            return;
+        }
         if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
             failureAction.ack(deliveryTag);
         } else if (outcome == RoutingOutcome.DEFERRED) {
@@ -288,9 +483,68 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             // here: this callback can run concurrently with reconcileConsumption, which already holds it across a
             // blocking AMQP call, so this only ever hands the tag off for that poll thread to act on instead.
             heldDeferredDeliveryTags.add(deliveryTag);
+        } else if (outcome == RoutingOutcome.NOT_DELIVERABLE && isLifecycleNotDeliverable()) {
+            // A lifecycle NOT_DELIVERABLE (the sole subscription paused, or the model not running) bypasses
+            // DeliveryFailurePolicy exactly like DEFERRED. Cancels this bridge's own consumer immediately,
+            // synchronously, rather than waiting for reconcileConsumption's next poll, then negatively acknowledges
+            // the triggering delivery with requeue. Cancelling first, not just nacking, matters: with the consumer
+            // still active a nack-with-requeue here would have the broker redeliver the same message straight back
+            // to it at broker round-trip speed, since a model-level pause is invisible to RabbitMQ's own flow
+            // control, which is exactly the unpaced churn DEFERRED's own held-and-released-once-per-poll mechanism
+            // exists to avoid. Cancelling first removes the only consumer that message could be redelivered to, so
+            // one requeue is enough. It and every later message this bridge was never sent stay visibly on the
+            // source queue until reconcileConsumption's own poll notices the model is running again and
+            // re-subscribes.
+            cancelConsumingNow();
+            failureAction.redeliver(deliveryTag);
         } else {
-            failureAction.apply(deliveryTag, delivery.getProperties(), delivery.getBody());
+            log.warn("A message on queue \"{}\", delivery tag {}, was not deliverable.", queue, deliveryTag);
+            routeFailure(deliveryTag, deliveryGeneration, delivery.getProperties(), delivery.getBody());
         }
+    }
+
+    // Routes a genuine failure (a lifecycle NOT_DELIVERABLE and a permanent catch-up refusal are both handled
+    // separately above, never reaching here) to this bridge's configured DeliveryFailurePolicy. PARK applies
+    // immediately, through failureAction, since parking exists to move a failed delivery out of the retry loop, not
+    // to pace it. REDELIVER is paced instead, held and released once per poll exactly like a DEFERRED delivery, via
+    // a second deque, so a message that fails on every attempt is bounded to one redelivery per pollInterval rather
+    // than nacking as fast as the broker round-trips it. See heldFailedDeliveryTags's own javadoc. Checks
+    // deliveryGeneration itself, since two of its three call sites run ahead of handleDelivery's own general check
+    // (they are inside a catch block, before that check would otherwise run).
+    private void routeFailure(long deliveryTag, long deliveryGeneration, BasicProperties properties, byte[] body) {
+        if (isStaleGeneration(deliveryGeneration)) {
+            logStaleGeneration(deliveryTag);
+            return;
+        }
+        if (failureAction.policy() == DeliveryFailurePolicy.REDELIVER) {
+            heldFailedDeliveryTags.add(deliveryTag);
+        } else {
+            failureAction.apply(deliveryTag, properties, body);
+        }
+    }
+
+    // Cancels this bridge's own consumer and stops the coarse poll for good, without closing the channel: the
+    // triggering delivery must stay on it, unacknowledged, until close() or an operator-driven restart, the same
+    // contract UnreadableLiveFilterException's own javadoc states for the domain bridges' equivalent method.
+    private void stopPermanently() {
+        consumeLock.lock();
+        try {
+            // Set under the same lock reconcileConsumption() now reads it under, so the two can never interleave:
+            // whichever of this method and a concurrent poll acquires the lock first fully decides the consumer's
+            // fate before the other even reads the flag.
+            permanentlyStopped = true;
+            if (consumerTag != null) {
+                try {
+                    consumeChannel.basicCancel(consumerTag);
+                } catch (IOException e) {
+                    log.warn("Failed to cancel the consumer on queue \"{}\" while stopping permanently.", queue, e);
+                }
+                consumerTag = null;
+            }
+        } finally {
+            consumeLock.unlock();
+        }
+        scheduler.shutdown();
     }
 
     /**
@@ -321,6 +575,11 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             } catch (RuntimeException ignored) {
                 // Best effort, matching basicCancel above: the channel is about to be closed either way, and
                 // closing it requeues whatever is left held regardless.
+            }
+            try {
+                releaseHeldFailedDelivery();
+            } catch (RuntimeException ignored) {
+                // Best effort, same reasoning as releaseHeldDeferredDelivery() above.
             }
         } finally {
             consumeLock.unlock();

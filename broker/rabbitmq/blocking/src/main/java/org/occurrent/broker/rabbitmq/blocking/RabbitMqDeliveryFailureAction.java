@@ -143,7 +143,19 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
             redeliver(deliveryTag);
             return;
         }
+        log.warn("Parked delivery tag {} to exchange \"{}\" routing key \"{}\" and acknowledged the original; " +
+                "nothing consumed it.", deliveryTag, destination.exchange(), destination.routingKey());
         ack(deliveryTag);
+    }
+
+    /**
+     * The {@link DeliveryFailurePolicy} this action applies. Exposed so a bridge can pace a
+     * {@link DeliveryFailurePolicy#REDELIVER} failure itself, held and released once per poll the same way it
+     * already paces {@link RoutingOutcome#DEFERRED}, rather than nacking it immediately on every attempt, without
+     * duplicating the policy this action was already built with.
+     */
+    public DeliveryFailurePolicy policy() {
+        return policy;
     }
 
     // A copy of properties with destination's own configured headers added on top of the original ones, so a
