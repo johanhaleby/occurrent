@@ -43,15 +43,6 @@ public interface ReplayPhase {
     CatchupPhase currentPhase();
 
     /**
-     * Whether the projection is anywhere inside a catch-up, history or reconciliation alike. What a poll asks to
-     * decide how soon to ask again, and not what decides whether an append is recorded, which needs the phase
-     * itself.
-     */
-    default boolean isReplaying() {
-        return currentPhase() != CatchupPhase.LIVE;
-    }
-
-    /**
      * A phase for a composition that never replays: an in-memory model, a durable-only model with no catch-up layer,
      * or a push feed with {@code catchup = NONE}. Always answers {@link CatchupPhase#LIVE}.
      * <p>

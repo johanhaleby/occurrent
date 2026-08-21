@@ -346,6 +346,10 @@ public final class AppliedAppendRecording {
     public void replayCompleted() {
         lifecycleReplaying = false;
         synchronized (clearLock) {
+            // Dropped here as well as on a history observation, because a lifecycle replay that handled nothing
+            // matching never reaches one, and what a previous episode was still holding belongs to a read model this
+            // one has just rebuilt.
+            dropAwaitingClear();
             attemptClear();
             episodeCleared = false;
         }

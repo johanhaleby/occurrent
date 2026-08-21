@@ -19,6 +19,7 @@ package org.occurrent.springboot.mongo.reactor;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.dsl.projection.CatchupPhase;
 import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.EventStore;
@@ -73,7 +74,7 @@ class ReactiveReplayPhaseWiringTest {
 
             Optional<ReplayPhase> phase = holder.forSubscription("some-subscription");
             assertThat(phase).isPresent();
-            assertThat(phase.get().isReplaying()).isFalse();
+            assertThat(phase.get().currentPhase()).isEqualTo(CatchupPhase.LIVE);
         }
     }
 

@@ -105,10 +105,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // registers there first) but it is buffering rather than delivering, so it would report a subscription that is
     // not yet folding anything as running.
     private final ConcurrentMap<String, Future<Boolean>> replayingSubscriptions = new ConcurrentHashMap<>();
-    // Ids whose history read is done and whose buffered live events are being delivered. Kept beside
-    // replayingSubscriptions rather than replacing its value, because isCatchingUp and isRunning both read that map
-    // and neither changes here. Entries are removed by forget, alongside the replay entry itself.
-    private final Set<String> reconcilingSubscriptions = ConcurrentHashMap.newKeySet();
+    // The replay whose history read is done, per subscription id, so what follows it is the live events buffered
+    // while it ran. Holds the replay itself rather than just the id, because a cancellation permits an immediate
+    // resubscribe while the old replay is still unwinding, and an id-only marker that old replay adds afterwards
+    // would tell the replacement it was past a history read it has not started.
+    private final ConcurrentMap<String, Future<Boolean>> reconcilingSubscriptions = new ConcurrentHashMap<>();
     // A pause asked for while a replay is in flight. The replay itself keeps running, since resuming it would mean
     // persisting the exact replay cursor, which this model does not do. Applied at the handover instead.
     private final ConcurrentMap<String, Boolean> pauseRequestedDuringReplay = new ConcurrentHashMap<>();
@@ -221,7 +222,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public void historyDone() {
-                reconcilingSubscriptions.add(subscriptionId);
+                reconcilingSubscriptions.put(subscriptionId, self.get());
             }
         };
 
@@ -425,7 +426,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     @Override
     public boolean isReplayingHistory(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        return replayingSubscriptions.containsKey(subscriptionId) && !reconcilingSubscriptions.contains(subscriptionId);
+        Future<Boolean> replay = replayingSubscriptions.get(subscriptionId);
+        return replay != null && reconcilingSubscriptions.get(subscriptionId) != replay;
     }
 
     @Override

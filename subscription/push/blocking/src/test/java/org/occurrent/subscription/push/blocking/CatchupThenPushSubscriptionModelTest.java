@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -48,6 +49,29 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupThenPushSubscriptionModelTest {
+
+    // A cancelled replay must not tell its replacement that it is past a history read. The marker holds the replay
+    // itself rather than only the id, so a stale one arriving late cannot match the new attempt, and the new
+    // attempt reads its own history as history.
+    @Test
+    void a_second_catch_up_for_the_same_id_reads_its_history_as_history() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<Boolean> historyDuringReplay = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupThenPushSubscriptionModel> self = new AtomicReference<>();
+        AtomicInteger round = new AtomicInteger();
+        PositionOrderedReader reader = reader(() -> Stream.of(cloudEvent("e" + round.incrementAndGet(), "Created")), 1);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        self.set(model);
+
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(),
+                __ -> historyDuringReplay.add(self.get().isReplayingHistory("proj"))).waitUntilStarted();
+        model.cancelSubscription("proj");
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(),
+                __ -> historyDuringReplay.add(self.get().isReplayingHistory("proj"))).waitUntilStarted();
+
+        assertThat(historyDuringReplay).containsExactly(true, true);
+    }
 
     @Test
     void catches_up_from_the_store_then_delivers_the_live_feed() {
