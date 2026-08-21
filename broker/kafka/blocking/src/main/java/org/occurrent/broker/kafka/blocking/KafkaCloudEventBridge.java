@@ -40,6 +40,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -104,7 +105,10 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <strong>Per-partition failure isolation.</strong> A record that does not resolve makes the consumer {@code seek}
  * back to that record's offset and this bridge stops processing that partition's remaining records for this poll,
  * so a later record in the same partition is never committed past the one that failed. Other partitions in the same
- * poll are unaffected, since their offsets are independent.
+ * poll are unaffected, since their offsets are independent. A partition that seeks back this way is also paused for
+ * roughly {@link Builder#pollTimeout(Duration)} before this bridge fetches from it again, so a record that keeps
+ * failing is retried at that pace rather than at traffic rate, and a healthy partition committing offsets in the
+ * same poll is never throttled down to a failing sibling's speed to get it.
  * <p>
  * <strong>Coarse lifecycle.</strong> Before every poll, this bridge reads {@link PushSubscriptionModel#subscriptionIds()}
  * and {@link PushSubscriptionModel#isRunning(String)} and pauses or resumes its own assignment to match, fetching
@@ -137,6 +141,21 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     private final RetryStrategy commitRetryStrategy;
     private final KafkaDeliveryFailureAction failureAction;
     private final Thread loopThread;
+
+    // Touched only by the loop thread. A partition this batch seeked back to (a poison record) is paused here
+    // until its own deadline, System.nanoTime() plus pollTimeout, rather than the whole loop sleeping for
+    // pollTimeout regardless of which partitions actually staged something. System.nanoTime() rather than
+    // currentTimeMillis(), so a wall-clock correction can never leave a paused partition paused far past
+    // pollTimeout. A partition still flowing normally is never held up by a poison record on a different one. See
+    // reconcilePauseResume(boolean) and processBatch(...).
+    private final Map<TopicPartition, Long> throttledUntilNanos = new HashMap<>();
+
+    // Set by close() to System.nanoTime() + closeTimeout, Long.MAX_VALUE until then. System.nanoTime() rather than
+    // currentTimeMillis(), so a wall-clock correction after close() can never let remainingCloseBudget() outlive
+    // what close() actually promised. Lets the loop thread bound its own WakeupException commit retry in
+    // commitWithRetry(...) to what remains of that wait, rather than blocking on a bare commitSync(Map) past
+    // closeTimeout. See that method's own comment.
+    private volatile long closeDeadlineNanos = Long.MAX_VALUE;
 
     private volatile boolean running = true;
 
@@ -251,10 +270,44 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         if (assignment.isEmpty()) {
             return;
         }
+        resumeExpiredThrottledPartitions(assignment);
         if (shouldConsume) {
-            consumer.resume(assignment);
+            Set<TopicPartition> toResume = new HashSet<>(assignment);
+            toResume.removeAll(throttledUntilNanos.keySet());
+            consumer.resume(toResume);
+            // A partition still throttled stays paused even though the coarse gate above says to resume the rest
+            // of the assignment. Re-paused explicitly rather than relying on it having stayed paused client-side,
+            // since a rebalance can have reassigned it since its last pause() call.
+            Set<TopicPartition> stillThrottled = new HashSet<>(throttledUntilNanos.keySet());
+            stillThrottled.retainAll(assignment);
+            if (!stillThrottled.isEmpty()) {
+                consumer.pause(stillThrottled);
+            }
         } else {
             consumer.pause(assignment);
+        }
+    }
+
+    // Resumes a throttled partition once its deadline has passed, so a poison record's backoff window is bounded
+    // to roughly pollTimeout rather than staying paused forever. Partitions no longer assigned (a rebalance moved
+    // them elsewhere) are dropped from the map without calling resume() on them, since this Consumer no longer
+    // owns them to resume.
+    private void resumeExpiredThrottledPartitions(Set<TopicPartition> assignment) {
+        if (throttledUntilNanos.isEmpty()) {
+            return;
+        }
+        long now = System.nanoTime();
+        Set<TopicPartition> expired = new HashSet<>();
+        throttledUntilNanos.entrySet().removeIf(entry -> {
+            boolean isExpired = entry.getValue() <= now;
+            if (isExpired) {
+                expired.add(entry.getKey());
+            }
+            return isExpired;
+        });
+        expired.retainAll(assignment);
+        if (!expired.isEmpty()) {
+            consumer.resume(expired);
         }
     }
 
@@ -273,19 +326,19 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         }
     }
 
-    // Returns true when this batch staged nothing to commit but did seek at least one partition back, the poison
-    // record shape: the next poll() would refetch and redeliver the identical record with nothing else to show
-    // for it. Backs off for pollTimeout in that case before returning, since this throws nothing the outer catch
-    // could back off for on its own.
+    // A partition that seeks back this batch (a poison record) is paused until roughly pollTimeout has passed,
+    // tracked in throttledUntilNanos and applied immediately below, rather than the whole loop backing off for
+    // pollTimeout regardless of which partitions actually failed. A different partition that keeps staging offsets
+    // in the same poll is never held to the poisoned one's pace.
     private void processBatch(ConsumerRecords<String, byte[]> records) {
         Map<TopicPartition, OffsetAndMetadata> toCommit = new HashMap<>();
-        boolean seekBackHappened = false;
+        Set<TopicPartition> seekedBackPartitions = new HashSet<>();
         try {
             for (TopicPartition partition : records.partitions()) {
                 for (ConsumerRecord<String, byte[]> record : records.records(partition)) {
                     if (!handleRecord(record, toCommit)) {
                         consumer.seek(partition, record.offset());
-                        seekBackHappened = true;
+                        seekedBackPartitions.add(partition);
                         break; // Stop this partition's remaining records for this poll. Other partitions are unaffected.
                     }
                 }
@@ -318,12 +371,15 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
                         consumer.groupMetadata().groupId(), e);
             }
         }
-        if (seekBackHappened && toCommit.isEmpty()) {
-            // A poison record. Every partition that fetched anything ended in a seek back to the exact offset it
-            // started this poll at, so the next poll() would refetch and redeliver the identical record
-            // immediately. Backing off for pollTimeout keeps that at this loop's normal cadence instead of
-            // spinning it at the JVM's own maximum rate against a record that can never resolve.
-            sleepUninterruptibly(pollTimeout);
+        if (!seekedBackPartitions.isEmpty()) {
+            // Paused now rather than left for the next reconcilePauseResume(...) call, so the very next poll()
+            // already excludes these partitions instead of refetching and redelivering the identical record once
+            // more before the throttle takes effect.
+            long throttledUntil = System.nanoTime() + pollTimeout.toNanos();
+            for (TopicPartition partition : seekedBackPartitions) {
+                throttledUntilNanos.put(partition, throttledUntil);
+            }
+            consumer.pause(seekedBackPartitions);
         }
     }
 
@@ -339,9 +395,19 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             // interrupt. Every record in this batch already resolved, so losing this commit to a signal that was
             // never actually about the commit itself would replay the whole batch on the next start for no
             // reason. Kafka documents wakeup() as arming a single pending interrupt, consumed by the first
-            // blocking call it raises in, so retrying the same commit once more proceeds normally.
-            consumer.commitSync(toCommit);
+            // blocking call it raises in, so retrying the same commit once more proceeds normally. Bounded to
+            // remainingCloseBudget() rather than a bare commitSync(Map), which falls back to the client's own
+            // default.api.timeout.ms against an unreachable broker, past whatever close() actually promised to
+            // wait for this loop thread to finish.
+            consumer.commitSync(toCommit, remainingCloseBudget());
         }
+    }
+
+    // The budget close() gave this loop thread to finish, floored at zero once it has already elapsed, so the
+    // WakeupException retry commit above can never block past what close() promised its own caller to wait.
+    private Duration remainingCloseBudget() {
+        long remainingNanos = closeDeadlineNanos - System.nanoTime();
+        return Duration.ofNanos(Math.max(remainingNanos, 0));
     }
 
     // Sleeps for duration, restoring the interrupt flag rather than propagating it, since the loop thread has
@@ -364,7 +430,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         } catch (RuntimeException e) {
             log.warn("Failed to rebuild a CloudEvent from a record on topic \"{}\" partition {} offset {}.",
                     record.topic(), record.partition(), record.offset(), e);
-            return resolve(record, toCommit, failureAction.applyToUndecodable(record));
+            return resolve(record, toCommit, failureAction.apply(record));
         }
         RoutingOutcome outcome;
         try {
@@ -374,13 +440,13 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             // Catches AssertionError too, since a filter or the handler can throw one, and an uncaught Error here
             // would leave the loop thread dead with the partition never advancing past this record.
             outcomeChannel.takeLastOutcome();
-            return resolve(record, toCommit, failureAction.apply(record, cloudEvent));
+            return resolve(record, toCommit, failureAction.apply(record));
         }
         if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
             stage(record, toCommit);
             return true;
         }
-        return resolve(record, toCommit, failureAction.apply(record, cloudEvent));
+        return resolve(record, toCommit, failureAction.apply(record));
     }
 
     private boolean resolve(ConsumerRecord<String, byte[]> record, Map<TopicPartition, OffsetAndMetadata> toCommit,
@@ -411,6 +477,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     @Override
     public void close() {
         running = false;
+        closeDeadlineNanos = System.nanoTime() + closeTimeout.toNanos();
         try {
             consumer.wakeup();
         } catch (RuntimeException ignored) {

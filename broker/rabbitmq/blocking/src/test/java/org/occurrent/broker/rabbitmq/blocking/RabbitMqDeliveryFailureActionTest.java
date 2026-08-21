@@ -20,11 +20,16 @@ import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.slf4j.LoggerFactory;
 
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -60,10 +65,10 @@ class RabbitMqDeliveryFailureActionTest {
     /**
      * A failed parking publish, for any reason the shared {@link RabbitMqConfirmPublisher} reports as a
      * {@link RuntimeException}, redelivers the original instead of losing it or letting the exception escape
-     * {@code applyToUndecodable}.
+     * {@code apply}.
      */
     @Test
-    void applyToUndecodable_redelivers_when_the_parking_publisher_throws() throws Exception {
+    void apply_redelivers_when_the_parking_publisher_throws() throws Exception {
         Channel consumeChannel = mock(Channel.class);
         RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
         RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey");
@@ -72,9 +77,84 @@ class RabbitMqDeliveryFailureActionTest {
         RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK,
                 parkingPublisher, parkingDestination, LoggerFactory.getLogger(getClass()));
 
-        action.applyToUndecodable(42L, new BasicProperties(), new byte[0]);
+        action.apply(42L, new BasicProperties(), new byte[0]);
 
         verify(consumeChannel).basicNack(42L, false, true);
         verify(consumeChannel, never()).basicAck(anyLong(), anyBoolean());
+    }
+
+    /**
+     * {@link DeliveryFailurePolicy#PARK} republishes the delivery's own raw {@code properties} unchanged, a
+     * caller-supplied {@code correlationId} included, rather than rebuilding them from a decoded {@code CloudEvent}
+     * and losing every AMQP field outside the CloudEvents mapping.
+     */
+    @Test
+    void apply_parks_the_original_properties_unchanged_preserving_metadata_outside_the_cloudEvents_mapping() throws Exception {
+        Channel consumeChannel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey");
+        BasicProperties originalProperties = new BasicProperties.Builder().correlationId("caller-correlation-id").build();
+        byte[] originalBody = "payload".getBytes();
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK,
+                parkingPublisher, parkingDestination, LoggerFactory.getLogger(getClass()));
+
+        action.apply(42L, originalProperties, originalBody);
+
+        verify(parkingPublisher).publish("exchange", "routingKey", originalProperties, originalBody);
+    }
+
+    /**
+     * {@code parkingDestination}'s own configured headers reach the parked message alongside the delivery's
+     * original AMQP fields, rather than being dropped in favor of the raw properties alone.
+     */
+    @Test
+    void apply_merges_the_parking_destinations_own_headers_onto_the_original_properties() throws Exception {
+        Channel consumeChannel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey")
+                .withHeaders(Map.of("parked-reason", "handler-failure"));
+        BasicProperties originalProperties = new BasicProperties.Builder()
+                .correlationId("caller-correlation-id")
+                .headers(Map.of("tenant", "acme"))
+                .build();
+        byte[] originalBody = "payload".getBytes();
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK,
+                parkingPublisher, parkingDestination, LoggerFactory.getLogger(getClass()));
+
+        action.apply(42L, originalProperties, originalBody);
+
+        ArgumentCaptor<BasicProperties> parkedPropertiesCaptor = ArgumentCaptor.forClass(BasicProperties.class);
+        verify(parkingPublisher).publish(eq("exchange"), eq("routingKey"), parkedPropertiesCaptor.capture(), eq(originalBody));
+        BasicProperties parkedProperties = parkedPropertiesCaptor.getValue();
+        assertThat(parkedProperties.getCorrelationId()).isEqualTo("caller-correlation-id");
+        assertThat(parkedProperties.getHeaders())
+                .containsEntry("tenant", "acme")
+                .containsEntry("parked-reason", "handler-failure");
+    }
+
+    /**
+     * On a colliding key, {@code parkingDestination}'s own header value wins over the delivery's original one,
+     * matching {@link RabbitMqDeliveryFailureAction}'s documented merge order. Disjoint keys alone cannot tell a
+     * correct merge from one whose precedence is silently reversed.
+     */
+    @Test
+    void apply_lets_the_parking_destinations_header_win_over_the_originals_on_a_colliding_key() throws Exception {
+        Channel consumeChannel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey")
+                .withHeaders(Map.of("parked-reason", "destination-value"));
+        BasicProperties originalProperties = new BasicProperties.Builder()
+                .headers(Map.of("parked-reason", "original-value"))
+                .build();
+        byte[] originalBody = "payload".getBytes();
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK,
+                parkingPublisher, parkingDestination, LoggerFactory.getLogger(getClass()));
+
+        action.apply(42L, originalProperties, originalBody);
+
+        ArgumentCaptor<BasicProperties> parkedPropertiesCaptor = ArgumentCaptor.forClass(BasicProperties.class);
+        verify(parkingPublisher).publish(eq("exchange"), eq("routingKey"), parkedPropertiesCaptor.capture(), eq(originalBody));
+        assertThat(parkedPropertiesCaptor.getValue().getHeaders())
+                .containsEntry("parked-reason", "destination-value");
     }
 }

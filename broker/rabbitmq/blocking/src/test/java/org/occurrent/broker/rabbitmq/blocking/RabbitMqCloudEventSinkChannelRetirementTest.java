@@ -36,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -74,6 +75,66 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
         // The old channel's close runs on its own thread rather than blocking this call, so it is awaited here
         // rather than asserted immediately.
         verify(timedOutChannel, timeout(2000)).close();
+    }
+
+    /**
+     * A channel-level shutdown, {@code isHardError() == false}, the connection itself and every other channel on
+     * it stay usable, only this one channel closed (a protocol violation on it, most often). That is what
+     * {@code connection.openChannel()} succeeding right after models. A hard, connection-level shutdown is a
+     * different case this retirement cannot recover from at all, since the connection the replacement channel
+     * would open on is itself already gone. See {@link RabbitMqConfirmPublisher}'s own javadoc for that boundary.
+     */
+    @Test
+    void a_shutdown_signal_during_the_confirm_wait_retires_the_channel_and_publishes_on_a_confirm_mode_replacement() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel shutdownChannel = mock(Channel.class);
+        Channel replacementChannel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(shutdownChannel), Optional.of(replacementChannel));
+        when(shutdownChannel.waitForConfirms(anyLong())).thenThrow(new ShutdownSignalException(false, false, null, null));
+
+        RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection, resolver).build();
+
+        assertThatThrownBy(() -> sink.publish(orderPlaced()))
+                .isInstanceOf(RabbitMqPublishException.class)
+                .hasCauseInstanceOf(ShutdownSignalException.class);
+
+        verify(replacementChannel).confirmSelect();
+        verify(replacementChannel).addReturnListener(any(ReturnCallback.class));
+        // The old channel's close runs on its own thread rather than blocking this call, so it is awaited here
+        // rather than asserted immediately, mirroring the timeout and interrupted cases above.
+        verify(shutdownChannel, timeout(2000)).close();
+
+        // With connection auto-recovery off, this is the only way the sink ever recovers from a shut-down channel:
+        // a later publish must land on the replacement rather than failing forever against the retired one.
+        when(replacementChannel.waitForConfirms(anyLong())).thenReturn(true);
+        sink.publish(orderPlaced());
+        verify(replacementChannel).basicPublish(any(), any(), eq(true), any(), any());
+    }
+
+    /**
+     * The other half of the boundary the test above documents. {@code isHardError() == true} means the connection
+     * itself is gone, so {@code connection.openChannel()} for the replacement fails too, exactly as it would
+     * against a real closed connection. The sink reports that failure rather than pretending to have recovered,
+     * with the retirement failure attached as suppressed on the original shutdown.
+     */
+    @Test
+    void a_hard_connection_level_shutdown_signal_fails_the_publish_since_no_replacement_channel_can_open() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel shutdownChannel = mock(Channel.class);
+        when(connection.openChannel())
+                .thenReturn(Optional.of(shutdownChannel))
+                .thenThrow(new ShutdownSignalException(true, false, null, null));
+        when(shutdownChannel.waitForConfirms(anyLong())).thenThrow(new ShutdownSignalException(true, false, null, null));
+
+        RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection, resolver).build();
+
+        assertThatThrownBy(() -> sink.publish(orderPlaced()))
+                .isInstanceOf(RabbitMqPublishException.class)
+                .hasCauseInstanceOf(ShutdownSignalException.class)
+                .satisfies(exception -> assertThat(exception.getSuppressed())
+                        .as("the failed channel replacement should be attached rather than silently swallowed")
+                        .hasSize(1)
+                        .allMatch(RabbitMqPublishException.class::isInstance));
     }
 
     @Test

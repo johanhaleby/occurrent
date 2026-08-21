@@ -92,4 +92,56 @@ class RabbitMqDestinationTest {
         assertThatThrownBy(() -> new RabbitMqDestination("my-exchange", "my.routing.key", null))
                 .isInstanceOf(NullPointerException.class);
     }
+
+    @Test
+    void an_exchange_of_exactly_255_ascii_bytes_is_accepted() {
+        String exchange = "a".repeat(255);
+
+        RabbitMqDestination destination = RabbitMqDestination.of(exchange, "my.routing.key");
+
+        assertThat(destination.exchange()).isEqualTo(exchange);
+    }
+
+    @Test
+    void an_exchange_of_256_ascii_bytes_is_refused() {
+        String exchange = "a".repeat(256);
+
+        assertThatThrownBy(() -> RabbitMqDestination.of(exchange, "my.routing.key"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exchange")
+                .hasMessageContaining("256");
+    }
+
+    @Test
+    void a_routingKey_of_exactly_255_ascii_bytes_is_accepted() {
+        String routingKey = "a".repeat(255);
+
+        RabbitMqDestination destination = RabbitMqDestination.of("my-exchange", routingKey);
+
+        assertThat(destination.routingKey()).isEqualTo(routingKey);
+    }
+
+    @Test
+    void a_routingKey_of_256_ascii_bytes_is_refused() {
+        String routingKey = "a".repeat(256);
+
+        assertThatThrownBy(() -> RabbitMqDestination.of("my-exchange", routingKey))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("routingKey")
+                .hasMessageContaining("256");
+    }
+
+    /**
+     * A multibyte character makes the byte length diverge from the char count, so this fails only if the
+     * validation actually measures UTF-8 bytes rather than {@code String#length()}. 86 copies of a
+     * three-byte character is 258 bytes but only 86 characters, well under 255 by a char count.
+     */
+    @Test
+    void a_value_under_255_characters_but_over_255_utf8_bytes_is_refused() {
+        String exchange = "中".repeat(86);
+
+        assertThatThrownBy(() -> RabbitMqDestination.of(exchange, "my.routing.key"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("258");
+    }
 }

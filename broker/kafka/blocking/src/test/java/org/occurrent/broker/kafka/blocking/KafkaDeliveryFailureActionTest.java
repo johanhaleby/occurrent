@@ -175,7 +175,7 @@ class KafkaDeliveryFailureActionTest {
                     "value".getBytes());
 
             long startedAtNanos = System.nanoTime();
-            KafkaDeliveryFailureAction.Outcome outcome = action.applyToUndecodable(record);
+            KafkaDeliveryFailureAction.Outcome outcome = action.apply(record);
             Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAtNanos);
 
             assertThat(outcome).isEqualTo(KafkaDeliveryFailureAction.Outcome.REDELIVER);

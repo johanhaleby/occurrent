@@ -20,13 +20,14 @@ import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ShutdownSignalException;
-import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 
 import static java.util.Objects.requireNonNull;
@@ -40,10 +41,13 @@ import static java.util.Objects.requireNonNull;
  * Neither branch ever acknowledges the original directly on the failure path; that is the one thing this class
  * exists to make impossible to get wrong twice.
  * <p>
- * {@link #applyToUndecodable(long, BasicProperties, byte[])} covers a message {@link RabbitMqCloudEventMapper#toCloudEvent(BasicProperties, byte[])}
- * could not turn into a {@link CloudEvent} at all. It shares the exact same {@link RabbitMqConfirmPublisher} as
- * {@link #apply(long, CloudEvent)}, publishing the delivery's own raw {@code properties} and {@code body} to the
- * parking destination unchanged rather than a rebuilt {@link CloudEvent}, since none exists to rebuild.
+ * {@link #apply(long, BasicProperties, byte[])} always parks or redelivers the delivery's own raw {@code properties}
+ * and {@code body}, unchanged apart from {@link RabbitMqDestination#headers() parkingDestination}'s own configured
+ * headers layered on top, whether or not the bridge managed to rebuild a CloudEvent from them. A parked message
+ * therefore keeps every AMQP field outside the CloudEvents mapping, a caller-supplied {@code correlationId},
+ * {@code appId} or {@code replyTo} among them, rather than only the attributes
+ * {@link RabbitMqCloudEventMapper#toBasicProperties(io.cloudevents.CloudEvent, java.util.Map)} would have rebuilt
+ * from a decoded event.
  * <p>
  * A failed parking publish (the parking exchange unavailable, its own confirm timing out, a {@code basic.return}
  * because nothing is bound to the parking routing key, ...) negatively acknowledges the original with requeue
@@ -112,34 +116,13 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
     }
 
     /**
-     * Applies this failure action to the delivery {@code deliveryTag} identifies, rebuilt as {@code cloudEvent}.
-     * Never acknowledges {@code deliveryTag} directly; {@link DeliveryFailurePolicy#PARK} acknowledges it only once
-     * the parking publish has been confirmed.
+     * Applies this failure action to the delivery {@code deliveryTag} identifies, republishing its own raw
+     * {@code properties} and {@code body}, plus the parking destination's own configured headers, when
+     * {@link DeliveryFailurePolicy#PARK} is configured, whether or not the bridge managed to rebuild a CloudEvent
+     * from them. {@link DeliveryFailurePolicy#PARK} acknowledges {@code deliveryTag} only once that publish has
+     * been confirmed and not returned as unroutable. Never acknowledges {@code deliveryTag} directly.
      */
-    public void apply(long deliveryTag, CloudEvent cloudEvent) {
-        requireNonNull(cloudEvent, "cloudEvent cannot be null");
-        if (policy == DeliveryFailurePolicy.REDELIVER) {
-            redeliver(deliveryTag);
-            return;
-        }
-        RabbitMqDestination destination = requireNonNull(parkingDestination);
-        // Body computed once and passed into toBasicProperties(..., byte[]) rather than calling the two-argument
-        // overload, so cloudEvent's lazily-serializing data is not serialized a second time on this park.
-        byte[] body = RabbitMqCloudEventMapper.toBody(cloudEvent);
-        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers(), body);
-        park(deliveryTag, properties, body);
-    }
-
-    /**
-     * Applies this failure action to the delivery {@code deliveryTag} identifies, for a message
-     * {@link RabbitMqCloudEventMapper#toCloudEvent(BasicProperties, byte[])} could not rebuild as a {@link CloudEvent}
-     * at all. {@link DeliveryFailurePolicy#REDELIVER} behaves exactly as {@link #apply(long, CloudEvent)}.
-     * {@link DeliveryFailurePolicy#PARK} publishes {@code properties} and {@code body} to the parking destination
-     * unchanged, through the same {@link RabbitMqConfirmPublisher} {@link #apply(long, CloudEvent)} uses, and
-     * acknowledges the original only once that publish is confirmed and not returned as unroutable. Never
-     * acknowledges {@code deliveryTag} directly.
-     */
-    public void applyToUndecodable(long deliveryTag, BasicProperties properties, byte[] body) {
+    public void apply(long deliveryTag, BasicProperties properties, byte[] body) {
         requireNonNull(properties, "properties cannot be null");
         requireNonNull(body, "body cannot be null");
         if (policy == DeliveryFailurePolicy.REDELIVER) {
@@ -151,14 +134,29 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
 
     private void park(long deliveryTag, BasicProperties properties, byte[] body) {
         RabbitMqDestination destination = requireNonNull(parkingDestination);
+        BasicProperties parkedProperties = withDestinationHeaders(properties, destination);
         try {
-            requireNonNull(parkingPublisher).publish(destination.exchange(), destination.routingKey(), properties, body);
+            requireNonNull(parkingPublisher).publish(destination.exchange(), destination.routingKey(), parkedProperties, body);
         } catch (RuntimeException e) {
             log.warn("Failed to park a delivery nothing consumed. Redelivering it instead of losing it.", e);
             redeliver(deliveryTag);
             return;
         }
         ack(deliveryTag);
+    }
+
+    // A copy of properties with destination's own configured headers added on top of the original ones, so a
+    // parking marker (a tenant or reason header, say) reaches the parked message alongside the delivery's own
+    // AMQP fields, all of which properties.builder() already carries over unchanged. destination's headers win
+    // on a key collision, since RabbitMqDestination's own constructor already reserves the cloudEvents_ prefix
+    // against ever colliding with the mapping, so the only collision possible here is a deliberate one.
+    private static BasicProperties withDestinationHeaders(BasicProperties properties, RabbitMqDestination destination) {
+        if (destination.headers().isEmpty()) {
+            return properties;
+        }
+        Map<String, Object> headers = properties.getHeaders() == null ? new HashMap<>() : new HashMap<>(properties.getHeaders());
+        headers.putAll(destination.headers());
+        return properties.builder().headers(headers).build();
     }
 
     /**

@@ -59,13 +59,14 @@ final class KafkaOrderingPrerequisites {
      * <b>A retried send must never be appended after a later one that already succeeded.</b> Kafka's own
      * documentation for {@link ProducerConfig#ENABLE_IDEMPOTENCE_CONFIG} states the interplay directly, idempotence
      * is enabled by default, requires {@code retries} greater than zero, {@code acks=all}, and
-     * {@code max.in.flight.requests.per.connection} no greater than five, and a conflicting setting disables
-     * idempotence silently when idempotence was never explicitly enabled, or is refused with the producer's own
-     * {@code ConfigException} at construction when it was. That refusal is why this checks only whether idempotence
-     * ends up effectively enabled, not explicitly {@code false} and {@code retries} not explicitly {@code 0},
-     * rather than also refusing an explicit {@code enable.idempotence=true} paired with a conflicting setting.
-     * {@link KafkaCloudEventSink.Builder#build()} never returns for that combination, Kafka's own construction
-     * already refuses it. Effectively disabled idempotence still keeps ordering when
+     * {@code max.in.flight.requests.per.connection} no greater than five, and a conflicting setting (an explicit
+     * {@code enable.idempotence=false}, an explicit {@code retries=0}, or {@code max.in.flight.requests.per.connection}
+     * explicitly set above five) disables idempotence silently when idempotence was never explicitly set to
+     * {@code true}, or is refused with the producer's own {@code ConfigException} at construction when it was.
+     * That refusal is why this checks only whether idempotence ends up effectively enabled, not explicitly
+     * {@code true}, rather than also refusing an explicit {@code enable.idempotence=true} paired with a conflicting
+     * setting. {@link KafkaCloudEventSink.Builder#build()} never returns for that combination, Kafka's own
+     * construction already refuses it. Effectively disabled idempotence still keeps ordering when
      * {@code max.in.flight.requests.per.connection} is pinned to {@code 1}, since only one request is ever
      * outstanding on this producer's one connection for a retry to overtake. That pin says nothing about two
      * different threads calling {@code publish} on this sink at once, each is its own caller with its own record
@@ -90,13 +91,20 @@ final class KafkaOrderingPrerequisites {
         }
 
         Object configuredIdempotence = config.get(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG);
+        boolean idempotenceExplicitlyTrue = configuredIdempotence != null && Boolean.parseBoolean(String.valueOf(configuredIdempotence));
         boolean idempotenceExplicitlyFalse = configuredIdempotence != null && !Boolean.parseBoolean(String.valueOf(configuredIdempotence));
         Object configuredRetries = config.get(ProducerConfig.RETRIES_CONFIG);
         boolean retriesExplicitlyZero = configuredRetries != null && "0".equals(String.valueOf(configuredRetries).trim());
-        boolean idempotenceEffectivelyEnabled = !idempotenceExplicitlyFalse && !retriesExplicitlyZero;
 
         Object configuredMaxInFlight = config.get(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION);
         boolean maxInFlightPinnedToOne = configuredMaxInFlight != null && "1".equals(String.valueOf(configuredMaxInFlight).trim());
+        // Only when idempotence was not explicitly set to true. That combination is refused outright by
+        // KafkaProducer's own construction with a ConfigException, never silently, so it never reaches this
+        // warning at all, the same reason idempotenceExplicitlyFalse/retriesExplicitlyZero below only matter when
+        // idempotence is not explicitly true either.
+        boolean maxInFlightExplicitlyOverFive = !idempotenceExplicitlyTrue && isGreaterThanFive(configuredMaxInFlight);
+
+        boolean idempotenceEffectivelyEnabled = !idempotenceExplicitlyFalse && !retriesExplicitlyZero && !maxInFlightExplicitlyOverFive;
 
         if (!idempotenceEffectivelyEnabled && !maxInFlightPinnedToOne) {
             if (idempotenceExplicitlyFalse) {
@@ -105,8 +113,24 @@ final class KafkaOrderingPrerequisites {
             if (retriesExplicitlyZero) {
                 causes.add(ProducerConfig.RETRIES_CONFIG + "=0");
             }
+            if (maxInFlightExplicitlyOverFive) {
+                causes.add(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION + "=" + configuredMaxInFlight);
+            }
         }
 
         return causes.isEmpty() ? Optional.empty() : Optional.of(String.join(", ", causes));
+    }
+
+    // A malformed value (not parseable as a number) is left for Kafka's own producer config validation to refuse,
+    // not this predicate's job, so it is read as "not greater than five" here rather than thrown from this check.
+    private static boolean isGreaterThanFive(Object value) {
+        if (value == null) {
+            return false;
+        }
+        try {
+            return Long.parseLong(String.valueOf(value).trim()) > 5;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 }

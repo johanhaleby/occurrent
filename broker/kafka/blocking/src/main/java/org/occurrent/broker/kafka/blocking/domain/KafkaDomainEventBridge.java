@@ -45,6 +45,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -68,12 +69,15 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * {@link org.occurrent.filtermatching.DataFieldReader} for, a configuration error that cannot change without a new
  * registration, and the same exception instance is thrown again on every later call. On catching it, this bridge
  * logs the failure, seeks the consumer back to the triggering record exactly as a {@link DeliveryFailurePolicy#REDELIVER}
- * failure would, commits whatever else resolved in the same poll (other partitions, and earlier records in the same
- * partition), and then <strong>sets this bridge to stop for good</strong>, rather than committing past the
- * triggering record or looping the poll again. The poll loop thread then closes its own {@code Consumer} as it
- * exits, the same single exit path {@link #close()} itself uses, so the permanent stop survives whether or not that
- * commit above succeeds on the first attempt. See the thread-ownership paragraph below. Stopping here, immediately,
- * is deliberate. A {@code Consumer} that keeps its assignment but stops polling is evicted from the group only after
+ * failure would, and then <strong>sets this bridge to stop for good before committing</strong> whatever else
+ * resolved in the same poll (other partitions, and earlier records in the same partition), rather than committing
+ * past the triggering record or looping the poll again. Setting the stop first, not after, means that commit is a
+ * single best-effort attempt rather than a retry this bridge could get stuck behind, since it already reads this
+ * bridge as stopped and never retries a failure past its first attempt. The poll loop thread then closes its own
+ * {@code Consumer} as it exits, the same single exit path {@link #close()} itself uses, so the permanent stop
+ * survives whether or not that commit succeeds. See the thread-ownership paragraph below. Stopping here,
+ * immediately, is deliberate, and does not wait on Kafka to confirm the commit first. A {@code Consumer} that keeps
+ * its assignment but stops polling is evicted from the group only after
  * {@code max.poll.interval.ms} (five minutes by default), which would leave this permanent, intentional stop
  * indistinguishable from a hung consumer for that whole window, log noise and a pointless rebalance included.
  * Closing sends Kafka's own clean group-departure request instead, so the next consumer in this group picks up
@@ -137,6 +141,18 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
     private final RetryStrategy commitRetryStrategy;
     private final KafkaDeliveryFailureAction failureAction;
     private final Thread loopThread;
+
+    // Touched only by the loop thread. System.nanoTime()-based, like closeDeadlineNanos below, so a wall-clock
+    // correction can never leave a paused partition paused far past pollTimeout. See KafkaCloudEventBridge's own
+    // field of the same name and reconcilePauseResume(boolean)/processBatch(...) for the per-partition
+    // poison-record throttle this backs.
+    private final Map<TopicPartition, Long> throttledUntilNanos = new HashMap<>();
+
+    // Set by close() to System.nanoTime() + closeTimeout, Long.MAX_VALUE until then. System.nanoTime() rather than
+    // currentTimeMillis(), so a wall-clock correction after close() can never let remainingCloseBudget() outlive
+    // what close() actually promised. See KafkaCloudEventBridge's own field of the same name and
+    // commitWithRetry(...) for what this bounds.
+    private volatile long closeDeadlineNanos = Long.MAX_VALUE;
 
     private volatile boolean running = true;
     private volatile boolean permanentlyStopped = false;
@@ -247,10 +263,44 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         if (assignment.isEmpty()) {
             return;
         }
+        resumeExpiredThrottledPartitions(assignment);
         if (shouldConsume) {
-            consumer.resume(assignment);
+            Set<TopicPartition> toResume = new HashSet<>(assignment);
+            toResume.removeAll(throttledUntilNanos.keySet());
+            consumer.resume(toResume);
+            // A partition still throttled stays paused even though the coarse gate above says to resume the rest
+            // of the assignment. Re-paused explicitly rather than relying on it having stayed paused client-side,
+            // since a rebalance can have reassigned it since its last pause() call.
+            Set<TopicPartition> stillThrottled = new HashSet<>(throttledUntilNanos.keySet());
+            stillThrottled.retainAll(assignment);
+            if (!stillThrottled.isEmpty()) {
+                consumer.pause(stillThrottled);
+            }
         } else {
             consumer.pause(assignment);
+        }
+    }
+
+    // Resumes a throttled partition once its deadline has passed, so a poison record's backoff window is bounded
+    // to roughly pollTimeout rather than staying paused forever. Partitions no longer assigned (a rebalance moved
+    // them elsewhere) are dropped from the map without calling resume() on them, since this Consumer no longer
+    // owns them to resume.
+    private void resumeExpiredThrottledPartitions(Set<TopicPartition> assignment) {
+        if (throttledUntilNanos.isEmpty()) {
+            return;
+        }
+        long now = System.nanoTime();
+        Set<TopicPartition> expired = new HashSet<>();
+        throttledUntilNanos.entrySet().removeIf(entry -> {
+            boolean isExpired = entry.getValue() <= now;
+            if (isExpired) {
+                expired.add(entry.getKey());
+            }
+            return isExpired;
+        });
+        expired.retainAll(assignment);
+        if (!expired.isEmpty()) {
+            consumer.resume(expired);
         }
     }
 
@@ -271,14 +321,15 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
 
     // Returns false when a permanent stop occurred this batch. running is now false and the loop must exit rather
     // than poll again, closing the Consumer from its own finally as it does. Whatever resolved before the
-    // permanent-stop trigger, in this partition or any other, is still committed first, exactly as an ordinary
-    // REDELIVER failure would leave it. That commit failing no longer loses the permanent stop, it is applied
-    // below regardless, since the triggering record's own seek already happened either way and nothing about
-    // stopping for good depends on whether an unrelated, already-resolved record in the same batch got committed.
+    // permanent-stop trigger, in this partition or any other, is still committed, exactly as an ordinary REDELIVER
+    // failure would leave it, but only as a single best-effort attempt, since running is already false by the time
+    // that commit runs. A failure there does not undo the permanent stop, it is set before the commit is even
+    // attempted, since the triggering record's own seek already happened either way and nothing about stopping for
+    // good depends on whether an unrelated, already-resolved record in the same batch got committed.
     private boolean processBatch(ConsumerRecords<String, byte[]> records) {
         Map<TopicPartition, OffsetAndMetadata> toCommit = new HashMap<>();
         boolean permanentStop = false;
-        boolean seekBackHappened = false;
+        Set<TopicPartition> seekedBackPartitions = new HashSet<>();
         try {
             for (TopicPartition partition : records.partitions()) {
                 for (ConsumerRecord<String, byte[]> record : records.records(partition)) {
@@ -289,7 +340,7 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                         break;
                     } else if (result == HandleResult.REDELIVER) {
                         consumer.seek(partition, record.offset());
-                        seekBackHappened = true;
+                        seekedBackPartitions.add(partition);
                         break;
                     }
                 }
@@ -304,36 +355,53 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
             seekToEarliestFetched(records);
             throw e;
         }
+        if (permanentStop) {
+            // Set before the commit below, not after, so commitWithRetry's own shutdown predicate already reads
+            // running as false on this call. That bounds a retriable failure here to the single best-effort
+            // attempt the class javadoc promises, instead of retrying uncapped against a coordinator outage while
+            // running was still true and leaving this bridge's promised immediate departure waiting on Kafka.
+            running = false;
+            permanentlyStopped = true;
+        }
         if (!toCommit.isEmpty()) {
             try {
                 commitWithRetry(toCommit);
             } catch (RuntimeException e) {
-                // commitRetryStrategy exhausted, or the failure was never retriable to begin with. Unlike a throw
-                // from the loop above, nothing here needs a rewind. Every partition's position is already exactly
-                // where it should be, past the last record this batch actually handled, or at the seek-and-break
-                // point for one that failed, so the records a later successful commit would cover are precisely
-                // the ones this batch already delivered. Rewinding here would instead redeliver the whole batch
-                // again on every poll for as long as the commit keeps failing, forever under a persistent
-                // failure, for no safety this bridge does not already have. Logged and left for the loop to try
-                // again on its own next commit. A crash before that later commit succeeds is plain at-least-once
-                // redelivery, the same as any other crash between a poll's deliveries and its commit.
-                log.warn("Failed to commit for group \"{}\" after this batch resolved. Retrying on a later commit.",
-                        consumer.groupMetadata().groupId(), e);
+                if (permanentStop) {
+                    // The permanent stop below proceeds regardless. Whatever this batch staged but never committed
+                    // is redelivered once another consumer in this group picks the partition back up, the same
+                    // at-least-once redelivery a crash between a poll's deliveries and its commit already costs.
+                    log.warn("Failed to commit for group \"{}\" while stopping this bridge for good. Proceeding " +
+                            "with the permanent stop regardless.", consumer.groupMetadata().groupId(), e);
+                } else {
+                    // commitRetryStrategy exhausted, or the failure was never retriable to begin with. Unlike a
+                    // throw from the loop above, nothing here needs a rewind. Every partition's position is already
+                    // exactly where it should be, past the last record this batch actually handled, or at the
+                    // seek-and-break point for one that failed, so the records a later successful commit would
+                    // cover are precisely the ones this batch already delivered. Rewinding here would instead
+                    // redeliver the whole batch again on every poll for as long as the commit keeps failing,
+                    // forever under a persistent failure, for no safety this bridge does not already have. Logged
+                    // and left for the loop to try again on its own next commit. A crash before that later commit
+                    // succeeds is plain at-least-once redelivery, the same as any other crash between a poll's
+                    // deliveries and its commit.
+                    log.warn("Failed to commit for group \"{}\" after this batch resolved. Retrying on a later commit.",
+                            consumer.groupMetadata().groupId(), e);
+                }
             }
         }
         if (permanentStop) {
-            running = false;
-            permanentlyStopped = true;
             return false;
         }
-        if (seekBackHappened && toCommit.isEmpty()) {
-            // A poison record. Every partition that fetched anything ended in a seek back to the exact offset it
-            // started this poll at, so the next poll() would refetch and redeliver the identical record
-            // immediately. Backing off for pollTimeout keeps that at this loop's normal cadence instead of
-            // spinning it at the JVM's own maximum rate against a record that can never resolve. Skipped when
-            // this batch is stopping for good instead, since nothing gains from delaying an exit already
-            // underway.
-            sleepUninterruptibly(pollTimeout);
+        if (!seekedBackPartitions.isEmpty()) {
+            // Paused now rather than left for the next reconcilePauseResume(...) call, so the very next poll()
+            // already excludes these partitions instead of refetching and redelivering the identical record once
+            // more before the throttle takes effect. See KafkaCloudEventBridge's own processBatch(...) for why
+            // this is per partition rather than a single sleep for the whole batch.
+            long throttledUntil = System.nanoTime() + pollTimeout.toNanos();
+            for (TopicPartition partition : seekedBackPartitions) {
+                throttledUntilNanos.put(partition, throttledUntil);
+            }
+            consumer.pause(seekedBackPartitions);
         }
         return true;
     }
@@ -350,9 +418,19 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
             // interrupt. Every record in this batch already resolved, so losing this commit to a signal that was
             // never actually about the commit itself would replay the whole batch on the next start for no
             // reason. Kafka documents wakeup() as arming a single pending interrupt, consumed by the first
-            // blocking call it raises in, so retrying the same commit once more proceeds normally.
-            consumer.commitSync(toCommit);
+            // blocking call it raises in, so retrying the same commit once more proceeds normally. Bounded to
+            // remainingCloseBudget() rather than a bare commitSync(Map), which falls back to the client's own
+            // default.api.timeout.ms against an unreachable broker, past whatever close() actually promised to
+            // wait for this loop thread to finish.
+            consumer.commitSync(toCommit, remainingCloseBudget());
         }
+    }
+
+    // The budget close() gave this loop thread to finish, floored at zero once it has already elapsed, so the
+    // WakeupException retry commit above can never block past what close() promised its own caller to wait.
+    private Duration remainingCloseBudget() {
+        long remainingNanos = closeDeadlineNanos - System.nanoTime();
+        return Duration.ofNanos(Math.max(remainingNanos, 0));
     }
 
     // Sleeps for duration, restoring the interrupt flag rather than propagating it, since the loop thread has
@@ -373,7 +451,7 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         } catch (RuntimeException e) {
             log.warn("Failed to rebuild a CloudEvent from a record on topic \"{}\" partition {} offset {}.",
                     record.topic(), record.partition(), record.offset(), e);
-            return toHandleResult(record, toCommit, failureAction.applyToUndecodable(record));
+            return toHandleResult(record, toCommit, failureAction.apply(record));
         }
 
         RoutingOutcome outcome;
@@ -391,13 +469,13 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
             // Either the projection handler itself threw, or the narrow registeredProjection() race the class
             // javadoc describes (an IllegalStateException that is not an UnreadableLiveFilterException). Both are
             // ordinary failure-policy cases, unlike the permanent one caught above.
-            return toHandleResult(record, toCommit, failureAction.apply(record, cloudEvent));
+            return toHandleResult(record, toCommit, failureAction.apply(record));
         }
         if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
             stage(record, toCommit);
             return HandleResult.RESOLVED;
         }
-        return toHandleResult(record, toCommit, failureAction.apply(record, cloudEvent));
+        return toHandleResult(record, toCommit, failureAction.apply(record));
     }
 
     private static HandleResult toHandleResult(ConsumerRecord<String, byte[]> record, Map<TopicPartition, OffsetAndMetadata> toCommit,
@@ -429,6 +507,7 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
     @Override
     public void close() {
         running = false;
+        closeDeadlineNanos = System.nanoTime() + closeTimeout.toNanos();
         try {
             consumer.wakeup();
         } catch (RuntimeException ignored) {

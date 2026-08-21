@@ -224,6 +224,16 @@ public abstract class KafkaTestSupport {
      * where which partition an event lands on has to be controlled precisely.
      */
     protected void publishCloudEvent(String recordTopic, @Nullable Integer partition, @Nullable String key, CloudEvent cloudEvent) {
+        publishCloudEvent(recordTopic, partition, key, cloudEvent, Map.of());
+    }
+
+    /**
+     * As {@link #publishCloudEvent(String, Integer, String, CloudEvent)}, with {@code extraHeaders} added on top of
+     * whatever headers {@link KafkaMessageFactory} writes for {@code cloudEvent} itself, for a test proving a
+     * header outside the CloudEvents mapping survives wherever the record it rode in on ends up.
+     */
+    protected void publishCloudEvent(String recordTopic, @Nullable Integer partition, @Nullable String key, CloudEvent cloudEvent,
+                                      Map<String, String> extraHeaders) {
         Map<String, Object> producerConfig = Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
                 ProducerConfig.ACKS_CONFIG, "all");
@@ -231,6 +241,7 @@ public abstract class KafkaTestSupport {
             ProducerRecord<String, byte[]> record = KafkaMessageFactory
                     .<String>createWriter(recordTopic, partition, null, key)
                     .writeBinary(cloudEvent);
+            extraHeaders.forEach((headerKey, value) -> record.headers().add(headerKey, value.getBytes(StandardCharsets.UTF_8)));
             producer.send(record).get(10, TimeUnit.SECONDS);
         } catch (Exception e) {
             throw new RuntimeException("Failed to publish a CloudEvent to \"" + recordTopic + "\" for a test", e);

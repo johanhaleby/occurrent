@@ -134,6 +134,44 @@ class KafkaOrderingPrerequisitesTest {
             assertThat(result).isPresent();
             assertThat(result.get()).contains(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG + "=false");
         }
+
+        /**
+         * {@code max.in.flight.requests.per.connection} above five silently disables idempotence too, the same
+         * interplay {@code ENABLE_IDEMPOTENCE_CONFIG}'s own Kafka documentation states, so a caller who only
+         * widened this setting without ever mentioning idempotence at all still loses the retry-ordering leg.
+         */
+        @Test
+        void max_in_flight_requests_above_five_breaks_it_even_though_idempotence_is_never_mentioned() {
+            Optional<String> result = KafkaOrderingPrerequisites.brokenOrderingGuarantee(Map.of(
+                    ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, "6"));
+
+            assertThat(result).isPresent();
+            assertThat(result.get()).contains(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION + "=6");
+        }
+
+        @Test
+        void max_in_flight_requests_at_exactly_five_keeps_it() {
+            Optional<String> result = KafkaOrderingPrerequisites.brokenOrderingGuarantee(Map.of(
+                    ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, "5"));
+
+            assertThat(result).isEmpty();
+        }
+
+        /**
+         * {@code enable.idempotence=true} paired with a {@code max.in.flight.requests.per.connection} above five is
+         * refused outright by {@link org.apache.kafka.clients.producer.KafkaProducer}'s own construction with a
+         * {@code ConfigException}, so a real build never reaches this predicate with that combination. This proves
+         * the predicate itself does not also flag it, mirroring the same choice it already makes for
+         * {@code enable.idempotence=true} paired with {@code retries=0}.
+         */
+        @Test
+        void max_in_flight_requests_above_five_is_not_flagged_when_idempotence_is_explicitly_true() {
+            Optional<String> result = KafkaOrderingPrerequisites.brokenOrderingGuarantee(Map.of(
+                    ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true",
+                    ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, "6"));
+
+            assertThat(result).isEmpty();
+        }
     }
 
     @Test

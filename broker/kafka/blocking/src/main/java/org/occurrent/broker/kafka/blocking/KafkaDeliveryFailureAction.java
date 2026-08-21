@@ -17,7 +17,6 @@
 package org.occurrent.broker.kafka.blocking;
 
 import io.cloudevents.CloudEvent;
-import io.cloudevents.kafka.KafkaMessageFactory;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
@@ -176,37 +175,24 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
     }
 
     /**
-     * Applies this failure action to {@code record}, rebuilt as {@code cloudEvent}. Never itself commits or seeks.
-     * Only reports which the caller should do.
+     * Applies this failure action to {@code record}. {@link DeliveryFailurePolicy#PARK} republishes {@code record}'s
+     * own headers and value unchanged, whether or not the bridge managed to rebuild a {@link CloudEvent} from them,
+     * rather than a value rebuilt from a decoded {@link CloudEvent} that would carry only the attributes
+     * {@link KafkaCloudEventMapper} maps and lose every other original Kafka header or key. {@code destination}'s
+     * own configured headers, if any, are added on top rather than replacing the record's own. The key follows ADR
+     * 133's rule that publishing uses every configured destination component, {@code destination.key()} when one
+     * is configured, {@code record}'s own key otherwise, the same fallback {@code RabbitMqDeliveryFailureAction}
+     * has no equivalent of since {@code RabbitMqDestination} carries no per-message key of its own to begin with.
+     * Never itself commits or seeks. Only reports which the caller should do.
      */
-    public Outcome apply(ConsumerRecord<String, byte[]> record, CloudEvent cloudEvent) {
-        requireNonNull(cloudEvent, "cloudEvent cannot be null");
-        if (policy == DeliveryFailurePolicy.REDELIVER) {
-            return Outcome.REDELIVER;
-        }
-        KafkaDestination destination = requireNonNull(parkingDestination);
-        ProducerRecord<String, byte[]> parkRecord = KafkaMessageFactory
-                .<String>createWriter(destination.topic(), null, null, destination.key())
-                .writeBinary(cloudEvent);
-        for (Map.Entry<String, String> header : destination.headers().entrySet()) {
-            parkRecord.headers().add(header.getKey(), header.getValue().getBytes(StandardCharsets.UTF_8));
-        }
-        return park(parkRecord);
-    }
-
-    /**
-     * Applies this failure action to {@code record}, for one {@link KafkaCloudEventMapper#toCloudEvent(ConsumerRecord)}
-     * could not turn into a {@link CloudEvent} at all. {@link DeliveryFailurePolicy#PARK} republishes
-     * {@code record}'s own key, headers and value unchanged rather than a rebuilt {@link CloudEvent}, since none
-     * exists to rebuild.
-     */
-    public Outcome applyToUndecodable(ConsumerRecord<String, byte[]> record) {
+    public Outcome apply(ConsumerRecord<String, byte[]> record) {
         requireNonNull(record, "record cannot be null");
         if (policy == DeliveryFailurePolicy.REDELIVER) {
             return Outcome.REDELIVER;
         }
         KafkaDestination destination = requireNonNull(parkingDestination);
-        ProducerRecord<String, byte[]> parkRecord = new ProducerRecord<>(destination.topic(), null, record.key(), record.value());
+        String key = destination.key() != null ? destination.key() : record.key();
+        ProducerRecord<String, byte[]> parkRecord = new ProducerRecord<>(destination.topic(), null, key, record.value());
         for (Header header : record.headers()) {
             parkRecord.headers().add(header);
         }
