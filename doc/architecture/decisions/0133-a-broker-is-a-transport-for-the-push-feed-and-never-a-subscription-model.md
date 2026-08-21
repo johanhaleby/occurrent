@@ -98,7 +98,9 @@ returns normally in all three.
 
 **The acknowledgement decision comes from a `PushObserver`, not from a check taken before or after the push.**
 `PushSubscriptionModel` reports through `routeReportingMatch`, which evaluates the sole registration's eligibility
-once and tells the observer that same answer before dispatching.
+once and tells the observer what it decided. (The 2026-08-21 amendment below moves that report to after the matched
+action runs, replacing the mechanism this paragraph originally described. The decision itself, one evaluation
+shared between the match and the report, is unchanged.)
 
 **The bridge cannot attach that observer, so the wiring order is part of this decision.** The observer is a
 constructor argument on `PushSubscriptionModel` and there is no method to set one afterwards, while the bridge is
@@ -118,10 +120,12 @@ A lifecycle check afterwards cannot separate them. A pause reports `false`, a co
 `isRunning(subscriptionId)` true, and the bridge acknowledges a message nothing consumed. That is the same two-step
 race one paragraph up, just moved after the push, so it has to be answered in the routing evaluation itself.
 
-So the push module gains a three-valued outcome reported from that one evaluation, `DELIVERED`, `FILTERED` and
-`NOT_DELIVERABLE`, and the bridge acknowledges on `DELIVERED` once `accept(...)` returns normally, and on `FILTERED`,
-where redelivering would loop forever because the event is simply not this consumer's. It does not acknowledge on
-`NOT_DELIVERABLE` and it does not acknowledge when `accept(...)` throws.
+So the push module gains an outcome reported from that one evaluation, `DELIVERED`, `FILTERED` and `NOT_DELIVERABLE`
+at the time this decision was written (a fourth value, `DEFERRED`, was added by the 2026-08-21 amendment below), and
+the bridge acknowledges on `DELIVERED`, and on `FILTERED`, where redelivering would loop forever because the event
+is simply not this consumer's. It does not acknowledge on `NOT_DELIVERABLE`, on `DEFERRED`, or when the matched
+action throws. (Originally worded around `accept(...)` returning normally. The amendment below changes which method
+a bridge calls and when the report happens, not this acknowledgement rule.)
 
 This refines a shape that has not shipped rather than breaking a released one, since `PushObserver` is still in the
 unreleased section of `changelog.md`, so its existing entry absorbs the outcome contract instead of a migration note
@@ -141,8 +145,11 @@ The bridge knows which id to ask about because ADR 90 gives it exactly one.
 
 What remains is that a stopped model drops live events, which ADR 85 decided and ADR 104 deliberately kept, on the
 grounds that a stop is an operator act with a `start()` on the other side. A bridge stops consuming when its
-subscription stops, so it does not feed a stopped model in the first place. This ADR inherits that decision rather
-than accepting a new loss of its own.
+subscription stops, checked on a coarse poll rather than before every message, so it mostly does not feed a stopped
+model, not never: a `stop()` or `pauseSubscription(...)` called from inside a handler can still hand a bridge a
+`NOT_DELIVERABLE` for a message already in flight before the next poll notices. The 2026-08-21 amendment's
+follow-up note below covers what a bridge does with that message. This ADR inherits ADR 85 and ADR 104's decision
+rather than accepting a new loss of its own.
 
 The bridge feeds the live `PushSubscriptionModel`. When a subscription needs history first, `CatchupThenPushSubscriptionModel`
 composes in front of it and takes that model as a constructor argument, so it is not itself the push target and a
@@ -363,12 +370,14 @@ filter nor a live match, and `ProjectionAnnotationRegistrar` derives the filter 
 break that annotation path, so this ADR does not do it.
 
 So [#848](https://github.com/johanhaleby/occurrent/issues/848) is a **prerequisite** for the domain bridge rather than
-an improvement to it, on the same footing as the three-valued outcome decision 1 needs.
+an improvement to it, on the same footing as the outcome decision 1 needs.
 
 **What that gives the feed is the same shape `routeReportingMatch` already has one level up.** The bridge rebuilds a
 CloudEvent from the message and hands it over, and the feed matches, decodes with its own converter, delivers, and
-reports which of the three outcomes happened. The bridge acknowledges on that outcome exactly as the CloudEvent bridge
-does, and the two levels become one mechanism described twice rather than two designs.
+reports which outcome happened. The bridge acknowledges on that outcome exactly as the CloudEvent bridge
+does, and the two levels become one mechanism described twice rather than two designs. (`DomainEventFeed.acceptCloudEvent`
+never actually returns `NOT_DELIVERABLE` in what shipped: only `FILTERED`, `DELIVERED` and `DEFERRED`, or a thrown
+exception for an unregistered feed or a permanently failed catch-up. See changelog.md's own correction and #893.)
 
 Handing over a CloudEvent rather than a domain event is what makes the match answerable at all, since a decoded domain
 event plus an `EventMetadata` of extensions cannot answer a condition on subject, source, time or raw data. Decision 8
@@ -793,20 +802,23 @@ fresh registration to a still-replaying `CatchupThenPushSubscriptionModel` befor
 `DELIVERED` and buffered rather than applied, the exact loss this amendment set out to prevent. A fresh-context
 adversarial verify falsified it with a deterministic test reproducing that interleaving.
 
-This amendment replaces the mechanism, not the constraint. Decision 1 stands exactly as written.
-`CatchupThenPushSubscriptionModel` is not itself a push target, and every constructor and `subscribe` are
+This amendment replaces the mechanism, not the constraint. Decision 1's conclusion stands: one evaluation, shared
+between the match and the report, is still what a caller relies on to acknowledge safely, and
+`CatchupThenPushSubscriptionModel` is still not itself a push target, with every constructor and `subscribe`
 unchanged. `PushObserver`/`RoutingOutcome` remain one exception decision 1 already names, and the readiness
 accessor and bean publication the amendment above added remain the other, both still additive rather than
-touching the class's existing contract. What changes is how `routeReportingMatch` decides what to report.
+touching the class's existing contract. Decision 1's own prose above, describing a three-valued outcome reported
+before the matched action ran, describes the mechanism this amendment replaces. Read it as history, not as what
+ships. What changes is how `routeReportingMatch` decides what to report.
 
-Today `RegisteringSubscribable.routeReportingMatch` reports `RoutingOutcome.DELIVERED` before the matched
-registration's action runs at all, then dispatches. For a direct handler that is harmless. The handler either runs
-or its exception propagates, and the outcome already reported does not depend on which. For a registration backed
-by a catch-up-then-live buffer it is not harmless, because "the action ran" and "the action's target actually has
+`RegisteringSubscribable.routeReportingMatch` used to report `RoutingOutcome.DELIVERED` before the matched
+registration's action ran at all, then dispatch. For a direct handler that was harmless. The handler either ran
+or its exception propagated, and the outcome already reported did not depend on which. For a registration backed
+by a catch-up-then-live buffer it was not harmless, because "the action ran" and "the action's target actually has
 the event" are different facts, and only the second one is what an acknowledging caller needs.
 
-`routeReportingMatch` now reports after the action runs, from what the action itself returns, under the one lock
-that already decides the match. The registered action, a new `RegisteringSubscribable.RoutingAction`, takes a
+`routeReportingMatch` now reports after the action runs, from what the action itself returns, from the one
+evaluation that already decides the match. The registered action, a new `RegisteringSubscribable.RoutingAction`, takes a
 `bufferIfNotLive` flag and returns whether the event genuinely landed. `RoutingOutcome` gains a fourth value,
 `DEFERRED`. It marks an event that reached a registration whose target cannot accept it yet, for a reason expected
 to resolve on its own, and it is safe to redeliver arbitrarily many times.
@@ -834,14 +846,13 @@ refuse-and-redeliver round trip happens. The RabbitMQ and Kafka Spring Boot star
 automatically, deferring to whichever `CatchupThenPushSubscriptionModel` bean, if any, owns a bridge's subscription
 id, so a zero-config Spring application gets the quiet path during a replay without naming `readinessSource` itself.
 
-This closes the gap for the blocking stack only, CloudEvent-level and domain-level alike. The reactor stack carries
-the identical shape of defect in its own `RegisteringSubscribable.routeReportingMatch` and
-`DomainEventFeed.acceptCloudEvent`, worse in one respect. The reactor `DomainEventFeed` never received even the
-readiness-gate half-fix this amendment replaces, so it reports `DELIVERED` for a buffered-not-applied event
-unconditionally today. No reactor broker bridge exists yet to need the `DeliveryFailurePolicy` bypass half of this
-fix, but the correctness half, `ReactiveHandover.acceptIfLive` and the matching `routeReportingMatch`/
-`DomainEventFeed` changes, does not depend on one existing. It is a follow-up change in this same epic, not done
-here.
+At the time this amendment was first written, it closed the gap for the blocking stack only, CloudEvent-level and
+domain-level alike. The reactor stack carried the identical shape of defect in its own
+`RegisteringSubscribable.routeReportingMatch` and `DomainEventFeed.acceptCloudEvent`, worse in one respect: the
+reactor `DomainEventFeed` had never received even the readiness-gate half-fix this amendment replaces, so it
+reported `DELIVERED` for a buffered-not-applied event unconditionally. No reactor broker bridge existed yet to need
+the `DeliveryFailurePolicy` bypass half of this fix, but the correctness half did not depend on one existing, and
+was tracked as a follow-up in this same epic. See below: that follow-up has since landed.
 
 Closes [#885](https://github.com/johanhaleby/occurrent/issues/885) as rejected. The wrapper-as-push-target design
 that issue proposed, and this amendment's own predecessor line of investigation considered again under a different
@@ -858,3 +869,97 @@ a payload outright rather than buffering it while not live, behind a dedicated
 `CatchupProjectionFeed` report `DEFERRED` instead of `NOT_DELIVERABLE` for an event that arrives before the
 registered projection is live, through that same `acceptIfLive`, closing the gap this amendment left open for the
 reactor `DomainEventFeed`.
+
+## Amendment (2026-08-21): a permanent catch-up refusal stops a bridge, and a lifecycle `NOT_DELIVERABLE` is paced, not failed
+
+A fixpoint review of the blocking bridges found two gaps this ADR's design left open, both on the same four bridges
+(`RabbitMqCloudEventBridge`, `KafkaCloudEventBridge`, `RabbitMqDomainEventBridge`, `KafkaDomainEventBridge`).
+
+**A permanently failed catch-up was routed through `DeliveryFailurePolicy` like an ordinary failure.**
+`BlockingHandover.acceptIfLive`/`acceptReportingDelivery` throw `PreDispatchRefusalException`, unwrapped, once
+`catchUpFailure` is set, and that field is never cleared. A bridge's generic `catch (RuntimeException | AssertionError)`
+caught it indistinguishably from a handler that merely threw once, so under `DeliveryFailurePolicy.PARK` every later
+message parked and acknowledged, forever, the exact loss decision 1's "never acknowledge a message nothing
+consumed" rests on. Each bridge now catches `BlockingHandover.PreDispatchRefusalException` by type ahead of the
+generic branch and treats it as permanent, the same shape `UnreadableLiveFilterException` already gets: log at
+error once, stop consuming, and negatively acknowledge (RabbitMQ) or seek back leaving the offset uncommitted
+(Kafka) rather than ever parking or committing into the same refusal. `BlockingHandover` is an internal type. A
+bridge importing it for this one `catch` is judged acceptable, narrower than either matching on the exception's
+message or treating every `NOT_DELIVERABLE`-shaped failure as potentially permanent.
+
+**`NOT_DELIVERABLE` conflates a failure with a lifecycle state, and the coarse poll can hand a bridge one mid-batch.**
+`routeReportingMatch` reports `NOT_DELIVERABLE` with no exception for a paused subscription or a model that is not
+running, indistinguishable at the bridge from `NOT_DELIVERABLE` with no exception for... nothing else, in fact:
+every other `NOT_DELIVERABLE` case comes with a thrown exception (the matcher failing, or the refusal above), so a
+normal-return `NOT_DELIVERABLE` is *always* a lifecycle state today, never a failure. The coarse poll only notices a
+`pauseSubscription`/`stop()` called from inside a handler up to one `pollInterval`/`pollTimeout` later, so a message
+already queued behind that call can still reach the bridge before the poll cancels consumption. Routed through
+`DeliveryFailurePolicy` as it was, `PARK` would park and acknowledge a message nothing is actually wrong with. Each
+CloudEvent-level bridge bypasses `DeliveryFailurePolicy` the same way `DEFERRED` already does: Kafka seeks back and
+throttles the partition, reusing the mechanism it already has. *(RabbitMQ's own fix here, a re-read plus an
+immediate consumer cancel, is superseded by the amendment below. This sentence is kept only as the historical record
+of what shipped first.)* The domain bridges need no equivalent change: `DomainEventFeed.acceptCloudEvent` has no
+pause concept and never returns `NOT_DELIVERABLE` at all (see the amendment above).
+
+**The cleaner long-term shape is a distinct `RoutingOutcome` value for a lifecycle refusal**, the same reasoning
+that gave `DEFERRED` its own value rather than overloading it onto `NOT_DELIVERABLE` in the first amendment above:
+one value, one meaning, and a bridge that does not have to re-derive a state `routeReportingMatch` already decided
+and then discarded. That was not done here. It is a wider, three-module change (a new public `RoutingOutcome`
+constant, threaded through `RegisteringSubscribable`, `PushObserver`, and every existing caller that switches on the
+enum) for a defect fully closed by a narrower, bridge-local re-read using API `RegisteringSubscribable` already
+exposes publicly (`subscriptionIds()`, `isRunning(String)`). The narrower fix ships the correctness fix now without
+reopening a settled outcome shape. Widening the enum is tracked as a follow-up rather than bundled in.
+
+## Amendment (2026-08-22): the RabbitMQ lifecycle re-read above is itself removed, held tags carry their own generation, and a permanent stop closes the channel
+
+A Copilot review of the fixpoint round above found the RabbitMQ-specific fix in the previous amendment traded one
+race for another, plus two smaller defects on the same bridges. All four apply to `RabbitMqCloudEventBridge` and
+`RabbitMqDomainEventBridge`. The third also touches both starters' `CatchupThenPushReadiness`.
+
+**The lifecycle re-read raced `stopPermanently()` for the same delivery tag.** The previous amendment's RabbitMQ fix
+re-read the model's running state after a `NOT_DELIVERABLE` report and, when it was the lifecycle case, cancelled
+the consumer and negatively acknowledged immediately rather than waiting for the next poll. That immediate action
+and a concurrent permanent stop (a `PreDispatchRefusalException` arriving on the very next delivery, say) could both
+be deciding the same tag's fate at once, with no lock ordering between them. The fix widens the safe direction instead of trying to close that race.
+A lifecycle `NOT_DELIVERABLE` is now paced exactly like `DEFERRED`, unconditionally, with no re-read at all. It costs the immediate-visibility guarantee the re-read bought (a paused
+message can now sit unacknowledged for up to one `pollInterval` instead of being requeued at once), a cost already
+paid, and accepted, everywhere `DEFERRED` itself applies. `isLifecycleNotDeliverable()` and the RabbitMQ-only
+`cancelConsumingNow()` are removed as dead code.
+
+**A held delivery tag's `channelGeneration` was checked once, at hold time, not again at release.** Both bridges
+already tracked a generation counter, bumped on an automatic connection recovery or a consumer shutdown, to stop a
+stale tag from being acknowledged after the channel that tag belonged to is gone. The check ran when a tag was
+first captured, not when it was later acted on, so a bump landing between the two left a window where a stale tag
+could still be acted on. Each held-tag deque now stores a `HeldDelivery(deliveryTag, generation)` record instead of
+a bare `long`, and every release revalidates the tag's own generation against the current one immediately before
+acting, dropping rather than redelivering a mismatch (the dead channel it belonged to already redelivered it by
+itself). `channelGeneration`'s own bump, and every immediate acknowledgement, negative acknowledgement or park this
+bridge issues, now take the same lock, so the bump can never land inside that window either.
+
+**A permanent stop left an already-held tag stuck until an operator called `close()`.** `stopPermanently()` cancelled
+the consumer and stopped the poll for good, but left the channel open with no way for a tag already held (from
+before the stop) to ever be released again, the very poll that would have released it now gone. It now releases
+every held tag, generation-safely, and then closes the consume channel itself, in that order, under the lock,
+rather than waiting for `close()`. Closing the channel also requeues the triggering delivery for a permanent catch-up
+refusal, RabbitMQ's own guarantee for a closed channel with an unacked delivery on it, so the explicit negative
+acknowledgement the previous amendment described for that case is no longer needed either. `stopPermanently()`'s own
+`catch` widens from `IOException` to `IOException | RuntimeException`, since `basicCancel` on an already-closed
+channel throws the latter.
+
+**`CatchupThenPushReadiness.memoized(...)`'s cache could lock in a wrong answer taken before the framework registrar
+had published anything for this bridge's own live feed.** The registrar publishes its shared identity-registry bean
+lazily, on its first registration, so a bridge's own poll can run before that bean exists at all, and separately,
+before this specific live feed's own entry lands in it once it does. Either "not found yet" answer used to fall
+through to an id-only scan across every wrapper bean in the context and, if that scan found an unrelated wrapper
+sharing the subscription id (ADR 102 permits exactly that), cached it as if it were the true identity match, forever.
+The fix separates the two. The id-scan fallback runs only when the registry bean is absent from the context
+outright, and once the bean exists, only a positive identity match from it is ever cached. "Not (yet) wrapped"
+re-resolves fresh, from one cheap map lookup, on every later poll instead.
+
+**Parking and redelivering a genuine failure both logged twice.** A bridge's own generic failure branch logged the
+cause at `warn` before routing to `DeliveryFailurePolicy`, and `RabbitMqDeliveryFailureAction`/`KafkaDeliveryFailureAction`
+also logged their own `park`/`redeliver` outcome, two lines for one event under `PARK`, and, once `redeliver` gained
+its own log line here too, under `REDELIVER` as well. The bridge-side cause logs move to `debug`. The action's own
+`park`/`redeliver` log is the one `warn` line an operator sees, in all four bridges and both actions. A permanent
+stop stays logged at `error`, unaffected, since it is a distinct, more serious event than an ordinary delivery
+failure.

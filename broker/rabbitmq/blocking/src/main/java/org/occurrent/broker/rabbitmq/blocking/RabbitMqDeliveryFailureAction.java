@@ -39,7 +39,7 @@ import static java.util.Objects.requireNonNull;
  * exactly the same sequence: {@link DeliveryFailurePolicy#REDELIVER} negatively acknowledges the original with
  * requeue, and {@link DeliveryFailurePolicy#PARK} republishes the original to a parking destination through a
  * {@link RabbitMqConfirmPublisher}, waits for that publish's own confirm, and only then acknowledges the original.
- * Neither branch ever acknowledges the original directly on the failure path; that is the one thing this class
+ * Neither branch ever acknowledges the original directly on the failure path. That is the one thing this class
  * exists to make impossible to get wrong twice.
  * <p>
  * {@link #apply(long, BasicProperties, byte[])} always parks or redelivers the delivery's own raw {@code properties}
@@ -127,7 +127,7 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
         requireNonNull(properties, "properties cannot be null");
         requireNonNull(body, "body cannot be null");
         if (policy == DeliveryFailurePolicy.REDELIVER) {
-            redeliver(deliveryTag);
+            redeliverFailure(deliveryTag);
             return;
         }
         park(deliveryTag, properties, body);
@@ -143,7 +143,19 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
             redeliver(deliveryTag);
             return;
         }
+        log.warn("Parked delivery tag {} to exchange \"{}\" routing key \"{}\" and acknowledged the original; " +
+                "nothing consumed it.", deliveryTag, destination.exchange(), destination.routingKey());
         ack(deliveryTag);
+    }
+
+    /**
+     * The {@link DeliveryFailurePolicy} this action applies. Exposed so a bridge can pace a
+     * {@link DeliveryFailurePolicy#REDELIVER} failure itself, held and released once per poll the same way it
+     * already paces {@link RoutingOutcome#DEFERRED}, rather than nacking it immediately on every attempt, without
+     * duplicating the policy this action was already built with.
+     */
+    public DeliveryFailurePolicy policy() {
+        return policy;
     }
 
     // A copy of properties with destination's own configured headers added on top of the original ones, so a
@@ -174,10 +186,13 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
 
     /**
      * Negatively acknowledges {@code deliveryTag} with requeue, on the delivery's own channel, unconditionally,
-     * bypassing {@link DeliveryFailurePolicy} entirely. Public, unlike {@link #apply(long, BasicProperties, byte[])},
-     * for {@link RoutingOutcome#DEFERRED}: a message a catch-up-then-live engine cannot accept yet, but is expected
-     * to accept shortly, is never a candidate for {@link DeliveryFailurePolicy#PARK}, whatever this bridge is
-     * configured with, since nothing here is broken or wrong, only not ready yet.
+     * bypassing {@link DeliveryFailurePolicy} entirely, and logging nothing itself. Public, unlike
+     * {@link #apply(long, BasicProperties, byte[])}, for {@link RoutingOutcome#DEFERRED} and a lifecycle
+     * {@link RoutingOutcome#NOT_DELIVERABLE}: a message a catch-up-then-live engine cannot accept yet, or a
+     * subscription paused or not running, is never a candidate for {@link DeliveryFailurePolicy#PARK}, whatever
+     * this bridge is configured with, since nothing here is broken or wrong, only not ready yet, and pacing a
+     * bridge's own consumer this way happens far too often, by design, for a log line per occurrence to be useful.
+     * See {@link #redeliverFailure(long)} for the equivalent used on an actual failure, which does log.
      */
     public void redeliver(long deliveryTag) {
         try {
@@ -185,6 +200,18 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
         } catch (IOException e) {
             throw new RabbitMqBridgeException("Failed to negatively acknowledge delivery tag " + deliveryTag, e);
         }
+    }
+
+    /**
+     * {@link #redeliver(long)}, plus a single {@code warn} log line, for a genuine {@link DeliveryFailurePolicy#REDELIVER}
+     * failure rather than pacing: a handler or filter that failed, say. The one line an operator needs for that
+     * event. A caller reaching this must not also log the same failure itself, the same way a caller of
+     * {@link #apply(long, BasicProperties, byte[])}'s {@code PARK} branch already relies on {@link #park} alone to
+     * log it.
+     */
+    public void redeliverFailure(long deliveryTag) {
+        log.warn("Redelivered delivery tag {} with requeue; nothing consumed it.", deliveryTag);
+        redeliver(deliveryTag);
     }
 
     /**

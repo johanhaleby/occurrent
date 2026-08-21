@@ -565,7 +565,7 @@ class ProjectionAnnotationRegistrar {
             // Published so a CloudEvent-level broker bridge, wired in a separate starter module that never depends
             // on this one, can look this exact object up and gate its own consumption on
             // model::isReadyForLiveDelivery. See CatchupThenPushSubscriptionModelPublisher.
-            CatchupThenPushSubscriptionModelPublisher.publish(applicationContext, id, model, log);
+            CatchupThenPushSubscriptionModelPublisher.publish(applicationContext, id, pushModel, model, log);
             subscribable = model;
             phase = () -> model.isCatchingUp(id);
         } else {

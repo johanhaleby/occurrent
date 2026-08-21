@@ -158,7 +158,12 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
                     await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
                             assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero());
                     bridge.close();
-                    assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero();
+                    // basicNack is fire-and-forget (no server reply) and close-ok is not ordered against the
+                    // broker actually re-enqueuing the channel's unacked deliveries, so a bare assertion straight
+                    // after close() can read zero while the requeue this proof depends on is still in flight.
+                    // Awaited, not asserted once, for the same reason the pre-close check above already is.
+                    await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                            assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero());
                     // The redelivered backlog reached the feed a second time and was acknowledged, proven above,
                     // but the count staying at 1 rather than climbing to 3 (the coalesced catch-up save plus one
                     // more per redelivered event, since live delivery is not coalesced) is what proves the feed
@@ -182,8 +187,11 @@ class RabbitMqDomainEventLevelBrokerExampleTest extends AbstractBrokerExampleTes
 
                     // Same closed-then-checked shape as above, now proving the live order's delivery was itself
                     // acknowledged rather than merely folded while still sitting unacknowledged on the bridge.
+                    // Awaited rather than asserted once, same reasoning as above: the requeue this proof depends on
+                    // is not ordered against close()'s own return.
                     bridge.close();
-                    assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero();
+                    await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                            assertThat(adminChannel.queueDeclarePassive(queue).getMessageCount()).isZero());
 
                     CloudEvent persistedPlaced = eventStore.read(orderAfterCatchup).events().findFirst().orElseThrow();
                     EventMetadata expectedMetadata = EventMetadata.from(persistedPlaced);

@@ -17,6 +17,7 @@
 package org.occurrent.springboot.blocking;
 
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
+import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.Logger;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.ApplicationContext;
@@ -29,6 +30,9 @@ import org.springframework.context.ConfigurableApplicationContext;
  * different, deliberately decoupled starter module, per ADR 133 decision 1) can look it up and pass
  * {@code model::isReadyForLiveDelivery} to the bridge builder's {@code readinessSource(...)}. Without this, the
  * model these registrars build is kept only in a private list, reachable by nothing outside the registrar itself.
+ * Also records the wrapper against the live feed it wraps in {@link CatchupThenPushWrapperRegistry}, so a starter's
+ * readiness lookup can correlate a bridge's own model by identity rather than by subscription id alone, since ADR
+ * 102 allows two wrapper instances to share one id.
  * <p>
  * Shared between {@link ProjectionAnnotationRegistrar} and {@link SagaAnnotationRegistrar}, which each build one of
  * these the same way, so the bean-name format and the registration failure modes cannot drift apart between the two.
@@ -42,12 +46,15 @@ final class CatchupThenPushSubscriptionModelPublisher {
     }
 
     /**
-     * Publish {@code model} as {@code "catchupThenPushSubscriptionModel-" + id}, or log and skip if
-     * {@code applicationContext} is not a {@link ConfigurableApplicationContext}.
+     * Publish {@code model} as {@code "catchupThenPushSubscriptionModel-" + id}, and record it against
+     * {@code liveFeed} in {@link CatchupThenPushWrapperRegistry}, or log and skip both if {@code applicationContext}
+     * is not a {@link ConfigurableApplicationContext}.
      *
+     * @param liveFeed The {@link PushSubscriptionModel} {@code model} wraps, the same instance a bridge built
+     *                 against it is fed. See {@link CatchupThenPushWrapperRegistry}.
      * @throws IllegalStateException if a bean with that name already exists
      */
-    static void publish(ApplicationContext applicationContext, String id, CatchupThenPushSubscriptionModel model, Logger log) {
+    static void publish(ApplicationContext applicationContext, String id, PushSubscriptionModel liveFeed, CatchupThenPushSubscriptionModel model, Logger log) {
         String beanName = beanName(id);
         if (!(applicationContext instanceof ConfigurableApplicationContext configurableContext)) {
             // Every Spring Boot context is configurable, so this is only reachable from an exotic harness. The
@@ -67,6 +74,7 @@ final class CatchupThenPushSubscriptionModelPublisher {
             throw new IllegalStateException("Cannot publish the CatchupThenPushSubscriptionModel for '%s' as '%s' because a bean with that name already exists. Occurrent publishes each push catch-up's wrapper under 'catchupThenPushSubscriptionModel-<id>', so rename your bean or the id.".formatted(id, beanName));
         }
         beanFactory.registerSingleton(beanName, model);
+        CatchupThenPushWrapperRegistry.register(applicationContext, liveFeed, model);
     }
 
     /** The bean name the {@link CatchupThenPushSubscriptionModel} for {@code id} is published under. */

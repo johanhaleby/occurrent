@@ -112,9 +112,12 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(RabbitMqCloudEventLevelBootstrap.class);
 
-    private static final String DATABASE_NAME = "occurrent_broker_example";
-    private static final String EVENTS_COLLECTION = "events";
-    private static final String EXCHANGE = "broker-example";
+    // Package-private, not private: RabbitMqBrokerExampleBootstrapSmokeTest references these directly, rather than
+    // duplicating the literals, so renaming one here cannot silently leave that test's own leak probe pointed at
+    // the wrong exchange or database.
+    static final String DATABASE_NAME = "occurrent_broker_example";
+    static final String EVENTS_COLLECTION = "events";
+    static final String EXCHANGE = "broker-example";
     private static final String QUEUE = "broker-example-cloudevent";
     private static final String SUBSCRIPTION_ID = "broker-example-cloudevent-projection";
 
