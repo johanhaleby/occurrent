@@ -535,8 +535,6 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * told they were handled, so a recording projection has to treat them as live rather than as part of a replay.
      */
 
-
-
     @Override
     public void pauseSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");

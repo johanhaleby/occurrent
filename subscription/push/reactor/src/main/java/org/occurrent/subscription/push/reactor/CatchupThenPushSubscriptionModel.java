@@ -371,8 +371,6 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * already false by then. This does not lean on that ordering, which nothing declares.
      */
 
-
-
     @Override
     public boolean isPaused(String subscriptionId) {
         return pauseRequestedDuringReplay.containsKey(subscriptionId) || liveFeed.isPaused(subscriptionId);

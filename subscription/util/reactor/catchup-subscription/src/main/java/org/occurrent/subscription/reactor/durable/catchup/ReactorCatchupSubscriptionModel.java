@@ -224,9 +224,6 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         return innerModelCatchingUp(subscriptionId) != null;
     }
 
-
-
-
     /**
      * Registered on every present inner model, since which one ends up running this id is not known until it
      * subscribes. Answers true only when every one of them accepts, so a model that cannot report its boundaries

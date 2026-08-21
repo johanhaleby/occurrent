@@ -28,7 +28,6 @@ import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 

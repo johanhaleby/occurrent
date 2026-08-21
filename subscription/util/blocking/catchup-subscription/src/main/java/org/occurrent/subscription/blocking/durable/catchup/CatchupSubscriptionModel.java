@@ -315,9 +315,6 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         return presentCatchupModels().anyMatch(model -> model.isCatchingUp(subscriptionId));
     }
 
-
-
-
     /**
      * Registered on every mode-specific model, since which one ends up running this id is not known until it
      * subscribes. Answers true only when every present one accepts, so a model that cannot report its boundaries

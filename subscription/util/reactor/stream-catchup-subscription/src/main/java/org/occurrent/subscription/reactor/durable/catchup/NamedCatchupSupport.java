@@ -128,8 +128,6 @@ final class NamedCatchupSupport {
     // fields inside the state are separate volatiles, but only the launcher writes them and it writes the generation
     // last, so a reader that saw this generation saw at least this launch's history flag.
 
-
-
     private SubscriptionModel requireNamed() {
         if (named == null) {
             throw new IllegalStateException(modelClass.getSimpleName() + " can only manage named subscriptions when the model it wraps manages them itself (implements " + SubscriptionModel.class.getSimpleName() + "). The wrapped " + wrapped.getClass().getName() + " only offers the plain (cold) subscribe(filter, startAt) primitive, so use that primitive directly, or wrap a model that manages named subscriptions.");

@@ -78,6 +78,4 @@ public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
         return false;
     }
 
-
-
 }

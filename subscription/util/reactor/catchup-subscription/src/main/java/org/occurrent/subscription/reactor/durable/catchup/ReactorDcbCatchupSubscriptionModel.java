@@ -254,9 +254,6 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
         return namedSubscriptions.listenForCatchup(subscriptionId, listener);
     }
 
-
-
-
     @Override
     public void shutdown() {
         namedSubscriptions.shutdown();

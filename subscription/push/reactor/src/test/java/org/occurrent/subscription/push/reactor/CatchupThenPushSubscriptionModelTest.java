@@ -568,7 +568,6 @@ class CatchupThenPushSubscriptionModelTest {
         return ce -> Mono.fromRunnable(() -> delivered.add(ce.getId()));
     }
 
-
     // Names each catch-up by the order it was announced in, so an assertion can say which one a signal belongs to
     // without depending on what the model uses to identify it.
     private static final class EpisodeLog implements CatchupListener {

@@ -76,9 +76,6 @@ public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
         return false;
     }
 
-
-
-
     /**
      * The replay-aware model behind {@code subscriptionModel}, unwrapping a {@link SubscriptionModelWrapper} until
      * one is found. An empty result means the model cannot say whether it is replaying, which is not the same as

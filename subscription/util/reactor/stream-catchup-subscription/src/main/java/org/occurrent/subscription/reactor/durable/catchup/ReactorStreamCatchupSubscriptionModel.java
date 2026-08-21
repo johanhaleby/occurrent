@@ -302,9 +302,6 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
         return namedSubscriptions.listenForCatchup(subscriptionId, listener);
     }
 
-
-
-
     @Override
     public void shutdown() {
         namedSubscriptions.shutdown();

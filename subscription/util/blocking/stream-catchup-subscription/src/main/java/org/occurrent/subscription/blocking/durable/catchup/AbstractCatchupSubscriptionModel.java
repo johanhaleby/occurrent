@@ -153,9 +153,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         return runningCatchupSubscriptions.containsKey(subscriptionId);
     }
 
-
-
-
     @Override
     public boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
