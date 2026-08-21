@@ -139,6 +139,42 @@ class RegisteringSubscribableRouteReportingMatchTest {
     }
 
     @Test
+    void the_matchObserver_still_reports_delivered_and_the_original_error_still_propagates_when_the_action_throws_an_assertion_error() {
+        AssertionError actionFailure = new AssertionError("action failed an assertion");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw actionFailure;
+        });
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> observed.add(outcome)));
+
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+        assertThat(thrown).isSameAs(actionFailure);
+    }
+
+    /**
+     * The regression this guards: a refusal decided before any dispatch was attempted (an engine-level guard, not
+     * a handler that ran) must never be reported as {@link RoutingOutcome#DELIVERED}, the mistake a Copilot review
+     * of this PR caught in {@code BlockingHandover.acceptIfLive}'s {@code catchUpFailure} case, which reaches this
+     * exact path through {@code CatchupThenPushSubscriptionModel}'s registered action.
+     */
+    @Test
+    void a_routing_action_refusal_reports_not_deliverable_and_the_wrapped_cause_still_propagates() {
+        RuntimeException refusalCause = new IllegalStateException("catch-up has failed");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw new RegisteringSubscribable.RoutingAction.Refusal(refusalCause);
+        });
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> observed.add(outcome)));
+
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(thrown).isSameAs(refusalCause);
+    }
+
+    @Test
     void subscribe_ignores_bufferIfNotLive_and_always_reports_delivered() {
         RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
         List<CloudEvent> received = new ArrayList<>();

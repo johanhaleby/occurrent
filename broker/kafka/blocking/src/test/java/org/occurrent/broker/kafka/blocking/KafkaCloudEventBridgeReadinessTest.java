@@ -47,15 +47,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * {@link KafkaCloudEventBridge.Builder#readinessSource(java.util.function.Predicate)} is the gate that closes the
- * catch-up acknowledgement hole, proven here against a real broker rather than against
- * {@code CatchupThenPushSubscriptionModel} itself, which {@code CatchupThenPushSubscriptionModelTest} already
- * covers for {@code isReadyForLiveDelivery(String)} in isolation. A {@code readinessSource} answering {@code false}
- * must keep this bridge from ever fetching a matching record at all, not merely from committing one it already
- * fetched, since a record that reaches the handler here would already have been staged for commit on
- * {@code RoutingOutcome.DELIVERED} before this test could observe anything wrong. The crash-shaped case (records
- * queue up while not ready, and a fresh bridge on the same {@code group.id} still sees them once ready) proves the
- * offset itself was never advanced during the not-ready window, not merely that the in-process handler was quiet.
+ * {@code PushSubscriptionModel.acceptRedeliverable(CloudEvent)} reporting {@code RoutingOutcome.DEFERRED} is what
+ * closes the catch-up acknowledgement hole on its own, with no {@code readinessSource} configured at all.
+ * {@link KafkaCloudEventBridge.Builder#readinessSource(java.util.function.Predicate)} is a pacing hint on top of
+ * that, proven here against a real broker rather than against {@code CatchupThenPushSubscriptionModel} itself,
+ * which {@code CatchupThenPushSubscriptionModelTest} already covers for {@code isReadyForLiveDelivery(String)} in
+ * isolation. A {@code readinessSource} answering {@code false} keeps this bridge from fetching a matching record
+ * at all, cutting down on how often the refuse-and-redeliver round trip below happens, but is never what makes
+ * that round trip safe. The crash-shaped case (records queue up while not ready, and a fresh bridge on the same
+ * {@code group.id} still sees them once ready) proves the offset itself was never advanced during the not-ready
+ * window, not merely that the in-process handler was quiet, and this bridge's per-partition throttle already
+ * keeps a repeatedly {@code DEFERRED} record from driving it into a tight loop, with or without a
+ * {@code readinessSource} configured.
  */
 class KafkaCloudEventBridgeReadinessTest extends KafkaTestSupport {
 

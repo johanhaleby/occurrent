@@ -112,8 +112,32 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
          * @return {@code true} once {@code cloudEvent} has genuinely landed, {@code false} when this call declined
          *         to hand it over at all (never when it was accepted and then failed; an exception is how that
          *         propagates instead).
+         * @throws Refusal to report a refusal decided before any dispatch was attempted (an engine-level guard,
+         *                 not a handler running at all), so {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)}
+         *                 can tell it apart from a handler that threw after genuinely being invoked. Any other
+         *                 unchecked exception this method throws is taken to mean the opposite: dispatch was
+         *                 attempted and the handler behind it failed.
          */
         boolean route(CloudEvent cloudEvent, boolean bufferIfNotLive);
+
+        /**
+         * Thrown by {@link #route(CloudEvent, boolean)} to report a refusal decided before any dispatch was
+         * attempted, wrapping the real failure as {@link #getCause()}. {@code routeReportingMatch} reports
+         * {@link RoutingOutcome#NOT_DELIVERABLE} for one of these, never {@link RoutingOutcome#DELIVERED}, and
+         * rethrows the wrapped cause unchanged, exactly as it would have propagated without this wrapper.
+         */
+        final class Refusal extends RuntimeException {
+            private final RuntimeException refusal;
+
+            public Refusal(RuntimeException refusal) {
+                super(refusal);
+                this.refusal = refusal;
+            }
+
+            RuntimeException unwrap() {
+                return refusal;
+            }
+        }
     }
 
     private final Set<String> subscriptionIds = ConcurrentHashMap.newKeySet();
@@ -396,22 +420,23 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     return;
                 }
                 boolean landed;
-                RuntimeException actionFailure = null;
                 try {
                     landed = registration.action().route(cloudEvent, bufferIfNotLive);
-                } catch (RuntimeException e) {
+                } catch (RoutingAction.Refusal refusal) {
+                    // Decided before any dispatch was attempted (BlockingHandover's catchUpFailure, say), never a
+                    // delivery, so this is NOT_DELIVERABLE, the same outcome a matcher that failed to answer
+                    // reports, not DELIVERED. The wrapped cause is what the caller sees, unchanged.
+                    matchObserver.accept(cloudEvent, RoutingOutcome.NOT_DELIVERABLE);
+                    throw refusal.unwrap();
+                } catch (RuntimeException | AssertionError e) {
                     // The action was invoked, which is what DELIVERED has always meant; whether the eventual fold
-                    // succeeds or throws is a separate signal (RoutingOutcome's own javadoc says so). An
-                    // engine-level refusal (BlockingHandover's catchUpFailure, say) never reaches this catch,
-                    // because it is thrown before any dispatch is attempted and is expected to propagate as the
-                    // real failure it is, not be reinterpreted as a delivery.
-                    landed = true;
-                    actionFailure = e;
+                    // succeeds or throws is a separate signal (RoutingOutcome's own javadoc says so). AssertionError
+                    // is caught here for the same reason the matcher-throw branch above catches it: a matched
+                    // handler is observed regardless of how it fails.
+                    matchObserver.accept(cloudEvent, RoutingOutcome.DELIVERED);
+                    throw e;
                 }
                 matchObserver.accept(cloudEvent, landed ? RoutingOutcome.DELIVERED : RoutingOutcome.DEFERRED);
-                if (actionFailure != null) {
-                    throw actionFailure;
-                }
                 return;
             }
         }

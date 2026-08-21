@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
@@ -36,18 +37,22 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * {@link RabbitMqCloudEventBridge.Builder#readinessSource(java.util.function.Predicate)} is the gate that closes
- * the catch-up acknowledgement hole, proven here against a real broker rather than against
- * {@code CatchupThenPushSubscriptionModel} itself, which {@code CatchupThenPushSubscriptionModelTest} already
- * covers for {@code isReadyForLiveDelivery(String)} in isolation. A {@code readinessSource} answering {@code false}
- * must keep this bridge from ever pulling a matching message off the queue at all, not merely from acknowledging
- * one it already pulled, since a message that reaches the handler here would already have been reported
- * {@code DELIVERED} and acknowledged before this test could observe anything wrong.
+ * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} reporting {@link RoutingOutcome#DEFERRED} is what
+ * closes the catch-up acknowledgement hole on its own, with no {@code readinessSource} configured at all.
+ * {@link RabbitMqCloudEventBridge.Builder#readinessSource(java.util.function.Predicate)} is a pacing hint on top of
+ * that, proven here against a real broker rather than against {@code CatchupThenPushSubscriptionModel} itself,
+ * which {@code CatchupThenPushSubscriptionModelTest} already covers for {@code isReadyForLiveDelivery(String)} in
+ * isolation. A {@code readinessSource} answering {@code false} keeps this bridge from pulling a matching message
+ * off the queue at all, cutting down on how often the refuse-and-redeliver round trip below happens, but is never
+ * what makes that round trip safe. Also covers this bridge's own bounded pacing, which keeps a redelivered
+ * {@code DEFERRED} message from driving it into a tight loop even with no {@code readinessSource} configured at
+ * all.
  */
 class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
 
@@ -211,6 +216,57 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
             Thread.sleep(500);
 
             assertThat(queueMessageCount(parkingQueue)).as("DEFERRED bypasses PARK entirely").isZero();
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    /**
+     * The bound a Copilot review of this PR asked for: with no {@code readinessSource} configured, every
+     * {@code DEFERRED} delivery used to be immediately nacked and requeued with nothing pacing the resulting loop,
+     * which a real broker turns into thousands of refuse-and-redeliver round trips over a long-running replay.
+     * {@code reconcileConsumption} now cancels this bridge's own consumer for one full poll interval the instant a
+     * {@code DEFERRED} delivery is seen, so the count over several poll intervals stays a small, bounded multiple
+     * of one, not thousands.
+     */
+    @Test
+    void a_deferred_delivery_with_no_readiness_source_is_paced_to_a_bounded_number_of_redeliveries_per_poll_interval() throws Exception {
+        String queue = declareAndBindQueue(OrderPlaced.class.getName());
+        AtomicInteger deferredCount = new AtomicInteger();
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel((cloudEvent, outcome) -> {
+            if (outcome == RoutingOutcome.DEFERRED) {
+                deferredCount.incrementAndGet();
+            }
+        });
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
+
+        CountDownLatch replayEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            if (ce.getId().equals("historical")) {
+                replayEntered.countDown();
+                awaitLatch(releaseReplay);
+            }
+        });
+        assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, outcomeChannel, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .build()) {
+            publish(OrderPlaced.class.getName(), "id-1");
+
+            // Ten poll intervals' worth of wall-clock time. An unbounded tight loop would rack up thousands of
+            // redeliveries in this window. A bound of one poll interval's worth of churn per cycle keeps it in the
+            // tens, comfortably under a bound that would still catch a regression back to the tight loop.
+            Thread.sleep(POLL_INTERVAL.multipliedBy(10).toMillis());
+
+            assertThat(deferredCount.get()).as("bounded to roughly one poll interval's worth of churn per cycle, "
+                            + "not a continuous tight loop for the whole wait")
+                    .isLessThan(200);
         } finally {
             releaseReplay.countDown();
         }

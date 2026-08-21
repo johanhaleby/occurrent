@@ -44,6 +44,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -89,7 +90,10 @@ import static java.util.Objects.requireNonNull;
  * behind it, which {@code acceptCloudEvent(...)} answers with {@link RoutingOutcome#DEFERRED} rather than
  * {@link RoutingOutcome#DELIVERED} for exactly that reason (see its own javadoc): refused outright rather than
  * buffered, bypassing {@link DeliveryFailurePolicy} regardless of what this bridge is configured with, so
- * {@code PARK} can never fire for a message that only needs the replay to catch up. Feeding
+ * {@code PARK} can never fire for a message that only needs the replay to catch up. A {@code DEFERRED} delivery
+ * also cancels this bridge's own consumer for one full {@link Builder#pollInterval(Duration)}, the same bound
+ * {@code RabbitMqCloudEventBridge} applies, so a replay redelivers in bursts at most a poll interval apart rather
+ * than saturating the channel for the whole replay. Feeding
  * {@code acceptCloudEvent(...)} can still throw {@link IllegalStateException} despite the poll, for the narrow race where the check ran just before the one
  * registration this feed ever accepts. That case, unlike {@link UnreadableLiveFilterException}, applies the
  * configured {@link DeliveryFailurePolicy} like any other failure, since it is transient rather than permanent.
@@ -119,6 +123,12 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
 
     private final Lock consumeLock = new ReentrantLock();
     private @Nullable String consumerTag;
+    // Set (never under consumeLock) the instant a DEFERRED delivery is nacked, read and cleared under consumeLock
+    // by reconcileConsumption on its own poll thread. Bounds a tight refuse-and-requeue loop against a replay to
+    // at most one poll interval's worth of churn before this bridge cancels itself for a full pollInterval, the
+    // same mechanism RabbitMqCloudEventBridge uses, and for the same lock-inversion reason: the delivery callback
+    // can run concurrently with reconcileConsumption, which already holds consumeLock across a blocking AMQP call.
+    private final AtomicBoolean deferredSinceLastReconcile = new AtomicBoolean(false);
     private volatile boolean permanentlyStopped;
 
     private RabbitMqDomainEventBridge(DomainEventFeed<E> feed, Channel consumeChannel, String queue, int prefetchCount,
@@ -177,7 +187,8 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                 if (permanentlyStopped) {
                     return;
                 }
-                boolean shouldConsume = feed.hasProjection() && feed.isReadyForLiveDelivery();
+                boolean pacedOff = deferredSinceLastReconcile.getAndSet(false);
+                boolean shouldConsume = feed.hasProjection() && feed.isReadyForLiveDelivery() && !pacedOff;
                 if (shouldConsume && consumerTag == null) {
                     consumerTag = consumeChannel.basicConsume(queue, false, this::handleDelivery, this::handleCancel);
                 } else if (!shouldConsume && consumerTag != null) {
@@ -239,7 +250,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             failureAction.ack(deliveryTag);
         } else if (outcome == RoutingOutcome.DEFERRED) {
             // Bypasses DeliveryFailurePolicy entirely, including PARK: nothing here is broken, only not ready yet.
+            // Never takes consumeLock here, see deferredSinceLastReconcile's own javadoc for why.
             failureAction.redeliver(deliveryTag);
+            deferredSinceLastReconcile.set(true);
         } else {
             failureAction.apply(deliveryTag, delivery.getProperties(), delivery.getBody());
         }

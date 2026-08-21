@@ -27,6 +27,7 @@ import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
+import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -183,10 +184,24 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
         // lost in the gap between the replay head and going live. Registers a delivery-reporting action rather than
         // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) still buffers
-        // exactly as before, while PushSubscriptionModel.acceptRedeliverable(..) (a broker path that can redeliver,
-        // bufferIfNotLive false) refuses instead of buffering, reported as RoutingOutcome.DEFERRED.
+        // exactly as before, throwing IllegalStateException unwrapped exactly as it always has (that path does not
+        // go through routeReportingMatch at all when unobserved, so a wrapped exception would leak out as itself
+        // rather than being unwrapped), while PushSubscriptionModel.acceptRedeliverable(..) (a broker path that can
+        // redeliver, bufferIfNotLive false) refuses instead of buffering, reported as RoutingOutcome.DEFERRED, and
+        // wraps acceptIfLive's IllegalStateException as RoutingAction.Refusal, since that exception is always a
+        // pre-dispatch guard (catchUpFailure) there, never once a fold has genuinely started, so routeReportingMatch
+        // reports NOT_DELIVERABLE for it instead of DELIVERED.
         liveFeed.subscribeCatchupThenPush(subscriptionId, filter, StartAt.subscriptionModelDefault(),
-                (cloudEvent, bufferIfNotLive) -> bufferIfNotLive ? handover.acceptReportingDelivery(cloudEvent) : handover.acceptIfLive(cloudEvent));
+                (cloudEvent, bufferIfNotLive) -> {
+                    if (bufferIfNotLive) {
+                        return handover.acceptReportingDelivery(cloudEvent);
+                    }
+                    try {
+                        return handover.acceptIfLive(cloudEvent);
+                    } catch (IllegalStateException e) {
+                        throw new RegisteringSubscribable.RoutingAction.Refusal(e);
+                    }
+                });
 
         // Kept for isReadyForLiveDelivery(String), which answers off this exact handover rather than off any state
         // this model tracks of its own (a shadow flag a second component maintains can drift from the buffer it is
@@ -197,7 +212,15 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Kept rather than launched once, so a replay a stop interrupts can be launched again over the same handover.
         // The handover has to be the same one: it holds the live buffer and the de-dup cache, so a second one would
         // replay into a projection that had already seen part of the history.
-        Supplier<Future<Boolean>> launch = () -> launchReplay(subscriptionId, handover, replayFilter);
+        //
+        // ownLaunch closes over itself through this reference for the same reason self does for the Future below:
+        // launchReplay needs to name its own launcher to remove it from interruptibleReplays by identity, so a
+        // cancelSubscription(id) immediately followed by a subscribe(id, ...) never lets the old replay's completion
+        // evict the new subscription's launcher out from under it, silently leaving that subscription un-relaunchable
+        // by a later stop() plus start(true).
+        AtomicReference<Supplier<Future<Boolean>>> ownLaunch = new AtomicReference<>();
+        Supplier<Future<Boolean>> launch = () -> launchReplay(subscriptionId, handover, replayFilter, ownLaunch);
+        ownLaunch.set(launch);
         interruptibleReplays.put(subscriptionId, launch);
         return new CatchingUpSubscription(subscriptionId, launch.get());
     }
@@ -210,13 +233,17 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * only once the catch-up has reached live, {@code false} while replaying or buffering ahead of its own drain, and
      * {@code false} forever after a catch-up failure.
      * <p>
-     * A CloudEvent-level broker bridge that feeds the live {@link PushSubscriptionModel} this model wraps needs this
-     * so it can avoid pulling a message off the broker only to have it buffered here rather than applied to the
-     * projection. Without it, the bridge's own {@code RoutingOutcome}-based acknowledgement would ack a message this
-     * handover has only buffered, which is safe against the local store but not against a message a consume bridge
-     * exists precisely to receive from another service, one the local replay can never restore. {@code false} for a
-     * {@code subscriptionId} this model never subscribed, or already cancelled, the safe answer for an id nothing
-     * here is tracking.
+     * A CloudEvent-level broker bridge that feeds the live {@link PushSubscriptionModel} this model wraps is safe to
+     * acknowledge from {@link org.occurrent.subscription.RoutingOutcome#DELIVERED} alone, with no call to this method
+     * at all: {@link PushSubscriptionModel#acceptRedeliverable(io.cloudevents.CloudEvent)} already refuses, rather
+     * than buffers, a message this catch-up would only have buffered, reported
+     * {@link org.occurrent.subscription.RoutingOutcome#DEFERRED} so the bridge redelivers it instead of acknowledging.
+     * This method exists only for a bridge that wants to pace itself, skipping a fetch it can predict would come
+     * back {@code DEFERRED} rather than pulling the message off the broker and immediately handing it back. An
+     * optional throughput optimization, never a correctness dependency: a bridge that never calls this still
+     * acknowledges only on genuine delivery, just after a few more refuse-and-redeliver round trips than one that
+     * does. {@code false} for a {@code subscriptionId} this model never subscribed, or already cancelled, the safe
+     * answer for an id nothing here is tracking.
      *
      * @param subscriptionId The subscription to ask about.
      */
@@ -228,7 +255,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     // Starts one replay for subscriptionId and returns its handle. Called by subscribe, and again by start(true) or
     // resumeSubscription for a replay that a stop interrupted.
-    private Future<Boolean> launchReplay(String subscriptionId, BlockingHandover<CloudEvent> handover, Filter replayFilter) {
+    private Future<Boolean> launchReplay(String subscriptionId, BlockingHandover<CloudEvent> handover, Filter replayFilter,
+                                          AtomicReference<Supplier<Future<Boolean>>> ownLaunch) {
         // The task needs to name itself to forget(), so the entry it removes is its own rather than whatever holds
         // the id by then. Without that, a cancel followed by a re-subscribe of the same id lets this replay keep
         // going against the new subscription's entry and then delete it, silently killing the new subscription.
@@ -273,8 +301,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                         + "refuses every event, so the source redelivers rather than losing them. Cancel the "
                         + "subscription and subscribe again once the cause is fixed.", subscriptionId, e);
                 // Dropped before the replay entry, so a start(true) racing this never sees a launcher with no replay
-                // running and relaunches a catch-up that failed.
-                interruptibleReplays.remove(subscriptionId);
+                // running and relaunches a catch-up that failed. By identity, never by key alone, so this replay's
+                // own completion can never evict a newer launcher a cancelSubscription(id) plus subscribe(id, ...)
+                // already put there for a different attempt.
+                interruptibleReplays.remove(subscriptionId, ownLaunch.get());
                 forget(subscriptionId, self.get());
                 throw e;
             }
@@ -288,7 +318,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 forget(subscriptionId, self.get());
                 return false;
             }
-            interruptibleReplays.remove(subscriptionId);
+            // By identity, for the same reason the failure path above is: this replay's own completion must never
+            // evict a newer launcher a cancelSubscription(id) plus subscribe(id, ...) already put there.
+            interruptibleReplays.remove(subscriptionId, ownLaunch.get());
             forget(subscriptionId, self.get());
             applyPendingPauseIfAny(subscriptionId);
             return true;

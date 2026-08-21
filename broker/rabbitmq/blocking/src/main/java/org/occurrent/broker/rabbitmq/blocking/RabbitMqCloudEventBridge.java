@@ -38,6 +38,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Predicate;
@@ -87,8 +88,11 @@ import static java.util.Objects.requireNonNull;
  * default, so this bridge pulls fewer messages off the queue while a {@link CatchupThenPushSubscriptionModel}
  * wrapping {@code model} is still replaying or draining into it, cutting down on {@link RoutingOutcome#DEFERRED}
  * redeliveries during a replay. Pacing only: {@link RoutingOutcome#DEFERRED} is what keeps this bridge correct with
- * no {@code readinessSource} configured at all, just noisier. See {@link Builder#readinessSource(Predicate)} for
- * how to wire it.
+ * no {@code readinessSource} configured at all, just noisier, and even that noise is bounded on its own: a
+ * {@code DEFERRED} delivery cancels this bridge's own consumer for one full {@link Builder#pollInterval(Duration)},
+ * rather than refusing and requeuing continuously for the whole replay, so a replay with no {@code readinessSource}
+ * configured redelivers in bursts at most a poll interval apart instead of saturating the channel. See
+ * {@link Builder#readinessSource(Predicate)} for how to wire it.
  */
 public final class RabbitMqCloudEventBridge implements AutoCloseable {
 
@@ -106,6 +110,14 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
 
     private final Lock consumeLock = new ReentrantLock();
     private @Nullable String consumerTag;
+    // Set (never under consumeLock) the instant a DEFERRED delivery is nacked, read and cleared by
+    // reconcileConsumption on its own poll thread, which already holds consumeLock for every other decision this
+    // makes. This is what bounds a tight refuse-and-requeue loop to at most one poll interval's worth of churn
+    // before this bridge cancels itself for a full pollInterval, rather than the delivery callback cancelling
+    // itself synchronously, which would take consumeLock from inside a callback reconcileConsumption might already
+    // be holding it across, a lock inversion this design avoids on purpose. See handleDelivery and
+    // reconcileConsumption.
+    private final AtomicBoolean deferredSinceLastReconcile = new AtomicBoolean(false);
 
     private RabbitMqCloudEventBridge(PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, Channel consumeChannel,
                                       String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction,
@@ -158,16 +170,22 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     // readinessSource agrees, not otherwise, checked on a fixed poll rather than on every message. subscriptionIds()
     // has at most one element by ADR 90 (PushSubscriptionModel declares Consumers.ONE), so there is never an
     // ambiguity about which id to ask isRunning(...) or readinessSource about.
+    //
+    // pacedOff additionally cancels this poll regardless of shouldConsume when a DEFERRED delivery was nacked since
+    // the last time this ran, bounding a tight refuse-and-requeue loop against a replay with no readinessSource
+    // configured to at most one poll interval's worth of churn: this bridge pauses for a full pollInterval, then
+    // tries again, rather than redelivering continuously for the whole replay.
     private void reconcileConsumption() {
         try {
             Set<String> subscriptionIds = model.subscriptionIds();
             String subscriptionId = subscriptionIds.isEmpty() ? null : subscriptionIds.iterator().next();
             boolean shouldConsume = subscriptionId != null && model.isRunning(subscriptionId) && readinessSource.test(subscriptionId);
+            boolean pacedOff = deferredSinceLastReconcile.getAndSet(false);
             consumeLock.lock();
             try {
-                if (shouldConsume && consumerTag == null) {
+                if (shouldConsume && !pacedOff && consumerTag == null) {
                     consumerTag = consumeChannel.basicConsume(queue, false, this::handleDelivery, this::handleCancel);
-                } else if (!shouldConsume && consumerTag != null) {
+                } else if ((!shouldConsume || pacedOff) && consumerTag != null) {
                     consumeChannel.basicCancel(consumerTag);
                     consumerTag = null;
                 }
@@ -216,8 +234,11 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         } else if (outcome == RoutingOutcome.DEFERRED) {
             // Bypasses DeliveryFailurePolicy entirely, including PARK: nothing here is broken, only not ready yet,
             // and parking a message that would otherwise have landed once catch-up finishes is exactly the kind of
-            // avoidable dead-lettering DEFERRED exists to rule out.
+            // avoidable dead-lettering DEFERRED exists to rule out. Never takes consumeLock here: this callback can
+            // run concurrently with reconcileConsumption, which already holds it across a blocking AMQP call, so
+            // this only leaves a marker for that poll thread to act on instead.
             failureAction.redeliver(deliveryTag);
+            deferredSinceLastReconcile.set(true);
         } else {
             failureAction.apply(deliveryTag, delivery.getProperties(), delivery.getBody());
         }

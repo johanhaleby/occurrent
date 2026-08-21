@@ -39,6 +39,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -333,6 +335,77 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
         // Once the bridge's channel is closed, RabbitMQ requeues whatever was left outstanding on it: proof the
         // message was never acked (an ack would have removed it for good) and never nacked-without-requeue either.
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(1));
+    }
+
+    /**
+     * {@code RoutingOutcome.DEFERRED} bypasses {@link DeliveryFailurePolicy} entirely, including {@code PARK}, the
+     * same as the CloudEvent-level bridge. {@code DomainEventFeed}'s coarse gate requires
+     * {@code isReadyForLiveDelivery()} before consuming at all, unlike the push-side bridge, and RabbitMQ's Java
+     * client dispatches one channel's deliveries to {@code handleDelivery} sequentially regardless of prefetch, so
+     * two messages from the same bridge can never race each other into {@code acceptIfLive} concurrently. The
+     * reachable way to prove this against a real broker is a direct, out-of-band call for the same dedup key (the
+     * domain event's {@code orderId}, this feed's own id extractor) that holds it in flight while the bridge
+     * delivers a duplicate for that same key: {@code acceptIfLive} refuses the bridge's delivery while the direct
+     * call is still folding, reported {@code DEFERRED}.
+     */
+    @Test
+    void park_configured_never_parks_a_deferred_message() throws Exception {
+        String queue = declareAndBindQueue(TestOrderPlaced.class.getName());
+        String parkingQueue = adminChannel.queueDeclare().getQueue();
+        adminChannel.queueBind(parkingQueue, exchange, "parked");
+        RabbitMqDestination parkingDestination = RabbitMqDestination.of(exchange, "parked");
+
+        CountDownLatch directCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseDirectCall = new CountDownLatch(1);
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> {
+            handled.add(event);
+            if (handled.size() == 1) {
+                directCallEntered.countDown();
+                awaitLatch(releaseDirectCall);
+            }
+        }, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        // Out-of-band, bypassing the bridge entirely: holds the "order-1" dedup key in flight so the bridge's own
+        // delivery for the same key below is the one that gets refused, without needing two deliveries racing on
+        // the same sequential dispatch thread.
+        CloudEvent directCloudEvent = new TestOrderPlacedConverter().toCloudEvent(new TestOrderPlaced("order-1"));
+        Thread directCaller = new Thread(() -> feed.acceptCloudEvent(directCloudEvent), "direct-in-flight-caller");
+        directCaller.start();
+        assertThat(directCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = RabbitMqDomainEventBridge.builder(connection(), feed, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(parkingDestination)
+                .build()) {
+            publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
+
+            // Long enough for several redeliver round trips of the DEFERRED delivery, so this is a genuine "never
+            // parked" assertion, not a race against the bridge's own retry pace.
+            Thread.sleep(POLL_INTERVAL.toMillis() * 6);
+            assertThat(queueMessageCount(parkingQueue)).as("DEFERRED bypasses PARK entirely").isZero();
+
+            releaseDirectCall.countDown();
+            directCaller.join(TimeUnit.SECONDS.toMillis(5));
+
+            // The redelivered duplicate finds the dedup key already applied by the direct call and does not fold
+            // the handler a second time.
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
+            assertThat(handled).containsExactly(new TestOrderPlaced("order-1"));
+        }
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).as("latch reached within the timeout").isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
     }
 
     private String declareAndBindQueue(String routingKey) throws Exception {
