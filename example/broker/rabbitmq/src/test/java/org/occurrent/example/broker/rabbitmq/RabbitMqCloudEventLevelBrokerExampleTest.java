@@ -59,14 +59,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * The CloudEvent-level half of the broker example. {@code CloudEventForwarder} publishes to RabbitMQ,
- * {@code RabbitMqCloudEventBridge} bridges the queue into a {@code PushSubscriptionModel}, and a
- * {@code @Projection(source = PUSH)} keeps a read model up to date from it. Proves the two parts of ADR 133's
- * contract that a fake in the middle cannot prove on its own. A handler that throws does not lose the message, and
- * a restarted consumer, the bridge and the push model, resumes from the broker instead of replaying its whole
- * history again. The forwarder keeps running across that restart on purpose. Its own resumption is the
- * {@code DurableSubscriptionModel} checkpoint contract, already tested where the forwarder lives, and restarting it
- * here would only duplicate that coverage without showing anything specific to the consume side.
+ * The CloudEvent-level half of the broker example. {@code RabbitMqCloudEventBridge} bridges a queue into a
+ * {@code PushSubscriptionModel}, and a {@code @Projection(source = PUSH)} keeps a read model up to date from it.
+ * Proves the two parts of ADR 133's contract that a fake in the middle cannot prove on its own. A handler that
+ * throws does not lose the message, published straight to the broker through {@code RabbitMqCloudEventSink} rather
+ * than through {@code CloudEventForwarder}, since the forwarder's own at-least-once retries could otherwise supply
+ * a legal duplicate that satisfies the redelivery assertion without the bridge itself ever having redelivered
+ * anything. A restarted consumer, the bridge and the push model, resumes from the broker instead of replaying its
+ * whole history again, proven with the forwarder in front of it as a real application would run it. The forwarder
+ * keeps running across that restart on purpose. Its own resumption is the {@code DurableSubscriptionModel}
+ * checkpoint contract, already tested where the forwarder lives, and restarting it here would only duplicate that
+ * coverage without showing anything specific to the consume side.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest {
@@ -86,22 +89,20 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 .build();
              RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build()) {
 
-            NativeMongoSubscriptionModel forwarderSubscriptionModel = new NativeMongoSubscriptionModel(
-                    mongoClient.getDatabase(databaseName), EVENTS_COLLECTION, org.occurrent.mongodb.timerepresentation.TimeRepresentation.RFC_3339_STRING,
-                    Executors.newVirtualThreadPerTaskExecutor());
-            CheckpointStorage forwarderCheckpoints = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "forwarder-checkpoints");
-            DurableSubscriptionModel forwarderSubscription = new DurableSubscriptionModel(forwarderSubscriptionModel, forwarderCheckpoints);
-            CloudEventForwarder forwarder = new CloudEventForwarder(forwarderSubscription, sink);
-            forwarder.forward("forward-orders-no-loss");
+            // Published directly through the sink below, deliberately without a CloudEventForwarder in front of it.
+            // The forwarder is at-least-once and can legally redeliver a lost confirm as a second physical copy of
+            // the same event, which the redelivery assertion below could then satisfy without the bridge itself
+            // ever having redelivered anything. Publishing straight to the broker guarantees exactly one physical
+            // copy per event instead, so a matching save can only be the bridge's own redelivery. Forwarder
+            // integration, and its own at-least-once retry behavior, is proven separately by the restart test below.
 
             // The read model store fails the very first write it is asked to make, whichever event that turns out
             // to be, then succeeds on every write after. If the bridge lost the message that failing write belonged
             // to instead of redelivering it, the order would never reach SHIPPED.
             AtomicBoolean failedOnce = new AtomicBoolean(false);
             // The exact view the failed save attempt tried to write, saved here so a later save can be checked for
-            // content equality against it rather than merely counted. The forwarder is at-least-once, so a legal
-            // duplicate of the other event could satisfy a raw save count without the failed delivery itself ever
-            // coming back, and only a genuine redelivery of the same message produces an identical view again.
+            // content equality against it rather than merely counted, proving a genuine redelivery of the same
+            // message rather than merely some other save.
             AtomicReference<OrderStatusProjection.OrderStatusView> failedAttemptView = new AtomicReference<>();
             AtomicInteger redeliveredSaveAttempts = new AtomicInteger();
             Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
@@ -132,25 +133,22 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 String orderId = "order-" + UUID.randomUUID();
                 eventStore.write(orderId, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderId, "Widget")));
                 eventStore.write(orderId, converter.toCloudEvent(new OrderShipped(UUID.randomUUID().toString(), orderId)));
+                // Published directly and exactly once each, from the store's own stamped copies (streamid,
+                // streamversion and position, which OrderStatusProjection reads off EventMetadata), not the bare
+                // CloudEvent converter.toCloudEvent(...) built above and never stamped. See the comment above the
+                // try block for why this bypasses the forwarder.
+                eventStore.read(orderId).events().forEach(sink::publish);
 
                 await().atMost(Duration.ofSeconds(20)).untilAsserted(() ->
                         assertThat(store.get(orderId)).extracting(OrderStatusProjection.OrderStatusView::status).isEqualTo("SHIPPED"));
 
                 // redeliveredSaveAttempts is what proves the specific failed delivery came back, not just that some
-                // save happened again. A bridge that dropped the failed delivery instead of redelivering it could
-                // still reach SHIPPED off the forwarder's own legal duplicate of the other event alone, a raw save
-                // count above some threshold cannot rule that out, only a save matching the failed attempt's exact
-                // content can.
+                // save happened again. With exactly one physical copy of each event ever on the broker, a matching
+                // save can only be the bridge's own redelivery of the failed one, never a coincidental duplicate.
                 assertThat(failedOnce).isTrue();
                 assertThat(redeliveredSaveAttempts.get()).isGreaterThanOrEqualTo(1);
             } finally {
-                // Nested, not sequential, so a failure closing the context does not skip shutting the forwarder
-                // subscription down too, the same reason its own close() methods close each resource in its own try.
-                try {
-                    context.close();
-                } finally {
-                    forwarderSubscription.shutdown();
-                }
+                context.close();
             }
         }
     }

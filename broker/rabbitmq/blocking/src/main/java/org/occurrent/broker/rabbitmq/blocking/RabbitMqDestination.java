@@ -19,6 +19,7 @@ package org.occurrent.broker.rabbitmq.blocking;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.api.blocking.EventDestination;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 import static java.util.Objects.requireNonNull;
@@ -29,8 +30,11 @@ import static java.util.Objects.requireNonNull;
  * {@link DestinationResolver#destinationsFor(org.occurrent.subscription.SubscriptionFilter)} result leaves
  * {@code headers} empty and reads {@code routingKey} as a binding pattern rather than one message's exact key.
  *
- * @param exchange   The exchange to publish to, or to bind against.
- * @param routingKey The routing key, or the binding pattern.
+ * @param exchange   The exchange to publish to, or to bind against. At most {@value #SHORTSTR_MAX_BYTES} bytes when
+ *                    UTF-8 encoded, the AMQP {@code shortstr} limit RabbitMQ enforces on the {@code basic.publish}
+ *                    exchange field.
+ * @param routingKey The routing key, or the binding pattern. At most {@value #SHORTSTR_MAX_BYTES} bytes when UTF-8
+ *                    encoded, the same {@code shortstr} limit.
  * @param headers    Application headers to carry on the message, never {@code null} and empty rather than absent
  *                    when there are none. No key may start with {@value RabbitMqCloudEventMapper#HEADER_PREFIX},
  *                    the namespace {@link RabbitMqCloudEventMapper} reserves for the CloudEvent attributes
@@ -39,10 +43,19 @@ import static java.util.Objects.requireNonNull;
  */
 public record RabbitMqDestination(String exchange, String routingKey, Map<String, String> headers) implements EventDestination {
 
+    /**
+     * The AMQP {@code shortstr} encoding RabbitMQ uses for {@code basic.publish}'s exchange and routing key fields
+     * caps both at this many UTF-8 bytes. A value over the limit is rejected here, at destination construction,
+     * rather than surfacing as a bare channel-level protocol error out of {@code basicPublish}.
+     */
+    static final int SHORTSTR_MAX_BYTES = 255;
+
     public RabbitMqDestination {
         requireNonNull(exchange, "exchange cannot be null");
         requireNonNull(routingKey, "routingKey cannot be null");
         requireNonNull(headers, "headers cannot be null");
+        requireShortstr("exchange", exchange);
+        requireShortstr("routingKey", routingKey);
         for (String key : headers.keySet()) {
             if (key.startsWith(RabbitMqCloudEventMapper.HEADER_PREFIX)) {
                 throw new IllegalArgumentException("Header \"" + key + "\" uses the \"" + RabbitMqCloudEventMapper.HEADER_PREFIX +
@@ -50,6 +63,14 @@ public record RabbitMqDestination(String exchange, String routingKey, Map<String
             }
         }
         headers = Map.copyOf(headers);
+    }
+
+    private static void requireShortstr(String fieldName, String value) {
+        int byteLength = value.getBytes(StandardCharsets.UTF_8).length;
+        if (byteLength > SHORTSTR_MAX_BYTES) {
+            throw new IllegalArgumentException(fieldName + " is " + byteLength + " bytes when UTF-8 encoded, which exceeds " +
+                    "RabbitMQ's " + SHORTSTR_MAX_BYTES + "-byte shortstr limit for basic.publish: \"" + value + "\"");
+        }
     }
 
     /**

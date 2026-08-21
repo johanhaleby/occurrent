@@ -20,7 +20,6 @@ import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ShutdownSignalException;
-import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.slf4j.Logger;
@@ -40,10 +39,12 @@ import static java.util.Objects.requireNonNull;
  * Neither branch ever acknowledges the original directly on the failure path; that is the one thing this class
  * exists to make impossible to get wrong twice.
  * <p>
- * {@link #applyToUndecodable(long, BasicProperties, byte[])} covers a message {@link RabbitMqCloudEventMapper#toCloudEvent(BasicProperties, byte[])}
- * could not turn into a {@link CloudEvent} at all. It shares the exact same {@link RabbitMqConfirmPublisher} as
- * {@link #apply(long, CloudEvent)}, publishing the delivery's own raw {@code properties} and {@code body} to the
- * parking destination unchanged rather than a rebuilt {@link CloudEvent}, since none exists to rebuild.
+ * {@link #apply(long, BasicProperties, byte[])} always parks or redelivers the delivery's own raw {@code properties}
+ * and {@code body}, unchanged, whether or not the bridge managed to rebuild a CloudEvent from them. A parked message
+ * therefore keeps every AMQP field outside the CloudEvents mapping, a caller-supplied {@code correlationId},
+ * {@code appId} or {@code replyTo} among them, rather than only the attributes
+ * {@link RabbitMqCloudEventMapper#toBasicProperties(io.cloudevents.CloudEvent, java.util.Map)} would have rebuilt
+ * from a decoded event.
  * <p>
  * A failed parking publish (the parking exchange unavailable, its own confirm timing out, a {@code basic.return}
  * because nothing is bound to the parking routing key, ...) negatively acknowledges the original with requeue
@@ -112,34 +113,13 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
     }
 
     /**
-     * Applies this failure action to the delivery {@code deliveryTag} identifies, rebuilt as {@code cloudEvent}.
-     * Never acknowledges {@code deliveryTag} directly; {@link DeliveryFailurePolicy#PARK} acknowledges it only once
-     * the parking publish has been confirmed.
-     */
-    public void apply(long deliveryTag, CloudEvent cloudEvent) {
-        requireNonNull(cloudEvent, "cloudEvent cannot be null");
-        if (policy == DeliveryFailurePolicy.REDELIVER) {
-            redeliver(deliveryTag);
-            return;
-        }
-        RabbitMqDestination destination = requireNonNull(parkingDestination);
-        // Body computed once and passed into toBasicProperties(..., byte[]) rather than calling the two-argument
-        // overload, so cloudEvent's lazily-serializing data is not serialized a second time on this park.
-        byte[] body = RabbitMqCloudEventMapper.toBody(cloudEvent);
-        BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, destination.headers(), body);
-        park(deliveryTag, properties, body);
-    }
-
-    /**
-     * Applies this failure action to the delivery {@code deliveryTag} identifies, for a message
-     * {@link RabbitMqCloudEventMapper#toCloudEvent(BasicProperties, byte[])} could not rebuild as a {@link CloudEvent}
-     * at all. {@link DeliveryFailurePolicy#REDELIVER} behaves exactly as {@link #apply(long, CloudEvent)}.
-     * {@link DeliveryFailurePolicy#PARK} publishes {@code properties} and {@code body} to the parking destination
-     * unchanged, through the same {@link RabbitMqConfirmPublisher} {@link #apply(long, CloudEvent)} uses, and
-     * acknowledges the original only once that publish is confirmed and not returned as unroutable. Never
+     * Applies this failure action to the delivery {@code deliveryTag} identifies, republishing its own raw
+     * {@code properties} and {@code body} unchanged when {@link DeliveryFailurePolicy#PARK} is configured, whether
+     * or not the bridge managed to rebuild a CloudEvent from them. {@link DeliveryFailurePolicy#PARK} acknowledges
+     * {@code deliveryTag} only once that publish has been confirmed and not returned as unroutable. Never
      * acknowledges {@code deliveryTag} directly.
      */
-    public void applyToUndecodable(long deliveryTag, BasicProperties properties, byte[] body) {
+    public void apply(long deliveryTag, BasicProperties properties, byte[] body) {
         requireNonNull(properties, "properties cannot be null");
         requireNonNull(body, "body cannot be null");
         if (policy == DeliveryFailurePolicy.REDELIVER) {

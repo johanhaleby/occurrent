@@ -36,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -74,6 +75,33 @@ class RabbitMqCloudEventSinkChannelRetirementTest {
         // The old channel's close runs on its own thread rather than blocking this call, so it is awaited here
         // rather than asserted immediately.
         verify(timedOutChannel, timeout(2000)).close();
+    }
+
+    @Test
+    void a_shutdown_signal_during_the_confirm_wait_retires_the_channel_and_publishes_on_a_confirm_mode_replacement() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel shutdownChannel = mock(Channel.class);
+        Channel replacementChannel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(shutdownChannel), Optional.of(replacementChannel));
+        when(shutdownChannel.waitForConfirms(anyLong())).thenThrow(new ShutdownSignalException(true, false, null, null));
+
+        RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(connection, resolver).build();
+
+        assertThatThrownBy(() -> sink.publish(orderPlaced()))
+                .isInstanceOf(RabbitMqPublishException.class)
+                .hasCauseInstanceOf(ShutdownSignalException.class);
+
+        verify(replacementChannel).confirmSelect();
+        verify(replacementChannel).addReturnListener(any(ReturnCallback.class));
+        // The old channel's close runs on its own thread rather than blocking this call, so it is awaited here
+        // rather than asserted immediately, mirroring the timeout and interrupted cases above.
+        verify(shutdownChannel, timeout(2000)).close();
+
+        // With connection auto-recovery off, this is the only way the sink ever recovers from a shut-down channel:
+        // a later publish must land on the replacement rather than failing forever against the retired one.
+        when(replacementChannel.waitForConfirms(anyLong())).thenReturn(true);
+        sink.publish(orderPlaced());
+        verify(replacementChannel).basicPublish(any(), any(), eq(true), any(), any());
     }
 
     @Test

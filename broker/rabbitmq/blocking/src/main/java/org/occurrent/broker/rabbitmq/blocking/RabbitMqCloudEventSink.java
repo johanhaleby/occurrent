@@ -48,9 +48,10 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * bounds the wait and fails it with {@link RabbitMqPublishTimeoutException} rather than blocking forever on a
  * broker that never answers, and {@link Builder#acknowledgementTimeout(Duration)} is not offered as something that
  * can be turned off, for the same reason {@link CloudEventSink}'s own javadoc gives. A publish that ends this way,
- * or one abandoned to an interrupted wait, is left outstanding on the broker's side of that channel, so this sink
- * retires the channel and opens a fresh one underneath it, and a later publish is never kept waiting on an
- * abandoned one or blamed for its eventual nack.
+ * one abandoned to an interrupted wait, or one whose channel or connection shuts down mid-publish, is left
+ * outstanding on the broker's side of that channel (or the channel itself is simply gone), so this sink retires the
+ * channel and opens a fresh one underneath it, and a later publish is never kept waiting on an abandoned one, blamed
+ * for its eventual nack, or stuck permanently on a channel the broker already closed.
  * <p>
  * Each publish carries its own random {@code correlationId}, so a {@code basic.return} is matched to the publish it
  * belongs to and never to a different one, including a retry of the same event after an earlier attempt's
@@ -182,13 +183,15 @@ public final class RabbitMqCloudEventSink implements CloudEventSink, AutoCloseab
 
         /**
          * Retries a {@link RabbitMqPublishException} that is neither {@link RabbitMqUnroutableEventException}
-         * (a configuration bug, not a transient failure) nor caused by a {@link ShutdownSignalException} (this
-         * sink's channel is closed by then, per the RabbitMQ client, so retrying against it can never succeed).
-         * {@link RabbitMqPublishTimeoutException} is excluded too, per ADR 133, since an expired acknowledgement
-         * timeout is for the caller to decide on, not for this retry to absorb. A wait interrupted by
-         * {@link InterruptedException} is excluded as well, since the thread asked to stop is not asking to try
-         * again. Whatever the resolver's {@code CloudEventTypeMapper} throws for a type it does not recognise is not
-         * a {@link RabbitMqPublishException} at all, so it is never retried either.
+         * (a configuration bug, not a transient failure) nor caused by a {@link ShutdownSignalException}. The
+         * channel behind a {@link ShutdownSignalException} is already retired and replaced before this predicate
+         * ever runs, so a retry here would not be recovering anything, only spending an attempt on a decision this
+         * sink already made. A caller who wants that specific failure retried automatically opts in with its own
+         * {@link RetryStrategy}. {@link RabbitMqPublishTimeoutException} is excluded too, per ADR 133, since an
+         * expired acknowledgement timeout is for the caller to decide on, not for this retry to absorb. A wait
+         * interrupted by {@link InterruptedException} is excluded as well, since the thread asked to stop is not
+         * asking to try again. Whatever the resolver's {@code CloudEventTypeMapper} throws for a type it does not
+         * recognise is not a {@link RabbitMqPublishException} at all, so it is never retried either.
          */
         private static RetryStrategy defaultRetryStrategy() {
             return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)

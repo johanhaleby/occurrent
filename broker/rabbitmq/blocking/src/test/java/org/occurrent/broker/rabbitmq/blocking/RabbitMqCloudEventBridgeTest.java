@@ -249,8 +249,9 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
     /**
      * A message with no {@code cloudEvents_} headers at all cannot become a {@link CloudEvent}, since
      * {@link CloudEventBuilder#build()} requires an id, a source and a type. {@link DeliveryFailurePolicy#PARK}
-     * still applies to it rather than always redelivering: the bridge parks the delivery's own raw properties and
-     * body unchanged, since there is no {@link CloudEvent} to republish through the ordinary parking path.
+     * still applies to it rather than always redelivering. The bridge parks the delivery's own raw properties and
+     * body unchanged, the same way it parks a decodable message too, since parking never depends on a CloudEvent
+     * existing to rebuild one from.
      */
     @Test
     void an_undecodable_message_is_parked_with_its_raw_bytes_and_the_original_is_acknowledged_once_confirmed() throws Exception {

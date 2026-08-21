@@ -60,10 +60,10 @@ class RabbitMqDeliveryFailureActionTest {
     /**
      * A failed parking publish, for any reason the shared {@link RabbitMqConfirmPublisher} reports as a
      * {@link RuntimeException}, redelivers the original instead of losing it or letting the exception escape
-     * {@code applyToUndecodable}.
+     * {@code apply}.
      */
     @Test
-    void applyToUndecodable_redelivers_when_the_parking_publisher_throws() throws Exception {
+    void apply_redelivers_when_the_parking_publisher_throws() throws Exception {
         Channel consumeChannel = mock(Channel.class);
         RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
         RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey");
@@ -72,9 +72,29 @@ class RabbitMqDeliveryFailureActionTest {
         RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK,
                 parkingPublisher, parkingDestination, LoggerFactory.getLogger(getClass()));
 
-        action.applyToUndecodable(42L, new BasicProperties(), new byte[0]);
+        action.apply(42L, new BasicProperties(), new byte[0]);
 
         verify(consumeChannel).basicNack(42L, false, true);
         verify(consumeChannel, never()).basicAck(anyLong(), anyBoolean());
+    }
+
+    /**
+     * {@link DeliveryFailurePolicy#PARK} republishes the delivery's own raw {@code properties} unchanged, a
+     * caller-supplied {@code correlationId} included, rather than rebuilding them from a decoded {@code CloudEvent}
+     * and losing every AMQP field outside the CloudEvents mapping.
+     */
+    @Test
+    void apply_parks_the_original_properties_unchanged_preserving_metadata_outside_the_cloudEvents_mapping() throws Exception {
+        Channel consumeChannel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey");
+        BasicProperties originalProperties = new BasicProperties.Builder().correlationId("caller-correlation-id").build();
+        byte[] originalBody = "payload".getBytes();
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK,
+                parkingPublisher, parkingDestination, LoggerFactory.getLogger(getClass()));
+
+        action.apply(42L, originalProperties, originalBody);
+
+        verify(parkingPublisher).publish("exchange", "routingKey", originalProperties, originalBody);
     }
 }

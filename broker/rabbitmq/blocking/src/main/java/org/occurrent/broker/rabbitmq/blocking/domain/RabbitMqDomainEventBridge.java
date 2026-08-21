@@ -209,7 +209,7 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             cloudEvent = RabbitMqCloudEventMapper.toCloudEvent(delivery.getProperties(), delivery.getBody());
         } catch (RuntimeException e) {
             log.warn("Failed to rebuild a CloudEvent from a message on queue \"{}\".", queue, e);
-            failureAction.applyToUndecodable(deliveryTag, delivery.getProperties(), delivery.getBody());
+            failureAction.apply(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
         }
 
@@ -230,13 +230,13 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             // ordinary failure-policy cases, unlike the permanent one caught above. AssertionError is caught here
             // too, since the converter, the live matcher or the projection can throw one, and leaving it uncaught
             // would strand the delivery unacked at prefetch one. Any other Error still propagates.
-            failureAction.apply(deliveryTag, cloudEvent);
+            failureAction.apply(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
         }
         if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
             failureAction.ack(deliveryTag);
         } else {
-            failureAction.apply(deliveryTag, cloudEvent);
+            failureAction.apply(deliveryTag, delivery.getProperties(), delivery.getBody());
         }
     }
 
