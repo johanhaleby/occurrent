@@ -22,6 +22,7 @@ import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ShutdownSignalException;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.subscription.RoutingOutcome;
 import org.slf4j.Logger;
 
 import java.io.IOException;
@@ -171,7 +172,14 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
         }
     }
 
-    private void redeliver(long deliveryTag) {
+    /**
+     * Negatively acknowledges {@code deliveryTag} with requeue, on the delivery's own channel, unconditionally,
+     * bypassing {@link DeliveryFailurePolicy} entirely. Public, unlike {@link #apply(long, BasicProperties, byte[])},
+     * for {@link RoutingOutcome#DEFERRED}: a message a catch-up-then-live engine cannot accept yet, but is expected
+     * to accept shortly, is never a candidate for {@link DeliveryFailurePolicy#PARK}, whatever this bridge is
+     * configured with, since nothing here is broken or wrong, only not ready yet.
+     */
+    public void redeliver(long deliveryTag) {
         try {
             consumeChannel.basicNack(deliveryTag, false, true);
         } catch (IOException e) {

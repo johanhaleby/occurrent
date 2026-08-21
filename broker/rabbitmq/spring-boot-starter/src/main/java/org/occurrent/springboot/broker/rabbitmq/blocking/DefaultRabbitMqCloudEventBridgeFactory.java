@@ -23,6 +23,7 @@ import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
 import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationContext;
 
 import static java.util.Objects.requireNonNull;
 
@@ -31,12 +32,15 @@ class DefaultRabbitMqCloudEventBridgeFactory implements RabbitMqCloudEventBridge
     private final Connection connection;
     private final RabbitMqBrokerProperties properties;
     private final ObjectProvider<DestinationResolver<RabbitMqDestination>> resolverProvider;
+    private final ApplicationContext applicationContext;
 
     DefaultRabbitMqCloudEventBridgeFactory(Connection connection, RabbitMqBrokerProperties properties,
-                                            ObjectProvider<DestinationResolver<RabbitMqDestination>> resolverProvider) {
+                                            ObjectProvider<DestinationResolver<RabbitMqDestination>> resolverProvider,
+                                            ApplicationContext applicationContext) {
         this.connection = requireNonNull(connection);
         this.properties = requireNonNull(properties);
         this.resolverProvider = requireNonNull(resolverProvider);
+        this.applicationContext = requireNonNull(applicationContext);
     }
 
     @Override
@@ -46,7 +50,8 @@ class DefaultRabbitMqCloudEventBridgeFactory implements RabbitMqCloudEventBridge
                 .declareTopology(bridgeProperties.isDeclareTopology())
                 .onDeliveryFailure(bridgeProperties.getOnDeliveryFailure())
                 .pollInterval(bridgeProperties.getPollInterval())
-                .prefetchCount(bridgeProperties.getPrefetchCount());
+                .prefetchCount(bridgeProperties.getPrefetchCount())
+                .readinessSource(subscriptionId -> CatchupThenPushReadiness.isReady(applicationContext, subscriptionId));
         DestinationResolver<RabbitMqDestination> resolver = resolverProvider.getIfAvailable();
         if (resolver != null) {
             builder.resolver(resolver);

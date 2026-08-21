@@ -33,6 +33,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Fallback;
@@ -122,14 +123,17 @@ public class OccurrentRabbitMqAutoConfiguration {
     /**
      * Pre-seeds {@link RabbitMqCloudEventBridgeFactory} with the connection, the resolver bean if one exists (a
      * bridge whose {@code occurrent.broker.rabbitmq.bridge.declare-topology} is {@code false}, or whose caller
-     * supplies its own bindings, needs none), and every {@code occurrent.broker.rabbitmq.bridge.*} default. Not
-     * conditioned on a resolver, and not {@code @Lazy}, since building this factory does nothing but capture
-     * configuration. Nothing about it opens a channel or requires a resolver until a consumer actually calls
-     * {@link RabbitMqCloudEventBridgeFactory#forQueue}.
+     * supplies its own bindings, needs none), and every {@code occurrent.broker.rabbitmq.bridge.*} default,
+     * including a zero-config {@code readinessSource} that defers to whichever
+     * {@code CatchupThenPushSubscriptionModel} bean, if any, owns the bridge's subscription id, see
+     * {@link CatchupThenPushReadiness}. Not conditioned on a resolver, and not {@code @Lazy}, since building this
+     * factory does nothing but capture configuration. Nothing about it opens a channel or requires a resolver
+     * until a consumer actually calls {@link RabbitMqCloudEventBridgeFactory#forQueue}.
      */
     @Bean
     RabbitMqCloudEventBridgeFactory occurrentRabbitMqCloudEventBridgeFactory(Connection connection, RabbitMqBrokerProperties properties,
-                                                                              ObjectProvider<DestinationResolver<RabbitMqDestination>> resolver) {
-        return new DefaultRabbitMqCloudEventBridgeFactory(connection, properties, resolver);
+                                                                              ObjectProvider<DestinationResolver<RabbitMqDestination>> resolver,
+                                                                              ApplicationContext applicationContext) {
+        return new DefaultRabbitMqCloudEventBridgeFactory(connection, properties, resolver, applicationContext);
     }
 }

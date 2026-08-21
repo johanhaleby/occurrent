@@ -741,3 +741,110 @@ topic narrowing has nothing left to do and decision 5's rule that the feed remai
 rest. `KafkaTopicPerTypeDestinationResolver` stays exactly as it is, unchanged in behaviour, the documented
 alternative for a deployment that wants per-type topics and either has single-type streams or accepts the
 narrower guarantee.
+
+## Amendment (2026-08-21): readiness gate for catch-up subscriptions
+
+Decision 1 says `CatchupThenPushSubscriptionModel` keeps the shape it has, and that `PushObserver` and the outcome
+`routeReportingMatch` reports to it are the one exception. That was accurate for the single acknowledgement decision
+a CloudEvent-level bridge had, whether the routing evaluation reported `DELIVERED`. It stopped being accurate once a
+bridge feeds a `PushSubscriptionModel` that a `CatchupThenPushSubscriptionModel` wraps.
+
+The wrapper registers on the live model before its own replay finishes, so a message the bridge pulls off the broker
+during that window reaches `routeReportingMatch`, gets reported `DELIVERED`, and is only buffered by the wrapper's
+`BlockingHandover`, not yet applied to the projection. `RoutingOutcome` alone cannot tell the two apart, because the
+bridge holds only the live `PushSubscriptionModel`, never the wrapper, unchanged from decision 1. A crash before the
+buffer drains loses that event for good, and it is not recoverable from the local event store, since a consume
+bridge exists precisely to receive an event another service published, one this store never had a copy of to replay
+back. The safety constraint this amendment adds is that a bridge must never acknowledge or commit a message for a
+subscription still in catch-up replay, because the broker's own copy is the only copy of that message anywhere.
+
+`CatchupThenPushSubscriptionModel` gains `isReadyForLiveDelivery(String)`, delegating to the specific subscription's
+`BlockingHandover`, the component that actually owns the buffer, true only once that subscription's catch-up has
+reached live. `RabbitMqCloudEventBridge` and `KafkaCloudEventBridge` each gain an optional
+`readinessSource(Predicate<String>)` on their builders, `true` for every id by default so a bridge fed a bare
+`PushSubscriptionModel` with no catch-up wrapper is unaffected, and AND it into the same coarse consume/fetch poll
+decision 1 already describes for the running and paused check. `@Projection(source = PUSH)` and
+`@Saga(source = PUSH)` publish the `CatchupThenPushSubscriptionModel` each builds internally as a Spring bean named
+`"catchupThenPushSubscriptionModel-" + id`, since that object was otherwise reachable only from inside the registrar
+that built it, and application wiring needs a handle on it to pass to `readinessSource`.
+
+Decision 1's "keep the shapes they have" now reads with a second narrow exception beside `PushObserver`.
+`CatchupThenPushSubscriptionModel` gains `isReadyForLiveDelivery(String)` and, on the Spring stack, becomes
+independently reachable as a named bean rather than staying private to the registrar that builds it. Both are
+additive. Nothing about `subscribe`, the catch-up-then-live handover, or the rest of the class's existing contract
+changed, and a caller that never touches `readinessSource` sees identical behavior to before this amendment.
+
+This closes the gap for the blocking stack's CloudEvent-level bridges only. The reactor stack has no equivalent yet.
+`ReactiveHandover` has no `isReadyForLiveDelivery()`, the reactor `DomainEventFeed` never received the domain-level
+version of this fix either, and no reactor broker bridge exists yet to need one. A design that has the bridge hold
+the `CatchupThenPushSubscriptionModel` itself, giving it a `Pushable` shape so readiness reaches the per-message
+`RoutingOutcome` the way `DomainEventFeed.acceptCloudEvent` already does, was considered and rejected for this
+change, since it would falsify decision 1's "not itself a push target" rationale outright rather than adding a
+narrow exception beside it. That alternative is tracked as
+[#885](https://github.com/johanhaleby/occurrent/issues/885), pending its own decision on whether to amend decision 1
+further.
+
+## Amendment (2026-08-21): one evaluation replaces the readiness gate for catch-up subscriptions
+
+The readiness-gate amendment above turned out to be unsound. It closed the acknowledgement gap by narrowing a race
+rather than removing it. A `cancelSubscription` immediately followed by a `subscribe` under the same id attaches a
+fresh registration to a still-replaying `CatchupThenPushSubscriptionModel` before the coarse readiness poll or
+`isRunning` check next runs, and a message the bridge pulls off the broker in that window still gets reported
+`DELIVERED` and buffered rather than applied, the exact loss this amendment set out to prevent. A fresh-context
+adversarial verify falsified it with a deterministic test reproducing that interleaving.
+
+This amendment replaces the mechanism, not the constraint. Decision 1 stands exactly as written.
+`CatchupThenPushSubscriptionModel` is not itself a push target, and every constructor and `subscribe` are
+unchanged. `PushObserver`/`RoutingOutcome` remain one exception decision 1 already names, and the readiness
+accessor and bean publication the amendment above added remain the other, both still additive rather than
+touching the class's existing contract. What changes is how `routeReportingMatch` decides what to report.
+
+Today `RegisteringSubscribable.routeReportingMatch` reports `RoutingOutcome.DELIVERED` before the matched
+registration's action runs at all, then dispatches. For a direct handler that is harmless. The handler either runs
+or its exception propagates, and the outcome already reported does not depend on which. For a registration backed
+by a catch-up-then-live buffer it is not harmless, because "the action ran" and "the action's target actually has
+the event" are different facts, and only the second one is what an acknowledging caller needs.
+
+`routeReportingMatch` now reports after the action runs, from what the action itself returns, under the one lock
+that already decides the match. The registered action, a new `RegisteringSubscribable.RoutingAction`, takes a
+`bufferIfNotLive` flag and returns whether the event genuinely landed. `RoutingOutcome` gains a fourth value,
+`DEFERRED`. It marks an event that reached a registration whose target cannot accept it yet, for a reason expected
+to resolve on its own, and it is safe to redeliver arbitrarily many times.
+
+`BlockingHandover` gains `acceptIfLive(T)` beside the existing `accept(T)`/`acceptReportingDelivery(T)`. Where those
+buffer a payload offered while not live, `acceptIfLive` refuses it outright, reporting `false` without ever
+touching the buffer. `PushSubscriptionModel.accept(CloudEvent)`, the write path an in-memory store listener or
+another in-process caller uses, is unchanged and keeps buffering, since a write-path event has nowhere else to come
+from and refusing it would lose it rather than protect it. A new `PushSubscriptionModel.acceptRedeliverable(CloudEvent)`
+is for a caller that can redeliver, a broker bridge, and routes to `acceptIfLive` instead. It refuses rather than
+buffers, reports `DEFERRED`, and lets the caller ask again. `CatchupThenPushSubscriptionModel`'s own public surface,
+every constructor and `subscribe`, does not change at all. Only which method its internal registration calls on the
+underlying handover does, chosen by which public entry point the caller used.
+
+`RabbitMqCloudEventBridge` and `KafkaCloudEventBridge`, and their domain-event equivalents, route
+`RoutingOutcome.DEFERRED` around `DeliveryFailurePolicy` entirely rather than through it. RabbitMQ negatively
+acknowledges with requeue, Kafka seeks back reusing the same per-partition throttle the earlier readiness gate
+already relied on, and neither ever parks. Nothing here is broken or wrong, so parking it would be the exact
+avoidable dead-lettering `DEFERRED` exists to rule out.
+
+`isReadyForLiveDelivery(String)` and `readinessSource(Predicate<String>)` stay, but nothing about correctness
+depends on them any more. `DEFERRED` is what keeps a bridge correct with no `readinessSource` configured at all,
+refusing and redelivering safely until catch-up finishes, and `readinessSource` only cuts down on how often that
+refuse-and-redeliver round trip happens. The RabbitMQ and Kafka Spring Boot starters now wire it
+automatically, deferring to whichever `CatchupThenPushSubscriptionModel` bean, if any, owns a bridge's subscription
+id, so a zero-config Spring application gets the quiet path during a replay without naming `readinessSource` itself.
+
+This closes the gap for the blocking stack only, CloudEvent-level and domain-level alike. The reactor stack carries
+the identical shape of defect in its own `RegisteringSubscribable.routeReportingMatch` and
+`DomainEventFeed.acceptCloudEvent`, worse in one respect. The reactor `DomainEventFeed` never received even the
+readiness-gate half-fix this amendment replaces, so it reports `DELIVERED` for a buffered-not-applied event
+unconditionally today. No reactor broker bridge exists yet to need the `DeliveryFailurePolicy` bypass half of this
+fix, but the correctness half, `ReactiveHandover.acceptIfLive` and the matching `routeReportingMatch`/
+`DomainEventFeed` changes, does not depend on one existing. It is a follow-up change in this same epic, not done
+here.
+
+Closes [#885](https://github.com/johanhaleby/occurrent/issues/885) as rejected. The wrapper-as-push-target design
+that issue proposed, and this amendment's own predecessor line of investigation considered again under a different
+name, is rejected a second time, for a different reason than decision 1's original one. `CatchupThenPushSubscriptionModel`'s
+public constructors shipped in 0.33.0, so giving it a `Pushable` shape would require changing released API, not
+merely revisiting a design choice. The fix that actually closes the gap needed no new push target at all.

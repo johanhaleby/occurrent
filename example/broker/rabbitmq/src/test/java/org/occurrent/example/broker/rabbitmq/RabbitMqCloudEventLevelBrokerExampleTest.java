@@ -17,11 +17,13 @@
 package org.occurrent.example.broker.rabbitmq;
 
 import io.cloudevents.CloudEvent;
+import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.Source;
+import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.CloudEventForwarder;
@@ -30,8 +32,10 @@ import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
+import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.blocking.OccurrentBlockingAnnotationConfiguration;
@@ -40,6 +44,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.nativedriver.blocking.NativeMongoSubscriptionModel;
+import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
@@ -50,7 +55,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -307,6 +314,163 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
             }
         } finally {
             forwarderSubscription.shutdown();
+        }
+    }
+
+    /**
+     * The regression proof for the catch-up acknowledgement hole. What actually closes it is
+     * {@code RoutingOutcome.DEFERRED}: {@code acceptRedeliverable(...)} refuses a message outright rather than
+     * buffering it while the wrapper is still replaying, so the bridge never acknowledges one it did not actually
+     * apply. {@code readinessSource} is configured here too, and this test still proves it keeps the bridge from
+     * pulling the message off the queue at all while not ready, but that is a pacing measure now, not what makes
+     * this safe. Exercised through the real {@code @Projection(source = PUSH)} wiring, not a hand-held
+     * {@code CatchupThenPushSubscriptionModel} reference, since that annotation-driven path is exactly where the
+     * defect lived. The wrapper {@code ProjectionAnnotationRegistrar} builds is otherwise reachable only from
+     * inside the registrar itself. {@code CatchupThenPushSubscriptionModelPublisher} is what makes it reachable
+     * here, under {@code "catchupThenPushSubscriptionModel-" + id}.
+     * <p>
+     * The replay is parked (never returns a single event) by a {@link PositionOrderedReader} that blocks before
+     * yielding anything, so {@code isReadyForLiveDelivery(id)} reads {@code false} for the whole test until this
+     * releases it. {@code startupMode = BACKGROUND} is required for that to work at all, since the default startup
+     * mode blocks {@code context.refresh()} until the catch-up finishes, which would deadlock against a replay this
+     * test itself controls.
+     * <p>
+     * The message published while parked carries an order id never written to the local event store at all, the
+     * same shape as an event a consume bridge exists to receive from another service. Nothing here could recover it
+     * from a replay if the bridge acknowledged it away before it was actually applied to the projection.
+     */
+    @Test
+    void catchup_readiness_keeps_the_bridge_from_consuming_until_the_replay_drains() throws Exception {
+        CloudEventConverter<OrderEvent> converter = newConverter();
+        CloudEventTypeMapper<OrderEvent> typeMapper = newTypeMapper();
+        RabbitMqTopicExchangeDestinationResolver resolver = newResolver(typeMapper);
+        MongoEventStore eventStore = newEventStore();
+        String projectionId = "order-status-readiness";
+
+        CountDownLatch replayStarted = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        PositionOrderedReader parkedReader = new ParkedUntilReleasedPositionOrderedReader(eventStore, replayStarted, releaseReplay);
+
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel pushModel = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        CheckpointStorage pushCatchupMarker = new NativeMongoCheckpointStorage(mongoClient.getDatabase(databaseName), "push-catchup-checkpoints");
+        Map<String, OrderStatusProjection.OrderStatusView> store = new ConcurrentHashMap<>();
+        ViewStateRepository<OrderStatusProjection.OrderStatusView, String> repository = ViewStateRepository.create(store::get, store::put);
+
+        AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
+        context.register(PropertiesConfig.class, OccurrentBlockingAnnotationConfiguration.class);
+        context.registerBean("pushModel", PushSubscriptionModel.class, () -> pushModel);
+        context.registerBean("pushCatchupMarker", CheckpointStorage.class, () -> pushCatchupMarker);
+        context.registerBean("positionOrderedReader", PositionOrderedReader.class, () -> parkedReader);
+        context.registerBean("cloudEventConverter", CloudEventConverter.class, () -> converter);
+        context.registerBean("viewStateRepository", ViewStateRepository.class, () -> repository);
+        context.registerBean("readinessProjectionHolder", ReadinessProjectionHolder.class, ReadinessProjectionHolder::new);
+        RabbitMqCloudEventBridge bridge = null;
+        RabbitMqCloudEventSink sink = null;
+        try {
+            // Returns immediately. startupMode = BACKGROUND on the projection below is what keeps this from
+            // blocking on the replay parkedReader is about to hold open.
+            context.refresh();
+
+            assertThat(replayStarted.await(10, TimeUnit.SECONDS))
+                    .as("the replay must genuinely be in flight before this test asserts anything about readiness")
+                    .isTrue();
+
+            CatchupThenPushSubscriptionModel catchupThenPush = context.getBean(
+                    "catchupThenPushSubscriptionModel-" + projectionId, CatchupThenPushSubscriptionModel.class);
+            assertThat(catchupThenPush.isReadyForLiveDelivery(projectionId)).isFalse();
+
+            sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build();
+            bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, outcomeChannel, queue)
+                    .resolver(resolver)
+                    .pollInterval(Duration.ofMillis(50))
+                    .readinessSource(catchupThenPush::isReadyForLiveDelivery)
+                    .build();
+
+            // Never written to eventStore at all, the same shape as an event only another service's store holds.
+            // Nothing here could replay it back if the bridge lost it. streamid and streamversion are stamped by
+            // hand, standing in for whatever store actually owns this stream, since OrderStatusProjection applies
+            // OrderPlaced through the metadata-aware handler and EventMetadata.from(...) requires both.
+            String orderId = "order-" + UUID.randomUUID();
+            OrderPlaced placed = new OrderPlaced(UUID.randomUUID().toString(), orderId, "Widget");
+            CloudEvent placedCloudEvent = CloudEventBuilder.from(converter.toCloudEvent(placed))
+                    .withExtension("streamid", orderId)
+                    .withExtension("streamversion", 1L)
+                    .build();
+            sink.publish(placedCloudEvent);
+
+            // Long enough for several poll intervals, so this is a genuine "never consumed while not ready"
+            // assertion, not a race against the bridge's own poll cadence.
+            Thread.sleep(500);
+            assertThat(store).doesNotContainKey(orderId);
+            assertThat(distinctEventIdsOnQueue(queue)).contains(placed.eventId());
+
+            releaseReplay.countDown();
+
+            await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(store).containsKey(orderId));
+            assertThat(catchupThenPush.isReadyForLiveDelivery(projectionId)).isTrue();
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(distinctEventIdsOnQueue(queue)).isEmpty());
+        } finally {
+            // releaseReplay first, unconditionally. A failed assertion above must not leave the replay thread
+            // parked forever, which would leak it past this test method.
+            releaseReplay.countDown();
+            try {
+                if (bridge != null) {
+                    bridge.close();
+                }
+            } finally {
+                try {
+                    if (sink != null) {
+                        sink.close();
+                    }
+                } finally {
+                    context.close();
+                }
+            }
+        }
+    }
+
+    /** Blocks before yielding a single event, so a replay reading through this never drains on its own. */
+    private static final class ParkedUntilReleasedPositionOrderedReader implements PositionOrderedReader {
+        private final PositionOrderedReader delegate;
+        private final CountDownLatch replayStarted;
+        private final CountDownLatch releaseReplay;
+
+        ParkedUntilReleasedPositionOrderedReader(PositionOrderedReader delegate, CountDownLatch replayStarted, CountDownLatch releaseReplay) {
+            this.delegate = delegate;
+            this.replayStarted = replayStarted;
+            this.releaseReplay = releaseReplay;
+        }
+
+        @Override
+        public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            replayStarted.countDown();
+            try {
+                if (!releaseReplay.await(20, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("Timed out waiting to be released");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+            return delegate.readInPositionOrder(filter, range);
+        }
+
+        @Override
+        public long currentPosition() {
+            return delegate.currentPosition();
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return delegate.writesPosition();
+        }
+    }
+
+    static class ReadinessProjectionHolder {
+        @Projection(id = "order-status-readiness", source = Source.PUSH, startupMode = StartupMode.BACKGROUND)
+        org.occurrent.dsl.projection.Projection<OrderStatusProjection.OrderStatusView, OrderEvent, String> projection() {
+            return OrderStatusProjection.orderStatusProjection();
         }
     }
 

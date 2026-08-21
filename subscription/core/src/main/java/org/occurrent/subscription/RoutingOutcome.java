@@ -21,14 +21,15 @@ package org.occurrent.subscription;
  * and everything built on it ({@code PushObserver}, and {@code DomainEventFeed}'s live match).
  * <p>
  * A caller that acknowledges an externally sourced event (a broker message, say) has to tell {@link #DELIVERED} and
- * {@link #FILTERED} apart from {@link #NOT_DELIVERABLE}. The first two describe an event a filter evaluated and
- * either accepted or declined on its own terms. The third covers every other reason the event was not actually
- * consumed. The filter was never asked at all, because there was no running, unpaused subscription for the event to
- * reach, or a filter was asked and threw instead of answering, or a filter accepted the event but the delivery
- * itself was then dropped rather than handled. Acknowledging on {@link #NOT_DELIVERABLE} discards an event nothing
- * consumed.
+ * {@link #FILTERED} apart from {@link #NOT_DELIVERABLE} and {@link #DEFERRED}. The first two describe an event a
+ * filter evaluated and either accepted or declined on its own terms. {@link #NOT_DELIVERABLE} covers every other
+ * reason the event was not actually consumed, leaving what happens next to the caller's own failure policy, since a
+ * stopped model or a paused subscription can resume and a later redelivery can then succeed. {@link #DEFERRED} is
+ * always safe to retry, with no failure policy involved at all, though resolving it can still need an operator to
+ * restart a stopped target rather than the redelivery alone. Acknowledging on either discards an event nothing
+ * consumed. The difference is only what a caller should do next.
  * <p>
- * All three come out of one evaluation, not a check taken before or after dispatch. A check taken separately would
+ * All four come out of one evaluation, not a check taken before or after dispatch. A check taken separately would
  * let a {@code stop()}, a {@code pauseSubscription} or a {@code cancelSubscription} land between the check and the
  * dispatch, so the outcome reported here is guaranteed to be the one that was true at the moment routing decided it,
  * not at some other moment a race could have moved past it.
@@ -36,13 +37,13 @@ package org.occurrent.subscription;
 public enum RoutingOutcome {
 
     /**
-     * A running, unpaused subscription's filter accepted the event. Whether the registered handler has actually run
-     * by the time this outcome is reported is a per-surface question, not something this outcome answers on its own,
-     * and on every surface examined so far the answer is no. A direct dispatch such as {@code PushObserver} reports
-     * this outcome before the handler is invoked at all, and a catch-up-then-live engine can report it for an event
-     * only just handed off into a buffer, ahead of the fold that eventually runs against it. Whether the handler
-     * succeeds or throws is a separate signal from this outcome either way. Consult the reporting method's own
-     * javadoc for what this outcome guarantees on a particular surface.
+     * A running, unpaused subscription's filter accepted the event, and it genuinely landed. It may be buffered
+     * where a fold will eventually run against it, delivered immediately, or already applied by an earlier
+     * attempt. A
+     * direct dispatch such as the blocking {@code PushObserver} reports this outcome only once the registered
+     * handler has run, whether it returned or threw, never before. Whether the handler succeeds or throws is a
+     * separate signal from this outcome either way. Consult the reporting method's own javadoc for what this
+     * outcome guarantees on a particular surface.
      */
     DELIVERED,
 
@@ -58,8 +59,22 @@ public enum RoutingOutcome {
      * The event was not delivered, for a reason that is never a filter declining it. Nothing is registered, the
      * model is not running, or the sole subscription is paused, so the filter was never asked. A filter that was
      * asked and threw instead of answering reports this too, since a filter that failed to answer did not decline
-     * the event. Never reported as a stand-in for {@link #FILTERED}, so a caller can tell "this event is not mine"
-     * from "nothing here is currently able to receive it".
+     * the event. Unlike {@link #DEFERRED}, a blind redelivery here is not automatically the right response. A
+     * stopped model or a paused subscription can be started or resumed, so a redelivery a caller's own failure
+     * policy issues can still succeed, but that recovery is the caller's to arrange, not something this outcome
+     * promises. Never reported as a stand-in for {@link #FILTERED} or {@link #DEFERRED}, so a caller can tell
+     * "this event is not mine", "nothing here is currently able to receive it", and "always safe to ask again"
+     * apart.
      */
-    NOT_DELIVERABLE
+    NOT_DELIVERABLE,
+
+    /**
+     * The event reached a registration whose target cannot accept it yet, a catch-up-then-live engine still
+     * replaying, say. Never a stand-in for {@link #NOT_DELIVERABLE}: nothing here is broken, wrong, or permanently
+     * undeliverable, so a caller must redeliver rather than park or discard. Safe to retry arbitrarily many times,
+     * though a target that is stopped rather than merely replaying needs an operator to restart it, redelivery
+     * alone will not resolve that case. Each attempt is evaluated fresh and the underlying engine dedupes what it
+     * has already applied.
+     */
+    DEFERRED
 }

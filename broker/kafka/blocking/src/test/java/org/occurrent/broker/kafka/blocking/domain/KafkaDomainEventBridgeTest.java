@@ -363,6 +363,90 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
         }
     }
 
+    /**
+     * {@code RoutingOutcome.DEFERRED} bypasses {@link DeliveryFailurePolicy} entirely, including {@code PARK}, the
+     * same as the CloudEvent-level bridge. {@code DomainEventFeed}'s coarse gate requires
+     * {@code isReadyForLiveDelivery()} before consuming at all, unlike the push-side bridge, and this bridge runs
+     * one dedicated poll loop thread, so two records can never race each other into {@code acceptIfLive}
+     * concurrently. The reachable way to prove this against a real broker is a direct, out-of-band call for the
+     * same dedup key (the domain event's {@code orderId}, this feed's own id extractor) that holds it in flight
+     * while the bridge delivers a duplicate for that same key: {@code acceptIfLive} refuses the bridge's delivery
+     * while the direct call is still folding, reported {@code DEFERRED}.
+     */
+    @Test
+    void park_configured_never_parks_a_deferred_record() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        String parkingTopic = createTopic(1);
+        KafkaDestination parkingDestination = KafkaDestination.of(parkingTopic);
+
+        CountDownLatch directCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseDirectCall = new CountDownLatch(1);
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", event -> {
+            handled.add(event);
+            if (handled.size() == 1) {
+                directCallEntered.countDown();
+                awaitLatch(releaseDirectCall);
+            }
+        }, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        // Out-of-band, bypassing the bridge entirely: holds the "order-1" dedup key in flight so the bridge's own
+        // delivery for the same key below is the one that gets refused, without needing two records racing on the
+        // same single poll loop thread.
+        CloudEvent directCloudEvent = new TestOrderPlacedConverter().toCloudEvent(new TestOrderPlaced("order-1"));
+        Thread directCaller = new Thread(() -> feed.acceptCloudEvent(directCloudEvent), "direct-in-flight-caller");
+        directCaller.start();
+        assertThat(directCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        try (KafkaDomainEventBridge<TestOrderPlaced> bridge = KafkaDomainEventBridge.builder(consumerConfig(groupId), feed)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(parkingDestination)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+
+            // Long enough for several seek-back-and-retry round trips of the DEFERRED record, so this is a genuine
+            // "never parked" assertion, not a race against the bridge's own retry pace.
+            Thread.sleep(POLL_TIMEOUT.toMillis() * 20);
+
+            releaseDirectCall.countDown();
+            directCaller.join(TimeUnit.SECONDS.toMillis(5));
+
+            // The redelivered duplicate finds the dedup key already applied by the direct call and does not fold
+            // the handler a second time.
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+            assertThat(handled).containsExactly(new TestOrderPlaced("order-1"));
+        }
+
+        assertThat(recordCount(parkingTopic)).as("DEFERRED bypasses PARK entirely").isZero();
+    }
+
+    private long recordCount(String recordTopic) {
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, "test-consumer-" + recordTopic,
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        try (org.apache.kafka.clients.consumer.KafkaConsumer<String, byte[]> consumer = new org.apache.kafka.clients.consumer.KafkaConsumer<>(
+                consumerConfig, new org.apache.kafka.common.serialization.StringDeserializer(), new org.apache.kafka.common.serialization.ByteArrayDeserializer())) {
+            consumer.subscribe(List.of(recordTopic));
+            org.apache.kafka.clients.consumer.ConsumerRecords<String, byte[]> records = consumer.poll(Duration.ofSeconds(3));
+            return records.count();
+        }
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).as("latch reached within the timeout").isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
+    }
+
     @Test
     void an_undecodable_message_is_parked_with_its_raw_bytes_and_the_original_commits_once_confirmed() throws Exception {
         String groupId = "group-" + UUID.randomUUID();

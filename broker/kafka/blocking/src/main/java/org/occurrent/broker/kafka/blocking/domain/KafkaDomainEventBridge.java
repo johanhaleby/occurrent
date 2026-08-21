@@ -63,6 +63,9 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * as {@code KafkaCloudEventBridge} follows the one its own model reports. {@link RoutingOutcome#DELIVERED} or
  * {@link RoutingOutcome#FILTERED} stages this record's offset for the next commit, {@link RoutingOutcome#NOT_DELIVERABLE}
  * and a thrown exception both apply this bridge's configured {@link DeliveryFailurePolicy} instead.
+ * {@link RoutingOutcome#DEFERRED} also never commits, but always seeks back the same way
+ * {@link DeliveryFailurePolicy#REDELIVER} does, bypassing {@link DeliveryFailurePolicy} entirely: nothing here is
+ * broken, only not ready yet, and {@code PARK} exists for failures, not for pacing.
  * <p>
  * <strong>{@link UnreadableLiveFilterException} is different, and permanent.</strong> It means the projection this
  * feed carries was registered with a {@code data} payload filter this feed has no
@@ -117,9 +120,10 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * {@link DeliveryFailurePolicy#REDELIVER} that is an instant seek-and-redeliver loop, not a wait. Without the
  * readiness half, a record arriving before the application calls {@code catchUpAll()}/{@code catchUp(...)} or
  * {@code goLive(...)}, or while a replay is still actively running, would only ever buffer with nothing behind it,
- * which {@code acceptCloudEvent(...)} answers with {@link RoutingOutcome#NOT_DELIVERABLE} for exactly that reason
- * (see its own javadoc), and under {@code REDELIVER} that is the same instant loop, this time against a buffer that
- * never drains until live is actually reached. {@code poll()} still runs while paused, for the same heartbeat and
+ * which {@code acceptCloudEvent(...)} answers with {@link RoutingOutcome#DEFERRED} for exactly that reason (see its
+ * own javadoc): refused outright rather than buffered, bypassing {@link DeliveryFailurePolicy} regardless of what
+ * this bridge is configured with, so {@code PARK} can never fire for a record that only needs the replay to catch
+ * up. {@code poll()} still runs while paused, for the same heartbeat and
  * rebalance reason {@code KafkaCloudEventBridge} states, and the same rewind-to-earliest-fetched it applies to a
  * record its very first, pre-pause fetch can still return applies here too.
  * <p>
@@ -474,6 +478,12 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
             stage(record, toCommit);
             return HandleResult.RESOLVED;
+        }
+        if (outcome == RoutingOutcome.DEFERRED) {
+            // Bypasses DeliveryFailurePolicy (and any parking) entirely: nothing here is broken, only not ready
+            // yet. REDELIVER, without ever calling failureAction.apply(record), reuses the same seek-back and
+            // throttledUntilNanos pacing processBatch(..) already applies for a partition it stops early.
+            return HandleResult.REDELIVER;
         }
         return toHandleResult(record, toCommit, failureAction.apply(record));
     }
