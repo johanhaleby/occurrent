@@ -25,8 +25,9 @@ package org.occurrent.subscription;
  * filter evaluated and either accepted or declined on its own terms. {@link #NOT_DELIVERABLE} covers every other
  * reason the event was not actually consumed, leaving what happens next to the caller's own failure policy, since a
  * stopped model or a paused subscription can resume and a later redelivery can then succeed. {@link #DEFERRED} is
- * the one outcome guaranteed to resolve on its own, with no failure policy involved at all. Acknowledging on either
- * discards an event nothing consumed. The difference is only what a caller should do next.
+ * always safe to retry, with no failure policy involved at all, though resolving it can still need an operator to
+ * restart a stopped target rather than the redelivery alone. Acknowledging on either discards an event nothing
+ * consumed. The difference is only what a caller should do next.
  * <p>
  * All four come out of one evaluation, not a check taken before or after dispatch. A check taken separately would
  * let a {@code stop()}, a {@code pauseSubscription} or a {@code cancelSubscription} land between the check and the
@@ -58,20 +59,22 @@ public enum RoutingOutcome {
      * The event was not delivered, for a reason that is never a filter declining it. Nothing is registered, the
      * model is not running, or the sole subscription is paused, so the filter was never asked. A filter that was
      * asked and threw instead of answering reports this too, since a filter that failed to answer did not decline
-     * the event. Unlike {@link #DEFERRED}, nothing here guarantees this resolves on its own. A stopped model or a
-     * paused subscription can be started or resumed, so a redelivery a caller's own failure policy issues can still
-     * succeed, but that recovery is the caller's to arrange, not something this outcome promises. Never reported as
-     * a stand-in for {@link #FILTERED} or {@link #DEFERRED}, so a caller can tell "this event is not mine",
-     * "nothing here is currently able to receive it", and "ask again shortly, guaranteed" apart.
+     * the event. Unlike {@link #DEFERRED}, a blind redelivery here is not automatically the right response. A
+     * stopped model or a paused subscription can be started or resumed, so a redelivery a caller's own failure
+     * policy issues can still succeed, but that recovery is the caller's to arrange, not something this outcome
+     * promises. Never reported as a stand-in for {@link #FILTERED} or {@link #DEFERRED}, so a caller can tell
+     * "this event is not mine", "nothing here is currently able to receive it", and "always safe to ask again"
+     * apart.
      */
     NOT_DELIVERABLE,
 
     /**
      * The event reached a registration whose target cannot accept it yet, a catch-up-then-live engine still
-     * replaying, say, for a reason expected to resolve on its own. Never a stand-in for {@link #NOT_DELIVERABLE}:
-     * nothing here is broken, wrong, or permanently undeliverable, so a caller must redeliver rather than park or
-     * discard. Safe to redeliver arbitrarily many times. Each attempt is evaluated fresh and the underlying engine
-     * dedupes what it has already applied.
+     * replaying, say. Never a stand-in for {@link #NOT_DELIVERABLE}: nothing here is broken, wrong, or permanently
+     * undeliverable, so a caller must redeliver rather than park or discard. Safe to retry arbitrarily many times,
+     * though a target that is stopped rather than merely replaying needs an operator to restart it, redelivery
+     * alone will not resolve that case. Each attempt is evaluated fresh and the underlying engine dedupes what it
+     * has already applied.
      */
     DEFERRED
 }

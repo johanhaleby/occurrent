@@ -794,9 +794,10 @@ fresh registration to a still-replaying `CatchupThenPushSubscriptionModel` befor
 adversarial verify falsified it with a deterministic test reproducing that interleaving.
 
 This amendment replaces the mechanism, not the constraint. Decision 1 stands exactly as written.
-`CatchupThenPushSubscriptionModel` is not itself a push target, its shape and its public constructors are
-unchanged, and `PushObserver`/`RoutingOutcome` remain the one exception decision 1 already names. What changes is
-how `routeReportingMatch` decides what to report.
+`CatchupThenPushSubscriptionModel` is not itself a push target, and every constructor and `subscribe` are
+unchanged. `PushObserver`/`RoutingOutcome` remain one exception decision 1 already names, and the readiness
+accessor and bean publication the amendment above added remain the other, both still additive rather than
+touching the class's existing contract. What changes is how `routeReportingMatch` decides what to report.
 
 Today `RegisteringSubscribable.routeReportingMatch` reports `RoutingOutcome.DELIVERED` before the matched
 registration's action runs at all, then dispatches. For a direct handler that is harmless. The handler either runs

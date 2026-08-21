@@ -955,6 +955,231 @@ class CatchupThenPushSubscriptionModelTest {
                 + "caught up").isTrue();
     }
 
+    /**
+     * Adversarial verification of {@code completeIfStillOwned}: its ownership check runs under the model's own
+     * monitor, the same one {@code cancelSubscription} and {@code launchReplay}'s registering put use, purely to
+     * make the check-then-write atomic with those two. Nothing in the guarded completion calls back into
+     * {@link org.occurrent.subscription.api.blocking.internal.BlockingHandover}'s own lock, and nothing that holds
+     * that lock calls back into the model's monitor, so the two never wait on each other. This races a replay's own
+     * completion against a concurrent {@code cancelSubscription} plus resubscribe for the same id and asserts both
+     * finish within a bounded timeout instead of hanging.
+     */
+    @Test
+    void a_completing_replay_and_a_concurrent_cancel_plus_resubscribe_never_deadlock_on_the_models_monitor() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+
+        CountDownLatch parkedOnOnlyEvent = new CountDownLatch(1);
+        CountDownLatch releaseFold = new CountDownLatch(1);
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            parkedOnOnlyEvent.countDown();
+            awaitLatch(releaseFold);
+        });
+        assertThat(parkedOnOnlyEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        CountDownLatch bothReady = new CountDownLatch(2);
+        CountDownLatch go = new CountDownLatch(1);
+
+        // Unblocks the parked fold, so the pre-existing replay thread runs the post-loop keepReplaying() check,
+        // drains, and reaches both completeIfStillOwned call sites (markCaughtUp, then the forget-plus-pending-pause
+        // completion), each acquiring the model's monitor.
+        Thread releaseTrigger = new Thread(() -> {
+            bothReady.countDown();
+            awaitLatch(go);
+            releaseFold.countDown();
+        }, "release-trigger");
+
+        // Acquires the SAME monitor, first for cancelSubscription's removal, then again for the new launcher's
+        // registering put inside launchReplay, racing directly against the replay thread above.
+        Thread cancelAndResubscribe = new Thread(() -> {
+            bothReady.countDown();
+            awaitLatch(go);
+            model.cancelSubscription("sub");
+            model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            });
+        }, "cancel-and-resubscribe");
+
+        releaseTrigger.start();
+        cancelAndResubscribe.start();
+        assertThat(bothReady.await(5, TimeUnit.SECONDS)).isTrue();
+        go.countDown();
+
+        releaseTrigger.join(5_000);
+        cancelAndResubscribe.join(5_000);
+
+        assertThat(releaseTrigger.isAlive()).as("no deadlock between completeIfStillOwned and a concurrent "
+                + "cancelSubscription/subscribe racing for the model's monitor").isFalse();
+        assertThat(cancelAndResubscribe.isAlive()).as("no deadlock between completeIfStillOwned and a concurrent "
+                + "cancelSubscription/subscribe racing for the model's monitor").isFalse();
+
+        // Sane and live either way, regardless of which side won the race.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (model.isCatchingUp("sub") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(model.isCatchingUp("sub")).as("the winning replay, old or new, eventually finishes catching up")
+                .isFalse();
+        assertThat(model.isRunning("sub")).isTrue();
+    }
+
+    /**
+     * Adversarial verification of the failure path: an old replay that throws after a same-id cancel-and-resubscribe
+     * only ever reaches the unguarded, by-identity {@code forget(..)} call, never {@code completeIfStillOwned}, since
+     * the failure branch neither writes the catch-up marker nor consumes a pending pause. This confirms that leaves
+     * every id-keyed write belonging to the NEW subscription untouched: its {@code replayingSubscriptions} entry,
+     * its pending pause, and the live feed's own pause state.
+     */
+    @Test
+    void an_old_replays_stale_failure_leaves_the_new_subscriptions_registration_and_pending_pause_untouched() throws Exception {
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")));
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+
+        CountDownLatch oldReplayParked = new CountDownLatch(1);
+        CountDownLatch releaseOldReplay = new CountDownLatch(1);
+        RuntimeException oldReplayFailure = new RuntimeException("old replay boom");
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            oldReplayParked.countDown();
+            awaitLatch(releaseOldReplay);
+            throw oldReplayFailure;
+        });
+        assertThat(oldReplayParked.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Cancelling does not stop the old replay's thread, only the registration and the map entries it owned at
+        // this moment.
+        model.cancelSubscription("sub");
+
+        CountDownLatch newReplayParkedOnFirstEvent = new CountDownLatch(1);
+        CountDownLatch releaseNewReplay = new CountDownLatch(1);
+        List<String> newReplayFolded = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            newReplayFolded.add(ce.getId());
+            newReplayParkedOnFirstEvent.countDown();
+            awaitLatch(releaseNewReplay);
+        });
+        assertThat(newReplayParkedOnFirstEvent.await(5, TimeUnit.SECONDS)).isTrue();
+        model.pauseSubscription("sub");
+        assertThat(model.isPaused("sub")).isTrue();
+        assertThat(model.isCatchingUp("sub")).isTrue();
+
+        // The old replay's failure runs only now, well after ownership moved to the new registration.
+        releaseOldReplay.countDown();
+        Thread.sleep(200);
+
+        assertThat(model.isCatchingUp("sub")).as("the new replay's own registration in replayingSubscriptions must "
+                + "survive the old replay's stale failure").isTrue();
+        assertThat(model.isPaused("sub")).as("the new subscription's pending pause must survive the old replay's "
+                + "stale failure untouched").isTrue();
+        assertThat(feed.isPaused("sub")).as("not consumed by the old replay's failure, which never reaches the "
+                + "pending-pause consumption at all").isFalse();
+        assertThat(marker.exists("sub")).as("the failure path never calls markCaughtUp").isFalse();
+
+        // And the new replay still completes normally afterwards, unaffected by the stale failure.
+        releaseNewReplay.countDown();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!feed.isPaused("sub") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(feed.isPaused("sub")).as("the new replay's own completion applies the pause that was always "
+                + "meant for it").isTrue();
+        assertThat(marker.exists("sub")).isTrue();
+        assertThat(newReplayFolded).containsExactly("1", "2", "3");
+    }
+
+    /**
+     * Adversarial verification that relaunching a legitimately interrupted replay still works normally after a
+     * stale, same-id replay's late completion was refused on both {@code completeIfStillOwned} call sites
+     * (markCaughtUp, and the forget-plus-pending-pause after catchUp(..) returns). Reuses the drain-time parking
+     * trick from the post-loop-window test above so the old replay's own post-loop check passes before ownership
+     * moves, and additionally stops and relaunches the new subscription's replay while the old one is still parked,
+     * so the relaunch and the stale replay's refused completion are interleaved rather than sequential.
+     */
+    @Test
+    void relaunching_an_interrupted_replay_still_completes_normally_after_an_old_replays_stale_completion_was_refused_on_both_paths() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+
+        CountDownLatch oldReplayParkedOnHistoricalEvent = new CountDownLatch(1);
+        CountDownLatch releaseHistoricalEvent = new CountDownLatch(1);
+        CountDownLatch oldReplayParkedOnBufferedLiveEvent = new CountDownLatch(1);
+        CountDownLatch releaseBufferedLiveEvent = new CountDownLatch(1);
+        List<String> oldReplayFolded = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            oldReplayFolded.add(ce.getId());
+            if (ce.getId().equals("1")) {
+                oldReplayParkedOnHistoricalEvent.countDown();
+                awaitLatch(releaseHistoricalEvent);
+            } else if (ce.getId().equals("2-live")) {
+                oldReplayParkedOnBufferedLiveEvent.countDown();
+                awaitLatch(releaseBufferedLiveEvent);
+            }
+        });
+        assertThat(oldReplayParkedOnHistoricalEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Arrives as a live event the still-replaying handover only buffers.
+        store.write("s1", List.of(cloudEvent("2-live", "Updated")));
+
+        // The post-loop keepReplaying() check runs next, still true (ownership has not moved yet), and
+        // drainBufferAndGoLive() delivers the one buffered event.
+        releaseHistoricalEvent.countDown();
+        assertThat(oldReplayParkedOnBufferedLiveEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Ownership moves here, while the old replay is parked mid-drain, after its post-loop check and before
+        // either completeIfStillOwned call site.
+        model.cancelSubscription("sub");
+
+        CountDownLatch newReplayParkedOnFirstEvent = new CountDownLatch(1);
+        CountDownLatch releaseNewReplay = new CountDownLatch(1);
+        List<String> newReplayFolded = new CopyOnWriteArrayList<>();
+        Subscription newSubscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            newReplayFolded.add(ce.getId());
+            newReplayParkedOnFirstEvent.countDown();
+            awaitLatch(releaseNewReplay);
+        });
+        assertThat(newReplayParkedOnFirstEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Interrupts the new replay legitimately, mid-fold: its own launcher survives in interruptibleReplays for
+        // start(true) to relaunch, and its replayingSubscriptions entry is dropped by its own (unguarded) forget().
+        model.stop();
+        releaseNewReplay.countDown();
+        assertThat(newSubscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+        assertThat(model.isCatchingUp("sub")).isFalse();
+
+        // The old replay's own late completion runs only now, well after ownership moved to the (now-stopped and
+        // forgotten) new registration. Refused on both completeIfStillOwned call sites.
+        releaseBufferedLiveEvent.countDown();
+        Thread.sleep(200);
+        assertThat(oldReplayFolded).containsExactly("1", "2-live");
+        assertThat(marker.exists("sub")).as("the old replay's stale success must not mark a subscription its "
+                + "history was never actually caught up for").isFalse();
+
+        // The interrupted new replay relaunches and completes normally, unaffected by the stale replay's refused
+        // completion.
+        model.start(true);
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!marker.exists("sub") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+
+        assertThat(marker.exists("sub")).as("the relaunched replay's own completion writes the marker").isTrue();
+        assertThat(model.isRunning("sub")).isTrue();
+        assertThat(model.isCatchingUp("sub")).isFalse();
+        assertThat(newReplayFolded).endsWith("1", "2-live");
+
+        // And the live feed genuinely works afterwards, so the relaunch really did hand over.
+        feed.accept(cloudEvent("3-post", "Updated"));
+        assertThat(newReplayFolded).endsWith("2-live", "3-post");
+    }
+
     @Test
     void starting_the_model_without_resuming_subscriptions_leaves_a_stopped_replay_for_resume_to_pick_up() throws Exception {
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
