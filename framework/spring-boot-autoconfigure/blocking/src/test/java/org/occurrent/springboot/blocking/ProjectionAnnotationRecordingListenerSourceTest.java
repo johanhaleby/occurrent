@@ -30,7 +30,7 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.AppendId;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
-import org.occurrent.subscription.CatchupSnapshot;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
@@ -54,19 +54,20 @@ import static org.mockito.Mockito.*;
  * exact model that {@link Subscriptions} bean runs on, not from an independently resolved {@code Subscribable} bean
  * of the same type that happens to exist elsewhere in the context.
  * <p>
- * {@code correctModel} is the one {@link Subscriptions} was actually built from here, reporting a replay in
- * progress. {@code distractorModel} is a second, unrelated {@code Subscribable} bean the context also happens to
- * have, reporting no replay. Deriving the phase from the wrong one would record the live event's append id anyway,
- * since {@code distractorModel} says nothing is replaying. Container-free, since a mock captures the delivery
- * callback {@link Subscriptions} passes to whichever model it wraps, so no real subscription infrastructure runs.
+ * {@code correctModel} is the one {@link Subscriptions} was actually built from here, and it announces a catch-up
+ * the moment a listener registers, the way a real model does. {@code distractorModel} is a second, unrelated
+ * {@code Subscribable} bean the context also happens to have, and it announces nothing. Registering on the wrong one
+ * would record the delivered event's append id anyway, since nothing would have told the projection a catch-up was
+ * running. Container-free, since a mock captures the delivery callback {@link Subscriptions} passes to whichever
+ * model it wraps, so no real subscription infrastructure runs.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
-class ProjectionAnnotationRecordingPhaseSourceTest {
+class ProjectionAnnotationRecordingListenerSourceTest {
 
     private static final String PROJECTION_ID = "orders";
 
     @Test
-    void the_recording_phase_comes_from_the_subscriptions_beans_own_model_not_an_unrelated_subscribable_bean() {
+    void the_recording_listener_is_registered_on_the_subscriptions_beans_own_model_not_an_unrelated_subscribable_bean() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
 
@@ -75,10 +76,13 @@ class ProjectionAnnotationRecordingPhaseSourceTest {
         // told directly what it exposes.
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) correctModel)).when(correctModel).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) correctModel).isCatchingUp(PROJECTION_ID)).thenReturn(true);
-        // One reading, which is what the phase source takes, so the part and the catch-up it belongs to cannot come
-        // from two different moments. Reading history is what suppresses recording, since a catch-up past that point
-        // is delivering events written since it started and those are recorded.
-        when(((ReplayAwareSubscriptions) correctModel).catchupSnapshot(PROJECTION_ID)).thenReturn(new CatchupSnapshot(true, true, 1L));
+        // Announces a catch-up as the listener registers, which is what a real model does when one is already
+        // running, and then delivers its history through the same action.
+        when(((ReplayAwareSubscriptions) correctModel).listenForCatchup(eq(PROJECTION_ID), any())).thenAnswer(invocation -> {
+            CatchupListener listener = invocation.getArgument(1);
+            listener.catchupStarted(new Object());
+            return true;
+        });
         when(correctModel.subscribe(anyString(), any(), any(StartAt.class), any())).thenAnswer(invocation -> {
             @SuppressWarnings("unchecked")
             Consumer<CloudEvent> action = invocation.getArgument(3);
@@ -89,7 +93,7 @@ class ProjectionAnnotationRecordingPhaseSourceTest {
         Subscribable distractorModel = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) distractorModel)).when(distractorModel).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) distractorModel).isCatchingUp(anyString())).thenReturn(false);
-        when(((ReplayAwareSubscriptions) distractorModel).catchupSnapshot(anyString())).thenReturn(CatchupSnapshot.LIVE);
+        when(((ReplayAwareSubscriptions) distractorModel).listenForCatchup(anyString(), any())).thenReturn(true);
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -99,10 +103,11 @@ class ProjectionAnnotationRecordingPhaseSourceTest {
                 .withBean(Subscriptions.class, () -> new Subscriptions<>(correctModel, testEventConverter()))
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    // correctModel (what Subscriptions actually runs on) reports replaying, so the live event's
-                    // append id must not be recorded. A phase read from distractorModel instead would have recorded
-                    // it, since distractorModel reports no replay in progress.
+                    // correctModel (what Subscriptions actually runs on) announced a catch-up, so the event it
+                    // then delivered must not be recorded. A listener registered on distractorModel instead would
+                    // have left the projection recording, since nothing would have announced anything.
                     assertThat(store.hasApplied(PROJECTION_ID, appendId)).isFalse();
+                    verify((ReplayAwareSubscriptions) distractorModel, never()).listenForCatchup(anyString(), any());
                 });
     }
 
