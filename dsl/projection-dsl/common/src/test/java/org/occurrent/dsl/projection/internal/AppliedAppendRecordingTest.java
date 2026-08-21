@@ -366,6 +366,34 @@ class AppliedAppendRecordingTest {
         assertThat(clears).hasSize(2);
     }
 
+    // A catch-up never goes live and then reconciles again, so a reconciliation seen after a live delivery belongs to
+    // a second catch-up. Its history read matching nothing is what makes it invisible, which the poll interval then
+    // steps over, so nothing else drops what the first one was holding.
+    @Test
+    void appends_waiting_for_a_clear_are_dropped_when_a_second_catch_up_reconciles_without_its_history_being_seen() {
+        AtomicBoolean clearShouldFail = new AtomicBoolean(true);
+        AppliedAppendStore store = clearCountingStore(new ArrayList<>(), clearShouldFail);
+        AtomicReference<CatchupPhase> phase = new AtomicReference<>(CatchupPhase.RECONCILING);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, phase::get);
+
+        AppendId firstCatchup = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(firstCatchup));
+
+        // The first catch-up hands over with its clear still failing, so the buffer survives the live observation.
+        phase.set(CatchupPhase.LIVE);
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        assertThat(store.hasApplied(PROJECTION_ID, firstCatchup)).isFalse();
+
+        // A second catch-up whose history read handled nothing, so the first thing seen of it is its reconciliation.
+        clearShouldFail.set(false);
+        phase.set(CatchupPhase.RECONCILING);
+        AppendId secondCatchup = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(secondCatchup));
+
+        assertThat(store.hasApplied(PROJECTION_ID, firstCatchup)).isFalse();
+        assertThat(store.hasApplied(PROJECTION_ID, secondCatchup)).isTrue();
+    }
+
     // Staying in the history read must not start a new episode on every event, which is what the per-episode latch
     // is for. Only the edge from the reconciliation back to history does.
     @Test

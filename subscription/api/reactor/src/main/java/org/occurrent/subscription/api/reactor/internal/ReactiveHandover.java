@@ -293,12 +293,13 @@ public final class ReactiveHandover<T> {
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : source.markCaughtUp());
 
         replayFolded
+                // Before the marker, before the catch-up signal and before the drain, on every path into it,
+                // including the already-caught-up one that skipped the replay entirely. Ahead of the signal
+                // specifically because a source's own subscriber to it runs inline and may forget the id, and this
+                // running after that would leave state behind that nothing removes.
+                .then(Mono.fromRunnable(source::historyDone))
                 .then(recordMarker)
                 .doOnSuccess(ignored -> catchupDone.tryEmitValue(true))
-                // Before the drain and on every path into it, including the already-caught-up one that skipped the
-                // replay entirely, so a source reporting its own catch-up phase has stopped calling this a replay by
-                // the time a buffered payload is delivered.
-                .then(Mono.fromRunnable(source::historyDone))
                 .thenMany(liveSink.asFlux().concatMap(this::deliver))
                 // This engine subscribes its own pipeline rather than handing it back, so without a scheduler the
                 // replay would run on whoever called catchUp, which is the Spring refresh thread for an annotated

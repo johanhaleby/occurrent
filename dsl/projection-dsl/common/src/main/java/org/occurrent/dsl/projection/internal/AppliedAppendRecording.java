@@ -155,14 +155,24 @@ public final class AppliedAppendRecording {
     private CatchupPhase observePhase() {
         CatchupPhase current = lifecycleReplaying ? CatchupPhase.REPLAYING_HISTORY : phase.currentPhase();
         if (current == CatchupPhase.REPLAYING_HISTORY) {
-            awaitingClear.clear();
-            awaitingClearOverflowLogged = false;
+            dropAwaitingClear();
             if (lastPhase == CatchupPhase.RECONCILING) {
                 episodeCleared = false;
             }
+        } else if (current == CatchupPhase.RECONCILING && lastPhase == CatchupPhase.LIVE) {
+            // A catch-up never goes live and then reconciles again, so this is a second catch-up whose history read
+            // was never seen, which happens when it matches nothing and the poll interval steps over it. Whatever the
+            // previous one was still holding belongs to a read model this one is rebuilding.
+            dropAwaitingClear();
         }
         lastPhase = current;
         return current;
+    }
+
+    // Assumes clearLock is already held by the caller.
+    private void dropAwaitingClear() {
+        awaitingClear.clear();
+        awaitingClearOverflowLogged = false;
     }
 
     // Assumes clearLock is already held by the caller.
@@ -191,8 +201,7 @@ public final class AppliedAppendRecording {
             store.recordApplied(projectionId, appendId);
             lastRecorded = appendId;
         }
-        awaitingClear.clear();
-        awaitingClearOverflowLogged = false;
+        dropAwaitingClear();
     }
 
     // Assumes clearLock is already held by the caller.
@@ -250,8 +259,7 @@ public final class AppliedAppendRecording {
      */
     public void replayObserved() {
         synchronized (clearLock) {
-            awaitingClear.clear();
-            awaitingClearOverflowLogged = false;
+            dropAwaitingClear();
             if (lastPhase == CatchupPhase.RECONCILING) {
                 episodeCleared = false;
             }

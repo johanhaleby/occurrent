@@ -42,6 +42,7 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -52,6 +53,29 @@ import static org.awaitility.Awaitility.await;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupThenPushSubscriptionModelTest {
+
+    // A completed catch-up must leave nothing behind that makes the next one look like it is past its history read.
+    // It did once: the catch-up-done signal removed the id inline before the history-done hook ran, so the hook put
+    // the id back and only a shutdown ever took it out again. A second catch-up for the same id then reported that it
+    // was reconciling for its whole history read, and a recording projection records during a reconciliation.
+    @Test
+    void a_second_catch_up_for_the_same_id_reads_its_history_as_history() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<Boolean> historyDuringReplay = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupThenPushSubscriptionModel> self = new AtomicReference<>();
+        AtomicInteger round = new AtomicInteger();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("e" + round.incrementAndGet(), "Created"))
+                .doOnNext(__ -> historyDuringReplay.add(self.get().isReplayingHistory("proj"))), 1);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        self.set(model);
+
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block();
+        model.cancelSubscription("proj");
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block();
+
+        assertThat(historyDuringReplay).containsExactly(true, true);
+    }
 
     @Test
     void catches_up_history_then_delivers_the_live_feed() {

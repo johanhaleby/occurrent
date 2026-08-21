@@ -266,6 +266,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         self.set(replay);
         // Registered before the thread starts, so isRunning(id) answers for it the moment subscribe returns rather than
         // whenever the replay thread happens to get scheduled.
+        // Cleared here rather than only on the exit paths, so this attempt starts in the history part of its
+        // catch-up whatever the previous attempt for the same id left behind.
+        reconcilingSubscriptions.remove(subscriptionId);
         replayingSubscriptions.put(subscriptionId, replay);
         Thread.ofVirtual().name("occurrent-push-catchup-" + subscriptionId).start(replay);
         return replay;

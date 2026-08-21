@@ -160,6 +160,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // isRunning(id) and keepReplaying() therefore answer for this subscription from the moment subscribe returns,
         // rather than from whenever that pipeline happens to get scheduled.
         Sinks.One<Boolean> replayDone = Sinks.one();
+        // Cleared here rather than only on the exit paths, so this attempt starts in the history part of its
+        // catch-up whatever the previous attempt for the same id left behind.
+        reconcilingSubscriptions.remove(subscriptionId);
         replayingSubscriptions.put(subscriptionId, replayDone);
 
         Mono<Boolean> catchupDone = handover.catchUp(new ReactiveHandover.Source<>() {
@@ -396,6 +399,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         // Removing it here is what stops a replay in flight: shouldKeepReplaying reads this map.
         replayingSubscriptions.remove(subscriptionId);
+        reconcilingSubscriptions.remove(subscriptionId);
         pauseRequestedDuringReplay.remove(subscriptionId);
         // A cancel is not a stop, so nothing is kept to launch again. This is also the recovery from a failed
         // catch-up: it frees the id and releases the registration that was refusing (ADR 104).
