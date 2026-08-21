@@ -39,6 +39,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 /**
  * Runs both {@link RabbitMqCloudEventLevelBootstrap} and {@link RabbitMqDomainEventLevelBootstrap} exactly as
@@ -107,8 +108,11 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
     }
 
     /**
-     * Proves that a failure partway through {@code start(...)} does not leak the forwarder subscription or the
-     * sink that already started before it. Failing the bridge's own channel open,
+     * Proves that a failure partway through {@code start(...)} does not leak the forwarder subscription that
+     * already started before it. The sink built in the same window is not asserted here, neither bootstrap exposes
+     * an accessor for it, and {@code RabbitMqCloudEventSink} itself has no closed-state to probe from outside. A
+     * leaked sink would show up as an open channel on the connection, not as anything this probe can observe.
+     * Failing the bridge's own channel open,
      * the second {@code openChannel()} call on the connection (the first is the sink's), forces exactly that
      * partial-construction failure without touching the bridge's own topology. If the forwarder subscription
      * leaked, it would still be watching the store and would forward a fresh order to the exchange, so a queue
@@ -157,18 +161,25 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
     }
 
     /**
-     * Binds a fresh queue directly to the bootstraps' fixed exchange, writes a fresh order straight into the
-     * bootstraps' fixed database, the same one a leaked forwarder subscription would still be watching, and
-     * asserts nothing arrives. A live forwarder would publish it within milliseconds of the write, well inside
-     * the wait below.
+     * Binds a fresh queue directly to the bootstraps' own {@link RabbitMqCloudEventLevelBootstrap#EXCHANGE}
+     * (both bootstraps share the identical exchange, database and collection names by design), writes a fresh
+     * order straight into {@link RabbitMqCloudEventLevelBootstrap#DATABASE_NAME}, the same database a leaked
+     * forwarder subscription would still be watching, and asserts nothing arrives. A live forwarder would publish
+     * it within milliseconds of the write, well inside the wait below. Referencing the bootstraps' own constants
+     * rather than repeating the literals here means a renamed exchange or database cannot leave this probe
+     * silently watching the wrong one while a real leak goes undetected.
+     * {@link #the_leak_probe_itself_sees_a_forwarder_that_is_actually_still_running()} is this method's own
+     * positive control, proving the probe mechanism catches a forwarder that genuinely is running before trusting
+     * it to prove the negative everywhere else in this class.
      */
     private void assertNothingArrivesFromALeakedForwarder() throws Exception {
         String probeQueue = "leak-probe-" + UUID.randomUUID();
         adminChannel.queueDeclare(probeQueue, false, false, true, null);
-        adminChannel.queueBind(probeQueue, "broker-example", "#");
+        adminChannel.queueBind(probeQueue, RabbitMqCloudEventLevelBootstrap.EXCHANGE, "#");
         try {
             CloudEventConverter<OrderEvent> converter = newConverter();
-            MongoEventStore eventStore = new MongoEventStore(mongoClient, "occurrent_broker_example", "events", new EventStoreConfig(TimeRepresentation.RFC_3339_STRING));
+            MongoEventStore eventStore = new MongoEventStore(mongoClient, RabbitMqCloudEventLevelBootstrap.DATABASE_NAME,
+                    RabbitMqCloudEventLevelBootstrap.EVENTS_COLLECTION, new EventStoreConfig(TimeRepresentation.RFC_3339_STRING));
             String orderId = "order-" + UUID.randomUUID();
             eventStore.write(orderId, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderId, "Widget")));
 
@@ -176,6 +187,34 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
             assertThat(adminChannel.queueDeclarePassive(probeQueue).getMessageCount()).isZero();
         } finally {
             adminChannel.queueDelete(probeQueue);
+        }
+    }
+
+    /**
+     * The positive control {@link #assertNothingArrivesFromALeakedForwarder()}'s own javadoc promises: the exact
+     * same probe mechanism, run while a bootstrap's forwarder genuinely is still running rather than after a
+     * simulated partial-construction failure, must see the order arrive. Without this, a probe that silently never
+     * saw anything, a wrong exchange name after a rename, for example, would make every "did not leak" assertion
+     * above pass vacuously.
+     */
+    @Test
+    void the_leak_probe_itself_sees_a_forwarder_that_is_actually_still_running() throws Exception {
+        try (RabbitMqCloudEventLevelBootstrap app = RabbitMqCloudEventLevelBootstrap.start(mongoClient, rabbitConnection)) {
+            String probeQueue = "leak-probe-control-" + UUID.randomUUID();
+            adminChannel.queueDeclare(probeQueue, false, false, true, null);
+            adminChannel.queueBind(probeQueue, RabbitMqCloudEventLevelBootstrap.EXCHANGE, "#");
+            try {
+                CloudEventConverter<OrderEvent> converter = newConverter();
+                MongoEventStore eventStore = new MongoEventStore(mongoClient, RabbitMqCloudEventLevelBootstrap.DATABASE_NAME,
+                        RabbitMqCloudEventLevelBootstrap.EVENTS_COLLECTION, new EventStoreConfig(TimeRepresentation.RFC_3339_STRING));
+                String orderId = "order-" + UUID.randomUUID();
+                eventStore.write(orderId, converter.toCloudEvent(new OrderPlaced(UUID.randomUUID().toString(), orderId, "Widget")));
+
+                await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                        assertThat(adminChannel.queueDeclarePassive(probeQueue).getMessageCount()).isEqualTo(1));
+            } finally {
+                adminChannel.queueDelete(probeQueue);
+            }
         }
     }
 

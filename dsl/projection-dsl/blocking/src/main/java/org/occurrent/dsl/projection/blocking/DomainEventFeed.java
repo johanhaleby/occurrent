@@ -181,11 +181,11 @@ public final class DomainEventFeed<E> {
      * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has actually reached live,
      * {@code false} while either is still replaying or buffering ahead of its own drain, and {@code false} forever
      * once either has thrown, since that failure is permanent and a later call reaching live does not clear it. A
-     * live event fed through {@link #acceptCloudEvent(CloudEvent)} while this answers {@code false} only ever
-     * buffers, or is dropped outright, and {@link #acceptCloudEvent(CloudEvent)}'s own javadoc covers what it
-     * reports for both. {@code false} for an unregistered feed, the same as {@link #hasProjection()} rather than
-     * the {@link IllegalStateException} {@link #accept(Object)} throws, so a listener can check both together
-     * before it has anything registered at all.
+     * live event fed through {@link #acceptCloudEvent(CloudEvent)} while this answers {@code false} is never
+     * buffered: it is refused outright, and {@link #acceptCloudEvent(CloudEvent)}'s own javadoc covers what it
+     * reports for that, and for a permanently failed catch-up. {@code false} for an unregistered feed, the same as
+     * {@link #hasProjection()} rather than the {@link IllegalStateException} {@link #accept(Object)} throws, so a
+     * listener can check both together before it has anything registered at all.
      */
     public boolean isReadyForLiveDelivery() {
         Registered<E> registered = feed.get();
@@ -264,6 +264,12 @@ public final class DomainEventFeed<E> {
      *                               {@link RoutingOutcome#NOT_DELIVERABLE}, since this feed, unlike a push
      *                               subscription model, has no write path to protect and ADR 104 already refuses
      *                               here for {@link #accept(Object)} and {@link #accept(EventMetadata, Object)}.
+     *                               Also thrown, unwrapped, as {@code BlockingHandover.PreDispatchRefusalException}
+     *                               (an {@code IllegalStateException} subtype, in
+     *                               {@code org.occurrent.subscription.api.blocking.internal}) once this
+     *                               registration's catch-up-then-live handover has permanently failed. That
+     *                               failure never clears, so every later call on the same registration throws the
+     *                               same way.
      * @throws UnreadableLiveFilterException the first time this is called on a registration whose {@link Filter}
      *                               references a {@code data} field this feed's {@link DataFieldReader} cannot
      *                               read, and again with the exact same exception instance on every later call on
@@ -273,6 +279,10 @@ public final class DomainEventFeed<E> {
      *                               expecting a different answer. Register a new {@code DomainEventFeed} with a
      *                               {@link Filter} that does not reference the field, or with a
      *                               {@link DataFieldReader} that can read it.
+     * @throws RuntimeException whatever {@link CloudEventConverter#toDomainEvent(CloudEvent)} throws for a matching
+     *                               event it cannot decode, uncaught. Reachable for a filter no more selective than
+     *                               the event type, {@link Filter#all()} in particular, against a source carrying
+     *                               event types this feed's converter was never built to decode.
      */
     public RoutingOutcome acceptCloudEvent(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");

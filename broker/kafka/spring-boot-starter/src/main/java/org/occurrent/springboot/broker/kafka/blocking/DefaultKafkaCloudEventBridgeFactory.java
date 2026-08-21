@@ -50,7 +50,7 @@ class DefaultKafkaCloudEventBridgeFactory implements KafkaCloudEventBridgeFactor
                 .pollTimeout(bridgeProperties.getPollTimeout())
                 .closeTimeout(bridgeProperties.getCloseTimeout())
                 .commitRetryStrategy(KafkaClientConfigs.commitRetryStrategy(bridgeProperties.getCommitRetry()))
-                .readinessSource(subscriptionId -> CatchupThenPushReadiness.isReady(applicationContext, subscriptionId));
+                .readinessSource(CatchupThenPushReadiness.memoized(applicationContext, model));
         DestinationResolver<KafkaDestination> resolver = resolverProvider.getIfAvailable();
         if (resolver != null) {
             builder.resolver(resolver);

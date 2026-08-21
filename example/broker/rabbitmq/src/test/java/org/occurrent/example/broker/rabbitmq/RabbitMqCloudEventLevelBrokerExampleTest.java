@@ -409,6 +409,12 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
 
             await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(store).containsKey(orderId));
             assertThat(catchupThenPush.isReadyForLiveDelivery(projectionId)).isTrue();
+            // Closed before the final queue assertion, deliberately: distinctEventIdsOnQueue's basicGet cannot see
+            // a delivery the bridge is still holding unacked on its own channel, so asserting the queue is empty
+            // while the bridge might still be open cannot tell a genuine ack apart from an ack that silently never
+            // happened. Closing first requeues anything the bridge never acknowledged, which turns "empty" back
+            // into a real proof, the same correction RabbitMqDomainEventLevelBrokerExampleTest already applies.
+            bridge.close();
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(distinctEventIdsOnQueue(queue)).isEmpty());
         } finally {
             // releaseReplay first, unconditionally. A failed assertion above must not leave the replay thread

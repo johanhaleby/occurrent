@@ -20,6 +20,7 @@ import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.CancelCallback;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ConsumerShutdownSignalCallback;
 import com.rabbitmq.client.DeliverCallback;
 import com.rabbitmq.client.Delivery;
 import com.rabbitmq.client.Envelope;
@@ -81,7 +82,7 @@ class RabbitMqDomainEventBridgeStopPermanentlyRaceTest {
 
         AtomicReference<DeliverCallback> deliverCallback = new AtomicReference<>();
         AtomicInteger consumeCalls = new AtomicInteger();
-        when(channel.basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class)))
+        when(channel.basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class), any(ConsumerShutdownSignalCallback.class)))
                 .thenAnswer(invocation -> {
                     deliverCallback.set(invocation.getArgument(2));
                     return "consumer-tag-" + consumeCalls.incrementAndGet();
@@ -111,7 +112,7 @@ class RabbitMqDomainEventBridgeStopPermanentlyRaceTest {
                 .pollInterval(POLL_INTERVAL)
                 .build();
         try {
-            verify(channel, timeout(2000)).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+            verify(channel, timeout(2000)).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class), any(ConsumerShutdownSignalCallback.class));
             assertThat(secondTickBlocked.await(2, TimeUnit.SECONDS)).as("second reconcile tick should be blocked in hasProjection()").isTrue();
 
             // Simulate a delivery arriving right now, on what would be the AMQP consumer thread, triggering the
@@ -147,7 +148,7 @@ class RabbitMqDomainEventBridgeStopPermanentlyRaceTest {
             // The invariant under test: only the very first tick may ever have called basicConsume. Whatever the
             // blocked tick decided to do with the shouldConsume it read, and whatever any tick after it decided,
             // none may restart the consumer once the permanent stop has cancelled it.
-            verify(channel, times(1)).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class));
+            verify(channel, times(1)).basicConsume(anyString(), anyBoolean(), any(DeliverCallback.class), any(CancelCallback.class), any(ConsumerShutdownSignalCallback.class));
         } finally {
             bridge.close();
         }

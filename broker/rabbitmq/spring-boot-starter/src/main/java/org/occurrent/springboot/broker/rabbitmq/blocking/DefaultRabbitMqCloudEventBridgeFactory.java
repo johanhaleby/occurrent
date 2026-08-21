@@ -51,7 +51,7 @@ class DefaultRabbitMqCloudEventBridgeFactory implements RabbitMqCloudEventBridge
                 .onDeliveryFailure(bridgeProperties.getOnDeliveryFailure())
                 .pollInterval(bridgeProperties.getPollInterval())
                 .prefetchCount(bridgeProperties.getPrefetchCount())
-                .readinessSource(subscriptionId -> CatchupThenPushReadiness.isReady(applicationContext, subscriptionId));
+                .readinessSource(CatchupThenPushReadiness.memoized(applicationContext, model));
         DestinationResolver<RabbitMqDestination> resolver = resolverProvider.getIfAvailable();
         if (resolver != null) {
             builder.resolver(resolver);

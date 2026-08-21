@@ -253,10 +253,14 @@ public final class DomainEventFeed<E> {
      * registration it is fielding an event for. That safety does not extend past a genuine
      * {@link RoutingOutcome#DELIVERED}: delivery is still at-least-once overall, so the fold itself must stay
      * idempotent, the de-dup cache {@link CatchupThenLiveOptions} bounds absorbs only the replay-to-live overlap
-     * this handover already tracks, not an unbounded broker redelivery window. Nothing is lost either way a
-     * {@link RoutingOutcome#DEFERRED} event goes, because the completion marker is never recorded for an
-     * interrupted attempt, so the next {@link #catchUpAll()} replays the whole history again, including this event,
-     * from the store.
+     * this handover already tracks, not an unbounded broker redelivery window. For a {@link #catchUpAll()}/
+     * {@link #catchUp(String)} registration, nothing is lost when a {@link RoutingOutcome#DEFERRED} event is never
+     * redelivered either: the completion marker is never recorded for an interrupted attempt, so the next
+     * {@link #catchUpAll()} replays the whole history again, including this event, from the store. That guarantee
+     * does not extend to a {@link #goLive(String)} registration, which has no store replay behind it at all
+     * (see {@link #goLive(String)}'s own javadoc). A {@link RoutingOutcome#DEFERRED} event there is only safe if
+     * the caller's own source, the broker or listener feeding this method, actually redelivers it. Losing it there
+     * is a caller-side loss, not this feed's.
      * <p>
      * Fails with an {@link IllegalStateException} when no projection is registered, for the reason
      * {@link #accept(Object)} gives, rather than completing with {@link RoutingOutcome#NOT_DELIVERABLE}. This feed,
