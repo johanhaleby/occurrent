@@ -53,7 +53,6 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
-import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
@@ -303,22 +302,6 @@ class ProjectionAnnotationRegistrar {
     // in front of the catch-up model (ADR 132 decision 8), the same lookup SagaAnnotationRegistrar already relies on
     // for its timer gate. Empty means the composition cannot say, and the projection is wrapped with nothing
     // watching it. Returns materializedView unchanged when recording is off.
-    // AppliedAppendRecorder declares the same two signals CatchupListener does without extending it, since the
-    // projection DSL does not depend on the subscription API and the subscription API does not depend on the DSL.
-    private static CatchupListener listenerFor(AppliedAppendRecorder recorder) {
-        return new CatchupListener() {
-            @Override
-            public void catchupStarted(Object episode) {
-                recorder.catchupStarted(episode);
-            }
-
-            @Override
-            public void historyRead(Object episode) {
-                recorder.historyRead(episode);
-            }
-        };
-    }
-
     private <E> MaterializedView<E> wrapForRecordingIfNeeded(org.occurrent.annotation.Projection annotation, String id, MaterializedView<E> materializedView, SubscriptionModelCapability capability) {
         if (!annotation.recordAppliedAppends()) {
             return materializedView;
@@ -340,7 +323,7 @@ class ProjectionAnnotationRegistrar {
         if (catchupModel != null) {
             // Registered before the subscription that produces the catch-ups is started below, so a catch-up that
             // begins the moment it starts is heard rather than recorded as though it were live.
-            if (catchupModel.listenForCatchup(id, listenerFor(recordingView))) {
+            if (catchupModel.listenForCatchup(id, recordingView)) {
                 recordingRegistry().register(id, recordingView);
             } else {
                 recordingRegistry().register(id, new PolledCatchupSignals(recordingView, () -> catchupModel.isCatchingUp(id)));

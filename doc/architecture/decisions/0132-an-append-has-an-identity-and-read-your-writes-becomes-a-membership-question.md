@@ -405,8 +405,8 @@ catch-up as though it were live, which is the defect this decision exists to pre
 
 There is no clear at startup. An application that restarts with its checkpoint intact replays nothing and keeps its
 records, which is correct because the read model is intact too, and both catch-up models classify a checkpoint that
-is neither global nor time-based as live. An application that restarts with a wiped checkpoint replays, and either
-the per-delivery check or the poll observes it, but only for a projection that declared a replaying start position
+is neither global nor time-based as live. An application that restarts with a wiped checkpoint replays, and the model
+says so, but only for a projection that declared a replaying start position
 (`startAt = BEGINNING`, or a global position of at least zero). On Occurrent's own shipped composition, the default
 start position with no global start position set bypasses the catch-up layer. Setting `startAtGlobalPosition` to
 zero or above takes precedence over it and replays from that position. The checkpoint is never consulted there, so wiping it
@@ -438,6 +438,14 @@ that `composeCatchupLayer(...)` returns is handed to a `ComposedCatchupModel` be
 The programmatic factories take no such argument. A recording view is built from a projection id and a store, and
 whoever composed it registers it with the model afterwards, since only they know which model that is. A composition
 with no catch-ups at all registers with nothing, which is the same thing as never being told about one.
+
+That registration is a plain call rather than something the caller has to adapt, because `AppliedAppendRecorder`
+extends `CatchupListener`, so a recording view is one and `listenForCatchup(projectionId, view)` takes it directly.
+It costs `dsl/projection-dsl/common` a dependency on `occurrent-subscription-core`, which is the direction that was
+already allowed, a projection knowing about subscriptions rather than the subscription API knowing about the
+projection DSL. The alternative was a forwarding adapter, and it has no home. It needs both types, and the only
+modules holding both are the two Spring registrars, which is exactly the wrong place for a caller that is not using
+Spring.
 
 For a blocking model that does have catch-ups, sending the signals is treated as part of the contract of being a
 subscription model that replays. A third-party model that replays and answers `false` from `listenForCatchup`

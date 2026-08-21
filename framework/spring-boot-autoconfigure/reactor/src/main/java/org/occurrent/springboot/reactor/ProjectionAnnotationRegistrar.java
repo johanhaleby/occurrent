@@ -50,7 +50,6 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
-import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscribable;
 import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
@@ -415,29 +414,13 @@ class ProjectionAnnotationRegistrar {
     // Wraps update so it records every applied append. Caller only calls this once it has already decided recording
     // is on (resolution is only ever built when annotation.recordAppliedAppends() is true), so there is no flag to
     // re-check here.
-    // AppliedAppendRecorder declares the same two signals CatchupListener does without extending it, since the
-    // projection DSL does not depend on the subscription API and the subscription API does not depend on the DSL.
-    private static CatchupListener listenerFor(AppliedAppendRecorder recorder) {
-        return new CatchupListener() {
-            @Override
-            public void catchupStarted(Object episode) {
-                recorder.catchupStarted(episode);
-            }
-
-            @Override
-            public void historyRead(Object episode) {
-                recorder.historyRead(episode);
-            }
-        };
-    }
-
     private <E> BiFunction<EventMetadata, E, Mono<Void>> applyRecording(String id, BiFunction<EventMetadata, E, Mono<Void>> update, CatchupResolution resolution) {
         BiFunction<EventMetadata, E, Mono<Void>> recording = Projections.recordingAppliedAppends(update, id, resolveAppliedAppendStore(id));
         ReplayAwareSubscriptions model = resolution.model();
         if (model != null && recording instanceof AppliedAppendRecorder recorder) {
             // Registered before the subscription that produces the catch-ups is started by the caller, so a
             // catch-up that begins the moment it starts is heard rather than recorded as though it were live.
-            if (model.listenForCatchup(id, listenerFor(recorder))) {
+            if (model.listenForCatchup(id, recorder)) {
                 registerForPoll(id, recorder);
             } else {
                 registerForPoll(id, new PolledCatchupSignals(recorder, () -> model.isCatchingUp(id)));
