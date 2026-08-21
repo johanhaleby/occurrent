@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -391,6 +392,41 @@ class AppliedAppendRecordingTest {
         recording.recordIfReady(metadataWithAppendId(secondCatchup));
 
         assertThat(store.hasApplied(PROJECTION_ID, firstCatchup)).isFalse();
+        assertThat(store.hasApplied(PROJECTION_ID, secondCatchup)).isTrue();
+    }
+
+    // The invariant: every catch-up clears exactly once before its first record, whatever the recorder happened to
+    // sample. Two catch-ups in a row look identical to a recorder that only saw a reconciliation in each, because the
+    // handover, the live gap and the second history read can all fall between two observations, which the poll
+    // routinely misses when that history read matches nothing. The generation is what tells them apart.
+    @Test
+    void a_second_catch_up_clears_even_when_every_phase_between_the_two_went_unobserved() {
+        List<String> clears = new ArrayList<>();
+        AtomicReference<CatchupPhase> phase = new AtomicReference<>(CatchupPhase.RECONCILING);
+        AtomicLong generation = new AtomicLong(1);
+        AppliedAppendStore store = clearCountingStore(clears, new AtomicBoolean(false));
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, new ReplayPhase() {
+            @Override
+            public CatchupPhase currentPhase() {
+                return phase.get();
+            }
+
+            @Override
+            public long currentGeneration() {
+                return generation.get();
+            }
+        });
+
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        assertThat(clears).hasSize(1);
+
+        // A second catch-up. Nothing observed the handover, the live gap or its history read, so the only thing that
+        // changed is which catch-up this is.
+        generation.set(2);
+        AppendId secondCatchup = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(secondCatchup));
+
+        assertThat(clears).hasSize(2);
         assertThat(store.hasApplied(PROJECTION_ID, secondCatchup)).isTrue();
     }
 

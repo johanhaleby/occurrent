@@ -302,6 +302,12 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
     }
 
     @Override
+    public long catchupGeneration(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return namedSubscriptions.catchupGeneration(subscriptionId);
+    }
+
+    @Override
     public void shutdown() {
         namedSubscriptions.shutdown();
     }

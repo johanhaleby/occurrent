@@ -86,7 +86,11 @@ final class PositionCatchupPipeline {
 
         // Run after the history windows rather than before them, so a caller that tracks which part of the catch-up
         // it is in moves only once every history event has been delivered. Delivery here is synchronous, so the
-        // windows call above returning means exactly that.
+        // windows call above returning means exactly that. Skipped when the replay was truncated, since windows also
+        // returns early then and a history that stopped part way through is not a history that was read.
+        if (!keepRunning.getAsBoolean()) {
+            return cursor;
+        }
         reconcileStarting.run();
 
         // Snapshot the head once and reconcile up to it. Re-reading a moving head would advance forever under

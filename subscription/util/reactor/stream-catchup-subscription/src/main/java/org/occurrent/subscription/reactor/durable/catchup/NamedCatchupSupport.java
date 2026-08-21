@@ -89,6 +89,9 @@ final class NamedCatchupSupport {
     // handOver park instead of subscribing the delegate on a stopped model. Same role as the blocking
     // AbstractCatchupSubscriptionModel's stopped flag.
     private volatile boolean stopped = false;
+    // Numbers every catch-up this JVM starts, so two of them for the same id are never confused by a caller that only
+    // samples the model. Static because the number only has to differ, not mean anything.
+    private static final java.util.concurrent.atomic.AtomicLong CATCHUP_GENERATIONS = new java.util.concurrent.atomic.AtomicLong();
 
     NamedCatchupSupport(CheckpointAwareSubscriptionModel wrapped, Class<?> modelClass) {
         this.wrapped = requireNonNull(wrapped);
@@ -113,6 +116,11 @@ final class NamedCatchupSupport {
      * rather than the events written since. False for an id with no replay in flight, so a handed-over subscription
      * and one this model never saw read the same, matching {@link #isCatchingUp(String)}.
      */
+    long catchupGeneration(String subscriptionId) {
+        CatchupState state = catchingUp.get(subscriptionId);
+        return state == null ? 0L : state.generation;
+    }
+
     boolean isReplayingHistory(String subscriptionId) {
         CatchupState state = catchingUp.get(subscriptionId);
         return state != null && state.replayingHistory.get();
@@ -391,6 +399,8 @@ final class NamedCatchupSupport {
         // written since the replay started. Back to true whenever the replay is relaunched, since that reads the
         // history again from the same start position.
         final AtomicBoolean replayingHistory = new AtomicBoolean(true);
+        // Numbers this catch-up so a caller that only samples the model can tell it from the next one for the same id.
+        final long generation = CATCHUP_GENERATIONS.incrementAndGet();
         // The replay, relaunchable: assigned once in subscribeWithCatchup before the state is published, run under
         // the state monitor by the initial subscribe and by start(..) for parked subscriptions.
         volatile Runnable launcher = () -> {

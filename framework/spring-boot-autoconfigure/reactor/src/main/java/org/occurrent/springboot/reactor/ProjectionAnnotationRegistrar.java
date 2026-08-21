@@ -353,7 +353,17 @@ class ProjectionAnnotationRegistrar {
         Optional<ReplayAwareSubscriptions> direct = capability == null ? Optional.empty() : capability.capability(ReplayAwareSubscriptions.class);
         if (direct.isPresent()) {
             ReplayAwareSubscriptions replayAware = direct.get();
-            return new ReplayPhaseResolution(() -> catchupPhaseOf(replayAware, id), true, false);
+            return new ReplayPhaseResolution(new ReplayPhase() {
+            @Override
+            public CatchupPhase currentPhase() {
+                return catchupPhaseOf(replayAware, id);
+            }
+
+            @Override
+            public long currentGeneration() {
+                return replayAware.catchupGeneration(id);
+            }
+        }, true, false);
         }
         log.warn("@Projection '{}' sets recordAppliedAppends = true, but its subscription model ({}) does not expose " +
                         "whether it is replaying. The default reactive Mongo composition does not have this problem; a " +
@@ -524,7 +534,17 @@ class ProjectionAnnotationRegistrar {
             withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
             subscribable = model;
             if (annotation.recordAppliedAppends()) {
-                recordingResolution = new ReplayPhaseResolution(() -> pushCatchupPhaseOf(model, id), true, false);
+                recordingResolution = new ReplayPhaseResolution(new ReplayPhase() {
+                @Override
+                public CatchupPhase currentPhase() {
+                    return pushCatchupPhaseOf(model, id);
+                }
+
+                @Override
+                public long currentGeneration() {
+                    return model.catchupGeneration(id);
+                }
+            }, true, false);
             }
         } else {
             // catchup = NONE never replays, so it is live as soon as it is running. Asked rather than recorded because

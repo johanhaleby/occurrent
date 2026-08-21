@@ -43,6 +43,19 @@ public interface ReplayPhase {
     CatchupPhase currentPhase();
 
     /**
+     * Which catch-up the projection is in, as a value that changes when a new one starts and is {@code 0} while it is
+     * live. A recorder samples this rather than watching every transition, so without it two catch-ups in a row look
+     * like one when nothing sampled the gap between them, and the second would record without first clearing what the
+     * rebuild is discarding.
+     * <p>
+     * The default cannot tell two apart, which is the honest answer for a composition that has nothing to derive it
+     * from.
+     */
+    default long currentGeneration() {
+        return 0L;
+    }
+
+    /**
      * A phase for a composition that never replays: an in-memory model, a durable-only model with no catch-up layer,
      * or a push feed with {@code catchup = NONE}. Always answers {@link CatchupPhase#LIVE}.
      * <p>

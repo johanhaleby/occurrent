@@ -303,8 +303,11 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // a pass with no new event has delivered them all. Re-reads are deduped by the cache (at-least-once).
         // Anything written after a pass is newer than globalCheckpoint and is covered by live delivery regardless.
         // Everything the bulk replay was going to deliver has been delivered by now, so what follows is the events
-        // written since it started. A recording projection records those and skips the history above it.
-        beginReconcile(subscriptionId);
+        // written since it started. A recording projection records those and skips the history above it. Skipped when
+        // the replay was truncated, since a history that stopped part way through is not a history that was read.
+        if (shouldKeepReplaying(subscriptionId)) {
+            beginReconcile(subscriptionId);
+        }
 
         long reconciledThroughCount = numberOfEventsBeforeStartingCatchupSubscription;
         long matchingEventCount = eventStoreQueries.count(catchupFilter);

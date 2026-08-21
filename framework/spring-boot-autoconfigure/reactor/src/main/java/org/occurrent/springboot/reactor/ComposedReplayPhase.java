@@ -86,7 +86,17 @@ public final class ComposedReplayPhase {
         if (capability == null) {
             return Optional.of(ReplayPhase.neverReplays());
         }
-        return Optional.of(() -> catchupPhaseOf(capability, subscriptionId));
+        return Optional.of(new ReplayPhase() {
+            @Override
+            public CatchupPhase currentPhase() {
+                return catchupPhaseOf(capability, subscriptionId);
+            }
+
+            @Override
+            public long currentGeneration() {
+                return capability.catchupGeneration(subscriptionId);
+            }
+        });
     }
 
     // isCatchingUp is read first on purpose. Both answers come from the same per-id state, which only moves one way,

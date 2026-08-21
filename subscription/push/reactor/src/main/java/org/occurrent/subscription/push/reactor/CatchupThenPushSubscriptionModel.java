@@ -103,6 +103,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // resubscribe while the old replay is still unwinding, and an id-only marker that old replay adds afterwards
     // would tell the replacement it was past a history read it has not started.
     private final ConcurrentMap<String, Sinks.One<Boolean>> reconcilingSubscriptions = new ConcurrentHashMap<>();
+    // Numbers each catch-up per subscription id, so a caller that only samples this model can tell one from the next.
+    // An entry outlives its catch-up, which costs nothing: a subscription id is application-defined and
+    // low-cardinality here, the same reason the other per-id registries keep theirs.
+    private final ConcurrentMap<String, Long> catchupGenerations = new ConcurrentHashMap<>();
+    private static final java.util.concurrent.atomic.AtomicLong CATCHUP_GENERATIONS = new java.util.concurrent.atomic.AtomicLong();
     // A pause asked for while a replay is in flight. The replay itself keeps running, since resuming it would mean
     // persisting the exact replay cursor, which this model does not do. Applied at the handover instead.
     private final ConcurrentMap<String, Boolean> pauseRequestedDuringReplay = new ConcurrentHashMap<>();
@@ -164,6 +169,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Cleared here rather than only on the exit paths, so this attempt starts in the history part of its
         // catch-up whatever the previous attempt for the same id left behind.
         reconcilingSubscriptions.remove(subscriptionId);
+        catchupGenerations.put(subscriptionId, CATCHUP_GENERATIONS.incrementAndGet());
         replayingSubscriptions.put(subscriptionId, replayDone);
 
         Mono<Boolean> catchupDone = handover.catchUp(new ReactiveHandover.Source<>() {
@@ -189,7 +195,15 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public void historyDone() {
-                reconcilingSubscriptions.put(subscriptionId, replayDone);
+                // Written only while this replay still owns the id, and taken back if a replacement took it over in
+                // between, because a cancellation permits an immediate resubscribe while this one is still unwinding
+                // and its marker would otherwise tell the replacement it is past a history read it has not started.
+                if (replayingSubscriptions.get(subscriptionId) == replayDone) {
+                    reconcilingSubscriptions.put(subscriptionId, replayDone);
+                    if (replayingSubscriptions.get(subscriptionId) != replayDone) {
+                        reconcilingSubscriptions.remove(subscriptionId, replayDone);
+                    }
+                }
             }
         });
 
@@ -199,14 +213,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 caughtUp -> {
                     if (caughtUp) {
                         interruptibleReplays.remove(subscriptionId);
-                        forget(subscriptionId);
+                        forget(subscriptionId, replayDone);
                         applyPendingPauseIfAny(subscriptionId);
                     } else {
                         // Stopped rather than failed, so the handover is intact, nothing is marked, and both the
                         // registration and the launcher are kept: start(true) replays the whole history again, the
                         // answer CatchupProjectionFeed.stopCatchUp() already records (ADR 104). Forgetting the replay
                         // entry last is what makes "launcher present, nothing replaying" mean stopped.
-                        forget(subscriptionId);
+                        forget(subscriptionId, replayDone);
                     }
                     replayDone.tryEmitValue(caughtUp);
                 },
@@ -220,7 +234,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                             + "refuses every event, so the source redelivers rather than losing them. Cancel the "
                             + "subscription and subscribe again once the cause is fixed.", subscriptionId, error);
                     interruptibleReplays.remove(subscriptionId);
-                    forget(subscriptionId);
+                    forget(subscriptionId, replayDone);
                     replayDone.tryEmitError(error);
                 });
 
@@ -249,9 +263,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         return launch.get();
     }
 
-    private void forget(String subscriptionId) {
-        replayingSubscriptions.remove(subscriptionId);
-        reconcilingSubscriptions.remove(subscriptionId);
+    private void forget(String subscriptionId, Sinks.One<Boolean> replay) {
+        replayingSubscriptions.remove(subscriptionId, replay);
+        reconcilingSubscriptions.remove(subscriptionId, replay);
     }
 
     /**
@@ -336,6 +350,16 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * The catch-up-done signal usually removes this id before the buffer is drained, so the answer here is normally
      * already false by then. This does not lean on that ordering, which nothing declares.
      */
+    /**
+     * Which catch-up this id is in, so a caller that only samples this model can tell one from the next. Derived from
+     * the replay's own identity, which already changes per attempt.
+     */
+    @Override
+    public long catchupGeneration(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return replayingSubscriptions.containsKey(subscriptionId) ? catchupGenerations.getOrDefault(subscriptionId, 0L) : 0L;
+    }
+
     @Override
     public boolean isReplayingHistory(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");

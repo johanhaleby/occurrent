@@ -326,6 +326,16 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         return presentCatchupModels().anyMatch(model -> model.isReplayingHistory(subscriptionId));
     }
 
+    /**
+     * Asked of the mode-specific models the same way {@link #isReplayingHistory(String)} is, since only the one
+     * running this id knows which catch-up it belongs to.
+     */
+    @Override
+    public long catchupGeneration(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return presentCatchupModels().mapToLong(model -> model.catchupGeneration(subscriptionId)).filter(g -> g != 0L).findFirst().orElse(0L);
+    }
+
     @Override
     public boolean isPaused(String subscriptionId) {
         return presentCatchupModels().anyMatch(model -> model.isPaused(subscriptionId))

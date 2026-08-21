@@ -294,10 +294,17 @@ of history was still waiting to be applied. The push models announce it at the b
 `replayCompleted()`, since a projection that was already caught up skips the replay entirely and never reaches that
 call.
 
-The check is asked per delivery. On subscription-fed paths it is the same question the saga timer already asks, so
-the recorder takes a `BooleanSupplier` built from `isCatchingUp(subscriptionId)`. On the pull paths, where
-`DomainEventFeed` and `CatchupProjectionFeed` drive the replay, the `ReplayAware` lifecycle the handover engines
-already forward answers it instead.
+The check is asked per delivery. On subscription-fed paths it is a sharper version of the question the saga timer
+already asks, so the recorder takes a `ReplayPhase` built from `isCatchingUp(subscriptionId)` and
+`isReplayingHistory(subscriptionId)` together. On the pull paths, where `DomainEventFeed` and
+`CatchupProjectionFeed` drive the replay, the `ReplayAware` lifecycle the handover engines already forward answers
+it instead.
+
+Asking per delivery means the recorder only ever sees samples, and two catch-ups in a row can look like one when
+nothing sampled the gap between them, which the poll misses whenever the second history read matches nothing. So the
+phase also says which catch-up it belongs to, `catchupGeneration(subscriptionId)`, and a changed value is what
+makes the second one clear before it records. The invariant is that every catch-up clears exactly once before its
+first record, whatever the sampling happened to catch.
 
 An event the recorder cannot record is skipped with a debug log rather than throwing. Every event written before
 this feature exists has no `appendid` extension, and neither does an event from a push feed unless whatever

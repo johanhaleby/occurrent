@@ -80,6 +80,9 @@ public final class AppliedAppendRecording {
     // history. Only that edge starts a new episode without a live delivery in between, which is what a relaunched
     // replay does.
     private CatchupPhase lastPhase = CatchupPhase.LIVE;
+    // The catch-up the previous observation belonged to, so a second one is noticed even when every phase between
+    // them went unsampled. Zero while live.
+    private long lastGeneration = 0L;
     // Appends handled during a reconciliation while a clear was owed. Recording them then would be pointless, since
     // the pending clear deletes every record for this projection, so they wait here and are written once it lands.
     // Bounded because a reconciliation under a clear that keeps failing has no other limit, and an append evicted
@@ -154,6 +157,16 @@ public final class AppliedAppendRecording {
      */
     private CatchupPhase observePhase() {
         CatchupPhase current = lifecycleReplaying ? CatchupPhase.REPLAYING_HISTORY : phase.currentPhase();
+        long generation = lifecycleReplaying ? lastGeneration : phase.currentGeneration();
+        if (generation != lastGeneration) {
+            // A different catch-up than the one the last observation saw, so nothing this recorder learned during
+            // that one applies here. This is what makes the clear happen even when the handover, the live gap and
+            // the next history read all fell between two observations, which a poll routinely misses for a catch-up
+            // whose history read matches nothing.
+            episodeCleared = false;
+            dropAwaitingClear();
+        }
+        lastGeneration = generation;
         if (current == CatchupPhase.REPLAYING_HISTORY) {
             dropAwaitingClear();
             if (lastPhase == CatchupPhase.RECONCILING) {

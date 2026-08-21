@@ -307,7 +307,17 @@ class ProjectionAnnotationRegistrar {
     // Empty means the composition cannot say, so it is treated as never replaying.
     private RecordingPhase asynchronousSubscribablePhase(String id, SubscriptionModelCapability capability) {
         Optional<ReplayAwareSubscriptions> replayAware = ReplayAwareSubscriptions.findIn(capability);
-        ReplayPhase phase = replayAware.<ReplayPhase>map(r -> () -> catchupPhaseOf(r, id)).orElseGet(ReplayPhase::neverReplays);
+        ReplayPhase phase = replayAware.<ReplayPhase>map(r -> new ReplayPhase() {
+            @Override
+            public CatchupPhase currentPhase() {
+                return catchupPhaseOf(r, id);
+            }
+
+            @Override
+            public long currentGeneration() {
+                return r.catchupGeneration(id);
+            }
+        }).orElseGet(ReplayPhase::neverReplays);
         return new RecordingPhase(phase, replayAware.isPresent());
     }
 
@@ -585,7 +595,17 @@ class ProjectionAnnotationRegistrar {
             // reports catching up again instead of staying at whatever it reached the first time.
             withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
             subscribable = model;
-            phase = () -> pushCatchupPhaseOf(model, id);
+            phase = new ReplayPhase() {
+                @Override
+                public CatchupPhase currentPhase() {
+                    return pushCatchupPhaseOf(model, id);
+                }
+
+                @Override
+                public long currentGeneration() {
+                    return model.catchupGeneration(id);
+                }
+            };
         } else {
             // catchup = NONE never replays, so it is live as soon as it is running. Asked rather than recorded because
             // occurrent.subscription.mode = manual defers the subscription, and a recorded Live would tell a readiness

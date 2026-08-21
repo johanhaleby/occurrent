@@ -68,4 +68,20 @@ public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
     default boolean isReplayingHistory(String subscriptionId) {
         return isCatchingUp(subscriptionId);
     }
+
+    /**
+     * Which catch-up {@code subscriptionId} is in, as a value that changes when a new one starts and is {@code 0}
+     * when none is running. Lets a caller that only samples this model tell one catch-up from the next even when it
+     * never sampled the gap between them, which a poll routinely misses for a catch-up whose history read matches
+     * nothing.
+     * <p>
+     * The default cannot tell two catch-ups apart, since it has only {@link #isCatchingUp(String)} to go on. Override
+     * it alongside {@link #isReplayingHistory(String)} if your model replays.
+     *
+     * @param subscriptionId The subscription to ask about.
+     * @return A value that changes per catch-up, or {@code 0} while none is running.
+     */
+    default long catchupGeneration(String subscriptionId) {
+        return isCatchingUp(subscriptionId) ? 1L : 0L;
+    }
 }

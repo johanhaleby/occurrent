@@ -235,6 +235,16 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         return owner instanceof ReplayAwareSubscriptions replayAware && replayAware.isReplayingHistory(subscriptionId);
     }
 
+    /**
+     * Asked of whichever inner model owns this id, for the same reason {@link #isReplayingHistory(String)} is.
+     */
+    @Override
+    public long catchupGeneration(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        SubscriptionModel owner = innerModelCatchingUp(subscriptionId);
+        return owner instanceof ReplayAwareSubscriptions replayAware ? replayAware.catchupGeneration(subscriptionId) : 0L;
+    }
+
     private @Nullable SubscriptionModel innerModelCatchingUp(String subscriptionId) {
         if (streamCatchupSubscriptionModel != null && streamCatchupSubscriptionModel.isCatchingUp(subscriptionId)) {
             return streamCatchupSubscriptionModel;
