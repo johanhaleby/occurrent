@@ -415,12 +415,11 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                         return Mono.<Void>empty();
                     }
                     // Deferred so a synchronous error from route(..) itself, not just one signalled on the returned
-                    // Mono, is still caught by the error handling below rather than escaping this assembly step.
+                    // Mono, is still caught by the classification below rather than escaping this assembly step.
+                    // Scoped to the action call alone, before the observer notification is attached, so a
+                    // matchObserver failure on the success path below can never re-enter this same handler and be
+                    // misclassified as an action failure.
                     return Mono.defer(() -> registration.action().route(cloudEvent))
-                            .flatMap(landed -> {
-                                matchObserver.accept(cloudEvent, Boolean.TRUE.equals(landed) ? RoutingOutcome.DELIVERED : RoutingOutcome.DEFERRED);
-                                return Mono.<Void>empty();
-                            })
                             .onErrorResume(error -> {
                                 // A RoutingAction.Refusal is decided before any dispatch was attempted
                                 // (ReactiveHandover's catch-up failure, say), never a delivery, so this is
@@ -447,7 +446,14 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                                         propagate.addSuppressed(observerFailure);
                                     }
                                 }
-                                return Mono.error(propagate);
+                                return Mono.<Boolean>error(propagate);
+                            })
+                            .flatMap(landed -> {
+                                // Told once, on the success path, with no suppression guard. A failure here is the
+                                // observer's own, propagating as itself rather than being attached to anything,
+                                // mirroring the blocking stack's success path.
+                                matchObserver.accept(cloudEvent, Boolean.TRUE.equals(landed) ? RoutingOutcome.DELIVERED : RoutingOutcome.DEFERRED);
+                                return Mono.<Void>empty();
                             });
                 }
             }

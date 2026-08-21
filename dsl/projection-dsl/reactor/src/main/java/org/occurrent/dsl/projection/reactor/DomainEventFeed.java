@@ -245,11 +245,16 @@ public final class DomainEventFeed<E> {
      * the returned {@link Mono} completes with {@link RoutingOutcome#DEFERRED} right away, never waiting on a
      * replay or a drain that might resolve it only much later. One evaluation decides both the live check and the
      * hand-over together, so there is no window between "is it live" and "hand it over" for a concurrent
-     * {@link #goLive(String)} to land in. Redelivering a {@link RoutingOutcome#DEFERRED} event is always safe.
-     * This feed's own de-dup key absorbs a repeat that already landed, and a caller with nowhere else to redeliver
-     * from, {@link #goLive(String)} exists precisely for a registration whose events are not in the local store,
-     * gets the same outcome either way, since this feed has no way to know in advance which kind of registration it
-     * is fielding an event for. Nothing is lost either way, because the completion marker is never recorded for an
+     * {@link #goLive(String)} to land in. Redelivering a {@link RoutingOutcome#DEFERRED} event is always safe. The
+     * attempt that reported it was never accepted in the first place, nothing here folded it, so retrying is safe
+     * until it completes with {@link RoutingOutcome#DELIVERED}, the same way a caller with nowhere else to
+     * redeliver from, {@link #goLive(String)} exists precisely for a registration whose events are not in the local
+     * store, gets the same outcome either way, since this feed has no way to know in advance which kind of
+     * registration it is fielding an event for. That safety does not extend past a genuine
+     * {@link RoutingOutcome#DELIVERED}: delivery is still at-least-once overall, so the fold itself must stay
+     * idempotent, the de-dup cache {@link CatchupThenLiveOptions} bounds absorbs only the replay-to-live overlap
+     * this handover already tracks, not an unbounded broker redelivery window. Nothing is lost either way a
+     * {@link RoutingOutcome#DEFERRED} event goes, because the completion marker is never recorded for an
      * interrupted attempt, so the next {@link #catchUpAll()} replays the whole history again, including this event,
      * from the store.
      * <p>

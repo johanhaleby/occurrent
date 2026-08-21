@@ -111,6 +111,50 @@ class RegisteringSubscribableRouteReportingMatchTest {
         assertThat(observed).containsExactly(RoutingOutcome.DEFERRED);
     }
 
+    /**
+     * The regression this guards. A Copilot review of this PR found that the success-path {@code flatMap} used to
+     * sit inside the same {@code onErrorResume} that classifies an action failure, so a throwing
+     * {@code matchObserver} here was caught by that handler, reclassified as though the action itself had failed,
+     * and told a second time with {@link RoutingOutcome#DELIVERED}. Told once, and the observer's own failure
+     * propagates as itself.
+     */
+    @Test
+    void the_matchObserver_is_told_once_on_the_success_path_and_its_own_failure_propagates_without_a_second_notification() {
+        RuntimeException observerFailure = new IllegalStateException("observer failed");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.just(true));
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> {
+                    observed.add(outcome);
+                    throw observerFailure;
+                }))
+                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(observerFailure));
+
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    /**
+     * As above, for a {@link RoutingOutcome#DEFERRED} result. The old bug reported it once correctly, then a second
+     * time as {@link RoutingOutcome#DELIVERED} once the reclassification ran, changing the outcome as well as the
+     * count.
+     */
+    @Test
+    void the_matchObserver_is_told_once_after_a_deferred_result_and_its_own_failure_propagates_without_a_second_notification() {
+        RuntimeException observerFailure = new IllegalStateException("observer failed");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.just(false));
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> {
+                    observed.add(outcome);
+                    throw observerFailure;
+                }))
+                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(observerFailure));
+
+        assertThat(observed).containsExactly(RoutingOutcome.DEFERRED);
+    }
+
     @Test
     void the_matchObserver_still_reports_delivered_and_the_original_error_still_propagates_when_the_action_errors() {
         RuntimeException actionFailure = new IllegalStateException("action failed");

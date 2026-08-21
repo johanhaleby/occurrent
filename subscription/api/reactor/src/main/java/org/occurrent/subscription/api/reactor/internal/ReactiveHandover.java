@@ -226,12 +226,18 @@ public final class ReactiveHandover<T> {
      * again.
      * <p>
      * A payload fed while this handover is stopped is refused the same way, for the same reason. Nothing is
-     * currently draining a buffer for it to wait in. Mirrors {@code BlockingHandover.acceptIfLive(Object)}.
+     * currently draining a buffer for it to wait in. Mirrors {@code BlockingHandover.acceptIfLive(Object)}'s
+     * not-live and stopped refusals, but not its concurrent-delivery one: {@code BlockingHandover} delivers
+     * outside its lock and can have two threads folding the same key at once, so it reports {@code false} for
+     * whichever one loses that race. This engine has no such race to report, because {@link #liveSink} and its
+     * single {@code concatMap} subscriber (see the class javadoc) serialize every live delivery onto one thread,
+     * so a payload offered while an earlier delivery of the same key is still queued or folding simply waits its
+     * turn behind it rather than racing it, and completes {@code true} once that earlier delivery lands.
      *
      * @return A {@link Mono} that completes with {@code true} once the payload has genuinely landed, delivered live
-     *         just now, or already delivered by an earlier attempt. {@code false} whenever this call did not
-     *         deliver it, whether because this handover is not live yet, is stopped, or a concurrent delivery of
-     *         the same payload is already running elsewhere. Every {@code false} is safe to retry. Errors with
+     *         just now, or already delivered by an earlier attempt, including one still queued or folding ahead of
+     *         it on the sink. {@code false} only when this handover is not live yet or is stopped, so this call
+     *         refused the payload outright rather than queuing it. Every {@code false} is safe to retry. Errors with
      *         {@link PreDispatchRefusalException} for the same reasons {@link #acceptReportingDelivery(Object)}
      *         does, checked first, before the live check, so a payload fed after a permanently failed catch-up
      *         fails fast rather than completing {@code false} forever for a caller to retry a catch-up that is
