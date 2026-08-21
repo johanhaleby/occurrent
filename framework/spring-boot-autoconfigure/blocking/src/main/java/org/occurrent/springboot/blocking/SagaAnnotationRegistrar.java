@@ -308,6 +308,10 @@ class SagaAnnotationRegistrar {
         // Asked rather than recorded, so a model that is stopped and started again, replaying a second time, reports
         // catching up again instead of staying at whatever it reached the first time.
         withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
+        // Published so a CloudEvent-level broker bridge, wired in a separate starter module that never depends on
+        // this one, can look this exact object up and gate its own consumption on model::isReadyForLiveDelivery.
+        // See CatchupThenPushSubscriptionModelPublisher.
+        CatchupThenPushSubscriptionModelPublisher.publish(applicationContext, id, model, log);
         return model;
     }
 

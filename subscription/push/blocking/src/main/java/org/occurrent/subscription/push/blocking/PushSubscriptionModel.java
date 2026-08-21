@@ -18,12 +18,15 @@ package org.occurrent.subscription.push.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.Pushable;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.Subscribable;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -107,9 +110,10 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * {@link #hasSubscriptions()} before feeding this model from a broker, and register the subscription before the
      * listener starts consuming. This model cannot refuse the event on your behalf, because it is also fed from the
      * write path (an {@code InMemoryEventStore} listener, say), where the event is already durably stored and
-     * refusing would fail the write instead of protecting anything. The domain-event feed, which is broker-only, does
-     * refuse. See ADR 104. A configured {@link PushObserver} is told the event's {@link RoutingOutcome} before
-     * delivery is attempted, and that is where to get visibility into it instead. Told about the event even when a
+     * refusing would fail the write instead of protecting anything. A caller that can redeliver instead of a write
+     * path that cannot should call {@link #acceptRedeliverable(CloudEvent)} instead, which never buffers. See ADR
+     * 104. A configured {@link PushObserver} is told the event's {@link RoutingOutcome} once delivery has been
+     * attempted, and that is where to get visibility into it instead. Told about the event even when a
      * subscription's filter itself throws a {@link RuntimeException} or {@link AssertionError} while being evaluated
      * (a supplied {@link DataFieldReader} can), reported as {@link RoutingOutcome#NOT_DELIVERABLE}, before that
      * exception propagates as it always has. Another {@link Error} bypasses the observer and propagates directly,
@@ -121,6 +125,25 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     public void accept(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         acceptEvent(cloudEvent);
+    }
+
+    /**
+     * As {@link #accept(CloudEvent)}, except an event that would only buffer, a catch-up-then-live subscription
+     * still replaying, say, is refused instead: reported {@link RoutingOutcome#DEFERRED} rather than buffered, and
+     * never delivered by this call. Call this instead of {@link #accept(CloudEvent)} from a broker listener that
+     * can redeliver the same event later, never from a write path that cannot, since a write-path event this call
+     * refuses is lost rather than protected, the same reason {@link #accept(CloudEvent)} itself never refuses.
+     * <p>
+     * Always evaluates the full routing decision and tells the configured {@link PushObserver}, even when this
+     * model was built with none, unlike {@link #accept(CloudEvent)}'s fast path for that case: a caller of this
+     * method needs the genuine {@link RoutingOutcome} to decide whether to acknowledge or redeliver, which the fast
+     * path has nothing to report.
+     *
+     * @param cloudEvent The event received from the external source, which the caller can redeliver if this refuses it.
+     */
+    public void acceptRedeliverable(CloudEvent cloudEvent) {
+        Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
+        routeReportingMatch(cloudEvent, false, this::notifyObserver);
     }
 
     /**
@@ -144,10 +167,20 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     // existed the batch path never touched an overridable method at all, and this helper keeps it that way.
     private void acceptEvent(CloudEvent cloudEvent) {
         if (observing) {
-            routeReportingMatch(cloudEvent, this::notifyObserver);
+            routeReportingMatch(cloudEvent, true, this::notifyObserver);
         } else {
             route(cloudEvent);
         }
+    }
+
+    // Package-private pass-through, deliberately not named subscribeReportingDelivery: that name collides with the
+    // protected final superclass method as an illegal override attempt across packages, even though this is not
+    // really an override, just a same-named method with the same erasure. CatchupThenPushSubscriptionModel is
+    // same-package but not a subclass, so it cannot reach the protected RegisteringSubscribable method directly.
+    // Lets it register an action that reports whether an event genuinely landed, instead of the plain
+    // Consumer<CloudEvent> subscribe(..) takes.
+    Subscription subscribeCatchupThenPush(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RegisteringSubscribable.RoutingAction action) {
+        return super.subscribeReportingDelivery(subscriptionId, filter, startAt, action);
     }
 
     // Keeps a broken observer from masquerading as a handler failure. accept(...) throwing is what tells a broker

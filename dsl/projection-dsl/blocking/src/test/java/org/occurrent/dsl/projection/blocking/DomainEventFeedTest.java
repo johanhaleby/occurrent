@@ -877,10 +877,11 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void accept_cloud_event_reports_not_deliverable_rather_than_delivered_when_a_stopped_catch_up_drops_the_event() {
+    void accept_cloud_event_reports_deferred_rather_than_delivered_when_a_stopped_catch_up_drops_the_event() {
         // The exact race Copilot's review of this PR caught: BlockingHandover.accept(..) returns normally for a
         // payload dropped because stopCatchUp() interrupted a replay still in flight (see its own javadoc), so
         // acceptCloudEvent(..) must read that signal back rather than assume delivery from a normal return.
+        // acceptIfLive(..) refuses this one outright rather than buffering it, reported DEFERRED, safe to redeliver.
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s", counterConverter().toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
         CountDownLatch parked = new CountDownLatch(1);
@@ -906,9 +907,9 @@ class DomainEventFeedTest {
 
         RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live")));
 
-        assertThat(outcome).as("the event matched the filter but the stopped handover dropped it, so it was never "
-                        + "actually delivered to the projection")
-                .isEqualTo(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(outcome).as("the event matched the filter but the stopped handover refused it outright rather "
+                        + "than buffering it, safe to redeliver")
+                .isEqualTo(RoutingOutcome.DEFERRED);
         assertThat(repo).doesNotContainKey("counter");
     }
 
@@ -996,44 +997,51 @@ class DomainEventFeedTest {
      * in that window used to report {@link RoutingOutcome#DELIVERED} for an event only buffered in memory. A
      * {@code DomainEventFeed} bound for {@code goLive(..)} never replays (its own javadoc: the events are not in the
      * local store), so a crash in that window lost the event for good even though a broker bridge would already have
-     * acknowledged it. {@code RabbitMqDomainEventBridgeTest} (in the RabbitMQ broker module) exercises the same
+     * acknowledged it. {@link RoutingOutcome#DEFERRED} is what fixes it now: {@code acceptCloudEvent(..)} refuses
+     * this event outright rather than buffering it, so a caller must redeliver instead of acknowledging, and a
+     * redelivery once {@code goLive(..)} has actually run is what folds the event, proving it was recoverable
+     * rather than dropped. {@code RabbitMqDomainEventBridgeTest} (in the RabbitMQ broker module) exercises the same
      * scenario end to end through the actual bridge; this is the unit-level proof of the feed's own contract.
      */
     @Test
-    void accept_cloud_event_reports_not_deliverable_for_an_event_buffered_before_catch_up_or_go_live_has_started() {
+    void accept_cloud_event_reports_deferred_for_an_event_offered_before_catch_up_or_go_live_has_started() {
         InMemoryEventStore store = new InMemoryEventStore();
         CloudEventConverter<Counted> converter = counterConverter();
         DomainEventFeed<Counted> feed = new DomainEventFeed<>(store, converter, Counted::eventId);
         ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
         feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        CloudEvent cloudEvent = converter.toCloudEvent(new Counted("1"));
 
-        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1")));
+        RoutingOutcome outcome = feed.acceptCloudEvent(cloudEvent);
 
         assertThat(outcome).as("nothing has decided yet whether this registration replays from the store or skips "
-                        + "straight to live, so a caller must not acknowledge this delivery")
-                .isEqualTo(RoutingOutcome.NOT_DELIVERABLE);
-        assertThat(repo).as("not folded yet, but not dropped either").isEmpty();
+                        + "straight to live, so a caller must redeliver rather than acknowledge this delivery")
+                .isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(repo).as("refused outright, never buffered, and not dropped either").isEmpty();
 
-        // Proof the event was buffered rather than lost: goLive(..) drains it into the projection, exactly as it
-        // would for a real application that only decides goLive(..) once it starts, after the bridge could already
-        // have delivered a message.
+        // Proof the event is recoverable rather than lost: goLive(..) makes the feed ready, exactly as it would for
+        // a real application that only decides goLive(..) once it starts, after the bridge could already have
+        // offered a message, and redelivering the same event once ready is what actually folds it.
         feed.goLive("counter");
+        RoutingOutcome redelivered = feed.acceptCloudEvent(cloudEvent);
 
+        assertThat(redelivered).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(repo.get("counter")).isEqualTo(1);
     }
 
     /**
-     * The counterpart to the test above, and the one place round 6 through 8's finer distinction is genuinely lost
-     * by the round-11 delegate. An event fed while {@code catchUpAll()} is still replaying is buffered ahead of a
-     * replay actually in flight and backed by the store, so a crash cannot lose it, yet {@code isReadyForLiveDelivery()}
-     * now reads {@code false} for it anyway, the same as the crash-vulnerable case above, because {@code BlockingHandover}
-     * keeps no record of "a replay is in flight" for the delegate to report. The event is still not lost. The replay's
-     * own drain folds it once caught up, and a redelivery the caller issues on the NOT_DELIVERABLE outcome matches
-     * the same de-dup key and is recognized as already delivered. The cost is an extra redelivery round trip, not
-     * data loss, which is the trade the round-11 ruling accepted in exchange for deleting the shadow-copy flag.
+     * The counterpart to the test above. An event fed while {@code catchUpAll()} is still replaying is refused
+     * outright by {@code acceptIfLive(..)} exactly like one fed before the replay ever started, reported
+     * {@link RoutingOutcome#DEFERRED}, even though a replay actually in flight and backed by the store means a
+     * <em>different, already-stored</em> event in that same window would have been safe to buffer. This method does
+     * not try to tell that case apart from the unsafe one above, see {@code acceptCloudEvent(..)}'s own javadoc for
+     * why: refusing unconditionally, rather than buffering, means this event is never folded by the replay's own
+     * drain at all, it was never in the store to begin with, and only the caller's own redelivery, once
+     * {@code isReadyForLiveDelivery()} reads {@code true}, actually applies it. That redelivery is a genuinely fresh
+     * delivery, not a duplicate the de-dup cache recognizes, since nothing folded this event the first time.
      */
     @Test
-    void accept_cloud_event_reports_not_deliverable_for_an_event_buffered_while_a_catch_up_replay_is_in_flight_but_still_folds_it_once() {
+    void accept_cloud_event_reports_deferred_for_an_event_offered_while_a_catch_up_replay_is_in_flight_and_only_the_redelivery_after_going_live_applies_it() {
         InMemoryEventStore store = new InMemoryEventStore();
         store.write("s", counterConverter().toCloudEvents(List.of(new Counted("1"), new Counted("2"))));
         CountDownLatch parked = new CountDownLatch(1);
@@ -1049,10 +1057,11 @@ class DomainEventFeedTest {
         awaitUninterruptibly(parked);
         assertThat(feed.isReadyForLiveDelivery()).as("the replay is still running, not yet live").isFalse();
 
-        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live")));
+        CloudEvent liveEvent = converter.toCloudEvent(new Counted("live"));
+        RoutingOutcome outcome = feed.acceptCloudEvent(liveEvent);
 
         assertThat(outcome).as("not ready yet, even though the in-flight replay will end up folding this event")
-                .isEqualTo(RoutingOutcome.NOT_DELIVERABLE);
+                .isEqualTo(RoutingOutcome.DEFERRED);
 
         proceed.countDown();
         try {
@@ -1062,8 +1071,15 @@ class DomainEventFeedTest {
             throw new RuntimeException(e);
         }
         assertThat(replay.isAlive()).isFalse();
-        // The two replayed events plus the one buffered mid-replay fold to three, so the event was not lost despite
-        // the NOT_DELIVERABLE outcome above.
+        assertThat(feed.isReadyForLiveDelivery()).isTrue();
+        // The refused event was never buffered, so only the two replayed events have folded so far.
+        assertThat(repo.get("counter")).isEqualTo(2);
+
+        // The redelivery a caller must issue on DEFERRED is what actually applies this event, now that the feed is
+        // live, since nothing folded it the first time.
+        RoutingOutcome redelivered = feed.acceptCloudEvent(liveEvent);
+
+        assertThat(redelivered).isEqualTo(RoutingOutcome.DELIVERED);
         assertThat(repo.get("counter")).isEqualTo(3);
     }
 

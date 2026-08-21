@@ -77,13 +77,18 @@ public final class BlockingHandover<T> {
         void markCaughtUp();
 
         /**
-         * Whether the replay should keep going, asked once per payload before it is folded. Return {@code false} to
-         * stop one already in flight, because the model was stopped or is shutting down.
+         * Whether the replay should keep going, asked once per payload before it is folded, and once more after the
+         * last one, right before {@link #markCaughtUp()} would otherwise run. Return {@code false} to stop one
+         * already in flight, because the model was stopped or is shutting down, or because whatever identifies this
+         * attempt (a subscription id, say) has since been reassigned to a different one.
          * <p>
          * A stop is not a failure. Nothing is drained, the handover does not go live, {@link #markCaughtUp()} is not
          * called, and no failure is recorded, so the next catch-up replays the whole history and the handover stays
          * usable. Live payloads arriving after a stop are dropped rather than buffered, the same dropped-not-deferred
-         * contract a stopped subscription model has (ADR 85).
+         * contract a stopped subscription model has (ADR 85). The final, post-loop check exists because the
+         * per-payload one only ever runs before a fold, never after the last one: an attempt whose ownership lapses
+         * while that last fold is still running would otherwise reach {@link #markCaughtUp()} for a history its
+         * current owner never actually folded.
          */
         default boolean keepReplaying() {
             return true;
@@ -112,6 +117,24 @@ public final class BlockingHandover<T> {
          * rather than written, the same discard-on-stop contract {@link #keepReplaying()} documents. Must not throw.
          */
         default void replayAbandoned() {
+        }
+    }
+
+    /**
+     * Thrown by {@link #acceptReportingDelivery(Object)} and {@link #acceptIfLive(Object)} for a refusal decided
+     * before any dispatch was attempted, a permanently failed catch-up, a full live buffer with nothing draining
+     * it, or a {@code dedupId} function that returned {@code null} for the payload, none of them a delivery.
+     * Distinct from any other {@link IllegalStateException} either method can throw, in particular one a delivered
+     * payload's own handler throws, so a caller that needs to tell those apart can catch this type specifically
+     * instead of classifying every {@link IllegalStateException} alike.
+     */
+    public static final class PreDispatchRefusalException extends IllegalStateException {
+        PreDispatchRefusalException(String message) {
+            super(message);
+        }
+
+        PreDispatchRefusalException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 
@@ -167,8 +190,8 @@ public final class BlockingHandover<T> {
      * Once live, {@code deliver} runs outside this engine's monitor (see the class javadoc), so a concurrent caller
      * gets a concurrent {@code deliver} call, not one queued behind another payload's fold.
      *
-     * @throws IllegalStateException if a prior {@link #catchUp(Source)} has failed, or if the live buffer overflows
-     *                                during the catch-up.
+     * @throws PreDispatchRefusalException if a prior {@link #catchUp(Source)} has failed, or if the live buffer
+     *                                overflows during the catch-up.
      */
     public void accept(T payload) {
         acceptReportingDelivery(payload);
@@ -185,7 +208,7 @@ public final class BlockingHandover<T> {
      *         delivered, or when a concurrent delivery of the same payload is already running and this call is not
      *         the one deciding whether it succeeds. {@code true} otherwise, including a de-duplicated repeat of a
      *         payload an earlier attempt already delivered.
-     * @throws IllegalStateException for the same reasons {@link #accept(Object)} does.
+     * @throws PreDispatchRefusalException for the same reasons {@link #accept(Object)} does.
      */
     public boolean acceptReportingDelivery(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
@@ -193,7 +216,7 @@ public final class BlockingHandover<T> {
         boolean dropped = false;
         synchronized (lock) {
             if (catchUpFailure != null) {
-                throw new IllegalStateException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
+                throw new PreDispatchRefusalException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
             }
             if (live) {
                 String key = dedupKey(payload);
@@ -216,7 +239,7 @@ public final class BlockingHandover<T> {
                 // nothing is coming to fold it and buffering would just fill up and overflow.
                 dropped = true;
             } else if (buffer.size() >= maxBufferedEvents) {
-                throw new IllegalStateException(HandoverMessages.bufferOverflow(maxBufferedEvents));
+                throw new PreDispatchRefusalException(HandoverMessages.bufferOverflow(maxBufferedEvents));
             } else {
                 buffer.add(payload);
             }
@@ -225,6 +248,56 @@ public final class BlockingHandover<T> {
             deliverOutsideLock(payload, deliverKey);
         }
         return !dropped;
+    }
+
+    /**
+     * As {@link #acceptReportingDelivery(Object)}, except a payload that would only buffer is refused instead:
+     * returned {@code false} without ever being added to the buffer. For a caller that can redeliver the same
+     * payload later, a buffered payload is strictly worse than a refused one, since a buffered payload has already
+     * been reported handled by the time this returns, while a refused one has not, and can safely be offered again.
+     * <p>
+     * A payload fed while this handover is stopped is refused the same way, for the same reason: nothing is
+     * currently draining a buffer for it to wait in.
+     *
+     * @return {@code true} once the payload has genuinely landed: delivered live just now, or already delivered by
+     *         an earlier attempt. {@code false} whenever this call did not deliver it, whether because this
+     *         handover is not live yet, is stopped, or a concurrent delivery of the same payload is already
+     *         running elsewhere. Every {@code false} is safe to retry: a redelivery lands on {@code deliveredIds}
+     *         once whatever is holding it up resolves.
+     * @throws PreDispatchRefusalException for the same reasons {@link #accept(Object)} does. Checked first, before
+     *         the live check, so a payload fed after a permanently failed catch-up fails fast rather than reporting
+     *         {@code false} forever for a caller to retry a catch-up that is never coming back.
+     */
+    public boolean acceptIfLive(T payload) {
+        Objects.requireNonNull(payload, "payload cannot be null");
+        String deliverKey = null;
+        boolean landed;
+        synchronized (lock) {
+            if (catchUpFailure != null) {
+                throw new PreDispatchRefusalException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
+            }
+            if (!live) {
+                // Refuse without buffering, unlike acceptReportingDelivery. Covers "never started", "still
+                // replaying", and "stopped mid-replay" alike, all three are "not live", and a caller here has
+                // already promised it can redeliver, so there is nothing to gain by holding the payload instead of
+                // asking again later.
+                landed = false;
+            } else {
+                String key = dedupKey(payload);
+                if (deliveredIds.contains(key)) {
+                    landed = true;
+                } else if (!inFlight.add(key)) {
+                    landed = false;
+                } else {
+                    deliverKey = key;
+                    landed = true;
+                }
+            }
+        }
+        if (deliverKey != null) {
+            deliverOutsideLock(payload, deliverKey);
+        }
+        return landed;
     }
 
     /**
@@ -293,6 +366,15 @@ public final class BlockingHandover<T> {
                         deliveredIds.add(key);
                     }
                 }
+            }
+            // Checked again here, once more, even though the loop above already checks it before every fold: that
+            // check runs before each payload, never after the last one, so a stop or a cancelled attempt landing
+            // while the final fold is still in flight would otherwise reach markCaughtUp() unnoticed, for a
+            // history the id's current owner never folded. Reusing keepReplaying() for this, rather than reading
+            // it as "only asked before a fold", is deliberate: whatever it means to no longer own the replay, it
+            // means the exact same thing whether that is discovered before a fold or right after the last one.
+            if (!stoppedMidReplay && !source.keepReplaying()) {
+                stoppedMidReplay = true;
             }
             if (stoppedMidReplay) {
                 // No drain, no going live, and no marker. Recording completion here is the one thing that would make
@@ -368,7 +450,7 @@ public final class BlockingHandover<T> {
     private String dedupKey(T payload) {
         String key = dedupId.apply(payload);
         if (key == null) {
-            throw new IllegalStateException(HandoverMessages.dedupKeyRequired());
+            throw new PreDispatchRefusalException(HandoverMessages.dedupKeyRequired());
         }
         return key;
     }

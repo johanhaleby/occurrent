@@ -21,24 +21,38 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.RoutingOutcome;
 
 /**
- * Told about every event {@link PushSubscriptionModel#accept(CloudEvent)} is asked to deliver, before delivery is
- * attempted, so a misconfigured queue binding, a missing declared event type or a type-mapping typo can be told
- * apart from a saga or projection that received an event and chose not to act on it. {@code accept(...)} itself
- * stays silent about all of these by design, see ADR 104.
+ * Told about every event {@link PushSubscriptionModel#accept(CloudEvent)} is asked to deliver, once the matched
+ * registration's action has run (or the model found no running, unpaused registration for it at all), so a
+ * misconfigured queue binding, a missing declared event type or a type-mapping typo can be told apart from a saga
+ * or projection that received an event and chose not to act on it. {@code accept(...)} itself stays silent about
+ * all of these by design, see ADR 104.
  * <p>
  * Called once per event, whether or not a handler ends up running. {@code outcome} is {@link RoutingOutcome#DELIVERED}
- * only when the model is running and a currently registered, unpaused subscription's filter accepted the event,
- * independent of whether that handler goes on to succeed or throw. It is {@link RoutingOutcome#FILTERED} when that
- * same subscription evaluated the event and declined it, and {@link RoutingOutcome#NOT_DELIVERABLE} when there was
- * no running, unpaused subscription for the event to reach at all, whether because nothing is registered, the model
- * is stopped, or the subscription is paused. A caller acknowledging an externally sourced event may acknowledge on
- * {@link RoutingOutcome#DELIVERED} once {@code accept(...)} has returned normally, and on
- * {@link RoutingOutcome#FILTERED}, where redelivering would loop forever against this same registration, since
- * the event is not this consumer's under the filter currently registered for it. It must never acknowledge on
- * {@link RoutingOutcome#NOT_DELIVERABLE}, which is why the three are kept
- * apart rather than collapsed back into a single flag. It shares the same filter evaluation the actual dispatch
- * decision is made from, so the two can never disagree, and no lifecycle transition landing between the evaluation
- * and this call can change which outcome is reported.
+ * only when the model is running, a currently registered, unpaused subscription's filter accepted the event, and
+ * the registration's action genuinely ran, independent of whether that action goes on to succeed or throw. It is
+ * {@link RoutingOutcome#FILTERED} when that same subscription evaluated the event and declined it, and
+ * {@link RoutingOutcome#NOT_DELIVERABLE} when there was no running, unpaused subscription for the event to reach at
+ * all, whether because nothing is registered, the model is stopped, or the subscription is paused. A caller
+ * acknowledging an externally sourced event may acknowledge on {@link RoutingOutcome#DELIVERED} once
+ * {@code accept(...)} has returned normally, and on {@link RoutingOutcome#FILTERED}, where redelivering would loop
+ * forever against this same registration, since the event is not this consumer's under the filter currently
+ * registered for it. It must never acknowledge on {@link RoutingOutcome#NOT_DELIVERABLE}, which is why the three
+ * are kept apart rather than collapsed back into a single flag. It shares the same filter evaluation the actual
+ * dispatch decision is made from, so the two can never disagree, and no lifecycle transition landing between the
+ * evaluation and this call can change which outcome is reported.
+ * <p>
+ * <strong>A broker bridge feeding this model from outside the process, rather than the in-process write path
+ * {@link PushSubscriptionModel#accept(CloudEvent)} serves, should call
+ * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)} instead.</strong> When this model is wrapped in a
+ * {@link CatchupThenPushSubscriptionModel} still replaying or draining,
+ * {@code acceptRedeliverable(...)} refuses such an event outright rather than buffering it, reported
+ * {@link RoutingOutcome#DEFERRED}, safe to redeliver and never a reason to acknowledge. {@code RabbitMqCloudEventBridge}
+ * and {@code KafkaCloudEventBridge} do exactly this, and are correct with no further configuration:
+ * {@link CatchupThenPushSubscriptionModel#isReadyForLiveDelivery(String)} and their own {@code readinessSource}
+ * remain available, but only as an optional pacing hint that cuts down on how often that refuse-and-redeliver round
+ * trip happens, not as a correctness requirement. Fed directly through {@code accept(...)}, with no catch-up
+ * wrapper in front, {@code DELIVERED} is exactly what it always was, safe to acknowledge on once
+ * {@code accept(...)} returns.
  * <p>
  * A filter that throws while being evaluated (a supplied {@code DataFieldReader} can) never gets to answer whether
  * it matched. A {@link RuntimeException} or {@link AssertionError} is reported to the observer as

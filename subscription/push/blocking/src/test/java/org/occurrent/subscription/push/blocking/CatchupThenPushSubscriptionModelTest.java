@@ -26,8 +26,10 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
+import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbSubscriptionFilter;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
@@ -157,6 +159,34 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("buffer overflowed");
     }
 
+    /**
+     * A full live buffer is also decided before any dispatch was attempted, the payload never reaches the handler,
+     * so it must report {@link RoutingOutcome#NOT_DELIVERABLE} for an observer configured on the write path, the
+     * same as a permanently failed catch-up, not {@link RoutingOutcome#DELIVERED}.
+     */
+    @Test
+    void overflowing_the_live_buffer_during_replay_reports_not_deliverable_rather_than_delivered_with_an_observer() {
+        List<RoutingOutcome> observed = new ArrayList<>();
+        PushSubscriptionModel feed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+        CloudEvent e1 = cloudEvent("1", "Created");
+        CloudEvent l1 = cloudEvent("l1", "Updated");
+        CloudEvent l2 = cloudEvent("l2", "Updated");
+        CloudEvent l3 = cloudEvent("l3", "Updated");
+        // On the first replayed element, three live events arrive but the buffer cap is two.
+        PositionOrderedReader reader = readerThatOnFirstElementPushesMany(List.of(e1), List.of(l1, l2, l3), feed);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null, new CatchupThenLiveOptions(10, 2));
+        var subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        });
+        Throwable thrown = catchThrowable(subscription::waitUntilStarted);
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("buffer overflowed");
+        // l1 and l2 buffer normally on the write path, reported DELIVERED same as always, l3 overflows the
+        // two-slot buffer and must not be reported DELIVERED for a handler that never ran.
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED, RoutingOutcome.DELIVERED, RoutingOutcome.NOT_DELIVERABLE);
+    }
+
     @Test
     void a_dcb_subscription_filter_cannot_be_replayed() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
@@ -204,6 +234,101 @@ class CatchupThenPushSubscriptionModelTest {
         // Registered and refusing reads as running, unlike the released registration this used to leave behind.
         assertThat(model.isRunning("sub")).isTrue();
         assertThat(model.isCatchingUp("sub")).isFalse();
+    }
+
+    /**
+     * The broker-path counterpart to the test above, and the regression guard for a Copilot review finding: a
+     * refusal decided before any dispatch was attempted must report {@link RoutingOutcome#NOT_DELIVERABLE}, never
+     * {@link RoutingOutcome#DELIVERED}, so a bridge applies its configured failure policy instead of acknowledging
+     * a message nothing consumed.
+     */
+    @Test
+    void a_catch_up_failure_reports_not_deliverable_rather_than_delivered_on_the_broker_path() {
+        List<RoutingOutcome> observed = new ArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+        PositionOrderedReader failingReader = failingReader();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader, liveFeed, null);
+
+        var subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        });
+        Throwable replayFailure = catchThrowable(subscription::waitUntilStarted);
+        assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        Throwable thrown = catchThrowable(() -> liveFeed.acceptRedeliverable(cloudEvent("1", "Created")));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+    }
+
+    /**
+     * The write-path counterpart to the two tests above, and a second Copilot review finding on the same PR: the
+     * write path (bufferIfNotLive true) wraps a catchUpFailure IllegalStateException as a Refusal exactly like the
+     * broker path does, so an observer configured on the write path also sees NOT_DELIVERABLE rather than
+     * DELIVERED for a refusal decided before any dispatch was attempted, and {@code route(CloudEvent)} unwraps the
+     * Refusal back to the plain IllegalStateException before it reaches this call's own caller.
+     */
+    @Test
+    void a_catch_up_failure_reports_not_deliverable_rather_than_delivered_on_the_write_path_with_an_observer() {
+        List<RoutingOutcome> observed = new ArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+        PositionOrderedReader failingReader = failingReader();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader, liveFeed, null);
+
+        var subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        });
+        Throwable replayFailure = catchThrowable(subscription::waitUntilStarted);
+        assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+    }
+
+    /**
+     * The regression this guards: a Copilot review of this PR found that catching every {@code IllegalStateException}
+     * from the handover, rather than only the one it throws for its own pre-dispatch refusal, wrapped a handler's own
+     * thrown {@code IllegalStateException} as a {@code Refusal} too, misreporting a handler that genuinely ran and
+     * failed as {@link RoutingOutcome#NOT_DELIVERABLE} instead of {@link RoutingOutcome#DELIVERED}.
+     */
+    @Test
+    void a_handlers_own_illegalstateexception_reports_delivered_rather_than_not_deliverable_on_the_write_path() throws Exception {
+        List<RoutingOutcome> observed = new ArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+        RuntimeException handlerFailure = new IllegalStateException("handler boom");
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Stream::empty, 0), liveFeed, null);
+
+        var subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            throw handlerFailure;
+        });
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")));
+
+        assertThat(thrown).isSameAs(handlerFailure);
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    @Test
+    void a_handlers_own_illegalstateexception_reports_delivered_rather_than_not_deliverable_on_the_broker_path() throws Exception {
+        List<RoutingOutcome> observed = new ArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+        RuntimeException handlerFailure = new IllegalStateException("handler boom");
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Stream::empty, 0), liveFeed, null);
+
+        var subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            throw handlerFailure;
+        });
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+        Throwable thrown = catchThrowable(() -> liveFeed.acceptRedeliverable(cloudEvent("1", "Created")));
+
+        assertThat(thrown).isSameAs(handlerFailure);
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
     }
 
     @Test
@@ -536,6 +661,525 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(folded).endsWith("2", "3", "4");
     }
 
+    /**
+     * A Copilot review finding: {@code launchReplay}'s completion used to remove its {@code interruptibleReplays}
+     * entry by key alone, the same mistake {@code forget(..)} already guards against for {@code replayingSubscriptions}
+     * by comparing the {@link java.util.concurrent.Future} identity instead. An old attempt under {@code "sub"},
+     * still blocked when {@code cancelSubscription("sub")} runs, can finish (fail, here) after a fresh
+     * {@code subscribe("sub", ...)} has already put a new launcher in the map for a replay this test then stops. If
+     * the old attempt's completion evicted that launcher by key, {@code start(true)} would find nothing to relaunch
+     * and the subscription would stay silently dead. It has to survive instead.
+     */
+    @Test
+    void an_old_replays_late_completion_after_a_cancel_and_resubscribe_does_not_evict_the_new_replays_launcher() throws Exception {
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")));
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        CountDownLatch oldReplayParked = new CountDownLatch(1);
+        CountDownLatch releaseOldReplay = new CountDownLatch(1);
+        RuntimeException oldReplayFailure = new RuntimeException("old replay boom");
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            oldReplayParked.countDown();
+            awaitLatch(releaseOldReplay);
+            throw oldReplayFailure;
+        });
+        assertThat(oldReplayParked.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Cancelling does not stop the old replay's thread, only the registration and the map entries it owned at
+        // this moment. The old replay is left running, blocked, entirely unaware it has been cancelled.
+        model.cancelSubscription("sub");
+
+        CountDownLatch newReplayParked = new CountDownLatch(1);
+        CountDownLatch releaseNewReplay = new CountDownLatch(1);
+        List<String> newReplayFolded = new CopyOnWriteArrayList<>();
+        Subscription newSubscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            newReplayFolded.add(ce.getId());
+            newReplayParked.countDown();
+            awaitLatch(releaseNewReplay);
+        });
+        assertThat(newReplayParked.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Stopped legitimately, mid-replay, exactly like starting_the_model_again_replays_a_catch_up_that_was_stopped
+        // above, so interruptibleReplays keeps this launcher on purpose, for start(true) to relaunch later.
+        model.stop();
+        releaseNewReplay.countDown();
+        assertThat(newSubscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+
+        // The old replay finishes (fails) only now, well after the new one was legitimately stopped and kept.
+        // Given a moment to run its cleanup before relaunching, so start(true) below races against the completed
+        // cleanup rather than the still-running failure handler.
+        releaseOldReplay.countDown();
+        Thread.sleep(200);
+
+        model.start(true);
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while ((!model.isRunning("sub") || model.isCatchingUp("sub")) && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+
+        assertThat(model.isRunning("sub")).as("the stopped launcher survived the old replay's late, stale-by-key completion")
+                .isTrue();
+        assertThat(model.isCatchingUp("sub")).isFalse();
+        assertThat(newReplayFolded).endsWith("1", "2", "3");
+    }
+
+    /**
+     * Adversarial verification companion to the failure-path test above: the same self-referencing compare-and-remove
+     * (interruptibleReplays.remove(subscriptionId, ownLaunch.get())) also has to hold on the SUCCESS completion path,
+     * not only the failure one. An old attempt under "sub", parked folding its last event when
+     * cancelSubscription("sub") runs, finishes successfully (reaches live, no exception) only after a fresh
+     * subscribe("sub", ...) has already put a new launcher in the map for a replay this test then stops. If the old
+     * attempt's successful completion evicted that launcher by key rather than by identity, start(true) would find
+     * nothing to relaunch and the subscription would stay silently dead, the same hazard the failure path has.
+     */
+    @Test
+    void an_old_replays_late_successful_completion_after_a_cancel_and_resubscribe_does_not_evict_the_new_replays_launcher() throws Exception {
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")));
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        CountDownLatch oldReplayParkedOnLastEvent = new CountDownLatch(1);
+        CountDownLatch releaseOldReplay = new CountDownLatch(1);
+        List<String> oldReplayFolded = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            oldReplayFolded.add(ce.getId());
+            if (ce.getId().equals("3")) {
+                // The last event in the store: keepReplaying() has already passed for it, and the loop's own
+                // hasNext() is what ends the replay next, not another keepReplaying() check, so parking here and
+                // then returning normally (no throw) drives the replay into catchUp's genuine success path
+                // (drainBufferAndGoLive + markCaughtUp + return true) regardless of what happens to this
+                // subscription id while parked.
+                oldReplayParkedOnLastEvent.countDown();
+                awaitLatch(releaseOldReplay);
+            }
+        });
+        assertThat(oldReplayParkedOnLastEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Cancelling does not stop the old replay's thread, only the registration and the map entries it owned at
+        // this moment. The old replay is left running, blocked, entirely unaware it has been cancelled.
+        model.cancelSubscription("sub");
+
+        CountDownLatch newReplayParked = new CountDownLatch(1);
+        CountDownLatch releaseNewReplay = new CountDownLatch(1);
+        List<String> newReplayFolded = new CopyOnWriteArrayList<>();
+        Subscription newSubscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            newReplayFolded.add(ce.getId());
+            newReplayParked.countDown();
+            awaitLatch(releaseNewReplay);
+        });
+        assertThat(newReplayParked.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Stopped legitimately, mid-replay, exactly like starting_the_model_again_replays_a_catch_up_that_was_stopped
+        // above, so interruptibleReplays keeps this launcher on purpose, for start(true) to relaunch later.
+        model.stop();
+        releaseNewReplay.countDown();
+        assertThat(newSubscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+
+        // The old replay reaches live (succeeds) only now, well after the new one was legitimately stopped and kept.
+        // Given a moment to run its own completion cleanup before relaunching, so start(true) below races against
+        // the completed cleanup rather than the still-running success handler.
+        releaseOldReplay.countDown();
+        Thread.sleep(200);
+        assertThat(oldReplayFolded).containsExactly("1", "2", "3");
+
+        model.start(true);
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while ((!model.isRunning("sub") || model.isCatchingUp("sub")) && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+
+        assertThat(model.isRunning("sub")).as("the stopped launcher survived the old replay's late, stale-by-key "
+                + "successful completion").isTrue();
+        assertThat(model.isCatchingUp("sub")).isFalse();
+        assertThat(newReplayFolded).endsWith("1", "2", "3");
+    }
+
+    /**
+     * A Copilot review of this PR caught what the compare-and-remove fix above still missed: it guards the map
+     * removal, but {@code BlockingHandover.catchUp}'s per-payload ownership check only ever runs before a fold,
+     * never after the last one. An old replay parked on its last event when {@code cancelSubscription} plus a
+     * fresh {@code subscribe} moves the id on unblocks straight into {@code hasNext() == false}, skipping that
+     * check entirely, and would have reached {@code markCaughtUp()} (and the new replay's own pending pause) for
+     * a history the id's actual owner never folded. Fixed by asking the same ownership question once more, right
+     * after the loop, before either side effect runs.
+     */
+    @Test
+    void an_old_replays_late_completion_does_not_write_the_new_subscriptions_marker_or_consume_its_pending_pause() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+
+        CountDownLatch oldReplayParkedOnLastEvent = new CountDownLatch(1);
+        CountDownLatch releaseOldReplay = new CountDownLatch(1);
+        List<String> oldReplayFolded = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            oldReplayFolded.add(ce.getId());
+            if (ce.getId().equals("3")) {
+                oldReplayParkedOnLastEvent.countDown();
+                awaitLatch(releaseOldReplay);
+            }
+        });
+        assertThat(oldReplayParkedOnLastEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Cancelling does not stop the old replay's thread, only the registration and the map entries it owned at
+        // this moment. The old replay is left running, blocked, entirely unaware it has been cancelled.
+        model.cancelSubscription("sub");
+
+        CountDownLatch newReplayParkedOnFirstEvent = new CountDownLatch(1);
+        CountDownLatch releaseNewReplay = new CountDownLatch(1);
+        List<String> newReplayFolded = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            newReplayFolded.add(ce.getId());
+            newReplayParkedOnFirstEvent.countDown();
+            awaitLatch(releaseNewReplay);
+        });
+        assertThat(newReplayParkedOnFirstEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Registered as replaying (still parked on its own first event), so this records a pause request for the
+        // handover to apply once ITS OWN replay finishes, not the stale one's.
+        model.pauseSubscription("sub");
+        assertThat(model.isPaused("sub")).isTrue();
+
+        // The old replay reaches its own, late, stale completion only now, well after the id moved on.
+        releaseOldReplay.countDown();
+        Thread.sleep(200);
+        assertThat(oldReplayFolded).containsExactly("1", "2", "3");
+
+        // Neither of the new subscription's own state was touched by the stale replay's completion. The marker
+        // it would write says the whole history is durably applied, which is false for the projection actually
+        // registered under this id right now, and the live feed itself must not have been paused yet either, or
+        // the pending request the assertion above already confirmed would have been consumed for nothing.
+        assertThat(marker.exists("sub")).as("the old replay's late completion must not mark the new subscription "
+                        + "caught up for a history the projection registered under this id never folded")
+                .isFalse();
+        assertThat(feed.isPaused("sub")).as("the pending pause survives the old replay's late completion, still "
+                + "waiting for the new replay's own completion to apply it").isFalse();
+        assertThat(model.isPaused("sub")).as("still pending, not lost").isTrue();
+
+        // The new replay finishes for real now, and its own completion is what applies the pause that was always
+        // meant for it, and writes the marker that actually reflects what this registration folded.
+        releaseNewReplay.countDown();
+        long pauseDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!feed.isPaused("sub") && System.nanoTime() < pauseDeadline) {
+            Thread.sleep(10);
+        }
+        assertThat(feed.isPaused("sub")).as("the new replay's own completion applies the pause that was always "
+                + "meant for it").isTrue();
+        assertThat(marker.exists("sub")).as("only the new replay's own completion marks this subscription "
+                + "caught up").isTrue();
+    }
+
+    /**
+     * A fresh-context verify of the fix above caught a narrower window it still left open: the post-loop
+     * {@code keepReplaying()} check and {@code markCaughtUp()} are separate steps with nothing re-checked in
+     * between, so an old replay whose ownership lapses after that check has already passed, but before
+     * {@code markCaughtUp()} and the pending-pause consumption actually run, still reaches both. Parking the old
+     * replay on a buffered live event's fold during {@code drainBufferAndGoLive()}, which only runs after the
+     * post-loop check has already passed, reproduces exactly that window.
+     */
+    @Test
+    void an_old_replays_ownership_lapsing_after_the_post_loop_check_still_does_not_write_the_new_subscriptions_marker_or_consume_its_pending_pause() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+
+        CountDownLatch oldReplayParkedOnHistoricalEvent = new CountDownLatch(1);
+        CountDownLatch releaseHistoricalEvent = new CountDownLatch(1);
+        CountDownLatch oldReplayParkedOnBufferedLiveEvent = new CountDownLatch(1);
+        CountDownLatch releaseBufferedLiveEvent = new CountDownLatch(1);
+        List<String> oldReplayFolded = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            oldReplayFolded.add(ce.getId());
+            if (ce.getId().equals("1")) {
+                oldReplayParkedOnHistoricalEvent.countDown();
+                awaitLatch(releaseHistoricalEvent);
+            } else if (ce.getId().equals("2-live")) {
+                oldReplayParkedOnBufferedLiveEvent.countDown();
+                awaitLatch(releaseBufferedLiveEvent);
+            }
+        });
+        assertThat(oldReplayParkedOnHistoricalEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Written once the replay's own history query has already run, so this arrives as a live event the
+        // still-replaying handover only buffers, not as part of the replay itself.
+        store.write("s1", List.of(cloudEvent("2-live", "Updated")));
+
+        // Unblocks the historical fold. hasNext() is now false, so the post-loop keepReplaying() check runs next,
+        // still true (ownership has not moved yet), and drainBufferAndGoLive() delivers the one buffered event.
+        releaseHistoricalEvent.countDown();
+        assertThat(oldReplayParkedOnBufferedLiveEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // The post-loop check has already passed by now. Ownership moves here, while the old replay is parked
+        // mid-drain, after that check and before markCaughtUp().
+        model.cancelSubscription("sub");
+        CountDownLatch newReplayParkedOnFirstEvent = new CountDownLatch(1);
+        CountDownLatch releaseNewReplay = new CountDownLatch(1);
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            newReplayParkedOnFirstEvent.countDown();
+            awaitLatch(releaseNewReplay);
+        });
+        assertThat(newReplayParkedOnFirstEvent.await(5, TimeUnit.SECONDS)).isTrue();
+        model.pauseSubscription("sub");
+        assertThat(model.isPaused("sub")).isTrue();
+
+        // The old replay's drain finishes only now, well after the id moved on.
+        releaseBufferedLiveEvent.countDown();
+        Thread.sleep(200);
+        assertThat(oldReplayFolded).containsExactly("1", "2-live");
+
+        assertThat(marker.exists("sub")).as("the old replay's late completion must not mark the new subscription "
+                        + "caught up, even though its own post-loop keepReplaying() check already passed before "
+                        + "ownership moved")
+                .isFalse();
+        assertThat(feed.isPaused("sub")).as("the pending pause survives the old replay's late completion, still "
+                + "waiting for the new replay's own completion to apply it").isFalse();
+        assertThat(model.isPaused("sub")).as("still pending, not lost").isTrue();
+
+        releaseNewReplay.countDown();
+        long pauseDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!feed.isPaused("sub") && System.nanoTime() < pauseDeadline) {
+            Thread.sleep(10);
+        }
+        assertThat(feed.isPaused("sub")).as("the new replay's own completion applies the pause that was always "
+                + "meant for it").isTrue();
+        assertThat(marker.exists("sub")).as("only the new replay's own completion marks this subscription "
+                + "caught up").isTrue();
+    }
+
+    /**
+     * Adversarial verification of {@code completeIfStillOwned}: its ownership check runs under the model's own
+     * monitor, the same one {@code cancelSubscription} and {@code launchReplay}'s registering put use, purely to
+     * make the check-then-write atomic with those two. Nothing in the guarded completion calls back into
+     * {@link org.occurrent.subscription.api.blocking.internal.BlockingHandover}'s own lock, and nothing that holds
+     * that lock calls back into the model's monitor, so the two never wait on each other. This races a replay's own
+     * completion against a concurrent {@code cancelSubscription} plus resubscribe for the same id and asserts both
+     * finish within a bounded timeout instead of hanging.
+     */
+    @Test
+    void a_completing_replay_and_a_concurrent_cancel_plus_resubscribe_never_deadlock_on_the_models_monitor() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+
+        CountDownLatch parkedOnOnlyEvent = new CountDownLatch(1);
+        CountDownLatch releaseFold = new CountDownLatch(1);
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            parkedOnOnlyEvent.countDown();
+            awaitLatch(releaseFold);
+        });
+        assertThat(parkedOnOnlyEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        CountDownLatch bothReady = new CountDownLatch(2);
+        CountDownLatch go = new CountDownLatch(1);
+
+        // Unblocks the parked fold, so the pre-existing replay thread runs the post-loop keepReplaying() check,
+        // drains, and reaches both completeIfStillOwned call sites (markCaughtUp, then the forget-plus-pending-pause
+        // completion), each acquiring the model's monitor.
+        Thread releaseTrigger = new Thread(() -> {
+            bothReady.countDown();
+            awaitLatch(go);
+            releaseFold.countDown();
+        }, "release-trigger");
+
+        // Acquires the SAME monitor, first for cancelSubscription's removal, then again for the new launcher's
+        // registering put inside launchReplay, racing directly against the replay thread above.
+        Thread cancelAndResubscribe = new Thread(() -> {
+            bothReady.countDown();
+            awaitLatch(go);
+            model.cancelSubscription("sub");
+            model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            });
+        }, "cancel-and-resubscribe");
+
+        releaseTrigger.start();
+        cancelAndResubscribe.start();
+        assertThat(bothReady.await(5, TimeUnit.SECONDS)).isTrue();
+        go.countDown();
+
+        releaseTrigger.join(5_000);
+        cancelAndResubscribe.join(5_000);
+
+        assertThat(releaseTrigger.isAlive()).as("no deadlock between completeIfStillOwned and a concurrent "
+                + "cancelSubscription/subscribe racing for the model's monitor").isFalse();
+        assertThat(cancelAndResubscribe.isAlive()).as("no deadlock between completeIfStillOwned and a concurrent "
+                + "cancelSubscription/subscribe racing for the model's monitor").isFalse();
+
+        // Sane and live either way, regardless of which side won the race.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (model.isCatchingUp("sub") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(model.isCatchingUp("sub")).as("the winning replay, old or new, eventually finishes catching up")
+                .isFalse();
+        assertThat(model.isRunning("sub")).isTrue();
+    }
+
+    /**
+     * Adversarial verification of the failure path: an old replay that throws after a same-id cancel-and-resubscribe
+     * only ever reaches the unguarded, by-identity {@code forget(..)} call, never {@code completeIfStillOwned}, since
+     * the failure branch neither writes the catch-up marker nor consumes a pending pause. This confirms that leaves
+     * every id-keyed write belonging to the NEW subscription untouched: its {@code replayingSubscriptions} entry,
+     * its pending pause, and the live feed's own pause state.
+     */
+    @Test
+    void an_old_replays_stale_failure_leaves_the_new_subscriptions_registration_and_pending_pause_untouched() throws Exception {
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")));
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+
+        CountDownLatch oldReplayParked = new CountDownLatch(1);
+        CountDownLatch releaseOldReplay = new CountDownLatch(1);
+        RuntimeException oldReplayFailure = new RuntimeException("old replay boom");
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            oldReplayParked.countDown();
+            awaitLatch(releaseOldReplay);
+            throw oldReplayFailure;
+        });
+        assertThat(oldReplayParked.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Cancelling does not stop the old replay's thread, only the registration and the map entries it owned at
+        // this moment.
+        model.cancelSubscription("sub");
+
+        CountDownLatch newReplayParkedOnFirstEvent = new CountDownLatch(1);
+        CountDownLatch releaseNewReplay = new CountDownLatch(1);
+        List<String> newReplayFolded = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            newReplayFolded.add(ce.getId());
+            newReplayParkedOnFirstEvent.countDown();
+            awaitLatch(releaseNewReplay);
+        });
+        assertThat(newReplayParkedOnFirstEvent.await(5, TimeUnit.SECONDS)).isTrue();
+        model.pauseSubscription("sub");
+        assertThat(model.isPaused("sub")).isTrue();
+        assertThat(model.isCatchingUp("sub")).isTrue();
+
+        // The old replay's failure runs only now, well after ownership moved to the new registration.
+        releaseOldReplay.countDown();
+        Thread.sleep(200);
+
+        assertThat(model.isCatchingUp("sub")).as("the new replay's own registration in replayingSubscriptions must "
+                + "survive the old replay's stale failure").isTrue();
+        assertThat(model.isPaused("sub")).as("the new subscription's pending pause must survive the old replay's "
+                + "stale failure untouched").isTrue();
+        assertThat(feed.isPaused("sub")).as("not consumed by the old replay's failure, which never reaches the "
+                + "pending-pause consumption at all").isFalse();
+        assertThat(marker.exists("sub")).as("the failure path never calls markCaughtUp").isFalse();
+
+        // And the new replay still completes normally afterwards, unaffected by the stale failure.
+        releaseNewReplay.countDown();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!feed.isPaused("sub") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(feed.isPaused("sub")).as("the new replay's own completion applies the pause that was always "
+                + "meant for it").isTrue();
+        assertThat(marker.exists("sub")).isTrue();
+        assertThat(newReplayFolded).containsExactly("1", "2", "3");
+    }
+
+    /**
+     * Adversarial verification that relaunching a legitimately interrupted replay still works normally after a
+     * stale, same-id replay's late completion was refused on both {@code completeIfStillOwned} call sites
+     * (markCaughtUp, and the forget-plus-pending-pause after catchUp(..) returns). Reuses the drain-time parking
+     * trick from the post-loop-window test above so the old replay's own post-loop check passes before ownership
+     * moves, and additionally stops and relaunches the new subscription's replay while the old one is still parked,
+     * so the relaunch and the stale replay's refused completion are interleaved rather than sequential.
+     */
+    @Test
+    void relaunching_an_interrupted_replay_still_completes_normally_after_an_old_replays_stale_completion_was_refused_on_both_paths() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+
+        CountDownLatch oldReplayParkedOnHistoricalEvent = new CountDownLatch(1);
+        CountDownLatch releaseHistoricalEvent = new CountDownLatch(1);
+        CountDownLatch oldReplayParkedOnBufferedLiveEvent = new CountDownLatch(1);
+        CountDownLatch releaseBufferedLiveEvent = new CountDownLatch(1);
+        List<String> oldReplayFolded = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            oldReplayFolded.add(ce.getId());
+            if (ce.getId().equals("1")) {
+                oldReplayParkedOnHistoricalEvent.countDown();
+                awaitLatch(releaseHistoricalEvent);
+            } else if (ce.getId().equals("2-live")) {
+                oldReplayParkedOnBufferedLiveEvent.countDown();
+                awaitLatch(releaseBufferedLiveEvent);
+            }
+        });
+        assertThat(oldReplayParkedOnHistoricalEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Arrives as a live event the still-replaying handover only buffers.
+        store.write("s1", List.of(cloudEvent("2-live", "Updated")));
+
+        // The post-loop keepReplaying() check runs next, still true (ownership has not moved yet), and
+        // drainBufferAndGoLive() delivers the one buffered event.
+        releaseHistoricalEvent.countDown();
+        assertThat(oldReplayParkedOnBufferedLiveEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Ownership moves here, while the old replay is parked mid-drain, after its post-loop check and before
+        // either completeIfStillOwned call site.
+        model.cancelSubscription("sub");
+
+        CountDownLatch newReplayParkedOnFirstEvent = new CountDownLatch(1);
+        CountDownLatch releaseNewReplay = new CountDownLatch(1);
+        List<String> newReplayFolded = new CopyOnWriteArrayList<>();
+        Subscription newSubscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            newReplayFolded.add(ce.getId());
+            newReplayParkedOnFirstEvent.countDown();
+            awaitLatch(releaseNewReplay);
+        });
+        assertThat(newReplayParkedOnFirstEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Interrupts the new replay legitimately, mid-fold: its own launcher survives in interruptibleReplays for
+        // start(true) to relaunch, and its replayingSubscriptions entry is dropped by its own (unguarded) forget().
+        model.stop();
+        releaseNewReplay.countDown();
+        assertThat(newSubscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+        assertThat(model.isCatchingUp("sub")).isFalse();
+
+        // The old replay's own late completion runs only now, well after ownership moved to the (now-stopped and
+        // forgotten) new registration. Refused on both completeIfStillOwned call sites.
+        releaseBufferedLiveEvent.countDown();
+        Thread.sleep(200);
+        assertThat(oldReplayFolded).containsExactly("1", "2-live");
+        assertThat(marker.exists("sub")).as("the old replay's stale success must not mark a subscription its "
+                + "history was never actually caught up for").isFalse();
+
+        // The interrupted new replay relaunches and completes normally, unaffected by the stale replay's refused
+        // completion.
+        model.start(true);
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!marker.exists("sub") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+
+        assertThat(marker.exists("sub")).as("the relaunched replay's own completion writes the marker").isTrue();
+        assertThat(model.isRunning("sub")).isTrue();
+        assertThat(model.isCatchingUp("sub")).isFalse();
+        assertThat(newReplayFolded).endsWith("1", "2-live");
+
+        // And the live feed genuinely works afterwards, so the relaunch really did hand over.
+        feed.accept(cloudEvent("3-post", "Updated"));
+        assertThat(newReplayFolded).endsWith("2-live", "3-post");
+    }
+
     @Test
     void starting_the_model_without_resuming_subscriptions_leaves_a_stopped_replay_for_resume_to_pick_up() throws Exception {
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
@@ -636,6 +1280,151 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(liveFeed.subscriptionIds()).contains("sub");
         assertThat(catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created"))))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+    }
+
+    // --- isReadyForLiveDelivery(String), the accessor a CloudEvent-level broker bridge can optionally pace its own
+    // consumption on (RabbitMqCloudEventBridge and KafkaCloudEventBridge's readinessSource), skipping a fetch it
+    // can predict would only come back DEFERRED. acceptRedeliverable(...) already refuses rather than buffers, so
+    // acknowledgement safety never depends on this. It only cuts down on refuse-and-redeliver round trips. ---
+
+    @Test
+    void an_id_the_model_has_never_seen_is_not_ready_for_live_delivery() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        assertThat(model.isReadyForLiveDelivery("never-subscribed")).isFalse();
+    }
+
+    @Test
+    void is_ready_for_live_delivery_is_false_while_the_replay_is_still_running_and_true_once_it_drains() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayReached.await(10, TimeUnit.SECONDS)).isTrue();
+
+        // Not yet. The replay is still applying its history, and a bridge pacing itself on this answer skips a
+        // fetch here rather than pulling a message off the broker only to have acceptRedeliverable(...) refuse it.
+        assertThat(model.isReadyForLiveDelivery("proj")).isFalse();
+
+        releaseReplay.countDown();
+        subscription.waitUntilStarted();
+
+        assertThat(model.isReadyForLiveDelivery("proj")).isTrue();
+    }
+
+    /**
+     * The buffering case specifically, distinct from the mid-replay case above. A live event that arrives while the
+     * replay is still in flight is only queued in the handover, not yet applied to the projection, so readiness must
+     * stay false for it too until the drain actually runs, the same "buffered, not durable" state
+     * {@code BlockingHandover} documents.
+     */
+    @Test
+    void is_ready_for_live_delivery_is_false_while_a_live_event_is_only_buffered_ahead_of_the_drain() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(__ -> {
+        });
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+
+        CountDownLatch replayStarted = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            delivered.add(ce.getId());
+            replayStarted.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayStarted.await(5, TimeUnit.SECONDS)).isTrue();
+
+        feed.accept(cloudEvent("live", "Updated"));
+        // Buffered, not yet applied. Still not ready, even though the live feed already accepted the event.
+        assertThat(model.isReadyForLiveDelivery("proj")).isFalse();
+        assertThat(delivered).doesNotContain("live");
+
+        releaseReplay.countDown();
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+        assertThat(model.isReadyForLiveDelivery("proj")).isTrue();
+        assertThat(delivered).containsExactly("1", "live");
+    }
+
+    @Test
+    void is_ready_for_live_delivery_stays_false_across_a_stop_mid_replay_and_becomes_true_once_a_relaunch_drains() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
+
+        CountDownLatch firstFolded = new CountDownLatch(1);
+        CountDownLatch releaseFold = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            folded.add(ce.getId());
+            firstFolded.countDown();
+            awaitLatch(releaseFold);
+        });
+
+        assertThat(firstFolded.await(5, TimeUnit.SECONDS)).isTrue();
+        model.stop();
+        releaseFold.countDown();
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+
+        // Stopped, same handover kept. Still not ready, not merely "unknown".
+        assertThat(model.isReadyForLiveDelivery("proj")).isFalse();
+
+        model.start(true);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!marker.exists("proj") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+
+        assertThat(model.isReadyForLiveDelivery("proj")).isTrue();
+    }
+
+    @Test
+    void is_ready_for_live_delivery_is_permanently_false_after_a_catch_up_failure() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), feed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        });
+        assertThat(catchThrowable(subscription::waitUntilStarted)).isInstanceOf(IllegalStateException.class);
+
+        assertThat(model.isReadyForLiveDelivery("sub")).isFalse();
+
+        // Restarting a failed catch-up does not clear the failure (only cancelSubscription + a fresh subscribe does),
+        // so this must keep answering false rather than flip true just because start(true) ran.
+        model.stop();
+        model.start(true);
+
+        assertThat(model.isReadyForLiveDelivery("sub")).isFalse();
+    }
+
+    @Test
+    void is_ready_for_live_delivery_is_false_once_a_subscription_is_cancelled() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        }).waitUntilStarted();
+        assertThat(model.isReadyForLiveDelivery("proj")).isTrue();
+
+        model.cancelSubscription("proj");
+
+        // The handover is gone along with the registration, the same "nothing here is tracking this id" answer as
+        // an id never subscribed at all.
+        assertThat(model.isReadyForLiveDelivery("proj")).isFalse();
     }
 
     private static void awaitLatch(CountDownLatch latch) {
