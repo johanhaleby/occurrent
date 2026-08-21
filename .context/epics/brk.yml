@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 121
+revision: 122
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -296,7 +296,7 @@ units:
     deliverables:
       - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
     blocking_on: []
-    next_action: "PR 889 ROUND 4 2026-08-21T~17:1xZ: 5/5 green on 2c526a137, Copilot found 2 threads and 5 suppressed, all real and routed: stale replay completion writes the new subscription marker and eats its pending pause (loss path, ownership check before every completion side effect), write-path catchUpFailure reported DELIVERED with an observer, held-tag drain not snapshotted (bound collapses), throwing observer swallows the rethrow. Worker a338a8ec60811f0d3 on it. Re-verifier aaf58fc78683e827a running on the hold mechanism and the two mutation checks. On the next head: gate facts, re-verify of the ownership fix, squash, CAS merge. Monitor bdwgc25oz active"
+    next_action: "PR 889 ROUND 4 IN FLIGHT 2026-08-21T~17:3xZ. Re-verifier aaf58fc78683e827a MERGE-SAFE on the hold mechanism at 2c526a137, both earlier Docker-blocked mutation checks now red as required, one caveat (a throwing nack mid-drain drops the tag) added to the round. Worker a338a8ec60811f0d3 fixing: stale replay completion ownership (loss path), write-path refusal reporting, drain snapshot plus per-tag error handling, observer rethrow. On the next head: gate facts, small re-verify of the ownership fix only, squash through the writing gates, CAS merge pinned to the verified head, worker posts the #885 comment, reactor-mirror brief, round-2 fixpoint. Monitor bdwgc25oz active"
     last_meaningful_progress_at: 2026-08-21T05:50:00Z
     observed: {}
     assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."
