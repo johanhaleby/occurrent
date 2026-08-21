@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 56
-updated_at: 2026-08-21T14:28:45Z
+revision: 57
+updated_at: 2026-08-21T15:20:45Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -285,7 +285,7 @@ units:
   U11:
     issue: 890
     goal: "Record writes that land during a startup replay: deliver the catch-up reconcile delta as live-equivalent (or an equivalent mechanism the design round settles) on both stacks, amend ADR 132 decision 6 and its consequences, falsifier test, docs and changelog"
-    phase: RUNNING
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -293,9 +293,9 @@ units:
     deliverables:
       - {check: manual_approval, ref: "design gate: plan handed to the orchestrator, approved by Johan", met: true, evidence: "Plan revision 3 approved 2026-08-21T10:42:42Z (dec-0016) with four in-place amendments after three fresh-context passes. Johan ruled scope (code fix, push models in) and delegated docs, decided append-identity only"}
       - {check: pr_merged, ref: 892, met: false, evidence: null}
-    blocking_on: []
-    next_action: "FINAL structural round by Johan ruling dec-0017 (2026-08-21T14:28:45Z): atomic phase-plus-generation snapshot, generation per launch, reactor push drain-completed transition, changelog antecedent. Copilot round 3 on a87a13e found the sampled-episode class a third time. Same class a fourth time pauses the unit. CI green on ad3237c4 (27). Gate after the round: four facts on the final head, every item with an outcome, CAS merge"
-    last_meaningful_progress_at: 2026-08-21T14:28:45Z
+    blocking_on: ["dec-0019, Johan: fifth narrow round, docs addendum instead, or other"]
+    next_action: "PAUSED 2026-08-21T15:20:45Z by dec-0017 after Copilot round 4 on c019e860 (CI green, 27 checks, falsifiers passing). Round 4: the ReplayAwareSubscriptions default composes three reads (both stacks), and the generation-to-0 handover drops the waiting buffer. Ruling queued as dec-0019 for the return ask. Worker told to stop coding, reply to the three closed threads, and send its blocked DELIVERY_RESULT"
+    last_meaningful_progress_at: 2026-08-21T15:20:45Z
     observed:
       pr_892: {head: 09c2207795e5767e1fb84d04a21c021c05924939, branch: "ayi/u11-replay-window-recording", rollup: "matrix green on 2dc1358a (falsifiers ran, framework and misc shards), 27a8489b changelog-only tail", review: "Copilot round 2 on 27a8489b, 2 threads plus 3 suppressed, open", via: "monitor PR-DELTA", at: 2026-08-21T12:41:30Z}
     assessment: "Adopted by Johan's structured-ask ruling 2026-08-21 (dec-0012, code fix now over docs addendum and deferral). Reopens ADR 132 decision 6 before 0.34.0. Mechanism verified in code on both stacks by a fresh-context Opus pass, citations on #890."
