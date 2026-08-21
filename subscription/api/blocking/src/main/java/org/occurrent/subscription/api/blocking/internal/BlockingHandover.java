@@ -77,13 +77,18 @@ public final class BlockingHandover<T> {
         void markCaughtUp();
 
         /**
-         * Whether the replay should keep going, asked once per payload before it is folded. Return {@code false} to
-         * stop one already in flight, because the model was stopped or is shutting down.
+         * Whether the replay should keep going, asked once per payload before it is folded, and once more after the
+         * last one, right before {@link #markCaughtUp()} would otherwise run. Return {@code false} to stop one
+         * already in flight, because the model was stopped or is shutting down, or because whatever identifies this
+         * attempt (a subscription id, say) has since been reassigned to a different one.
          * <p>
          * A stop is not a failure. Nothing is drained, the handover does not go live, {@link #markCaughtUp()} is not
          * called, and no failure is recorded, so the next catch-up replays the whole history and the handover stays
          * usable. Live payloads arriving after a stop are dropped rather than buffered, the same dropped-not-deferred
-         * contract a stopped subscription model has (ADR 85).
+         * contract a stopped subscription model has (ADR 85). The final, post-loop check exists because the
+         * per-payload one only ever runs before a fold, never after the last one: an attempt whose ownership lapses
+         * while that last fold is still running would otherwise reach {@link #markCaughtUp()} for a history its
+         * current owner never actually folded.
          */
         default boolean keepReplaying() {
             return true;
@@ -343,6 +348,15 @@ public final class BlockingHandover<T> {
                         deliveredIds.add(key);
                     }
                 }
+            }
+            // Checked again here, once more, even though the loop above already checks it before every fold: that
+            // check runs before each payload, never after the last one, so a stop or a cancelled attempt landing
+            // while the final fold is still in flight would otherwise reach markCaughtUp() unnoticed, for a
+            // history the id's current owner never folded. Reusing keepReplaying() for this, rather than reading
+            // it as "only asked before a fold", is deliberate: whatever it means to no longer own the replay, it
+            // means the exact same thing whether that is discovered before a fold or right after the last one.
+            if (!stoppedMidReplay && !source.keepReplaying()) {
+                stoppedMidReplay = true;
             }
             if (stoppedMidReplay) {
                 // No drain, no going live, and no marker. Recording completion here is the one thing that would make

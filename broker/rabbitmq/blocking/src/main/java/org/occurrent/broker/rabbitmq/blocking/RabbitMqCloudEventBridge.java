@@ -33,15 +33,16 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.util.Queue;
+import java.util.Deque;
 import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.LongConsumer;
 import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
@@ -117,13 +118,14 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     // nacking it there and then. With prefetchCount == 1 (the default) the broker sends nothing further on this
     // consumer once a delivery is left unacked, so the churn stops at that instant with no cancel involved at all;
     // configured above 1, up to that many can be held between releases, since that many can be outstanding at
-    // once. reconcileConsumption, on its own poll thread, drains this under its own lock and nacks-with-requeue
-    // everything it finds, once per pollInterval, which is what bounds this to at most one redelivery per
-    // pollInterval per unit of prefetchCount, by construction, rather than racing a scheduled cancel against
-    // however fast the broker itself round-trips a nack. A queue rather than a single held tag, so a bridge
-    // configured with prefetchCount above 1 never drops an earlier held tag under a later one. See handleDelivery
-    // and reconcileConsumption.
-    private final Queue<Long> heldDeferredDeliveryTags = new ConcurrentLinkedQueue<>();
+    // once. reconcileConsumption, on its own poll thread, releases at most a snapshot of what is here under its
+    // own lock, once per pollInterval, which is what bounds this to at most one redelivery per pollInterval per
+    // unit of prefetchCount, by construction, rather than racing a scheduled cancel against however fast the
+    // broker itself round-trips a nack. A deque rather than a single held tag, so a bridge configured with
+    // prefetchCount above 1 never drops an earlier held tag under a later one, and a failed release can push a
+    // tag back to the front rather than only ever appending to the back. See handleDelivery and
+    // releaseHeldDeferredDelivery.
+    private final Deque<Long> heldDeferredDeliveryTags = new ConcurrentLinkedDeque<>();
 
     private RabbitMqCloudEventBridge(PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, Channel consumeChannel,
                                       String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction,
@@ -204,16 +206,43 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         }
     }
 
-    // Nacks (with requeue) everything handleDelivery left held, if anything, bypassing DeliveryFailurePolicy
+    // Nacks (with requeue) a snapshot of what handleDelivery left held, if anything, bypassing DeliveryFailurePolicy
     // exactly as the DEFERRED branch there always has. Always called under consumeLock, since it issues a
     // blocking Channel call per held tag. With prefetchCount == 1 (the default), the broker sends nothing further
     // on this consumer between a delivery being held and this releasing it, so calling this once per pollInterval
     // is what bounds a DEFERRED delivery to at most one redelivery per poll interval by construction, not a race
     // against however fast the broker itself round-trips a nack.
+    //
+    // The snapshot size is read once, up front, rather than draining until empty: a nack this loop issues can
+    // cause an immediate redelivery whose DEFERRED handleDelivery call appends a fresh tag to this same deque
+    // while this loop is still running, and draining until empty would nack that fresh tag too, in the same
+    // pass, collapsing the at-most-one-per-poll-interval bound this exists to keep. A tag appended mid-loop waits
+    // for the next poll instead.
+    //
+    // A failed nack (an IOException surfacing as RabbitMqBridgeException from basicNack) never drops the tag it
+    // was for: it goes back to the front, ahead of whatever this pass has not gotten to yet, and this pass stops
+    // rather than trying the next slot, since a channel failing to nack once is not going to succeed on a
+    // different tag straight after. The next poll retries it. A channel that has actually died requeues
+    // everything still unacked on it by itself regardless, so this is only for one that survives the failure.
     private void releaseHeldDeferredDelivery() {
-        Long heldTag;
-        while ((heldTag = heldDeferredDeliveryTags.poll()) != null) {
-            failureAction.redeliver(heldTag);
+        releaseHeldDeferredDelivery(heldDeferredDeliveryTags, failureAction::redeliver);
+    }
+
+    // Package-private and static, parameterized on the deque and the release call, so this bridge's redelivery
+    // bookkeeping is directly testable with a stub that throws on demand, no real Channel or broker required.
+    static void releaseHeldDeferredDelivery(Deque<Long> heldDeferredDeliveryTags, LongConsumer redeliver) {
+        int snapshotCount = heldDeferredDeliveryTags.size();
+        for (int i = 0; i < snapshotCount; i++) {
+            Long heldTag = heldDeferredDeliveryTags.pollFirst();
+            if (heldTag == null) {
+                return;
+            }
+            try {
+                redeliver.accept(heldTag);
+            } catch (RuntimeException e) {
+                heldDeferredDeliveryTags.offerFirst(heldTag);
+                throw e;
+            }
         }
     }
 

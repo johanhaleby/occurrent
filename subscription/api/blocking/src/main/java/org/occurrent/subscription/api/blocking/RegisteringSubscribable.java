@@ -445,7 +445,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
 
     /**
      * Route a single event to every registered handler whose filter matches, in registration order, on the calling
-     * thread. A handler exception propagates to the caller.
+     * thread. A handler exception propagates to the caller, unwrapped exactly as it always has even for an action
+     * that throws {@link RoutingAction.Refusal}: that wrapper only ever matters to
+     * {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)}, which can act on it before rethrowing the same
+     * unwrapped cause, and a caller here gets that cause directly since this path has no observer to tell first.
      * <p>
      * A stopped model routes nothing, and a paused subscription is skipped. The event is dropped for that handler
      * rather than held, so resuming later does not deliver it.
@@ -459,7 +462,11 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         }
         for (Registration registration : registrations) {
             if (!pausedSubscriptions.contains(registration.id()) && registration.matcher().test(cloudEvent)) {
-                registration.action().route(cloudEvent, true);
+                try {
+                    registration.action().route(cloudEvent, true);
+                } catch (RoutingAction.Refusal refusal) {
+                    throw refusal.unwrap();
+                }
             }
         }
     }

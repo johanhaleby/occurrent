@@ -184,20 +184,18 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
         // lost in the gap between the replay head and going live. Registers a delivery-reporting action rather than
         // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) still buffers
-        // exactly as before, throwing IllegalStateException unwrapped exactly as it always has (that path does not
-        // go through routeReportingMatch at all when unobserved, so a wrapped exception would leak out as itself
-        // rather than being unwrapped), while PushSubscriptionModel.acceptRedeliverable(..) (a broker path that can
-        // redeliver, bufferIfNotLive false) refuses instead of buffering, reported as RoutingOutcome.DEFERRED, and
-        // wraps acceptIfLive's IllegalStateException as RoutingAction.Refusal, since that exception is always a
-        // pre-dispatch guard (catchUpFailure) there, never once a fold has genuinely started, so routeReportingMatch
-        // reports NOT_DELIVERABLE for it instead of DELIVERED.
+        // exactly as before, while PushSubscriptionModel.acceptRedeliverable(..) (a broker path that can redeliver,
+        // bufferIfNotLive false) refuses instead of buffering, reported as RoutingOutcome.DEFERRED. Both branches
+        // wrap a catchUpFailure IllegalStateException as RoutingAction.Refusal, since that exception is always a
+        // pre-dispatch guard there, never once a fold has genuinely started, so routeReportingMatch reports
+        // NOT_DELIVERABLE for it instead of DELIVERED when an observer is configured. Route (unobserved) and
+        // routeReportingMatch (observed) both unwrap Refusal back to the original cause before it ever reaches a
+        // caller, so accept(..) and acceptRedeliverable(..) both still throw the plain IllegalStateException they
+        // always have, whether or not a PushObserver is configured.
         liveFeed.subscribeCatchupThenPush(subscriptionId, filter, StartAt.subscriptionModelDefault(),
                 (cloudEvent, bufferIfNotLive) -> {
-                    if (bufferIfNotLive) {
-                        return handover.acceptReportingDelivery(cloudEvent);
-                    }
                     try {
-                        return handover.acceptIfLive(cloudEvent);
+                        return bufferIfNotLive ? handover.acceptReportingDelivery(cloudEvent) : handover.acceptIfLive(cloudEvent);
                     } catch (IllegalStateException e) {
                         throw new RegisteringSubscribable.RoutingAction.Refusal(e);
                     }
