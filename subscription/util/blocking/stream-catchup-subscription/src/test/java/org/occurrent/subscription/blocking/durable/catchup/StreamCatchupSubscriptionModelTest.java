@@ -89,6 +89,31 @@ class StreamCatchupSubscriptionModelTest {
         inMemorySubscriptionModel.shutdown();
     }
 
+    // The contract a recording projection reads per delivery. Both answer true while the history that was already
+    // there is being read, isReplayingHistory turns false for the events written since, and both are false once the
+    // subscription has handed over.
+    @Test
+    void reports_the_history_read_and_the_reconciliation_as_different_parts_of_one_catch_up() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        write(eventStore, nameDefined("history"));
+
+        CopyOnWriteArrayList<String> phasePerDelivery = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+
+        subscription.subscribe("subscription", StartAtTime.beginningOfTime(), cloudEvent -> {
+            phasePerDelivery.add(subscription.isCatchingUp("subscription") + "/" + subscription.isReplayingHistory("subscription"));
+            // Written from inside the history read, so it cannot be part of it and the reconciliation is what
+            // delivers it.
+            if (phasePerDelivery.size() == 1) {
+                write(eventStore, nameDefined("writtenDuringTheHistoryRead"));
+            }
+        }).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(phasePerDelivery).containsExactly("true/true", "true/false"));
+        assertThat(subscription.isCatchingUp("subscription")).isFalse();
+        assertThat(subscription.isReplayingHistory("subscription")).isFalse();
+    }
+
     @Test
     void replays_historic_events_by_time_when_the_store_does_not_write_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
