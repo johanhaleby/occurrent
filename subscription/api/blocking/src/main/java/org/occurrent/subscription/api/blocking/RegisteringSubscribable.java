@@ -426,14 +426,28 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     // Decided before any dispatch was attempted (BlockingHandover's catchUpFailure, say), never a
                     // delivery, so this is NOT_DELIVERABLE, the same outcome a matcher that failed to answer
                     // reports, not DELIVERED. The wrapped cause is what the caller sees, unchanged.
-                    matchObserver.accept(cloudEvent, RoutingOutcome.NOT_DELIVERABLE);
-                    throw refusal.unwrap();
+                    RuntimeException cause = refusal.unwrap();
+                    try {
+                        matchObserver.accept(cloudEvent, RoutingOutcome.NOT_DELIVERABLE);
+                    } catch (RuntimeException | Error observerFailure) {
+                        // Same self-suppression guard as the matcher-throw branch above: skip the instance itself.
+                        if (observerFailure != cause) {
+                            cause.addSuppressed(observerFailure);
+                        }
+                    }
+                    throw cause;
                 } catch (RuntimeException | AssertionError e) {
                     // The action was invoked, which is what DELIVERED has always meant; whether the eventual fold
                     // succeeds or throws is a separate signal (RoutingOutcome's own javadoc says so). AssertionError
                     // is caught here for the same reason the matcher-throw branch above catches it: a matched
                     // handler is observed regardless of how it fails.
-                    matchObserver.accept(cloudEvent, RoutingOutcome.DELIVERED);
+                    try {
+                        matchObserver.accept(cloudEvent, RoutingOutcome.DELIVERED);
+                    } catch (RuntimeException | Error observerFailure) {
+                        if (observerFailure != e) {
+                            e.addSuppressed(observerFailure);
+                        }
+                    }
                     throw e;
                 }
                 matchObserver.accept(cloudEvent, landed ? RoutingOutcome.DELIVERED : RoutingOutcome.DEFERRED);

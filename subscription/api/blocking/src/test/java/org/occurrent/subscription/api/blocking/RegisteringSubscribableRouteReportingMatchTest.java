@@ -154,6 +154,44 @@ class RegisteringSubscribableRouteReportingMatchTest {
     }
 
     /**
+     * The regression this guards: a Copilot review of this PR found that a throwing {@code matchObserver} here
+     * replaced {@code actionFailure} with its own failure, since {@code throw e} was never reached. The original
+     * failure must still propagate, with the observer's failure attached rather than discarded.
+     */
+    @Test
+    void a_distinct_matchObserver_failure_is_attached_to_the_actions_exception() {
+        RuntimeException actionFailure = new IllegalStateException("action failed");
+        Error observerFailure = new Error("matchObserver failed too");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw actionFailure;
+        });
+
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> {
+            throw observerFailure;
+        }));
+
+        assertThat(thrown).isSameAs(actionFailure);
+        assertThat(thrown.getSuppressed()).containsExactly(observerFailure);
+    }
+
+    @Test
+    void a_shared_exception_instance_thrown_by_the_action_and_the_matchObserver_is_not_self_suppressed() {
+        RuntimeException shared = new IllegalStateException("shared failure");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw shared;
+        });
+
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> {
+            throw shared;
+        }));
+
+        assertThat(thrown).isSameAs(shared);
+        assertThat(thrown.getSuppressed()).isEmpty();
+    }
+
+    /**
      * The regression this guards: a refusal decided before any dispatch was attempted (an engine-level guard, not
      * a handler that ran) must never be reported as {@link RoutingOutcome#DELIVERED}, the mistake a Copilot review
      * of this PR caught in {@code BlockingHandover.acceptIfLive}'s {@code catchUpFailure} case, which reaches this
@@ -172,6 +210,44 @@ class RegisteringSubscribableRouteReportingMatchTest {
 
         assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
         assertThat(thrown).isSameAs(refusalCause);
+    }
+
+    /**
+     * The regression this guards: a Copilot review of this PR found that a throwing {@code matchObserver} here
+     * replaced the wrapped {@code refusalCause} with its own failure, since {@code throw refusalCause} was never
+     * reached. The wrapped cause must still propagate, with the observer's failure attached rather than discarded.
+     */
+    @Test
+    void a_distinct_matchObserver_failure_is_attached_to_the_refusals_wrapped_cause() {
+        RuntimeException refusalCause = new IllegalStateException("catch-up has failed");
+        Error observerFailure = new Error("matchObserver failed too");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw new RegisteringSubscribable.RoutingAction.Refusal(refusalCause);
+        });
+
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> {
+            throw observerFailure;
+        }));
+
+        assertThat(thrown).isSameAs(refusalCause);
+        assertThat(thrown.getSuppressed()).containsExactly(observerFailure);
+    }
+
+    @Test
+    void a_shared_exception_instance_thrown_by_the_refusals_wrapped_cause_and_the_matchObserver_is_not_self_suppressed() {
+        RuntimeException shared = new IllegalStateException("catch-up has failed");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw new RegisteringSubscribable.RoutingAction.Refusal(shared);
+        });
+
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> {
+            throw shared;
+        }));
+
+        assertThat(thrown).isSameAs(shared);
+        assertThat(thrown.getSuppressed()).isEmpty();
     }
 
     @Test
