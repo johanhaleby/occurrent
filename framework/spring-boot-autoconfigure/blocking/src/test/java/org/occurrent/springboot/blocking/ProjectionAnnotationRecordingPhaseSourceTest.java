@@ -74,6 +74,9 @@ class ProjectionAnnotationRecordingPhaseSourceTest {
         // told directly what it exposes.
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) correctModel)).when(correctModel).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) correctModel).isCatchingUp(PROJECTION_ID)).thenReturn(true);
+        // Both, because a model that is catching up but past its history read is delivering events written since it
+        // started, and those are recorded. Reading history is what suppresses recording.
+        when(((ReplayAwareSubscriptions) correctModel).isReplayingHistory(PROJECTION_ID)).thenReturn(true);
         when(correctModel.subscribe(anyString(), any(), any(StartAt.class), any())).thenAnswer(invocation -> {
             @SuppressWarnings("unchecked")
             Consumer<CloudEvent> action = invocation.getArgument(3);
