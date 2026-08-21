@@ -159,6 +159,34 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("buffer overflowed");
     }
 
+    /**
+     * A full live buffer is also decided before any dispatch was attempted, the payload never reaches the handler,
+     * so it must report {@link RoutingOutcome#NOT_DELIVERABLE} for an observer configured on the write path, the
+     * same as a permanently failed catch-up, not {@link RoutingOutcome#DELIVERED}.
+     */
+    @Test
+    void overflowing_the_live_buffer_during_replay_reports_not_deliverable_rather_than_delivered_with_an_observer() {
+        List<RoutingOutcome> observed = new ArrayList<>();
+        PushSubscriptionModel feed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+        CloudEvent e1 = cloudEvent("1", "Created");
+        CloudEvent l1 = cloudEvent("l1", "Updated");
+        CloudEvent l2 = cloudEvent("l2", "Updated");
+        CloudEvent l3 = cloudEvent("l3", "Updated");
+        // On the first replayed element, three live events arrive but the buffer cap is two.
+        PositionOrderedReader reader = readerThatOnFirstElementPushesMany(List.of(e1), List.of(l1, l2, l3), feed);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null, new CatchupThenLiveOptions(10, 2));
+        var subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        });
+        Throwable thrown = catchThrowable(subscription::waitUntilStarted);
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("buffer overflowed");
+        // l1 and l2 buffer normally on the write path, reported DELIVERED same as always, l3 overflows the
+        // two-slot buffer and must not be reported DELIVERED for a handler that never ran.
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED, RoutingOutcome.DELIVERED, RoutingOutcome.NOT_DELIVERABLE);
+    }
+
     @Test
     void a_dcb_subscription_filter_cannot_be_replayed() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
@@ -257,6 +285,50 @@ class CatchupThenPushSubscriptionModelTest {
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
         assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+    }
+
+    /**
+     * The regression this guards: a Copilot review of this PR found that catching every {@code IllegalStateException}
+     * from the handover, rather than only the one it throws for its own pre-dispatch refusal, wrapped a handler's own
+     * thrown {@code IllegalStateException} as a {@code Refusal} too, misreporting a handler that genuinely ran and
+     * failed as {@link RoutingOutcome#NOT_DELIVERABLE} instead of {@link RoutingOutcome#DELIVERED}.
+     */
+    @Test
+    void a_handlers_own_illegalstateexception_reports_delivered_rather_than_not_deliverable_on_the_write_path() throws Exception {
+        List<RoutingOutcome> observed = new ArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+        RuntimeException handlerFailure = new IllegalStateException("handler boom");
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Stream::empty, 0), liveFeed, null);
+
+        var subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            throw handlerFailure;
+        });
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")));
+
+        assertThat(thrown).isSameAs(handlerFailure);
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    @Test
+    void a_handlers_own_illegalstateexception_reports_delivered_rather_than_not_deliverable_on_the_broker_path() throws Exception {
+        List<RoutingOutcome> observed = new ArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+        RuntimeException handlerFailure = new IllegalStateException("handler boom");
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Stream::empty, 0), liveFeed, null);
+
+        var subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            throw handlerFailure;
+        });
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+        Throwable thrown = catchThrowable(() -> liveFeed.acceptRedeliverable(cloudEvent("1", "Created")));
+
+        assertThat(thrown).isSameAs(handlerFailure);
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
     }
 
     @Test

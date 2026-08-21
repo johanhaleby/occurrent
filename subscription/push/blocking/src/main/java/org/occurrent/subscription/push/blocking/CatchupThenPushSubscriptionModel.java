@@ -186,17 +186,18 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) still buffers
         // exactly as before, while PushSubscriptionModel.acceptRedeliverable(..) (a broker path that can redeliver,
         // bufferIfNotLive false) refuses instead of buffering, reported as RoutingOutcome.DEFERRED. Both branches
-        // wrap a catchUpFailure IllegalStateException as RoutingAction.Refusal, since that exception is always a
-        // pre-dispatch guard there, never once a fold has genuinely started, so routeReportingMatch reports
-        // NOT_DELIVERABLE for it instead of DELIVERED when an observer is configured. Route (unobserved) and
-        // routeReportingMatch (observed) both unwrap Refusal back to the original cause before it ever reaches a
-        // caller, so accept(..) and acceptRedeliverable(..) both still throw the plain IllegalStateException they
-        // always have, whether or not a PushObserver is configured.
+        // wrap only a BlockingHandover.PreDispatchRefusalException as RoutingAction.Refusal, never every
+        // IllegalStateException the call could throw, since the handler itself can throw one too (deliverOutsideLock
+        // runs it inside this same try), and a handler that genuinely ran must report DELIVERED, not
+        // NOT_DELIVERABLE, whatever it threw. Route (unobserved) and routeReportingMatch (observed) both unwrap
+        // Refusal back to the original cause before it ever reaches a caller, so accept(..) and
+        // acceptRedeliverable(..) both still throw the plain IllegalStateException a catch-up failure always has,
+        // whether or not a PushObserver is configured.
         liveFeed.subscribeCatchupThenPush(subscriptionId, filter, StartAt.subscriptionModelDefault(),
                 (cloudEvent, bufferIfNotLive) -> {
                     try {
                         return bufferIfNotLive ? handover.acceptReportingDelivery(cloudEvent) : handover.acceptIfLive(cloudEvent);
-                    } catch (IllegalStateException e) {
+                    } catch (BlockingHandover.PreDispatchRefusalException e) {
                         throw new RegisteringSubscribable.RoutingAction.Refusal(e);
                     }
                 });

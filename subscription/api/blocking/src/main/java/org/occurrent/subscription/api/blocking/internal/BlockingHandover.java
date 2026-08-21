@@ -120,6 +120,24 @@ public final class BlockingHandover<T> {
         }
     }
 
+    /**
+     * Thrown by {@link #acceptReportingDelivery(Object)} and {@link #acceptIfLive(Object)} for a refusal decided
+     * before any dispatch was attempted, a permanently failed catch-up, a full live buffer with nothing draining
+     * it, or a {@code dedupId} function that returned {@code null} for the payload, none of them a delivery.
+     * Distinct from any other {@link IllegalStateException} either method can throw, in particular one a delivered
+     * payload's own handler throws, so a caller that needs to tell those apart can catch this type specifically
+     * instead of classifying every {@link IllegalStateException} alike.
+     */
+    public static final class PreDispatchRefusalException extends IllegalStateException {
+        PreDispatchRefusalException(String message) {
+            super(message);
+        }
+
+        PreDispatchRefusalException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     private final Consumer<T> deliver;
     private final Function<T, String> dedupId;
     private final int maxBufferedEvents;
@@ -172,8 +190,8 @@ public final class BlockingHandover<T> {
      * Once live, {@code deliver} runs outside this engine's monitor (see the class javadoc), so a concurrent caller
      * gets a concurrent {@code deliver} call, not one queued behind another payload's fold.
      *
-     * @throws IllegalStateException if a prior {@link #catchUp(Source)} has failed, or if the live buffer overflows
-     *                                during the catch-up.
+     * @throws PreDispatchRefusalException if a prior {@link #catchUp(Source)} has failed, or if the live buffer
+     *                                overflows during the catch-up.
      */
     public void accept(T payload) {
         acceptReportingDelivery(payload);
@@ -190,7 +208,7 @@ public final class BlockingHandover<T> {
      *         delivered, or when a concurrent delivery of the same payload is already running and this call is not
      *         the one deciding whether it succeeds. {@code true} otherwise, including a de-duplicated repeat of a
      *         payload an earlier attempt already delivered.
-     * @throws IllegalStateException for the same reasons {@link #accept(Object)} does.
+     * @throws PreDispatchRefusalException for the same reasons {@link #accept(Object)} does.
      */
     public boolean acceptReportingDelivery(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
@@ -198,7 +216,7 @@ public final class BlockingHandover<T> {
         boolean dropped = false;
         synchronized (lock) {
             if (catchUpFailure != null) {
-                throw new IllegalStateException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
+                throw new PreDispatchRefusalException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
             }
             if (live) {
                 String key = dedupKey(payload);
@@ -221,7 +239,7 @@ public final class BlockingHandover<T> {
                 // nothing is coming to fold it and buffering would just fill up and overflow.
                 dropped = true;
             } else if (buffer.size() >= maxBufferedEvents) {
-                throw new IllegalStateException(HandoverMessages.bufferOverflow(maxBufferedEvents));
+                throw new PreDispatchRefusalException(HandoverMessages.bufferOverflow(maxBufferedEvents));
             } else {
                 buffer.add(payload);
             }
@@ -246,8 +264,8 @@ public final class BlockingHandover<T> {
      *         handover is not live yet, is stopped, or a concurrent delivery of the same payload is already
      *         running elsewhere. Every {@code false} is safe to retry: a redelivery lands on {@code deliveredIds}
      *         once whatever is holding it up resolves.
-     * @throws IllegalStateException for the same reasons {@link #accept(Object)} does. Checked first, before the
-     *         live check, so a payload fed after a permanently failed catch-up fails fast rather than reporting
+     * @throws PreDispatchRefusalException for the same reasons {@link #accept(Object)} does. Checked first, before
+     *         the live check, so a payload fed after a permanently failed catch-up fails fast rather than reporting
      *         {@code false} forever for a caller to retry a catch-up that is never coming back.
      */
     public boolean acceptIfLive(T payload) {
@@ -256,7 +274,7 @@ public final class BlockingHandover<T> {
         boolean landed;
         synchronized (lock) {
             if (catchUpFailure != null) {
-                throw new IllegalStateException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
+                throw new PreDispatchRefusalException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
             }
             if (!live) {
                 // Refuse without buffering, unlike acceptReportingDelivery. Covers "never started", "still
@@ -432,7 +450,7 @@ public final class BlockingHandover<T> {
     private String dedupKey(T payload) {
         String key = dedupId.apply(payload);
         if (key == null) {
-            throw new IllegalStateException(HandoverMessages.dedupKeyRequired());
+            throw new PreDispatchRefusalException(HandoverMessages.dedupKeyRequired());
         }
         return key;
     }
