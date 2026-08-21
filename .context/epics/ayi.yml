@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 44
-updated_at: 2026-08-20T13:09:13Z
+revision: 45
+updated_at: 2026-08-21T01:00:48Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -18,6 +18,14 @@ definition_of_done:
   - "#740 closed at ship; #361 closed as duplicate of #740, never resolved separately"
   - "Memory checkpointed, sessions archived, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
 pending_actions:
+  - id: act-011
+    type: merge
+    target: "PR 880, CAS-pinned to f81c516a, the changelog scoping fix from U7's remainders, prose-only ci-skip squash"
+    expected: "PR 880 merged, changelog claim scoped to the reactor stack"
+    status: VERIFIED
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-21T00:59:10Z
   - id: act-010
     type: merge
     target: "PR 875, CAS-pinned to 334f24e4 after the gate and the executed bite-verify on both reset falsifiers"
@@ -245,15 +253,15 @@ units:
   U7:
     issue: 740
     goal: "Epic-end fresh-context review fixpoint over the complete ayi increment, blocker-only reopens, cap 3 rounds"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U5, U6]
     session: "subagent aa473d19fa8cb4757"
     deliverables:
-      - {check: manual_approval, ref: "fixpoint clean under the stopping rule, or the cap reached and remainders routed to Johan as one structured ask", met: false, evidence: null}
+      - {check: manual_approval, ref: "fixpoint clean under the stopping rule, or the cap reached and remainders routed to Johan as one structured ask", met: true, evidence: "Round 1 CLEAN on the complete increment at 8a77ac2a (no blocker, no completed-prefix reasoning, no ADR drift). Remainders routed under the stopping rule as issues 876 to 879 plus the PR 880 changelog fix, merged as 4bf7de731"}
     blocking_on: []
-    next_action: "ROUND 1 CLEAN, fixpoint closed under the stopping rule. Remainders routed: 876 (pre-existing updateEvent position corruption, milestoned for release triage), 877, 878, 879 (hardening, next release); the changelog overclaim fixed inline as PR 880 (prose-only, Copilot requested, merges under the standing grant on a clean round). Then closeout"
-    last_meaningful_progress_at: 2026-08-20T13:09:13Z
+    next_action: "none. Fixpoint closed. Epic closeout pending exactly one queued ruling (dec-0010, adopt 883 or defer) plus the ship-day acts recorded in ORCHESTRATOR.md"
+    last_meaningful_progress_at: 2026-08-21T01:00:48Z
     observed: {}
     assessment: "Not a chip; fresh-context subagents per round, findings above the line become addendum units reviewed against the complete current state."
