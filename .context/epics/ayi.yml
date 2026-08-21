@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 51
-updated_at: 2026-08-21T10:31:22Z
+revision: 52
+updated_at: 2026-08-21T10:42:42Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -291,11 +291,11 @@ units:
     depends_on: []
     session: "chip task_22e97514, ListAgents name orchestrator-join-on-merge-660d54-1d (marker-confirmed by its gate message), worktree orchestrator-join-on-merge-660d54 (r34 orchestrator reuse), dispatched 2026-08-21T07:48:03Z, session resolves at start)"
     deliverables:
-      - {check: manual_approval, ref: "design gate: plan handed to the orchestrator, approved by Johan", met: false, evidence: null}
+      - {check: manual_approval, ref: "design gate: plan handed to the orchestrator, approved by Johan", met: true, evidence: "Plan revision 3 approved 2026-08-21T10:42:42Z (dec-0016) with four in-place amendments after three fresh-context passes. Johan ruled scope (code fix, push models in) and delegated docs, decided append-identity only"}
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "Revision 2 re-reviewed 2026-08-21T10:31:22Z: all seven originals verified fixed against the code, one new MAJOR (push flip in replayCompleted misses the already-caught-up drain on both handovers) plus two mediums (folding-pipeline truncation tail, buffer must drop on the reconcile-to-history edge and flush only from the RECONCILING branch). Revision 3 owed, then a targeted re-check of N1 to N3 only, then approval relay. 891 filed by the worker and deferred (dec-0015)"
-    last_meaningful_progress_at: 2026-08-21T10:31:22Z
+    next_action: "Implementation at Sonnet/high on branch ayi/u11-replay-window-recording. Monitor reports the PR. Merge gate: four facts plus adversarial verify aimed at the recorder buffer branches (A1, A2), the reactor fold boundary, and the push drain hook on both handovers"
+    last_meaningful_progress_at: 2026-08-21T10:42:42Z
     observed: {}
     assessment: "Adopted by Johan's structured-ask ruling 2026-08-21 (dec-0012, code fix now over docs addendum and deferral). Reopens ADR 132 decision 6 before 0.34.0. Mechanism verified in code on both stacks by a fresh-context Opus pass, citations on #890."
   U7:
