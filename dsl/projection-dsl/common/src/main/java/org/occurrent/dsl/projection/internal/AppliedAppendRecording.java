@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
@@ -64,12 +65,20 @@ public final class AppliedAppendRecording {
     // One-slot dedup: a single append usually delivers several events and only the first needs a write. Reset
     // whenever a clear succeeds, since the store no longer has anything recorded to deduplicate against.
     private volatile @Nullable AppendId lastRecorded = null;
-    // The catch-up this recorder currently belongs to, or null when none does. Written only by catchupStarted and
-    // compared by identity, so a signal from a catch-up that has since lost its subscription is told apart from one
-    // from the catch-up that took it over.
-    private @Nullable Object episode = null;
-    // True between a catch-up's start and its history boundary. Nothing is recorded while it is set.
-    private boolean readingHistory = false;
+    // The catch-up this recorder currently belongs to and whether its history is still being read, as one value so
+    // a reader can never see one without the other. The episode is compared by identity, so a signal from a catch-up
+    // that has since lost its subscription is told apart from one from the catch-up that took it over.
+    //
+    // Both signals write only this, never the store and never clearLock, because they run on the thread that drives
+    // the catch-up. Taking clearLock there would block a replay behind a store call, since clearLock is held across
+    // store.clear and store.recordApplied.
+    private record Catchup(Object episode, boolean readingHistory) {
+    }
+
+    private final AtomicReference<@Nullable Catchup> catchup = new AtomicReference<>();
+    // The catch-up whose clear and buffer drop have already been done. Read and written only under clearLock, which
+    // is what lets the signals stay off that lock: they announce, and the next locked call reacts.
+    private @Nullable Object reactedTo = null;
     // Appends handled during a reconciliation while a clear was owed. Recording them then would be pointless, since
     // the pending clear deletes every record for this projection, so they wait here and are written once it lands.
     // Bounded because a reconciliation under a clear that keeps failing has no other limit, and an append evicted
@@ -108,7 +117,7 @@ public final class AppliedAppendRecording {
     public void recordIfReady(EventMetadata metadata) {
         requireNonNull(metadata, "metadata cannot be null");
         synchronized (clearLock) {
-            if (readingHistory) {
+            if (reactToAnyNewCatchup()) {
                 // The clear this catch-up owes, and nothing else. A history of N events clears once rather than
                 // running N deleteMany calls, because a clear that succeeds is no longer owed.
                 if (pendingClear) {
@@ -144,6 +153,27 @@ public final class AppliedAppendRecording {
             lastRecorded = appendId;
         }
         dropAwaitingClear();
+    }
+
+    /**
+     * Picks up whatever the signals announced since the last locked call, and answers whether the history is still
+     * being read. A catch-up not yet reacted to owes a clear and invalidates what a previous one was holding, which
+     * is done here rather than in {@link #catchupStarted(Object)} so that call never waits for this lock.
+     * <p>
+     * Assumes clearLock is already held by the caller.
+     */
+    private boolean reactToAnyNewCatchup() {
+        Catchup current = catchup.get();
+        if (current == null) {
+            return false;
+        }
+        if (current.episode() != reactedTo) {
+            reactedTo = current.episode();
+            pendingClear = true;
+            // What a previous catch-up was holding describes a read model this one is rebuilding.
+            dropAwaitingClear();
+        }
+        return current.readingHistory();
     }
 
     // Assumes clearLock is already held by the caller.
@@ -209,13 +239,7 @@ public final class AppliedAppendRecording {
      */
     public void catchupStarted(Object episode) {
         requireNonNull(episode, "episode cannot be null");
-        synchronized (clearLock) {
-            this.episode = episode;
-            readingHistory = true;
-            pendingClear = true;
-            // What a previous catch-up was holding describes a read model this one is rebuilding.
-            dropAwaitingClear();
-        }
+        catchup.set(new Catchup(episode, true));
     }
 
     /**
@@ -227,10 +251,11 @@ public final class AppliedAppendRecording {
      */
     public void historyRead(Object episode) {
         requireNonNull(episode, "episode cannot be null");
-        synchronized (clearLock) {
-            if (this.episode == episode) {
-                readingHistory = false;
-            }
+        Catchup current = catchup.get();
+        if (current != null && current.episode() == episode && current.readingHistory()) {
+            // Compared and swapped rather than written, so a catch-up that started while this call was in flight is
+            // not moved past a history it has not read.
+            catchup.compareAndSet(current, new Catchup(episode, false));
         }
     }
 
@@ -245,6 +270,7 @@ public final class AppliedAppendRecording {
      */
     public void retryPendingClear() {
         synchronized (clearLock) {
+            reactToAnyNewCatchup();
             if (pendingClear) {
                 attemptClear();
             }
@@ -261,6 +287,7 @@ public final class AppliedAppendRecording {
      */
     public boolean pollForClear() {
         synchronized (clearLock) {
+            reactToAnyNewCatchup();
             if (pendingClear) {
                 attemptClear();
             }

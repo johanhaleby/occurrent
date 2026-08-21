@@ -88,6 +88,58 @@ class AppliedAppendRecordingTest {
         assertThat(order).containsExactly("record-start", "record-end", "clear");
     }
 
+    // Both signals are sent from the thread driving the catch-up, and on the blocking stream model the boundary is
+    // sent from inside the replay's own loop. If either waited on the lock the store calls are made under, an
+    // unavailable store would stall the replay itself rather than only the recording.
+    @Test
+    void neither_signal_waits_for_a_store_call_already_in_flight() throws InterruptedException {
+        CountDownLatch clearEntered = new CountDownLatch(1);
+        CountDownLatch releaseClear = new CountDownLatch(1);
+        AppliedAppendStore delegate = AppliedAppendStore.inMemory();
+        AppliedAppendStore heldStore = new AppliedAppendStore() {
+            @Override
+            public void recordApplied(String projectionId, AppendId appendId) {
+                delegate.recordApplied(projectionId, appendId);
+            }
+
+            @Override
+            public boolean hasApplied(String projectionId, AppendId appendId) {
+                return delegate.hasApplied(projectionId, appendId);
+            }
+
+            @Override
+            public void clear(String projectionId) {
+                clearEntered.countDown();
+                awaitFor(releaseClear);
+                delegate.clear(projectionId);
+            }
+        };
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, heldStore);
+
+        // A first catch-up, whose clear the poll below runs and gets stuck in.
+        recording.catchupStarted(new Object());
+        Thread stuckInClear = new Thread(recording::pollForClear);
+        stuckInClear.start();
+        assertThat(clearEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        Object episode = new Object();
+        CountDownLatch signalsReturned = new CountDownLatch(1);
+        Thread signalling = new Thread(() -> {
+            recording.catchupStarted(episode);
+            recording.historyRead(episode);
+            signalsReturned.countDown();
+        });
+        signalling.start();
+
+        assertThat(signalsReturned.await(2, TimeUnit.SECONDS))
+                .as("both signals returned while the store call was still in flight")
+                .isTrue();
+
+        releaseClear.countDown();
+        stuckInClear.join(TimeUnit.SECONDS.toMillis(30));
+        signalling.join(TimeUnit.SECONDS.toMillis(5));
+    }
+
     @Test
     void the_first_delivery_after_a_catch_up_starts_runs_the_clear_that_catch_up_owes() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
@@ -399,6 +451,17 @@ class AppliedAppendRecordingTest {
         assertThat(clears).isEmpty();
         assertThat(store.hasApplied(PROJECTION_ID, first)).isTrue();
         assertThat(store.hasApplied(PROJECTION_ID, second)).isTrue();
+    }
+
+    private static void awaitFor(CountDownLatch latch) {
+        try {
+            if (!latch.await(30, TimeUnit.SECONDS)) {
+                throw new AssertionError("timed out waiting for the test to release the store");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
     }
 
     private static EventMetadata metadataWithAppendId(AppendId appendId) {

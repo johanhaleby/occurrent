@@ -367,7 +367,10 @@ class ProjectionAnnotationRegistrar {
     // reasons for a null model are different facts and are kept apart: structurallyNeverCatchesUp is a composition
     // known to have no catch-up layer, catchupAwarenessUnknown is one this registrar cannot see into.
     private record CatchupResolution(@Nullable ReplayAwareSubscriptions model, boolean structurallyNeverCatchesUp,
-                                     boolean catchupAwarenessUnknown) {
+                                     boolean catchupAwarenessUnknown, boolean pollsForClear) {
+        CatchupResolution(@Nullable ReplayAwareSubscriptions model, boolean structurallyNeverCatchesUp, boolean catchupAwarenessUnknown) {
+            this(model, structurallyNeverCatchesUp, catchupAwarenessUnknown, false);
+        }
     }
 
     // ADR 132 decision 9's third case: a composition that can replay and can report its phase, but is wired so it
@@ -425,6 +428,10 @@ class ProjectionAnnotationRegistrar {
             } else {
                 registerForPoll(id, new PolledCatchupSignals(recorder, () -> model.isCatchingUp(id)));
             }
+        } else if (model == null && resolution.pollsForClear() && recording instanceof AppliedAppendRecorder recorder) {
+            // A pull feed drives its own replay and needs no watching, but the clear that replay owes can still fail,
+            // and a feed that then goes quiet has nothing left to retry it. The poll does.
+            registerForPoll(id, recorder);
         }
         return recording;
     }
@@ -586,7 +593,7 @@ class ProjectionAnnotationRegistrar {
             // the view-DSL ReplayAware lifecycle instead, which the recording wrapper forwards to and drives its own
             // bookkeeping from (ADR 132 decision 6).
             BiFunction<EventMetadata, E, Mono<Void>> effectiveFold = annotation.recordAppliedAppends()
-                    ? applyRecording(id, fold, new CatchupResolution(null, true, false))
+                    ? applyRecording(id, fold, new CatchupResolution(null, true, false, catchesUp))
                     : fold;
             Filter replayFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
             registerOnFeed = () -> feed.register(id, effectiveFold, replayFilter);

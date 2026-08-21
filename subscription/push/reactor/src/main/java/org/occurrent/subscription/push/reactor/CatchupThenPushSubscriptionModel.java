@@ -172,12 +172,19 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Cleared here rather than only on the exit paths, so this attempt starts in the history part of its
         // catch-up whatever the previous attempt for the same id left behind.
         replayingSubscriptions.put(subscriptionId, replayDone);
-        // Sent where the id is taken and before the replay below runs, so it always precedes anything this
-        // attempt delivers. The replay itself is the episode, so a later attempt for the same id starts its own.
-        CatchupListener startListener = catchupListeners.get(subscriptionId);
-        if (startListener != null) {
-            startListener.catchupStarted(replayDone);
-        }
+        // Sent inside the map operation that holds this id, which cancelSubscription's own remove also takes, so a
+        // cancel and a fresh subscribe cannot slip between taking the id and sending. An attempt that no longer
+        // owns the id sends nothing, or its start would arrive after its replacement's and the recorder would adopt
+        // a catch-up that is already over. The replay itself is the episode, so a later attempt starts its own.
+        replayingSubscriptions.computeIfPresent(subscriptionId, (id, owner) -> {
+            if (owner == replayDone) {
+                CatchupListener startListener = catchupListeners.get(subscriptionId);
+                if (startListener != null) {
+                    startListener.catchupStarted(replayDone);
+                }
+            }
+            return owner;
+        });
 
         Mono<Boolean> catchupDone = handover.catchUp(new ReactiveHandover.Source<>() {
             @Override

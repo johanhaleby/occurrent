@@ -47,6 +47,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -172,6 +173,63 @@ class CatchupThenPushSubscriptionModelTest {
         // (ReactiveHandover completes the catch-up signal before draining the live buffer, on purpose). "late" is
         // live-buffered rather than replayed, so it is only folded during that later drain, off this thread.
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "2", "late"));
+    }
+
+    // A cancel and a fresh subscribe can land between an attempt taking the id and announcing its catch-up. If the
+    // announce sits outside the step that takes the id, the stale attempt's start arrives after its replacement's,
+    // the recorder adopts a catch-up that is already over, and the replacement's own boundary is then ignored, so
+    // everything the replacement records is lost.
+    //
+    // The first announce is held for a moment so the cancel and resubscribe run while it is in flight, which is the
+    // interleaving itself rather than a hope of hitting it. Holding it inside the step that takes the id is what
+    // makes the cancel wait, so the second announce cannot overtake the first.
+    @Test
+    void a_start_is_never_announced_by_an_attempt_that_has_lost_the_id() throws Exception {
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+
+        List<Object> announced = new CopyOnWriteArrayList<>();
+        AtomicBoolean holdFirstAnnounce = new AtomicBoolean(true);
+        model.listenForCatchup("proj", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                if (holdFirstAnnounce.compareAndSet(true, false)) {
+                    try {
+                        Thread.sleep(300);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                announced.add(episode);
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+            }
+        });
+
+        CountDownLatch firstSubscribeReturned = new CountDownLatch(1);
+        Thread first = new Thread(() -> {
+            model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+            firstSubscribeReturned.countDown();
+        });
+        first.start();
+
+        // Long enough that the first attempt is inside its announce, short enough that it has not left it.
+        Thread.sleep(100);
+        model.cancelSubscription("proj");
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        assertThat(firstSubscribeReturned.await(5, TimeUnit.SECONDS)).isTrue();
+        first.join(TimeUnit.SECONDS.toMillis(5));
+
+        // Whatever order the two attempts ran in, the last catch-up announced is the one that owns the id, so a
+        // recorder listening to this ends up holding the live attempt's episode rather than a finished one's.
+        assertThat(announced).hasSize(2);
+        assertThat(model.isCatchingUp("proj")).isTrue();
+        Object lastAnnounced = announced.get(announced.size() - 1);
+        assertThat(announced.get(0)).isNotSameAs(lastAnnounced);
     }
 
     // isCatchingUp answers for the whole catch-up, marker included, so it must not turn false while the marker

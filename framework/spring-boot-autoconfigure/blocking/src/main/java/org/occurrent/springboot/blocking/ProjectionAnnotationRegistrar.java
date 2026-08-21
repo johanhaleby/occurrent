@@ -307,14 +307,14 @@ class ProjectionAnnotationRegistrar {
             return materializedView;
         }
         warnIfRecordingNeverResets(id, true, verifiedNeverReplays(annotation));
-        return wrapForRecording(annotation, id, materializedView, ReplayAwareSubscriptions.findIn(capability).orElse(null));
+        return wrapForRecording(annotation, id, materializedView, ReplayAwareSubscriptions.findIn(capability).orElse(null), true);
     }
 
     // Wraps materializedView in the applied-append recorder when the annotation asks for it, listening to
     // catchupModel for the catch-up boundaries. A null catchupModel is a composition whose catch-ups nothing can
     // learn about, which is also every composition that never has any. Returns materializedView unchanged when
     // recording is off.
-    private <E> MaterializedView<E> wrapForRecording(org.occurrent.annotation.Projection annotation, String id, MaterializedView<E> materializedView, @Nullable ReplayAwareSubscriptions catchupModel) {
+    private <E> MaterializedView<E> wrapForRecording(org.occurrent.annotation.Projection annotation, String id, MaterializedView<E> materializedView, @Nullable ReplayAwareSubscriptions catchupModel, boolean hasCatchups) {
         if (!annotation.recordAppliedAppends()) {
             return materializedView;
         }
@@ -328,6 +328,11 @@ class ProjectionAnnotationRegistrar {
             } else {
                 recordingRegistry().register(id, new PolledCatchupSignals(recordingView, () -> catchupModel.isCatchingUp(id)));
             }
+            scheduleRecordingPoll(id);
+        } else if (hasCatchups) {
+            // A pull feed drives its own replay and needs no watching, but the clear that replay owes can still fail,
+            // and a feed that then goes quiet has nothing left to retry it. The poll does.
+            recordingRegistry().register(id, recordingView);
             scheduleRecordingPoll(id);
         }
         return recordingView;
@@ -571,7 +576,7 @@ class ProjectionAnnotationRegistrar {
         }
         // Listens for catch-ups only when catchesUp, since catchup = NONE has none to hear about.
         warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), !catchesUp);
-        MaterializedView<E> materializedView = wrapForRecording(annotation, id, resolvedView, catchupModel);
+        MaterializedView<E> materializedView = wrapForRecording(annotation, id, resolvedView, catchupModel, catchesUp);
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ProjectionRunner<E> runner = stream ? ProjectionRunner.stream(subscribable, converter) : ProjectionRunner.agnostic(subscribable, converter);
         // No catchesUp guard needed: with catchup = NONE, validatePushDescriptor already rejected any startupMode but
@@ -643,7 +648,7 @@ class ProjectionAnnotationRegistrar {
         // Listens to no model: a domain feed's own ReplayAware lifecycle (forwarded to the recording wrapper
         // through CatchupProjectionFeed's instanceof probe) is this composition's only replay signal, and there is
         // no subscription model behind it to hear the same catch-up from twice (ADR 132 decisions 8 and 12).
-        MaterializedView<E> materializedView = wrapForRecording(annotation, id, resolveStoreView(annotation, method, projection, id), null);
+        MaterializedView<E> materializedView = wrapForRecording(annotation, id, resolveStoreView(annotation, method, projection, id), null, catchesUp);
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
         Filter eventFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
         // Only read below where catchesUp is true, where a goLive() branch runs instead.

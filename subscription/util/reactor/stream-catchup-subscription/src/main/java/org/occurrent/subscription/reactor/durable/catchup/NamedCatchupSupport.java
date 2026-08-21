@@ -165,10 +165,20 @@ final class NamedCatchupSupport {
             // delivers.
             Object launched = new Object();
             state.episode.set(launched);
-            CatchupListener startListener = catchupListeners.get(subscriptionId);
-            if (startListener != null) {
-                startListener.catchupStarted(launched);
-            }
+            // Announced inside the map operation that holds this id, which cancelSubscription's own remove also
+            // takes, so a cancel and a fresh subscribe cannot slip between the ownership check and the send. A
+            // launch that no longer owns the id announces nothing, or its start would arrive after its
+            // replacement's and the recorder would adopt a catch-up that is already over. The listener only writes
+            // its own state here, so running it inside the map operation reenters nothing.
+            catchingUp.computeIfPresent(subscriptionId, (id, owner) -> {
+                if (owner == state) {
+                    CatchupListener startListener = catchupListeners.get(subscriptionId);
+                    if (startListener != null) {
+                        startListener.catchupStarted(launched);
+                    }
+                }
+                return owner;
+            });
             // Token before replay, replay through the caller's action (no retry, failure is loud), then delegate live.
             Disposable replaying = pipeline.captureLiveToken(wrapped)
                     .flatMapMany(liveToken -> pipeline.replayApplying(startPosition, cache,
