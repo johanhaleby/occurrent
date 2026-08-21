@@ -33,12 +33,13 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Predicate;
@@ -88,11 +89,13 @@ import static java.util.Objects.requireNonNull;
  * default, so this bridge pulls fewer messages off the queue while a {@link CatchupThenPushSubscriptionModel}
  * wrapping {@code model} is still replaying or draining into it, cutting down on {@link RoutingOutcome#DEFERRED}
  * redeliveries during a replay. Pacing only: {@link RoutingOutcome#DEFERRED} is what keeps this bridge correct with
- * no {@code readinessSource} configured at all, just noisier, and even that noise is bounded on its own: a
- * {@code DEFERRED} delivery cancels this bridge's own consumer for one full {@link Builder#pollInterval(Duration)},
- * rather than refusing and requeuing continuously for the whole replay, so a replay with no {@code readinessSource}
- * configured redelivers in bursts at most a poll interval apart instead of saturating the channel. See
- * {@link Builder#readinessSource(Predicate)} for how to wire it.
+ * no {@code readinessSource} configured at all, just noisier, and even that noise is bounded on its own. A
+ * {@code DEFERRED} delivery is held unacked rather than nacked immediately, so with {@link Builder#prefetchCount(int)}
+ * left at its default of one, the broker sends nothing further on this consumer until the next poll releases it,
+ * which is what bounds a replay with no {@code readinessSource} configured to at most one redelivery per
+ * {@link Builder#pollInterval(Duration)} (or {@code prefetchCount} many, configured above the default) rather than
+ * refusing and requeuing continuously for the whole replay. See {@link Builder#readinessSource(Predicate)} for how
+ * to wire it.
  */
 public final class RabbitMqCloudEventBridge implements AutoCloseable {
 
@@ -110,14 +113,17 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
 
     private final Lock consumeLock = new ReentrantLock();
     private @Nullable String consumerTag;
-    // Set (never under consumeLock) the instant a DEFERRED delivery is nacked, read and cleared by
-    // reconcileConsumption on its own poll thread, which already holds consumeLock for every other decision this
-    // makes. This is what bounds a tight refuse-and-requeue loop to at most one poll interval's worth of churn
-    // before this bridge cancels itself for a full pollInterval, rather than the delivery callback cancelling
-    // itself synchronously, which would take consumeLock from inside a callback reconcileConsumption might already
-    // be holding it across, a lock inversion this design avoids on purpose. See handleDelivery and
-    // reconcileConsumption.
-    private final AtomicBoolean deferredSinceLastReconcile = new AtomicBoolean(false);
+    // Appended to (never under consumeLock) by handleDelivery the instant a delivery reports DEFERRED, in place of
+    // nacking it there and then. With prefetchCount == 1 (the default) the broker sends nothing further on this
+    // consumer once a delivery is left unacked, so the churn stops at that instant with no cancel involved at all;
+    // configured above 1, up to that many can be held between releases, since that many can be outstanding at
+    // once. reconcileConsumption, on its own poll thread, drains this under its own lock and nacks-with-requeue
+    // everything it finds, once per pollInterval, which is what bounds this to at most one redelivery per
+    // pollInterval per unit of prefetchCount, by construction, rather than racing a scheduled cancel against
+    // however fast the broker itself round-trips a nack. A queue rather than a single held tag, so a bridge
+    // configured with prefetchCount above 1 never drops an earlier held tag under a later one. See handleDelivery
+    // and reconcileConsumption.
+    private final Queue<Long> heldDeferredDeliveryTags = new ConcurrentLinkedQueue<>();
 
     private RabbitMqCloudEventBridge(PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, Channel consumeChannel,
                                       String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction,
@@ -171,30 +177,43 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     // has at most one element by ADR 90 (PushSubscriptionModel declares Consumers.ONE), so there is never an
     // ambiguity about which id to ask isRunning(...) or readinessSource about.
     //
-    // pacedOff additionally cancels this poll regardless of shouldConsume when a DEFERRED delivery was nacked since
-    // the last time this ran, bounding a tight refuse-and-requeue loop against a replay with no readinessSource
-    // configured to at most one poll interval's worth of churn: this bridge pauses for a full pollInterval, then
-    // tries again, rather than redelivering continuously for the whole replay.
+    // Also releases any DEFERRED delivery handleDelivery is holding unacked, every pass, regardless of
+    // shouldConsume: a subscription that stops or pauses right after a delivery was held must not leave that
+    // delivery sitting unacked on this channel until this bridge eventually closes, so this runs whether or not
+    // this poll also starts or cancels the consumer.
     private void reconcileConsumption() {
         try {
             Set<String> subscriptionIds = model.subscriptionIds();
             String subscriptionId = subscriptionIds.isEmpty() ? null : subscriptionIds.iterator().next();
             boolean shouldConsume = subscriptionId != null && model.isRunning(subscriptionId) && readinessSource.test(subscriptionId);
-            boolean pacedOff = deferredSinceLastReconcile.getAndSet(false);
             consumeLock.lock();
             try {
-                if (shouldConsume && !pacedOff && consumerTag == null) {
+                if (shouldConsume && consumerTag == null) {
                     consumerTag = consumeChannel.basicConsume(queue, false, this::handleDelivery, this::handleCancel);
-                } else if ((!shouldConsume || pacedOff) && consumerTag != null) {
+                } else if (!shouldConsume && consumerTag != null) {
                     consumeChannel.basicCancel(consumerTag);
                     consumerTag = null;
                 }
+                releaseHeldDeferredDelivery();
             } finally {
                 consumeLock.unlock();
             }
         } catch (IOException | RuntimeException e) {
             log.warn("Failed to reconcile consumption for queue \"{}\" against the subscription model's running state. " +
                     "Retrying on the next poll.", queue, e);
+        }
+    }
+
+    // Nacks (with requeue) everything handleDelivery left held, if anything, bypassing DeliveryFailurePolicy
+    // exactly as the DEFERRED branch there always has. Always called under consumeLock, since it issues a
+    // blocking Channel call per held tag. With prefetchCount == 1 (the default), the broker sends nothing further
+    // on this consumer between a delivery being held and this releasing it, so calling this once per pollInterval
+    // is what bounds a DEFERRED delivery to at most one redelivery per poll interval by construction, not a race
+    // against however fast the broker itself round-trips a nack.
+    private void releaseHeldDeferredDelivery() {
+        Long heldTag;
+        while ((heldTag = heldDeferredDeliveryTags.poll()) != null) {
+            failureAction.redeliver(heldTag);
         }
     }
 
@@ -232,22 +251,28 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
             failureAction.ack(deliveryTag);
         } else if (outcome == RoutingOutcome.DEFERRED) {
-            // Bypasses DeliveryFailurePolicy entirely, including PARK: nothing here is broken, only not ready yet,
-            // and parking a message that would otherwise have landed once catch-up finishes is exactly the kind of
-            // avoidable dead-lettering DEFERRED exists to rule out. Never takes consumeLock here: this callback can
-            // run concurrently with reconcileConsumption, which already holds it across a blocking AMQP call, so
-            // this only leaves a marker for that poll thread to act on instead.
-            failureAction.redeliver(deliveryTag);
-            deferredSinceLastReconcile.set(true);
+            // Held unacked rather than nacked here, deliberately: with prefetchCount == 1 (the default) leaving
+            // this unacked is what stops the broker sending anything further on this consumer, so the churn stops
+            // at the instant this runs, with no cancel involved at all. reconcileConsumption releases it (still
+            // bypassing DeliveryFailurePolicy entirely, including PARK, exactly as before: nothing here is broken,
+            // only not ready yet) on its own poll thread, at most once per pollInterval. Never takes consumeLock
+            // here: this callback can run concurrently with reconcileConsumption, which already holds it across a
+            // blocking AMQP call, so this only ever hands the tag off for that poll thread to act on instead.
+            heldDeferredDeliveryTags.add(deliveryTag);
         } else {
             failureAction.apply(deliveryTag, delivery.getProperties(), delivery.getBody());
         }
     }
 
     /**
-     * Stops the background poll, cancels this bridge's consumer if it has one, and closes the {@link Channel} (and,
-     * with {@link DeliveryFailurePolicy#PARK}, the parking sink) this bridge created. Does not close the
-     * {@link Connection} it was built from.
+     * Stops the background poll, cancels this bridge's consumer if it has one, releases any {@code DEFERRED}
+     * delivery still held unacked, and closes the {@link Channel} (and, with {@link DeliveryFailurePolicy#PARK},
+     * the parking sink) this bridge created. Does not close the {@link Connection} it was built from.
+     * <p>
+     * Releasing a held delivery here is belt and braces rather than load bearing: closing a channel with an
+     * unacked delivery on it already requeues that delivery at the broker on its own, so skipping this line would
+     * still leave nothing stuck. Doing it explicitly means a delivery this bridge is holding is redelivered the
+     * instant this method runs rather than whenever the broker notices the channel is gone.
      */
     @Override
     public void close() {
@@ -261,6 +286,12 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
                     // Best effort: the channel is about to be closed either way.
                 }
                 consumerTag = null;
+            }
+            try {
+                releaseHeldDeferredDelivery();
+            } catch (RuntimeException ignored) {
+                // Best effort, matching basicCancel above: the channel is about to be closed either way, and
+                // closing it requeues whatever is left held regardless.
             }
         } finally {
             consumeLock.unlock();

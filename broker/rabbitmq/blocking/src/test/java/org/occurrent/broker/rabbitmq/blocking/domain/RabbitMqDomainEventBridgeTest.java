@@ -399,6 +399,82 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
         }
     }
 
+    /**
+     * The same pacing fix {@code RabbitMqCloudEventBridge} needed, mirrored here: a {@code DEFERRED} delivery is
+     * held unacked rather than nacked immediately, so with {@link RabbitMqDomainEventBridge.Builder#prefetchCount(int)}
+     * left at its default of one, the broker sends nothing further on this consumer while a delivery is held, and
+     * {@code reconcileConsumption} releases at most one held tag per poll interval. That makes the bound here exact
+     * rather than statistical: a raw wall-clock count depends on how fast the broker itself round-trips a nack and
+     * flakes with it, the mistake an earlier version of {@code RabbitMqCloudEventBridge}'s own equivalent test made.
+     * There is no {@code RoutingOutcome} observer on {@code DomainEventFeed} to count {@code DEFERRED} directly, so
+     * this counts {@code CloudEventConverter#toDomainEvent} calls instead: {@code acceptCloudEvent} decodes on
+     * every matching attempt, {@code DELIVERED} or {@code DEFERRED} alike, so with the dedup key held in flight for
+     * the whole observation window, every one of those decodes but the direct call's own first one is a redelivery
+     * this bridge issued.
+     */
+    @Test
+    void a_deferred_delivery_is_redelivered_at_most_once_per_poll_interval() throws Exception {
+        String queue = declareAndBindQueue(TestOrderPlaced.class.getName());
+
+        CountDownLatch directCallEntered = new CountDownLatch(1);
+        CountDownLatch releaseDirectCall = new CountDownLatch(1);
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        AtomicInteger decodeAttempts = new AtomicInteger();
+        TestOrderPlacedConverter delegate = new TestOrderPlacedConverter();
+        CloudEventConverter<TestOrderPlaced> countingConverter = new CloudEventConverter<>() {
+            @Override
+            public CloudEvent toCloudEvent(TestOrderPlaced domainEvent) {
+                return delegate.toCloudEvent(domainEvent);
+            }
+
+            @Override
+            public TestOrderPlaced toDomainEvent(CloudEvent cloudEvent) {
+                decodeAttempts.incrementAndGet();
+                return delegate.toDomainEvent(cloudEvent);
+            }
+
+            @Override
+            public String getCloudEventType(Class<? extends TestOrderPlaced> type) {
+                return delegate.getCloudEventType(type);
+            }
+        };
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), countingConverter, TestOrderPlaced::orderId);
+        feed.register("proj", event -> {
+            handled.add(event);
+            if (handled.size() == 1) {
+                directCallEntered.countDown();
+                awaitLatch(releaseDirectCall);
+            }
+        }, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        CloudEvent directCloudEvent = delegate.toCloudEvent(new TestOrderPlaced("order-1"));
+        Thread directCaller = new Thread(() -> feed.acceptCloudEvent(directCloudEvent), "direct-in-flight-caller");
+        directCaller.start();
+        assertThat(directCallEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = RabbitMqDomainEventBridge.builder(connection(), feed, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .build()) {
+            publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
+
+            int pollIntervalsToObserve = 10;
+            Thread.sleep(POLL_INTERVAL.multipliedBy(pollIntervalsToObserve).toMillis());
+
+            assertThat(decodeAttempts.get()).as("the bridge's own delivery was attempted at all, beyond the "
+                            + "direct call's own first decode").isGreaterThan(1);
+            assertThat(decodeAttempts.get()).as("at most one redelivery per poll interval, by construction, not a "
+                            + "raw count that depends on how fast the broker round-trips a nack, plus one for the "
+                            + "direct call's own first decode")
+                    .isLessThanOrEqualTo(pollIntervalsToObserve + 4);
+
+            releaseDirectCall.countDown();
+            directCaller.join(TimeUnit.SECONDS.toMillis(5));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
+        }
+    }
+
     private static void awaitLatch(CountDownLatch latch) {
         try {
             assertThat(latch.await(5, TimeUnit.SECONDS)).as("latch reached within the timeout").isTrue();

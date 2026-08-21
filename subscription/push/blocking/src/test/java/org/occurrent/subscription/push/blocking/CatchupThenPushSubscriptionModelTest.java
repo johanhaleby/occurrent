@@ -628,6 +628,79 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(newReplayFolded).endsWith("1", "2", "3");
     }
 
+    /**
+     * Adversarial verification companion to the failure-path test above: the same self-referencing compare-and-remove
+     * (interruptibleReplays.remove(subscriptionId, ownLaunch.get())) also has to hold on the SUCCESS completion path,
+     * not only the failure one. An old attempt under "sub", parked folding its last event when
+     * cancelSubscription("sub") runs, finishes successfully (reaches live, no exception) only after a fresh
+     * subscribe("sub", ...) has already put a new launcher in the map for a replay this test then stops. If the old
+     * attempt's successful completion evicted that launcher by key rather than by identity, start(true) would find
+     * nothing to relaunch and the subscription would stay silently dead, the same hazard the failure path has.
+     */
+    @Test
+    void an_old_replays_late_successful_completion_after_a_cancel_and_resubscribe_does_not_evict_the_new_replays_launcher() throws Exception {
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")));
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        CountDownLatch oldReplayParkedOnLastEvent = new CountDownLatch(1);
+        CountDownLatch releaseOldReplay = new CountDownLatch(1);
+        List<String> oldReplayFolded = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            oldReplayFolded.add(ce.getId());
+            if (ce.getId().equals("3")) {
+                // The last event in the store: keepReplaying() has already passed for it, and the loop's own
+                // hasNext() is what ends the replay next, not another keepReplaying() check, so parking here and
+                // then returning normally (no throw) drives the replay into catchUp's genuine success path
+                // (drainBufferAndGoLive + markCaughtUp + return true) regardless of what happens to this
+                // subscription id while parked.
+                oldReplayParkedOnLastEvent.countDown();
+                awaitLatch(releaseOldReplay);
+            }
+        });
+        assertThat(oldReplayParkedOnLastEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Cancelling does not stop the old replay's thread, only the registration and the map entries it owned at
+        // this moment. The old replay is left running, blocked, entirely unaware it has been cancelled.
+        model.cancelSubscription("sub");
+
+        CountDownLatch newReplayParked = new CountDownLatch(1);
+        CountDownLatch releaseNewReplay = new CountDownLatch(1);
+        List<String> newReplayFolded = new CopyOnWriteArrayList<>();
+        Subscription newSubscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            newReplayFolded.add(ce.getId());
+            newReplayParked.countDown();
+            awaitLatch(releaseNewReplay);
+        });
+        assertThat(newReplayParked.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Stopped legitimately, mid-replay, exactly like starting_the_model_again_replays_a_catch_up_that_was_stopped
+        // above, so interruptibleReplays keeps this launcher on purpose, for start(true) to relaunch later.
+        model.stop();
+        releaseNewReplay.countDown();
+        assertThat(newSubscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+
+        // The old replay reaches live (succeeds) only now, well after the new one was legitimately stopped and kept.
+        // Given a moment to run its own completion cleanup before relaunching, so start(true) below races against
+        // the completed cleanup rather than the still-running success handler.
+        releaseOldReplay.countDown();
+        Thread.sleep(200);
+        assertThat(oldReplayFolded).containsExactly("1", "2", "3");
+
+        model.start(true);
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while ((!model.isRunning("sub") || model.isCatchingUp("sub")) && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+
+        assertThat(model.isRunning("sub")).as("the stopped launcher survived the old replay's late, stale-by-key "
+                + "successful completion").isTrue();
+        assertThat(model.isCatchingUp("sub")).isFalse();
+        assertThat(newReplayFolded).endsWith("1", "2", "3");
+    }
+
     @Test
     void starting_the_model_without_resuming_subscriptions_leaves_a_stopped_replay_for_resume_to_pick_up() throws Exception {
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();

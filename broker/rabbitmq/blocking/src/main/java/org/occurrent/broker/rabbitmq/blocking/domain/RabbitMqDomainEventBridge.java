@@ -39,12 +39,13 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -90,10 +91,11 @@ import static java.util.Objects.requireNonNull;
  * behind it, which {@code acceptCloudEvent(...)} answers with {@link RoutingOutcome#DEFERRED} rather than
  * {@link RoutingOutcome#DELIVERED} for exactly that reason (see its own javadoc): refused outright rather than
  * buffered, bypassing {@link DeliveryFailurePolicy} regardless of what this bridge is configured with, so
- * {@code PARK} can never fire for a message that only needs the replay to catch up. A {@code DEFERRED} delivery
- * also cancels this bridge's own consumer for one full {@link Builder#pollInterval(Duration)}, the same bound
- * {@code RabbitMqCloudEventBridge} applies, so a replay redelivers in bursts at most a poll interval apart rather
- * than saturating the channel for the whole replay. Feeding
+ * {@code PARK} can never fire for a message that only needs the replay to catch up. A {@code DEFERRED} delivery is
+ * also held unacked rather than nacked immediately, the same mechanism {@code RabbitMqCloudEventBridge} applies, so
+ * with {@link Builder#prefetchCount(int)} left at its default of one, the broker sends nothing further on this
+ * consumer until the next poll releases it, bounding a replay to at most one redelivery per
+ * {@link Builder#pollInterval(Duration)} rather than saturating the channel for the whole replay. Feeding
  * {@code acceptCloudEvent(...)} can still throw {@link IllegalStateException} despite the poll, for the narrow race where the check ran just before the one
  * registration this feed ever accepts. That case, unlike {@link UnreadableLiveFilterException}, applies the
  * configured {@link DeliveryFailurePolicy} like any other failure, since it is transient rather than permanent.
@@ -123,12 +125,14 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
 
     private final Lock consumeLock = new ReentrantLock();
     private @Nullable String consumerTag;
-    // Set (never under consumeLock) the instant a DEFERRED delivery is nacked, read and cleared under consumeLock
-    // by reconcileConsumption on its own poll thread. Bounds a tight refuse-and-requeue loop against a replay to
-    // at most one poll interval's worth of churn before this bridge cancels itself for a full pollInterval, the
-    // same mechanism RabbitMqCloudEventBridge uses, and for the same lock-inversion reason: the delivery callback
-    // can run concurrently with reconcileConsumption, which already holds consumeLock across a blocking AMQP call.
-    private final AtomicBoolean deferredSinceLastReconcile = new AtomicBoolean(false);
+    // Appended to (never under consumeLock) by handleDelivery the instant a delivery reports DEFERRED, in place of
+    // nacking it there and then, the same mechanism RabbitMqCloudEventBridge uses. See that class's own javadoc on
+    // its equivalent field for the full reasoning. In short: with prefetchCount == 1 (the default) leaving a
+    // DEFERRED delivery unacked is what stops the broker sending anything further on this consumer, so the churn
+    // stops at that instant with no cancel involved at all, and reconcileConsumption releases whatever is held,
+    // under consumeLock, at most once per pollInterval. A queue rather than a single held tag, so a bridge
+    // configured with prefetchCount above 1 never drops an earlier held tag under a later one.
+    private final Queue<Long> heldDeferredDeliveryTags = new ConcurrentLinkedQueue<>();
     private volatile boolean permanentlyStopped;
 
     private RabbitMqDomainEventBridge(DomainEventFeed<E> feed, Channel consumeChannel, String queue, int prefetchCount,
@@ -187,20 +191,32 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                 if (permanentlyStopped) {
                     return;
                 }
-                boolean pacedOff = deferredSinceLastReconcile.getAndSet(false);
-                boolean shouldConsume = feed.hasProjection() && feed.isReadyForLiveDelivery() && !pacedOff;
+                boolean shouldConsume = feed.hasProjection() && feed.isReadyForLiveDelivery();
                 if (shouldConsume && consumerTag == null) {
                     consumerTag = consumeChannel.basicConsume(queue, false, this::handleDelivery, this::handleCancel);
                 } else if (!shouldConsume && consumerTag != null) {
                     consumeChannel.basicCancel(consumerTag);
                     consumerTag = null;
                 }
+                releaseHeldDeferredDelivery();
             } finally {
                 consumeLock.unlock();
             }
         } catch (IOException | RuntimeException e) {
             log.warn("Failed to reconcile consumption for queue \"{}\" against the feed's registration state. " +
                     "Retrying on the next poll.", queue, e);
+        }
+    }
+
+    // Nacks (with requeue) everything handleDelivery left held, if anything, bypassing DeliveryFailurePolicy
+    // exactly as the DEFERRED branch there always has. Always called under consumeLock, since it issues a
+    // blocking Channel call per held tag. With prefetchCount == 1 (the default), the broker sends nothing further
+    // on this consumer between a delivery being held and this releasing it, so calling this once per pollInterval
+    // is what bounds a DEFERRED delivery to at most one redelivery per poll interval by construction.
+    private void releaseHeldDeferredDelivery() {
+        Long heldTag;
+        while ((heldTag = heldDeferredDeliveryTags.poll()) != null) {
+            failureAction.redeliver(heldTag);
         }
     }
 
@@ -249,10 +265,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
             failureAction.ack(deliveryTag);
         } else if (outcome == RoutingOutcome.DEFERRED) {
-            // Bypasses DeliveryFailurePolicy entirely, including PARK: nothing here is broken, only not ready yet.
-            // Never takes consumeLock here, see deferredSinceLastReconcile's own javadoc for why.
-            failureAction.redeliver(deliveryTag);
-            deferredSinceLastReconcile.set(true);
+            // Held unacked rather than nacked here, deliberately. Never takes consumeLock here, see
+            // heldDeferredDeliveryTags's own javadoc for the full reasoning.
+            heldDeferredDeliveryTags.add(deliveryTag);
         } else {
             failureAction.apply(deliveryTag, delivery.getProperties(), delivery.getBody());
         }
@@ -284,9 +299,16 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     }
 
     /**
-     * Stops the background poll, cancels this bridge's consumer if it has one, and closes the {@link Channel} (and,
-     * with {@link DeliveryFailurePolicy#PARK}, the parking sink) this bridge created. Does not close the
-     * {@link Connection} it was built from.
+     * Stops the background poll, cancels this bridge's consumer if it has one, releases any {@code DEFERRED}
+     * delivery still held unacked, and closes the {@link Channel} (and, with {@link DeliveryFailurePolicy#PARK},
+     * the parking sink) this bridge created. Does not close the {@link Connection} it was built from. Never
+     * releases the one delivery {@code stopPermanently()} is holding for {@link UnreadableLiveFilterException},
+     * since that tag never enters the held-{@code DEFERRED} queue this releases in the first place.
+     * <p>
+     * Releasing a held {@code DEFERRED} delivery here is belt and braces rather than load bearing: closing a
+     * channel with an unacked delivery on it already requeues that delivery at the broker on its own, so skipping
+     * this line would still leave nothing stuck. Doing it explicitly means a delivery this bridge is holding is
+     * redelivered the instant this method runs rather than whenever the broker notices the channel is gone.
      */
     @Override
     public void close() {
@@ -300,6 +322,12 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                     // Best effort: the channel is about to be closed either way.
                 }
                 consumerTag = null;
+            }
+            try {
+                releaseHeldDeferredDelivery();
+            } catch (RuntimeException ignored) {
+                // Best effort, matching basicCancel above: the channel is about to be closed either way, and
+                // closing it requeues whatever is left held regardless.
             }
         } finally {
             consumeLock.unlock();

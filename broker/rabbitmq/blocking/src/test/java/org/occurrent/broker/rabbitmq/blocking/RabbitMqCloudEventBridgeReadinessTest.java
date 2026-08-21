@@ -222,15 +222,23 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
     }
 
     /**
-     * The bound a Copilot review of this PR asked for: with no {@code readinessSource} configured, every
+     * The pacing a Copilot review of this PR asked for: with no {@code readinessSource} configured, every
      * {@code DEFERRED} delivery used to be immediately nacked and requeued with nothing pacing the resulting loop,
-     * which a real broker turns into thousands of refuse-and-redeliver round trips over a long-running replay.
-     * {@code reconcileConsumption} now cancels this bridge's own consumer for one full poll interval the instant a
-     * {@code DEFERRED} delivery is seen, so the count over several poll intervals stays a small, bounded multiple
-     * of one, not thousands.
+     * which a real broker turns into thousands of refuse-and-redeliver round trips over a long-running replay. Two
+     * earlier fixes both still flaked on CI: an outright poll-interval self-cancel only halved the churn rather
+     * than bounding it (a real broker's round trip is fast enough to pack dozens of nack-and-redeliver cycles into
+     * the single poll interval before that cancel takes effect), and asserting a quiet streak against that same
+     * mechanism just moved the same round-trip-speed dependency to a different number. Holding the {@code DEFERRED}
+     * delivery unacked instead of nacking it, released by the poll thread rather than by the delivery callback,
+     * removes the dependency outright: with {@link RabbitMqCloudEventBridge.Builder#prefetchCount(int)} left at its
+     * default of one, the broker sends nothing further on this consumer while a delivery is held, so exactly one
+     * redelivery happens per poll interval by construction, not "however many fit." That makes the bound here
+     * exact rather than statistical: {@code deferredCount} after {@code N} poll intervals is at most {@code N} plus
+     * a small constant for the delivery already in flight when the window started and the scheduler's own first
+     * tick, never a number that depends on how fast the broker itself round-trips a nack.
      */
     @Test
-    void a_deferred_delivery_with_no_readiness_source_is_paced_to_a_bounded_number_of_redeliveries_per_poll_interval() throws Exception {
+    void a_deferred_delivery_with_no_readiness_source_is_redelivered_at_most_once_per_poll_interval() throws Exception {
         String queue = declareAndBindQueue(OrderPlaced.class.getName());
         AtomicInteger deferredCount = new AtomicInteger();
         RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel((cloudEvent, outcome) -> {
@@ -259,17 +267,72 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
                 .build()) {
             publish(OrderPlaced.class.getName(), "id-1");
 
-            // Ten poll intervals' worth of wall-clock time. An unbounded tight loop would rack up thousands of
-            // redeliveries in this window. A bound of one poll interval's worth of churn per cycle keeps it in the
-            // tens, comfortably under a bound that would still catch a regression back to the tight loop.
-            Thread.sleep(POLL_INTERVAL.multipliedBy(10).toMillis());
+            int pollIntervalsToObserve = 10;
+            Thread.sleep(POLL_INTERVAL.multipliedBy(pollIntervalsToObserve).toMillis());
 
-            assertThat(deferredCount.get()).as("bounded to roughly one poll interval's worth of churn per cycle, "
-                            + "not a continuous tight loop for the whole wait")
-                    .isLessThan(200);
+            // The mechanism engaged at all, so this is not vacuously true against a bridge that, say, never
+            // consumes the message in the first place.
+            assertThat(deferredCount.get()).as("at least one DEFERRED redelivery happened").isGreaterThan(0);
+
+            // The exact structural bound: with prefetchCount left at its default of one, the broker cannot deliver
+            // a second message on this consumer while the first is still held, so at most one redelivery happens
+            // per reconcileConsumption pass. Over pollIntervalsToObserve poll intervals of wall-clock time that
+            // bounds the count at pollIntervalsToObserve plus a small constant, room for the scheduler's own first
+            // tick (which runs immediately, before the first poll interval has elapsed) and the delivery already
+            // in flight when this window started, never a number tied to how fast the broker round-trips a nack.
+            assertThat(deferredCount.get()).as("at most one redelivery per poll interval, by construction, not a "
+                            + "raw count that depends on how fast the broker round-trips a nack")
+                    .isLessThanOrEqualTo(pollIntervalsToObserve + 3);
         } finally {
             releaseReplay.countDown();
         }
+    }
+
+    /**
+     * A {@code DEFERRED} delivery this bridge is holding unacked when {@code close()} runs must not hang it and
+     * must not be lost. {@code close()} releases (nacks with requeue) any held tag itself, and even without that,
+     * a channel closed with an unacked delivery on it is requeued by the broker on its own, so this covers both:
+     * that {@code close()} returns promptly, and that the message is still on the queue afterwards.
+     */
+    @Test
+    void close_while_a_deferred_delivery_is_held_completes_promptly_and_does_not_lose_the_message() throws Exception {
+        String queue = declareAndBindQueue(OrderPlaced.class.getName());
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel((cloudEvent, outcome) -> {
+        });
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
+
+        CountDownLatch replayEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            if (ce.getId().equals("historical")) {
+                replayEntered.countDown();
+                awaitLatch(releaseReplay);
+            }
+        });
+        assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, outcomeChannel, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .build();
+        try {
+            publish(OrderPlaced.class.getName(), "id-1");
+            // Long enough that the bridge has fetched the message and is holding it unacked (DEFERRED, the replay
+            // still parked) by the time close() runs on top of it.
+            Thread.sleep(POLL_INTERVAL.toMillis() * 2);
+
+            long start = System.nanoTime();
+            bridge.close();
+            long elapsedMs = Duration.ofNanos(System.nanoTime() - start).toMillis();
+            assertThat(elapsedMs).as("close() must not hang on a held DEFERRED delivery").isLessThan(5000);
+        } finally {
+            releaseReplay.countDown();
+        }
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isEqualTo(1));
     }
 
     private static void awaitLatch(CountDownLatch latch) {
