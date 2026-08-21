@@ -91,6 +91,30 @@ class DcbCatchupSubscriptionModelTest {
         inMemorySubscriptionModel.shutdown();
     }
 
+    // The same contract the stream model reports, through the dispatcher a DCB projection actually subscribes on.
+    // Both answer true while the history that was already there is being read, and isReplayingHistory turns false for
+    // the events appended since.
+    @Test
+    void reports_the_history_read_and_the_reconciliation_as_different_parts_of_one_catch_up() {
+        appendTagged("name:1", nameDefined("history"));
+
+        CopyOnWriteArrayList<String> phasePerDelivery = new CopyOnWriteArrayList<>();
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
+
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            phasePerDelivery.add(subscription.isCatchingUp("subscription") + "/" + subscription.isReplayingHistory("subscription"));
+            // Appended from inside the history read, so it cannot be part of it and the reconciliation is what
+            // delivers it.
+            if (phasePerDelivery.size() == 1) {
+                appendTagged("name:1", nameDefined("appendedDuringTheHistoryRead"));
+            }
+        }).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(phasePerDelivery).containsExactly("true/true", "true/false"));
+        assertThat(subscription.isCatchingUp("subscription")).isFalse();
+        assertThat(subscription.isReplayingHistory("subscription")).isFalse();
+    }
+
     @Test
     void replays_matching_dcb_events_from_the_beginning_of_the_sequence_in_position_order() {
         NameDefined name1 = nameDefined("name1");
