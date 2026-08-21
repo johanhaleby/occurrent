@@ -26,6 +26,8 @@ import org.slf4j.Logger;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 
 import static java.util.Objects.requireNonNull;
@@ -40,7 +42,8 @@ import static java.util.Objects.requireNonNull;
  * exists to make impossible to get wrong twice.
  * <p>
  * {@link #apply(long, BasicProperties, byte[])} always parks or redelivers the delivery's own raw {@code properties}
- * and {@code body}, unchanged, whether or not the bridge managed to rebuild a CloudEvent from them. A parked message
+ * and {@code body}, unchanged apart from {@link RabbitMqDestination#headers() parkingDestination}'s own configured
+ * headers layered on top, whether or not the bridge managed to rebuild a CloudEvent from them. A parked message
  * therefore keeps every AMQP field outside the CloudEvents mapping, a caller-supplied {@code correlationId},
  * {@code appId} or {@code replyTo} among them, rather than only the attributes
  * {@link RabbitMqCloudEventMapper#toBasicProperties(io.cloudevents.CloudEvent, java.util.Map)} would have rebuilt
@@ -114,10 +117,10 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
 
     /**
      * Applies this failure action to the delivery {@code deliveryTag} identifies, republishing its own raw
-     * {@code properties} and {@code body} unchanged when {@link DeliveryFailurePolicy#PARK} is configured, whether
-     * or not the bridge managed to rebuild a CloudEvent from them. {@link DeliveryFailurePolicy#PARK} acknowledges
-     * {@code deliveryTag} only once that publish has been confirmed and not returned as unroutable. Never
-     * acknowledges {@code deliveryTag} directly.
+     * {@code properties} and {@code body}, plus the parking destination's own configured headers, when
+     * {@link DeliveryFailurePolicy#PARK} is configured, whether or not the bridge managed to rebuild a CloudEvent
+     * from them. {@link DeliveryFailurePolicy#PARK} acknowledges {@code deliveryTag} only once that publish has
+     * been confirmed and not returned as unroutable. Never acknowledges {@code deliveryTag} directly.
      */
     public void apply(long deliveryTag, BasicProperties properties, byte[] body) {
         requireNonNull(properties, "properties cannot be null");
@@ -131,14 +134,29 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
 
     private void park(long deliveryTag, BasicProperties properties, byte[] body) {
         RabbitMqDestination destination = requireNonNull(parkingDestination);
+        BasicProperties parkedProperties = withDestinationHeaders(properties, destination);
         try {
-            requireNonNull(parkingPublisher).publish(destination.exchange(), destination.routingKey(), properties, body);
+            requireNonNull(parkingPublisher).publish(destination.exchange(), destination.routingKey(), parkedProperties, body);
         } catch (RuntimeException e) {
             log.warn("Failed to park a delivery nothing consumed. Redelivering it instead of losing it.", e);
             redeliver(deliveryTag);
             return;
         }
         ack(deliveryTag);
+    }
+
+    // A copy of properties with destination's own configured headers added on top of the original ones, so a
+    // parking marker (a tenant or reason header, say) reaches the parked message alongside the delivery's own
+    // AMQP fields, all of which properties.builder() already carries over unchanged. destination's headers win
+    // on a key collision, since RabbitMqDestination's own constructor already reserves the cloudEvents_ prefix
+    // against ever colliding with the mapping, so the only collision possible here is a deliberate one.
+    private static BasicProperties withDestinationHeaders(BasicProperties properties, RabbitMqDestination destination) {
+        if (destination.headers().isEmpty()) {
+            return properties;
+        }
+        Map<String, Object> headers = properties.getHeaders() == null ? new HashMap<>() : new HashMap<>(properties.getHeaders());
+        headers.putAll(destination.headers());
+        return properties.builder().headers(headers).build();
     }
 
     /**

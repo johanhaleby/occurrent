@@ -48,10 +48,13 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * bounds the wait and fails it with {@link RabbitMqPublishTimeoutException} rather than blocking forever on a
  * broker that never answers, and {@link Builder#acknowledgementTimeout(Duration)} is not offered as something that
  * can be turned off, for the same reason {@link CloudEventSink}'s own javadoc gives. A publish that ends this way,
- * one abandoned to an interrupted wait, or one whose channel or connection shuts down mid-publish, is left
- * outstanding on the broker's side of that channel (or the channel itself is simply gone), so this sink retires the
- * channel and opens a fresh one underneath it, and a later publish is never kept waiting on an abandoned one, blamed
- * for its eventual nack, or stuck permanently on a channel the broker already closed.
+ * one abandoned to an interrupted wait, or one whose channel shuts down mid-publish, is left outstanding on the
+ * broker's side of that channel (or the channel itself is simply gone), so this sink retires the channel and opens
+ * a fresh one underneath it, and a later publish is never kept waiting on an abandoned one, blamed for its eventual
+ * nack, or stuck permanently on a channel the broker already closed. That recovery reaches a channel-level
+ * shutdown. A connection-level one leaves nothing this sink can reopen a channel on, and needs the caller's own
+ * {@link Connection} to support reconnection instead, RabbitMQ's client offers this directly as automatic
+ * connection recovery.
  * <p>
  * Each publish carries its own random {@code correlationId}, so a {@code basic.return} is matched to the publish it
  * belongs to and never to a different one, including a retry of the same event after an earlier attempt's

@@ -172,7 +172,13 @@ final class RabbitMqConfirmPublisher implements AutoCloseable {
             // IOException, so it needs its own catch to reach the caller at all. The RabbitMQ client leaves this
             // channel unusable once it has shut down, so it is retired and replaced here, symmetric with the
             // timeout and interrupted paths below, rather than left in place to fail every later publish on this
-            // sink forever with connection auto-recovery off.
+            // sink forever with connection auto-recovery off. That recovery only reaches a channel-level shutdown
+            // (e.isHardError() false), where the connection itself and every other channel on it stay usable. A
+            // hard, connection-level shutdown retires this channel the same way, but the replacement open then
+            // fails too, since the connection it would open on is itself gone, and that failure is reported rather
+            // than hidden. Recovering from a hard shutdown needs a Connection this sink can itself reconnect to,
+            // which is the caller's own connection setup to provide, RabbitMQ's client supports it directly as
+            // automatic connection recovery.
             RabbitMqPublishException shutdownException = new RabbitMqPublishException("Channel or connection shut down while publishing to exchange \"" +
                     exchange + "\" with routing key \"" + routingKey + "\"", e);
             retireChannelPreserving(shutdownException);

@@ -20,11 +20,16 @@ import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.slf4j.LoggerFactory;
 
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -96,5 +101,34 @@ class RabbitMqDeliveryFailureActionTest {
         action.apply(42L, originalProperties, originalBody);
 
         verify(parkingPublisher).publish("exchange", "routingKey", originalProperties, originalBody);
+    }
+
+    /**
+     * {@code parkingDestination}'s own configured headers reach the parked message alongside the delivery's
+     * original AMQP fields, rather than being dropped in favor of the raw properties alone.
+     */
+    @Test
+    void apply_merges_the_parking_destinations_own_headers_onto_the_original_properties() throws Exception {
+        Channel consumeChannel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey")
+                .withHeaders(Map.of("parked-reason", "handler-failure"));
+        BasicProperties originalProperties = new BasicProperties.Builder()
+                .correlationId("caller-correlation-id")
+                .headers(Map.of("tenant", "acme"))
+                .build();
+        byte[] originalBody = "payload".getBytes();
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK,
+                parkingPublisher, parkingDestination, LoggerFactory.getLogger(getClass()));
+
+        action.apply(42L, originalProperties, originalBody);
+
+        ArgumentCaptor<BasicProperties> parkedPropertiesCaptor = ArgumentCaptor.forClass(BasicProperties.class);
+        verify(parkingPublisher).publish(eq("exchange"), eq("routingKey"), parkedPropertiesCaptor.capture(), eq(originalBody));
+        BasicProperties parkedProperties = parkedPropertiesCaptor.getValue();
+        assertThat(parkedProperties.getCorrelationId()).isEqualTo("caller-correlation-id");
+        assertThat(parkedProperties.getHeaders())
+                .containsEntry("tenant", "acme")
+                .containsEntry("parked-reason", "handler-failure");
     }
 }

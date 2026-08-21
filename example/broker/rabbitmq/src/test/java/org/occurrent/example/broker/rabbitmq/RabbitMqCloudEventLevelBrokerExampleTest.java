@@ -33,6 +33,7 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.blocking.OccurrentBlockingAnnotationConfiguration;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
@@ -87,7 +88,13 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
                 .resolver(resolver)
                 .pollInterval(Duration.ofMillis(50))
                 .build();
-             RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver).build()) {
+             // retryStrategy(none()) so an ambiguous publish failure fails this test outright instead of retrying.
+             // The sink's own default retry would resend on a RabbitMqPublishException whose outcome it never
+             // actually learned, and a resend that turns out to have been unnecessary is a second physical copy
+             // on the broker, exactly the kind of duplicate the redelivery assertion below has to rule out.
+             RabbitMqCloudEventSink sink = RabbitMqCloudEventSink.builder(rabbitConnection, resolver)
+                     .retryStrategy(RetryStrategy.none())
+                     .build()) {
 
             // Published directly through the sink below, deliberately without a CloudEventForwarder in front of it.
             // The forwarder is at-least-once and can legally redeliver a lost confirm as a second physical copy of
