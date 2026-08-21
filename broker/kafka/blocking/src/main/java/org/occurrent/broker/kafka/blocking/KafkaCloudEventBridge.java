@@ -143,10 +143,12 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     private final Thread loopThread;
 
     // Touched only by the loop thread. A partition this batch seeked back to (a poison record) is paused here
-    // until its own deadline, System.currentTimeMillis() plus pollTimeout, rather than the whole loop sleeping for
-    // pollTimeout regardless of which partitions actually staged something. A partition still flowing normally is
-    // never held up by a poison record on a different one. See reconcilePauseResume(boolean) and processBatch(...).
-    private final Map<TopicPartition, Long> throttledUntilMillis = new HashMap<>();
+    // until its own deadline, System.nanoTime() plus pollTimeout, rather than the whole loop sleeping for
+    // pollTimeout regardless of which partitions actually staged something. System.nanoTime() rather than
+    // currentTimeMillis(), so a wall-clock correction can never leave a paused partition paused far past
+    // pollTimeout. A partition still flowing normally is never held up by a poison record on a different one. See
+    // reconcilePauseResume(boolean) and processBatch(...).
+    private final Map<TopicPartition, Long> throttledUntilNanos = new HashMap<>();
 
     // Set by close() to System.nanoTime() + closeTimeout, Long.MAX_VALUE until then. System.nanoTime() rather than
     // currentTimeMillis(), so a wall-clock correction after close() can never let remainingCloseBudget() outlive
@@ -271,12 +273,12 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         resumeExpiredThrottledPartitions(assignment);
         if (shouldConsume) {
             Set<TopicPartition> toResume = new HashSet<>(assignment);
-            toResume.removeAll(throttledUntilMillis.keySet());
+            toResume.removeAll(throttledUntilNanos.keySet());
             consumer.resume(toResume);
             // A partition still throttled stays paused even though the coarse gate above says to resume the rest
             // of the assignment. Re-paused explicitly rather than relying on it having stayed paused client-side,
             // since a rebalance can have reassigned it since its last pause() call.
-            Set<TopicPartition> stillThrottled = new HashSet<>(throttledUntilMillis.keySet());
+            Set<TopicPartition> stillThrottled = new HashSet<>(throttledUntilNanos.keySet());
             stillThrottled.retainAll(assignment);
             if (!stillThrottled.isEmpty()) {
                 consumer.pause(stillThrottled);
@@ -291,12 +293,12 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     // them elsewhere) are dropped from the map without calling resume() on them, since this Consumer no longer
     // owns them to resume.
     private void resumeExpiredThrottledPartitions(Set<TopicPartition> assignment) {
-        if (throttledUntilMillis.isEmpty()) {
+        if (throttledUntilNanos.isEmpty()) {
             return;
         }
-        long now = System.currentTimeMillis();
+        long now = System.nanoTime();
         Set<TopicPartition> expired = new HashSet<>();
-        throttledUntilMillis.entrySet().removeIf(entry -> {
+        throttledUntilNanos.entrySet().removeIf(entry -> {
             boolean isExpired = entry.getValue() <= now;
             if (isExpired) {
                 expired.add(entry.getKey());
@@ -325,7 +327,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     }
 
     // A partition that seeks back this batch (a poison record) is paused until roughly pollTimeout has passed,
-    // tracked in throttledUntilMillis and applied immediately below, rather than the whole loop backing off for
+    // tracked in throttledUntilNanos and applied immediately below, rather than the whole loop backing off for
     // pollTimeout regardless of which partitions actually failed. A different partition that keeps staging offsets
     // in the same poll is never held to the poisoned one's pace.
     private void processBatch(ConsumerRecords<String, byte[]> records) {
@@ -373,9 +375,9 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             // Paused now rather than left for the next reconcilePauseResume(...) call, so the very next poll()
             // already excludes these partitions instead of refetching and redelivering the identical record once
             // more before the throttle takes effect.
-            long throttledUntil = System.currentTimeMillis() + pollTimeout.toMillis();
+            long throttledUntil = System.nanoTime() + pollTimeout.toNanos();
             for (TopicPartition partition : seekedBackPartitions) {
-                throttledUntilMillis.put(partition, throttledUntil);
+                throttledUntilNanos.put(partition, throttledUntil);
             }
             consumer.pause(seekedBackPartitions);
         }

@@ -352,6 +352,11 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
      * CloudEvents mapping, and the parking destination's own configured headers. All three together, on the same
      * parked record, are what actually distinguishes {@link KafkaDeliveryFailureAction#apply(ConsumerRecord)}'s
      * republish-unchanged behaviour from a rebuild.
+     * <p>
+     * {@code parkingDestination} here configures no key of its own, so this also proves the other half of
+     * {@link KafkaDeliveryFailureAction#apply(ConsumerRecord)}'s key rule, the original record's key survives when
+     * {@code destination.key()} is {@code null}. {@link #parks_a_decodable_delivery_using_the_parking_destinations_own_configured_key_instead_of_the_originals()}
+     * proves the other half, a configured key overriding the original.
      */
     @Test
     void parks_a_decodable_delivery_preserving_the_original_key_a_non_cloudevent_header_and_the_parking_destinations_own_header() throws Exception {
@@ -378,6 +383,40 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
             assertThat(parked.key()).isEqualTo("stream-1");
             assertThat(headerValue(parked, "tenant")).isEqualTo("acme");
             assertThat(headerValue(parked, "parked-reason")).isEqualTo("handler-failure");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+        }
+    }
+
+    /**
+     * Per ADR 133, publishing uses every configured destination component, so a {@code parkingDestination} with its
+     * own {@code key} must win over the failing delivery's own key, not silently publish under the original's key
+     * instead. The source record here is keyed {@code "stream-1"}, {@code parkingDestination} is keyed
+     * {@code "parking-key"}, and only {@code "parking-key"} may land on the parked record.
+     */
+    @Test
+    void parks_a_decodable_delivery_using_the_parking_destinations_own_configured_key_instead_of_the_originals() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        String parkingTopic = createTopic(1);
+        KafkaDestination parkingDestination = KafkaDestination.of(parkingTopic, "parking-key");
+
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        model.subscribe("sub", cloudEvent -> {
+            throw new RuntimeException("always fails");
+        });
+
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(parkingDestination)
+                .build()) {
+            publishCloudEvent(topic, "stream-1", orderPlaced("id-1"));
+
+            ConsumerRecord<String, byte[]> parked = consumeOneRecord(parkingTopic);
+            assertThat(parked.key()).isEqualTo("parking-key");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
                     assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
