@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 46
-updated_at: 2026-08-21T05:33:25Z
+revision: 47
+updated_at: 2026-08-21T06:15:46Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -22,7 +22,7 @@ pending_actions:
     type: dispatch-chip
     target: "U10 chip task_8c301721, branch ayi/u10-flaky-filtered-rebuild from origin/main"
     expected: "a session carrying the marker in its opening prompt starts and pushes the branch"
-    status: PENDING
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-21T05:33:25Z
@@ -265,13 +265,14 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: "chip task_8c301721 (session resolves at start)"
+    session: "chip task_8c301721, session local_da1d13bd-816f-4c27-b0d1-cd95a7c5f9ae (marker-confirmed), worktree quirky-archimedes-2fe068"
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 888, met: false, evidence: null}
     blocking_on: []
-    next_action: "Johan starts the chip. Then the monitor reports the PR, the merge gate runs with an adversarial verify of the mutation claim"
+    next_action: "ci-wait on PR 888 head 64139950. At checks done plus Copilot review: four-fact gate, adversarial verify of the poll-cap diagnosis and the mutation claim, then CAS merge"
     last_meaningful_progress_at: 2026-08-21T05:33:25Z
-    observed: {}
+    observed:
+      pr_888: {head: 64139950be9e76bbafe1da18dcfed42ec8dbc183, branch: "ayi/u10-flaky-filtered-rebuild", rollup: "0fail running", review: "not yet arrived", via: "monitor PR-OPENED", at: 2026-08-21T06:15:46Z}
     assessment: "Adopted post-closeout by Johan's direct ruling 2026-08-21 (dec-0010). Test-only unit expected. A main-code defect found in diagnosis returns BLOCKED and becomes its own unit."
   U7:
     issue: 740
