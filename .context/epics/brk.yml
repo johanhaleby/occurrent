@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 112
+revision: 113
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -296,7 +296,7 @@ units:
     deliverables:
       - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
     blocking_on: []
-    next_action: "PLAN GATE PENDING 2026-08-21T~09:2xZ: addendum worker a338a8ec60811f0d3 delivered plan v2 (wrapper-as-push-target, saved at the session scratchpad u9-plan-v2.md) and is BLOCKED on the gate. Fresh-context plan reviewer a79d32af13fc4dfc0 (Opus, read-only) running with eight pointed attacks, the orchestrator own worry being step 5 appending a not-ready event to the buffer before reporting NOT_DELIVERABLE (redelivery then duplicates the append, unbounded on RabbitMQ REDELIVER). On the verdict: rule the gate under dec-0009 (journal as plan_gate), relay to the worker, implementation at Sonnet/high per its own recommendation unless the review says otherwise. Monitor bdwgc25oz active"
+    next_action: "PLAN v2 REVISED 2026-08-21T~09:5xZ (dec-0010): reviewer a79d32af13fc4dfc0 found the unreleased-class premise false (four constructors in occurrent-0.33.0), the Spring path unable to supply an observer or a pre-refresh wrapper, append-then-refuse duplication (also in DomainEventFeed), PARK dead-lettering not-ready messages. v3 direction: bridge keeps the PushSubscriptionModel, decision 1 stands, one evaluation in routeReportingMatch with an action-reported delivery, acceptIfLive under one lock, source distinction (write path buffers, broker refuses), new DEFERRED outcome never parked, coarse gate as pacing only, DomainEventFeed fixed too, #885 closes rejected-with-reason. Worker a338a8ec60811f0d3 writing v3 with its own fresh-context review attached. Review saved at scratchpad u9-plan-v2-review.md. Monitor bdwgc25oz active"
     last_meaningful_progress_at: 2026-08-21T05:50:00Z
     observed: {}
     assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."
