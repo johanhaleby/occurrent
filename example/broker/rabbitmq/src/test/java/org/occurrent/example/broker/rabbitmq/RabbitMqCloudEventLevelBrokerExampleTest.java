@@ -318,8 +318,12 @@ class RabbitMqCloudEventLevelBrokerExampleTest extends AbstractBrokerExampleTest
     }
 
     /**
-     * The regression proof for the catch-up acknowledgement hole this bridge's {@code readinessSource} closes.
-     * Exercised through the real {@code @Projection(source = PUSH)} wiring, not a hand-held
+     * The regression proof for the catch-up acknowledgement hole. What actually closes it is
+     * {@code RoutingOutcome.DEFERRED}: {@code acceptRedeliverable(...)} refuses a message outright rather than
+     * buffering it while the wrapper is still replaying, so the bridge never acknowledges one it did not actually
+     * apply. {@code readinessSource} is configured here too, and this test still proves it keeps the bridge from
+     * pulling the message off the queue at all while not ready, but that is a pacing measure now, not what makes
+     * this safe. Exercised through the real {@code @Projection(source = PUSH)} wiring, not a hand-held
      * {@code CatchupThenPushSubscriptionModel} reference, since that annotation-driven path is exactly where the
      * defect lived. The wrapper {@code ProjectionAnnotationRegistrar} builds is otherwise reachable only from
      * inside the registrar itself. {@code CatchupThenPushSubscriptionModelPublisher} is what makes it reachable

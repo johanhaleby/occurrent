@@ -47,8 +47,8 @@ import static java.util.Objects.requireNonNull;
 /**
  * Bridges a RabbitMQ queue into a {@link PushSubscriptionModel}, the CloudEvent-level consume side ADR 133 decision 1
  * describes. Rebuilds each message as a {@link CloudEvent} through {@link RabbitMqCloudEventMapper}, hands it to
- * {@link PushSubscriptionModel#accept(CloudEvent)}, and acknowledges only once the {@link RoutingOutcome} that
- * {@code accept(...)} reported through a shared {@link RoutingOutcomeChannel} says the event was actually consumed.
+ * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}, and acknowledges only once the {@link RoutingOutcome}
+ * that reported through a shared {@link RoutingOutcomeChannel} says the event was actually consumed.
  * <p>
  * <strong>Holds a {@link PushSubscriptionModel}, never a {@link CatchupThenPushSubscriptionModel}.</strong> ADR 133
  * decision 1 is explicit that a bridge feeds the live model, not the catch-up wrapper in front of it, since a
@@ -56,12 +56,16 @@ import static java.util.Objects.requireNonNull;
  * as a constructor argument and replays history through it before handing over. An application that wants catch-up
  * builds one from the same {@link PushSubscriptionModel} this bridge is given, in front of it, not instead of it.
  * <p>
- * <strong>Acknowledgement.</strong> {@code accept(...)} throwing (a handler exception, or a subscription filter
- * that failed to evaluate) never acknowledges. A normal return with {@link RoutingOutcome#DELIVERED} or
- * {@link RoutingOutcome#FILTERED} acknowledges. A normal return with {@link RoutingOutcome#NOT_DELIVERABLE} never
- * acknowledges. In every case that does not acknowledge, this bridge's configured {@link DeliveryFailurePolicy}
- * applies: {@link DeliveryFailurePolicy#REDELIVER} (the default) negatively acknowledges with requeue,
- * {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only then acknowledges the original.
+ * <strong>Acknowledgement.</strong> {@code acceptRedeliverable(...)} throwing (a handler exception, or a
+ * subscription filter that failed to evaluate) never acknowledges. A normal return with
+ * {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED} acknowledges. A normal return with
+ * {@link RoutingOutcome#NOT_DELIVERABLE} never acknowledges, and this bridge's configured
+ * {@link DeliveryFailurePolicy} applies: {@link DeliveryFailurePolicy#REDELIVER} (the default) negatively
+ * acknowledges with requeue, {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only then
+ * acknowledges the original. A normal return with {@link RoutingOutcome#DEFERRED}, a
+ * {@link CatchupThenPushSubscriptionModel} wrapping {@code model} still replaying or draining, say, also never
+ * acknowledges, but always negatively acknowledges with requeue, bypassing {@link DeliveryFailurePolicy} entirely:
+ * nothing here is broken, only not ready yet, and {@code PARK} exists for failures, not for pacing.
  * <p>
  * <strong>Topology.</strong> By default this bridge declares its own queue (durable, not exclusive, not
  * auto-delete) and binds it to {@link Builder#bindings(Set)} if given, or else to
@@ -70,8 +74,8 @@ import static java.util.Objects.requireNonNull;
  * or else to {@link DestinationResolver#catchAllDestination()} outright. {@link Builder#declareTopology(boolean)
  * declareTopology(false)} skips all of this for a deployment whose platform team owns the queue and its bindings
  * itself, per #415. A binding only narrows what arrives; a {@link SubscriptionFilter} on anything other than the
- * event type is invisible to it, and {@code accept(...)} still applies the subscription's own filter regardless of
- * what was bound.
+ * event type is invisible to it, and {@code acceptRedeliverable(...)} still applies the subscription's own filter
+ * regardless of what was bound.
  * <p>
  * <strong>Coarse lifecycle.</strong> A background poll, {@link Builder#pollInterval(Duration)} apart (one second by
  * default), reads {@link PushSubscriptionModel#subscriptionIds()} and {@link PushSubscriptionModel#isRunning(String)}
@@ -80,11 +84,11 @@ import static java.util.Objects.requireNonNull;
  * exists so this bridge never feeds a stopped or paused model, which per ADR 85 and ADR 104 drops the event rather
  * than holding it. Never used to decide a single message; that decision comes from the {@link RoutingOutcome} above.
  * The same poll also reads {@link Builder#readinessSource(Predicate)} for the subscription id, {@code true} by
- * default, so this bridge never pulls a message off the queue while a {@link CatchupThenPushSubscriptionModel}
- * wrapping {@code model} is still replaying or draining into it. The message waits on the broker instead of being
- * buffered here, since acknowledging on {@link RoutingOutcome#DELIVERED} a message the wrapper has only buffered,
- * not yet applied, is exactly the loss a consume bridge exists to prevent. See
- * {@link Builder#readinessSource(Predicate)} for how to wire it.
+ * default, so this bridge pulls fewer messages off the queue while a {@link CatchupThenPushSubscriptionModel}
+ * wrapping {@code model} is still replaying or draining into it, cutting down on {@link RoutingOutcome#DEFERRED}
+ * redeliveries during a replay. Pacing only: {@link RoutingOutcome#DEFERRED} is what keeps this bridge correct with
+ * no {@code readinessSource} configured at all, just noisier. See {@link Builder#readinessSource(Predicate)} for
+ * how to wire it.
  */
 public final class RabbitMqCloudEventBridge implements AutoCloseable {
 
@@ -198,7 +202,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             return;
         }
         try {
-            model.accept(cloudEvent);
+            model.acceptRedeliverable(cloudEvent);
         } catch (RuntimeException | AssertionError e) {
             // Catches AssertionError too, since a filter or the handler can throw one, and an uncaught Error here
             // would leave the delivery unacked and stall the consumer at prefetch one. Any other Error still propagates.
@@ -209,6 +213,11 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         RoutingOutcome outcome = outcomeChannel.takeLastOutcome();
         if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
             failureAction.ack(deliveryTag);
+        } else if (outcome == RoutingOutcome.DEFERRED) {
+            // Bypasses DeliveryFailurePolicy entirely, including PARK: nothing here is broken, only not ready yet,
+            // and parking a message that would otherwise have landed once catch-up finishes is exactly the kind of
+            // avoidable dead-lettering DEFERRED exists to rule out.
+            failureAction.redeliver(deliveryTag);
         } else {
             failureAction.apply(deliveryTag, delivery.getProperties(), delivery.getBody());
         }
@@ -359,18 +368,20 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
          * Asked, alongside {@code model}'s own running state, on every coarse lifecycle poll (see the class
          * javadoc). {@code true} for every subscription id by default, which is exactly right for {@code model} fed
          * directly with no catch-up in front of it, or for {@code catchup = NONE}, since no wrapper exists there to
-         * buffer anything for this to protect against.
+         * pace against.
          * <p>
-         * Wrap {@code model} in a {@link CatchupThenPushSubscriptionModel} and pass
-         * {@code catchupThenPush::isReadyForLiveDelivery} here, so this bridge stops pulling from the queue for as
-         * long as that wrapper's replay is still running or draining, and resumes once it reaches live. Without
-         * this, a message this bridge acknowledges on {@link RoutingOutcome#DELIVERED} while the wrapper is only
-         * buffering it is durable nowhere but this process's memory until the drain completes. A crash before that
-         * loses it for good, which the local event store cannot restore for an event a consume bridge exists
-         * precisely to receive from another service. Built by an {@code @Projection(source = PUSH)} or
+         * A pacing hint only, never a correctness dependency: {@link RoutingOutcome#DEFERRED} is what keeps this
+         * bridge correct against a {@link CatchupThenPushSubscriptionModel} wrapping {@code model} with no
+         * {@code readinessSource} configured at all, refusing rather than acknowledging a message the wrapper is
+         * still replaying or draining into, and redelivering it. Configuring this only cuts down on how often that
+         * refuse-and-redeliver round trip happens during a replay. Wrap {@code model} in a
+         * {@link CatchupThenPushSubscriptionModel} and pass {@code catchupThenPush::isReadyForLiveDelivery} here, so
+         * this bridge stops pulling from the queue for as long as that wrapper's replay is still running or
+         * draining, and resumes once it reaches live. Built by an {@code @Projection(source = PUSH)} or
          * {@code @Saga(source = PUSH)} bean instead of by hand, the wrapper is published as a Spring bean named
          * {@code "catchupThenPushSubscriptionModel-" + id}, so {@code applicationContext.getBean(name,
-         * CatchupThenPushSubscriptionModel.class)::isReadyForLiveDelivery} reaches the same object.
+         * CatchupThenPushSubscriptionModel.class)::isReadyForLiveDelivery} reaches the same object, or, through the
+         * RabbitMQ Spring Boot starter, wired automatically with no configuration at all.
          */
         public Builder readinessSource(Predicate<String> readinessSource) {
             this.readinessSource = requireNonNull(readinessSource, "readinessSource cannot be null");

@@ -51,20 +51,24 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 /**
  * Bridges a Kafka topic into a {@link PushSubscriptionModel}, the CloudEvent-level consume side ADR 133 decision 1
  * describes. Rebuilds each record as a {@link CloudEvent} through {@link KafkaCloudEventMapper}, hands it to
- * {@link PushSubscriptionModel#accept(CloudEvent)}, and commits only once the {@link RoutingOutcome} that
- * {@code accept(...)} reported through a shared {@link RoutingOutcomeChannel} says the event was actually consumed.
+ * {@link PushSubscriptionModel#acceptRedeliverable(CloudEvent)}, and commits only once the {@link RoutingOutcome}
+ * that reported through a shared {@link RoutingOutcomeChannel} says the event was actually consumed.
  * <p>
  * <strong>Holds a {@link PushSubscriptionModel}, never a {@link CatchupThenPushSubscriptionModel}</strong>, for the
  * same reason {@code RabbitMqCloudEventBridge} does. ADR 133 decision 1 is explicit that a bridge feeds the live
  * model, not the catch-up wrapper in front of it.
  * <p>
- * <strong>Acknowledgement.</strong> {@code accept(...)} throwing (a handler exception, or a subscription filter
- * that failed to evaluate) never commits. A normal return with {@link RoutingOutcome#DELIVERED} or
- * {@link RoutingOutcome#FILTERED} stages this record's offset for the next commit. A normal return with
- * {@link RoutingOutcome#NOT_DELIVERABLE} never does. In every case that does not commit, this bridge's configured
- * {@link DeliveryFailurePolicy} applies. {@link DeliveryFailurePolicy#REDELIVER} (the default) seeks the consumer
- * back to this record's offset, {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only
- * once that publish is confirmed treats this record as resolved, exactly as a delivered one.
+ * <strong>Acknowledgement.</strong> {@code acceptRedeliverable(...)} throwing (a handler exception, or a
+ * subscription filter that failed to evaluate) never commits. A normal return with {@link RoutingOutcome#DELIVERED}
+ * or {@link RoutingOutcome#FILTERED} stages this record's offset for the next commit. A normal return with
+ * {@link RoutingOutcome#NOT_DELIVERABLE} never does, and this bridge's configured {@link DeliveryFailurePolicy}
+ * applies: {@link DeliveryFailurePolicy#REDELIVER} (the default) seeks the consumer back to this record's offset,
+ * {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only once that publish is confirmed
+ * treats this record as resolved, exactly as a delivered one. A normal return with {@link RoutingOutcome#DEFERRED},
+ * a {@link CatchupThenPushSubscriptionModel} wrapping {@code model} still replaying or draining, say, also never
+ * commits, but always seeks the consumer back the same way {@code REDELIVER} does, bypassing
+ * {@link DeliveryFailurePolicy} entirely: nothing here is broken, only not ready yet, and {@code PARK} exists for
+ * failures, not for pacing.
  * <p>
  * <strong>One dedicated thread owns the {@code Consumer} end to end</strong>, unlike {@code RabbitMqCloudEventBridge}'s
  * split between a scheduler thread and an AMQP callback thread. A Kafka {@code Consumer} is not thread-safe, so this
@@ -123,12 +127,13 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * When that happens this bridge seeks every affected partition back to the earliest record that poll returned,
  * rather than silently dropping what it already fetched but was never entitled to feed the model. The same recheck
  * also reads {@link Builder#readinessSource(Predicate)} for the subscription id, {@code true} by default, so this
- * bridge never fetches while a {@link CatchupThenPushSubscriptionModel} wrapping {@code model} is still replaying or
- * draining into it. Records queue up on the broker instead of being pulled off and buffered here, since staging a
- * record for commit on {@link RoutingOutcome#DELIVERED} while the wrapper has only buffered it, not yet applied it,
- * is exactly the loss a consume bridge exists to prevent. This is independent of, and layered underneath, the
- * per-partition throttle below, which pauses only a poisoned partition. This gate pauses the whole assignment
- * instead, the same as the running check above. See {@link Builder#readinessSource(Predicate)} for how to wire it.
+ * bridge fetches less often while a {@link CatchupThenPushSubscriptionModel} wrapping {@code model} is still
+ * replaying or draining into it, cutting down on how often the per-partition throttle below has to absorb a
+ * {@link RoutingOutcome#DEFERRED} seek-back. Pacing only: {@link RoutingOutcome#DEFERRED} is what keeps this bridge
+ * correct with no {@code readinessSource} configured at all, just noisier. This is independent of, and layered
+ * underneath, the per-partition throttle below, which pauses only a poisoned partition. This gate pauses the whole
+ * assignment instead, the same as the running check above. See {@link Builder#readinessSource(Predicate)} for how
+ * to wire it.
  * <p>
  * <strong>Ordering.</strong> A partitioned topic gives no global order. Two events on different partitions can be
  * processed in either order by this bridge, whatever their publish order was. Events for one stream stay in order
@@ -444,7 +449,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         }
         RoutingOutcome outcome;
         try {
-            model.accept(cloudEvent);
+            model.acceptRedeliverable(cloudEvent);
             outcome = outcomeChannel.takeLastOutcome();
         } catch (RuntimeException | AssertionError e) {
             // Catches AssertionError too, since a filter or the handler can throw one, and an uncaught Error here
@@ -455,6 +460,13 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
             stage(record, toCommit);
             return true;
+        }
+        if (outcome == RoutingOutcome.DEFERRED) {
+            // Bypasses DeliveryFailurePolicy (and any parking) entirely: nothing here is broken, only not ready
+            // yet. Returning false, without ever calling failureAction.apply(record), reuses the same seek-back
+            // and throttledUntilNanos pacing processBatch(..) already applies for a partition it stops early,
+            // exactly the mechanism the pre-existing readinessSource-gated path already relied on.
+            return false;
         }
         return resolve(record, toCommit, failureAction.apply(record));
     }
@@ -630,18 +642,20 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
          * Asked, alongside {@code model}'s own running state, on every coarse lifecycle recheck (see the class
          * javadoc). {@code true} for every subscription id by default, which is exactly right for {@code model} fed
          * directly with no catch-up in front of it, or for {@code catchup = NONE}, since no wrapper exists there to
-         * buffer anything for this to protect against.
+         * pace against.
          * <p>
-         * Wrap {@code model} in a {@link CatchupThenPushSubscriptionModel} and pass
-         * {@code catchupThenPush::isReadyForLiveDelivery} here, so this bridge stops fetching for as long as that
-         * wrapper's replay is still running or draining, and resumes once it reaches live. Without this, a record
-         * this bridge stages for commit on {@link RoutingOutcome#DELIVERED} while the wrapper is only buffering it
-         * is durable nowhere but this process's memory until the drain completes. A crash before that loses it for
-         * good, which the local event store cannot restore for an event a consume bridge exists precisely to
-         * receive from another service. Built by an {@code @Projection(source = PUSH)} or {@code @Saga(source =
-         * PUSH)} bean instead of by hand, the wrapper is published as a Spring bean named
-         * {@code "catchupThenPushSubscriptionModel-" + id}, so {@code applicationContext.getBean(name,
-         * CatchupThenPushSubscriptionModel.class)::isReadyForLiveDelivery} reaches the same object.
+         * A pacing hint only, never a correctness dependency: {@link RoutingOutcome#DEFERRED} is what keeps this
+         * bridge correct against a {@link CatchupThenPushSubscriptionModel} wrapping {@code model} with no
+         * {@code readinessSource} configured at all, seeking back rather than committing a record the wrapper is
+         * still replaying or draining into. Configuring this only cuts down on how often that seek-back-and-retry
+         * round trip happens during a replay. Wrap {@code model} in a {@link CatchupThenPushSubscriptionModel} and
+         * pass {@code catchupThenPush::isReadyForLiveDelivery} here, so this bridge stops fetching for as long as
+         * that wrapper's replay is still running or draining, and resumes once it reaches live. Built by an
+         * {@code @Projection(source = PUSH)} or {@code @Saga(source = PUSH)} bean instead of by hand, the wrapper is
+         * published as a Spring bean named {@code "catchupThenPushSubscriptionModel-" + id}, so
+         * {@code applicationContext.getBean(name, CatchupThenPushSubscriptionModel.class)::isReadyForLiveDelivery}
+         * reaches the same object, or, through the Kafka Spring Boot starter, wired automatically with no
+         * configuration at all.
          */
         public Builder readinessSource(Predicate<String> readinessSource) {
             this.readinessSource = requireNonNull(readinessSource, "readinessSource cannot be null");

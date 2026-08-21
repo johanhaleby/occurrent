@@ -20,7 +20,11 @@ import com.rabbitmq.client.AMQP.BasicProperties;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
+import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
 import java.net.URI;
@@ -29,6 +33,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -113,6 +119,119 @@ class RabbitMqCloudEventBridgeReadinessTest extends RabbitMqTestSupport {
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).hasSize(1));
         }
         assertAcknowledged(queue);
+    }
+
+    /**
+     * The dec-0009 falsifying race, closed by construction this time rather than by narrowing a timing window: a
+     * {@link CatchupThenPushSubscriptionModel} still replaying refuses a live delivery outright
+     * ({@code RoutingOutcome.DEFERRED}) instead of buffering it and reporting {@code DELIVERED} ahead of the fold.
+     * No {@code readinessSource} is configured here at all, proving {@code DEFERRED} alone, not the pacing hint, is
+     * what keeps this bridge correct.
+     */
+    @Test
+    void a_message_that_arrives_during_a_catch_up_replay_is_never_acknowledged_and_is_delivered_once_live_with_no_readiness_source_configured() throws Exception {
+        String queue = declareAndBindQueue(OrderPlaced.class.getName());
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
+
+        CountDownLatch replayEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            folded.add(ce.getId());
+            if (ce.getId().equals("historical")) {
+                replayEntered.countDown();
+                awaitLatch(releaseReplay);
+            }
+        });
+        assertThat(replayEntered.await(5, TimeUnit.SECONDS)).as("the replay reached its one historical event").isTrue();
+
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, outcomeChannel, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .build()) {
+            publish(OrderPlaced.class.getName(), "id-1");
+
+            // Long enough for many refuse-and-redeliver round trips against DEFERRED, so this is a genuine
+            // "never folded" assertion, not a race against the bridge's own retry pace. The queue's own message
+            // count is not asserted here: a tight refuse-and-requeue loop leaves the message alternating between
+            // ready and momentarily unacked, which queueMessageCount(..) cannot sample reliably.
+            Thread.sleep(500);
+
+            assertThat(folded).as("refused, never buffered or acknowledged, while the replay is still blocked").doesNotContain("id-1");
+
+            releaseReplay.countDown();
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(folded).contains("id-1"));
+        }
+        assertAcknowledged(queue);
+    }
+
+    /**
+     * {@code RoutingOutcome.DEFERRED} bypasses {@link DeliveryFailurePolicy} entirely, including {@code PARK}: a
+     * message that only needs the replay to catch up must never be republished to a parking destination, since
+     * nothing about it is broken.
+     */
+    @Test
+    void park_configured_never_parks_a_deferred_message() throws Exception {
+        String queue = declareAndBindQueue(OrderPlaced.class.getName());
+        String parkingQueue = "parking-queue-" + UUID.randomUUID();
+        String parkingExchange = "parking-exchange-" + UUID.randomUUID();
+        adminChannel.exchangeDeclare(parkingExchange, "topic", false, true, null);
+        adminChannel.queueDeclare(parkingQueue, false, false, false, null);
+        adminChannel.queueBind(parkingQueue, parkingExchange, "#");
+
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
+
+        CountDownLatch replayEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            if (ce.getId().equals("historical")) {
+                replayEntered.countDown();
+                awaitLatch(releaseReplay);
+            }
+        });
+        assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), liveFeed, outcomeChannel, queue)
+                .declareTopology(false)
+                .pollInterval(POLL_INTERVAL)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(RabbitMqDestination.of(parkingExchange, "parked"))
+                .build()) {
+            publish(OrderPlaced.class.getName(), "id-1");
+
+            Thread.sleep(500);
+
+            assertThat(queueMessageCount(parkingQueue)).as("DEFERRED bypasses PARK entirely").isZero();
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).as("latch reached within the timeout").isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static CloudEvent cloudEvent(String id, String type) {
+        return CloudEventBuilder.v1()
+                .withId(id)
+                .withSource(URI.create("urn:occurrent:test"))
+                .withType(type)
+                .withExtension("streamid", "s1")
+                .build();
     }
 
     private String declareAndBindQueue(String routingKey) throws Exception {

@@ -181,8 +181,12 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
         BlockingHandover<CloudEvent> handover = BlockingHandover.create(action, CloudEvent::getId, options, "subscription");
         // Register on the live feed first, so any event that commits during the replay is captured (buffered) and not
-        // lost in the gap between the replay head and going live.
-        liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);
+        // lost in the gap between the replay head and going live. Registers a delivery-reporting action rather than
+        // a plain Consumer, so PushSubscriptionModel.accept(..) (the write path, bufferIfNotLive true) still buffers
+        // exactly as before, while PushSubscriptionModel.acceptRedeliverable(..) (a broker path that can redeliver,
+        // bufferIfNotLive false) refuses instead of buffering, reported as RoutingOutcome.DEFERRED.
+        liveFeed.subscribeCatchupThenPush(subscriptionId, filter, StartAt.subscriptionModelDefault(),
+                (cloudEvent, bufferIfNotLive) -> bufferIfNotLive ? handover.acceptReportingDelivery(cloudEvent) : handover.acceptIfLive(cloudEvent));
 
         // Kept for isReadyForLiveDelivery(String), which answers off this exact handover rather than off any state
         // this model tracks of its own (a shadow flag a second component maintains can drift from the buffer it is

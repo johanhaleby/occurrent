@@ -22,6 +22,7 @@ import org.occurrent.broker.kafka.blocking.KafkaDestination;
 import org.occurrent.broker.kafka.blocking.RoutingOutcomeChannel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationContext;
 
 import java.util.Map;
 
@@ -31,10 +32,13 @@ class DefaultKafkaCloudEventBridgeFactory implements KafkaCloudEventBridgeFactor
 
     private final KafkaBrokerProperties properties;
     private final ObjectProvider<DestinationResolver<KafkaDestination>> resolverProvider;
+    private final ApplicationContext applicationContext;
 
-    DefaultKafkaCloudEventBridgeFactory(KafkaBrokerProperties properties, ObjectProvider<DestinationResolver<KafkaDestination>> resolverProvider) {
+    DefaultKafkaCloudEventBridgeFactory(KafkaBrokerProperties properties, ObjectProvider<DestinationResolver<KafkaDestination>> resolverProvider,
+                                         ApplicationContext applicationContext) {
         this.properties = requireNonNull(properties);
         this.resolverProvider = requireNonNull(resolverProvider);
+        this.applicationContext = requireNonNull(applicationContext);
     }
 
     @Override
@@ -45,7 +49,8 @@ class DefaultKafkaCloudEventBridgeFactory implements KafkaCloudEventBridgeFactor
                 .onDeliveryFailure(bridgeProperties.getOnDeliveryFailure())
                 .pollTimeout(bridgeProperties.getPollTimeout())
                 .closeTimeout(bridgeProperties.getCloseTimeout())
-                .commitRetryStrategy(KafkaClientConfigs.commitRetryStrategy(bridgeProperties.getCommitRetry()));
+                .commitRetryStrategy(KafkaClientConfigs.commitRetryStrategy(bridgeProperties.getCommitRetry()))
+                .readinessSource(subscriptionId -> CatchupThenPushReadiness.isReady(applicationContext, subscriptionId));
         DestinationResolver<KafkaDestination> resolver = resolverProvider.getIfAvailable();
         if (resolver != null) {
             builder.resolver(resolver);

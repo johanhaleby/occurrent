@@ -19,9 +19,17 @@ package org.occurrent.broker.kafka.blocking;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.Test;
+import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
 import java.net.URI;
@@ -31,6 +39,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -162,6 +172,127 @@ class KafkaCloudEventBridgeReadinessTest extends KafkaTestSupport {
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
                     assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
         }
+    }
+
+    /**
+     * The dec-0009 falsifying race, closed by construction this time rather than by narrowing a timing window: a
+     * {@link CatchupThenPushSubscriptionModel} still replaying refuses a live delivery outright
+     * ({@code RoutingOutcome.DEFERRED}) instead of buffering it and reporting {@code DELIVERED} ahead of the fold.
+     * No {@code readinessSource} is configured here at all, proving {@code DEFERRED} alone, not the pacing hint, is
+     * what keeps this bridge correct.
+     */
+    @Test
+    void a_record_that_arrives_during_a_catch_up_replay_is_never_committed_and_is_delivered_once_live_with_no_readiness_source_configured() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(orderPlacedWithId("historical")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
+
+        CountDownLatch replayEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            folded.add(ce.getId());
+            if (ce.getId().equals("historical")) {
+                replayEntered.countDown();
+                awaitLatch(releaseReplay);
+            }
+        });
+        assertThat(replayEntered.await(5, TimeUnit.SECONDS)).as("the replay reached its one historical event").isTrue();
+
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), liveFeed, outcomeChannel)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publishCloudEvent(topic, "stream-1", orderPlaced("id-1"));
+
+            // Long enough for many seek-back-and-retry round trips against DEFERRED, so this is a genuine
+            // "never folded" assertion, not a race against the bridge's own retry pace.
+            Thread.sleep(500);
+
+            assertThat(folded).as("refused, never staged for commit, while the replay is still blocked").doesNotContain("id-1");
+            assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isNull();
+
+            releaseReplay.countDown();
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(folded).contains("id-1"));
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+        }
+    }
+
+    /**
+     * {@code RoutingOutcome.DEFERRED} bypasses {@link DeliveryFailurePolicy} entirely, including {@code PARK}: a
+     * record that only needs the replay to catch up must never be republished to a parking destination, since
+     * nothing about it is broken. Reuses {@code processBatch(..)}'s existing seek-back and pacing, so this also
+     * proves no new machinery was needed to redeliver a {@code DEFERRED} record.
+     */
+    @Test
+    void park_configured_never_parks_a_deferred_record() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        String parkingTopic = createTopic(1);
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(orderPlacedWithId("historical")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
+
+        CountDownLatch replayEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            if (ce.getId().equals("historical")) {
+                replayEntered.countDown();
+                awaitLatch(releaseReplay);
+            }
+        });
+        assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), liveFeed, outcomeChannel)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(KafkaDestination.of(parkingTopic))
+                .build()) {
+            publishCloudEvent(topic, "stream-1", orderPlaced("id-1"));
+
+            Thread.sleep(500);
+
+            assertThat(recordCount(parkingTopic)).as("DEFERRED bypasses PARK entirely").isZero();
+        } finally {
+            releaseReplay.countDown();
+        }
+    }
+
+    private long recordCount(String recordTopic) {
+        Map<String, Object> consumerConfig = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, "test-consumer-" + recordTopic,
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        try (KafkaConsumer<String, byte[]> consumer = new KafkaConsumer<>(consumerConfig, new StringDeserializer(), new ByteArrayDeserializer())) {
+            consumer.subscribe(List.of(recordTopic));
+            ConsumerRecords<String, byte[]> records = consumer.poll(Duration.ofSeconds(3));
+            return records.count();
+        }
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).as("latch reached within the timeout").isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static CloudEvent orderPlacedWithId(String id) {
+        return CloudEventBuilder.v1()
+                .withId(id)
+                .withSource(URI.create("urn:test"))
+                .withType("com.acme.OrderPlaced")
+                .withExtension("streamid", "s1")
+                .build();
     }
 
     private Map<String, Object> consumerConfig(String groupId) {

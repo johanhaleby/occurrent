@@ -86,7 +86,34 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         MANY
     }
 
-    private record Registration(String id, Predicate<CloudEvent> matcher, Consumer<CloudEvent> action) {
+    private record Registration(String id, Predicate<CloudEvent> matcher, RoutingAction action) {
+    }
+
+    /**
+     * What a registration does with a matched event, and whether it genuinely landed rather than only being
+     * offered. {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)} reports
+     * {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#DEFERRED} from this return value, evaluated after
+     * this method runs rather than guessed beforehand, so a caller wrapping a catch-up-then-live engine can refuse
+     * without buffering when {@code bufferIfNotLive} is {@code false} and report that refusal accurately.
+     * <p>
+     * Public so a same-package-but-not-a-subclass caller reached through a {@code protected} pass-through, the
+     * shape {@link org.occurrent.subscription.push.blocking.PushSubscriptionModel} exposes to
+     * {@code CatchupThenPushSubscriptionModel} for exactly this, can still name the type. The registration entry
+     * point this feeds, {@link #subscribeReportingDelivery(String, SubscriptionFilter, StartAt, RoutingAction)},
+     * stays {@code protected}; only the shape of the action is public.
+     */
+    public interface RoutingAction {
+        /**
+         * @param cloudEvent      The matched event to route.
+         * @param bufferIfNotLive What to do when the target this action feeds is not ready right now: buffer the
+         *                        event for later if {@code true}, refuse it without buffering if {@code false}.
+         *                        An implementation with only one behavior, no buffering distinction to make, is
+         *                        free to ignore this parameter.
+         * @return {@code true} once {@code cloudEvent} has genuinely landed, {@code false} when this call declined
+         *         to hand it over at all (never when it was accepted and then failed; an exception is how that
+         *         propagates instead).
+         */
+        boolean route(CloudEvent cloudEvent, boolean bufferIfNotLive);
     }
 
     private final Set<String> subscriptionIds = ConcurrentHashMap.newKeySet();
@@ -134,6 +161,25 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
 
     @Override
     public final Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        Objects.requireNonNull(action, "action cannot be null");
+        return doSubscribe(subscriptionId, filter, startAt, (cloudEvent, bufferIfNotLive) -> {
+            action.accept(cloudEvent);
+            return true;
+        });
+    }
+
+    /**
+     * As {@link #subscribe(String, SubscriptionFilter, StartAt, Consumer)}, except the registered action reports
+     * back whether the event it was given genuinely landed, so {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)}
+     * can report {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#DEFERRED} accurately instead of assuming
+     * delivery ahead of it. {@link Consumers#ONE} only, the same restriction
+     * {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)} itself already enforces at routing time.
+     */
+    protected final Subscription subscribeReportingDelivery(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RoutingAction action) {
+        return doSubscribe(subscriptionId, filter, startAt, action);
+    }
+
+    private Subscription doSubscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RoutingAction action) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Objects.requireNonNull(startAt, "startAt cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
@@ -276,33 +322,44 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
 
     /**
      * For a subclass declared {@link Consumers#ONE}: evaluate its at-most-one registration's eligibility exactly
-     * once, tell {@code matchObserver} the {@link RoutingOutcome}, then dispatch that registration's handler if the
-     * outcome is {@link RoutingOutcome#DELIVERED}.
+     * once, dispatch that registration's action if the matcher accepted, then tell {@code matchObserver} the
+     * {@link RoutingOutcome}, deciding between {@link RoutingOutcome#DELIVERED} and {@link RoutingOutcome#DEFERRED}
+     * from what the action itself reports rather than assuming delivery ahead of it.
      * <p>
-     * Sharing one evaluation between the two, unlike a separate pre-check ahead of {@link #route(CloudEvent)}, means
-     * the two can never disagree about whether the event matched, even for a matcher that is not a deterministic
-     * pure function of the event, and means no lifecycle transition (a concurrent {@code stop()}, a
-     * {@code pauseSubscription} or a {@code resumeSubscription}) can land between the decision and the report. The
-     * model not running and the sole subscription being paused both report {@link RoutingOutcome#NOT_DELIVERABLE},
-     * the same way {@link #route(CloudEvent)} already treats them for dispatch. A filter that declines the event
-     * reports {@link RoutingOutcome#FILTERED}. The matcher itself throwing reports
-     * {@link RoutingOutcome#NOT_DELIVERABLE}, never {@link RoutingOutcome#FILTERED}, since a filter that failed to
-     * answer did not decline the event, and that throwing matcher's exception still propagates to the caller once
-     * {@code matchObserver} has been told. If {@code matchObserver} itself then throws a {@link RuntimeException} or
-     * an {@link Error} while being told, that failure is suppressed onto the matcher's original exception rather
-     * than replacing it, so a badly behaved {@code matchObserver} can never change which exception, or whose, a
-     * caller sees.
+     * Sharing one evaluation between the matcher and the report, unlike a separate pre-check ahead of
+     * {@link #route(CloudEvent)}, means the two can never disagree about whether the event matched, even for a
+     * matcher that is not a deterministic pure function of the event, and means no lifecycle transition (a
+     * concurrent {@code stop()}, a {@code pauseSubscription} or a {@code resumeSubscription}) can land between the
+     * decision and the report. The model not running and the sole subscription being paused both report
+     * {@link RoutingOutcome#NOT_DELIVERABLE}, the same way {@link #route(CloudEvent)} already treats them for
+     * dispatch. A filter that declines the event reports {@link RoutingOutcome#FILTERED}. The matcher itself
+     * throwing reports {@link RoutingOutcome#NOT_DELIVERABLE}, never {@link RoutingOutcome#FILTERED}, since a
+     * filter that failed to answer did not decline the event, and that throwing matcher's exception still
+     * propagates to the caller once {@code matchObserver} has been told. If {@code matchObserver} itself then
+     * throws a {@link RuntimeException} or an {@link Error} while being told, that failure is suppressed onto the
+     * matcher's original exception rather than replacing it, so a badly behaved {@code matchObserver} can never
+     * change which exception, or whose, a caller sees.
+     * <p>
+     * A matched registration's {@link RoutingAction} is always told this event was matched, even when it later
+     * throws: {@code matchObserver} is told {@link RoutingOutcome#DELIVERED}, since the action was genuinely
+     * invoked, which is what {@link RoutingOutcome#DELIVERED} has always meant regardless of what the action does
+     * with the event afterward, and the original {@link RuntimeException} then still propagates to the caller once
+     * {@code matchObserver} has been told. An engine-level refusal a {@link RoutingAction} makes deliberately, by
+     * returning {@code false} rather than throwing, is a different thing entirely and is what decides
+     * {@link RoutingOutcome#DEFERRED} instead.
      * <p>
      * Restricted to {@link Consumers#ONE} because sharing one evaluation across more than one registration would
      * mean deciding every registration's eligibility before dispatching any of them, changing which registration's
      * exception a caller sees first. With at most one registration that reordering cannot happen, which is what
      * makes this safe where restructuring {@link #route(CloudEvent)} itself would not be.
      *
-     * @param cloudEvent    The event to route.
-     * @param matchObserver Told, once, this event's {@link RoutingOutcome}, before its registration's handler (if
-     *                      any) runs.
+     * @param cloudEvent      The event to route.
+     * @param bufferIfNotLive Passed through to the matched registration's {@link RoutingAction#route(CloudEvent, boolean)}
+     *                        unchanged; this method itself has no opinion on what it means.
+     * @param matchObserver   Told, once, this event's {@link RoutingOutcome}, after its registration's action (if
+     *                        any) has run, whether that action returned or threw.
      */
-    protected final void routeReportingMatch(CloudEvent cloudEvent, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
+    protected final void routeReportingMatch(CloudEvent cloudEvent, boolean bufferIfNotLive, BiConsumer<CloudEvent, RoutingOutcome> matchObserver) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
         Objects.requireNonNull(matchObserver, "matchObserver cannot be null");
         if (consumers != Consumers.ONE) {
@@ -334,9 +391,26 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     }
                     throw e;
                 }
-                matchObserver.accept(cloudEvent, eligible ? RoutingOutcome.DELIVERED : RoutingOutcome.FILTERED);
-                if (eligible) {
-                    registration.action().accept(cloudEvent);
+                if (!eligible) {
+                    matchObserver.accept(cloudEvent, RoutingOutcome.FILTERED);
+                    return;
+                }
+                boolean landed;
+                RuntimeException actionFailure = null;
+                try {
+                    landed = registration.action().route(cloudEvent, bufferIfNotLive);
+                } catch (RuntimeException e) {
+                    // The action was invoked, which is what DELIVERED has always meant; whether the eventual fold
+                    // succeeds or throws is a separate signal (RoutingOutcome's own javadoc says so). An
+                    // engine-level refusal (BlockingHandover's catchUpFailure, say) never reaches this catch,
+                    // because it is thrown before any dispatch is attempted and is expected to propagate as the
+                    // real failure it is, not be reinterpreted as a delivery.
+                    landed = true;
+                    actionFailure = e;
+                }
+                matchObserver.accept(cloudEvent, landed ? RoutingOutcome.DELIVERED : RoutingOutcome.DEFERRED);
+                if (actionFailure != null) {
+                    throw actionFailure;
                 }
                 return;
             }
@@ -360,7 +434,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
         }
         for (Registration registration : registrations) {
             if (!pausedSubscriptions.contains(registration.id()) && registration.matcher().test(cloudEvent)) {
-                registration.action().accept(cloudEvent);
+                registration.action().route(cloudEvent, true);
             }
         }
     }
@@ -399,7 +473,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                 // model given no reader at all refuses a payload filter earlier, at subscribe time.
                 try {
                     if (registration.matcher().test(cloudEvent)) {
-                        registration.action().accept(cloudEvent);
+                        registration.action().route(cloudEvent, true);
                     }
                 } catch (RuntimeException e) {
                     failed.add(registration);

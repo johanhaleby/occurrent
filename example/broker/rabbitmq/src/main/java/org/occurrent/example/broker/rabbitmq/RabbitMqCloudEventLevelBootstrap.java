@@ -189,9 +189,9 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
 
             bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, outcomeChannel, QUEUE)
                     .resolver(resolver)
-                    // Without this, the bridge would ack a message on RoutingOutcome.DELIVERED the instant it
-                    // matches, even while catchupThenPush's replay is still running or draining and has only
-                    // buffered it, not folded it. See RabbitMqCloudEventBridge.Builder#readinessSource's own javadoc.
+                    // Pacing only: RoutingOutcome.DEFERRED already keeps the bridge from acking a message
+                    // catchupThenPush's replay has only buffered, not folded. This just cuts down on how often
+                    // that refuse-and-redeliver round trip happens while the replay is still running or draining.
                     .readinessSource(catchupThenPushForReadiness::isReadyForLiveDelivery)
                     .build();
 

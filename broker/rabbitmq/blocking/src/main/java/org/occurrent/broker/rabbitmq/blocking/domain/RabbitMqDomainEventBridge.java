@@ -60,7 +60,9 @@ import static java.util.Objects.requireNonNull;
  * as {@link RabbitMqCloudEventBridge} follows the one its own model reports:
  * {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED} acknowledges, {@link RoutingOutcome#NOT_DELIVERABLE}
  * and a thrown exception both apply this bridge's configured {@link DeliveryFailurePolicy} instead, never
- * acknowledging directly.
+ * acknowledging directly. {@link RoutingOutcome#DEFERRED} also never acknowledges, but always negatively
+ * acknowledges with requeue, bypassing {@link DeliveryFailurePolicy} entirely: nothing here is broken, only not
+ * ready yet, and {@code PARK} exists for failures, not for pacing.
  * <p>
  * <strong>{@link UnreadableLiveFilterException} is different, and permanent.</strong> It means the projection this
  * feed carries was registered with a {@code data} payload filter this feed has no {@link org.occurrent.filtermatching.DataFieldReader}
@@ -84,11 +86,11 @@ import static java.util.Objects.requireNonNull;
  * an instant requeue-and-redeliver loop, not a wait. Without the readiness half, a message arriving before the
  * application calls {@code catchUpAll()}/{@code catchUp(...)} or {@code goLive(...)}, or while a
  * {@code catchUpAll()}/{@code catchUp(...)} replay is still actively running, would only ever buffer with nothing
- * behind it, which {@code acceptCloudEvent(...)} answers with {@link RoutingOutcome#NOT_DELIVERABLE} rather than
- * {@link RoutingOutcome#DELIVERED} for exactly that reason (see its own javadoc), and under
- * {@link DeliveryFailurePolicy#REDELIVER} that is the same instant requeue-and-redeliver loop, this time against a
- * buffer that never drains until live is actually reached. Feeding {@code acceptCloudEvent(...)} can still throw
- * {@link IllegalStateException} despite the poll, for the narrow race where the check ran just before the one
+ * behind it, which {@code acceptCloudEvent(...)} answers with {@link RoutingOutcome#DEFERRED} rather than
+ * {@link RoutingOutcome#DELIVERED} for exactly that reason (see its own javadoc): refused outright rather than
+ * buffered, bypassing {@link DeliveryFailurePolicy} regardless of what this bridge is configured with, so
+ * {@code PARK} can never fire for a message that only needs the replay to catch up. Feeding
+ * {@code acceptCloudEvent(...)} can still throw {@link IllegalStateException} despite the poll, for the narrow race where the check ran just before the one
  * registration this feed ever accepts. That case, unlike {@link UnreadableLiveFilterException}, applies the
  * configured {@link DeliveryFailurePolicy} like any other failure, since it is transient rather than permanent.
  * <p>
@@ -235,6 +237,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         }
         if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
             failureAction.ack(deliveryTag);
+        } else if (outcome == RoutingOutcome.DEFERRED) {
+            // Bypasses DeliveryFailurePolicy entirely, including PARK: nothing here is broken, only not ready yet.
+            failureAction.redeliver(deliveryTag);
         } else {
             failureAction.apply(deliveryTag, delivery.getProperties(), delivery.getBody());
         }

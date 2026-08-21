@@ -228,6 +228,56 @@ public final class BlockingHandover<T> {
     }
 
     /**
+     * As {@link #acceptReportingDelivery(Object)}, except a payload that would only buffer is refused instead:
+     * returned {@code false} without ever being added to the buffer. For a caller that can redeliver the same
+     * payload later, a buffered payload is strictly worse than a refused one, since a buffered payload has already
+     * been reported handled by the time this returns, while a refused one has not, and can safely be offered again.
+     * <p>
+     * A payload fed while this handover is stopped is refused the same way, for the same reason: nothing is
+     * currently draining a buffer for it to wait in.
+     *
+     * @return {@code true} once the payload has genuinely landed: delivered live just now, or already delivered by
+     *         an earlier attempt. {@code false} whenever this call did not deliver it, whether because this
+     *         handover is not live yet, is stopped, or a concurrent delivery of the same payload is already
+     *         running elsewhere. Every {@code false} is safe to retry: a redelivery lands on {@code deliveredIds}
+     *         once whatever is holding it up resolves.
+     * @throws IllegalStateException for the same reasons {@link #accept(Object)} does. Checked first, before the
+     *         live check, so a payload fed after a permanently failed catch-up fails fast rather than reporting
+     *         {@code false} forever for a caller to retry a catch-up that is never coming back.
+     */
+    public boolean acceptIfLive(T payload) {
+        Objects.requireNonNull(payload, "payload cannot be null");
+        String deliverKey = null;
+        boolean landed;
+        synchronized (lock) {
+            if (catchUpFailure != null) {
+                throw new IllegalStateException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
+            }
+            if (!live) {
+                // Refuse without buffering, unlike acceptReportingDelivery. Covers "never started", "still
+                // replaying", and "stopped mid-replay" alike, all three are "not live", and a caller here has
+                // already promised it can redeliver, so there is nothing to gain by holding the payload instead of
+                // asking again later.
+                landed = false;
+            } else {
+                String key = dedupKey(payload);
+                if (deliveredIds.contains(key)) {
+                    landed = true;
+                } else if (!inFlight.add(key)) {
+                    landed = false;
+                } else {
+                    deliverKey = key;
+                    landed = true;
+                }
+            }
+        }
+        if (deliverKey != null) {
+            deliverOutsideLock(payload, deliverKey);
+        }
+        return landed;
+    }
+
+    /**
      * Whether a live payload fed right now would actually be delivered, immediately and synchronously, rather than
      * buffered against a replay's own drain, refused outright, or silently dropped. True only once
      * {@link #catchUp(Source)} has reached live. False before that, whether {@link #catchUp(Source)} has never been
