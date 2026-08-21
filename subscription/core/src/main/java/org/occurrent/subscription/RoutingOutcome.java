@@ -39,11 +39,11 @@ public enum RoutingOutcome {
     /**
      * A running, unpaused subscription's filter accepted the event, and it genuinely landed. It may be buffered
      * where a fold will eventually run against it, delivered immediately, or already applied by an earlier
-     * attempt. A
-     * direct dispatch such as the blocking {@code PushObserver} reports this outcome only once the registered
-     * handler has run, whether it returned or threw, never before. Whether the handler succeeds or throws is a
-     * separate signal from this outcome either way. Consult the reporting method's own javadoc for what this
-     * outcome guarantees on a particular surface.
+     * attempt. A direct dispatch such as the blocking or reactor {@code PushObserver} reports this outcome only
+     * once the registered handler has run (or, on the reactor stack, once its {@code Mono} has completed or
+     * errored), whether it succeeded or failed, never before. Whether the handler succeeds or fails is a separate
+     * signal from this outcome either way. Consult the reporting method's own javadoc for what this outcome
+     * guarantees on a particular surface.
      */
     DELIVERED,
 

@@ -18,12 +18,15 @@ package org.occurrent.subscription.push.reactor;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.Pushable;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
 import org.occurrent.subscription.api.reactor.Subscribable;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
@@ -100,7 +103,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
      * the listener starts consuming. This model cannot refuse the event on your behalf, because it is also fed from
      * the write path, where the event is already durably stored and refusing would fail the write instead of
      * protecting anything. The domain-event feed, which is broker-only, does refuse. See ADR 104. A configured
-     * {@link PushObserver} is told the event's {@link RoutingOutcome} before delivery is attempted, and that is
+     * {@link PushObserver} is told the event's {@link RoutingOutcome} once delivery has been attempted, and that is
      * where to get visibility into it instead. Told about the event even when a subscription's filter itself throws
      * a {@link RuntimeException} or {@link AssertionError} while being evaluated (a supplied {@link DataFieldReader}
      * can), reported as {@link RoutingOutcome#NOT_DELIVERABLE}, before that exception propagates as it always has.
@@ -128,6 +131,16 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
         return Flux.fromIterable(cloudEvents)
                 .concatMap(this::acceptEvent)
                 .then();
+    }
+
+    // Package-private pass-through, deliberately not named subscribeReportingDelivery. That name collides with the
+    // protected final superclass method as an illegal override attempt across packages, even though this is not
+    // really an override, just a same-named method with the same erasure. CatchupThenPushSubscriptionModel is
+    // same-package but not a subclass, so it cannot reach the protected RegisteringSubscribable method directly.
+    // Lets it register an action that reports whether an event genuinely landed, instead of the plain
+    // Function<CloudEvent, Mono<Void>> subscribe(..) takes.
+    Subscription subscribeCatchupThenPush(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RegisteringSubscribable.RoutingAction action) {
+        return super.subscribeReportingDelivery(subscriptionId, filter, startAt, action);
     }
 
     // Never call the overridable accept(CloudEvent) from here. This class is public and not final, and a subclass
