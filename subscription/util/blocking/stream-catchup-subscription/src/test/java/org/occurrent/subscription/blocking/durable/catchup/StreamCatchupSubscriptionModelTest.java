@@ -89,36 +89,45 @@ class StreamCatchupSubscriptionModelTest {
         inMemorySubscriptionModel.shutdown();
     }
 
-    // The contract a recording projection reads per delivery. Both answer true while the history that was already
-    // there is being read, isReplayingHistory turns false for the events written since, and both are false once the
-    // subscription has handed over.
+    // The contract a recording projection is told, rather than one it reads per delivery. The start arrives before
+    // anything this catch-up delivers, the boundary arrives after the history that was already there and before the
+    // events written since the catch-up started, and both name the same catch-up.
     @Test
-    void reports_the_history_read_and_the_reconciliation_as_different_parts_of_one_catch_up() {
+    void tells_a_listener_when_a_catch_up_starts_and_when_its_history_has_been_read() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
         write(eventStore, nameDefined("history"));
 
-        CopyOnWriteArrayList<String> phasePerDelivery = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> signals = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<Object> episodes = new CopyOnWriteArrayList<>();
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
 
-        CopyOnWriteArrayList<Long> generationPerDelivery = new CopyOnWriteArrayList<>();
+        boolean sendsThem = subscription.listenForCatchup("subscription", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                signals.add("started");
+                episodes.add(episode);
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+                signals.add("historyRead");
+                episodes.add(episode);
+            }
+        });
+        assertThat(sendsThem).isTrue();
+
         subscription.subscribe("subscription", StartAtTime.beginningOfTime(), cloudEvent -> {
-            // One reading, which is what a recorder decides from, so the part and the catch-up it belongs to can
-            // never come from two different moments.
-            org.occurrent.subscription.CatchupSnapshot snapshot = subscription.catchupSnapshot("subscription");
-            phasePerDelivery.add(snapshot.catchingUp() + "/" + snapshot.replayingHistory());
-            generationPerDelivery.add(snapshot.generation());
-            // Written from inside the history read, so it cannot be part of it and the reconciliation is what
-            // delivers it.
-            if (phasePerDelivery.size() == 1) {
+            signals.add("delivered");
+            // Written from inside the history read, so it cannot be part of it and what delivers it is the rest of
+            // the catch-up.
+            if (signals.stream().filter("delivered"::equals).count() == 1) {
                 write(eventStore, nameDefined("writtenDuringTheHistoryRead"));
             }
         }).waitUntilStarted();
 
-        await().untilAsserted(() -> assertThat(phasePerDelivery).containsExactly("true/true", "true/false"));
-        // Both deliveries name the same catch-up, and it is gone once the subscription has handed over.
-        assertThat(generationPerDelivery).hasSize(2);
-        assertThat(generationPerDelivery.get(0)).isEqualTo(generationPerDelivery.get(1)).isNotZero();
-        assertThat(subscription.catchupSnapshot("subscription")).isEqualTo(org.occurrent.subscription.CatchupSnapshot.LIVE);
+        await().untilAsserted(() -> assertThat(signals).containsExactly("started", "delivered", "historyRead", "delivered"));
+        assertThat(episodes).hasSize(2);
+        assertThat(episodes.get(0)).isSameAs(episodes.get(1));
     }
 
     @Test
