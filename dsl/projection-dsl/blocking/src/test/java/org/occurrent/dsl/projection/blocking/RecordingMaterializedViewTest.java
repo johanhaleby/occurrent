@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
+import org.occurrent.dsl.projection.CatchupPhase;
 import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ReplayAware;
@@ -60,7 +61,7 @@ class RecordingMaterializedViewTest {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
 
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, store, () -> true);
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, store, () -> CatchupPhase.REPLAYING_HISTORY);
 
         recording.update(metadataWithAppendId(appendId), "event");
 
@@ -116,7 +117,7 @@ class RecordingMaterializedViewTest {
         AppendId before = AppendId.mint();
         store.recordApplied(PROJECTION_ID, before);
         AtomicBoolean replaying = new AtomicBoolean(false);
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store, replaying::get);
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store, () -> replaying.get() ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.LIVE);
 
         recording.replayObserved();
 

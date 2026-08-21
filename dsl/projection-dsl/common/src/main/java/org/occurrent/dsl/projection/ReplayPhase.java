@@ -19,7 +19,7 @@ package org.occurrent.dsl.projection;
 import org.jspecify.annotations.NullMarked;
 
 /**
- * Tells a recording wrapper whether its projection is currently replaying, so it knows when recording an applied
+ * Tells a recording wrapper which part of a catch-up its projection is in, so it knows when recording an applied
  * append is safe
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
  * decision 8).
@@ -30,20 +30,30 @@ import org.jspecify.annotations.NullMarked;
  * caller that knows the composition (the blocking registrar unwrapping with {@code ReplayAwareSubscriptions.findIn(..)},
  * or whoever composed the reactive model) is the one who can answer correctly.
  * <p>
- * A named functional type rather than a bare {@code BooleanSupplier}, so the one case a composition can never
- * replay has an explicit value ({@link #neverReplays()}) instead of a boolean whose polarity a caller could invert
- * by mistake.
+ * A composition that can only answer whether it is catching up at all, without telling history apart from the
+ * events written since the catch-up started, answers {@link CatchupPhase#REPLAYING_HISTORY} for the whole catch-up.
+ * That records nothing until the handover, which is what this interface did before it had three values, and it
+ * costs the appends delivered by the reconciliation.
  */
 @NullMarked
 @FunctionalInterface
 public interface ReplayPhase {
 
-    /** Whether the projection this phase describes is currently replaying history. */
-    boolean isReplaying();
+    /** Which part of a catch-up the projection this phase describes is in right now. */
+    CatchupPhase currentPhase();
+
+    /**
+     * Whether the projection is anywhere inside a catch-up, history or reconciliation alike. What a poll asks to
+     * decide how soon to ask again, and not what decides whether an append is recorded, which needs the phase
+     * itself.
+     */
+    default boolean isReplaying() {
+        return currentPhase() != CatchupPhase.LIVE;
+    }
 
     /**
      * A phase for a composition that never replays: an in-memory model, a durable-only model with no catch-up layer,
-     * or a push feed with {@code catchup = NONE}. Always answers {@code false}.
+     * or a push feed with {@code catchup = NONE}. Always answers {@link CatchupPhase#LIVE}.
      * <p>
      * Always the same instance, so a caller distinguishing this known case from an unresolved one can compare with
      * {@code ==} rather than needing its own sentinel. A non-capturing lambda expression here would not give that
@@ -56,6 +66,6 @@ public interface ReplayPhase {
     // Interfaces cannot declare a private field, so the singleton instance neverReplays() hands out lives here
     // instead, in a nested class initialized on first use.
     class NeverReplays {
-        private static final ReplayPhase INSTANCE = () -> false;
+        private static final ReplayPhase INSTANCE = () -> CatchupPhase.LIVE;
     }
 }

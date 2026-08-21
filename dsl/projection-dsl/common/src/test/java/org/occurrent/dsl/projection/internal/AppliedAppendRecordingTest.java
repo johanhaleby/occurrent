@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
+import org.occurrent.dsl.projection.CatchupPhase;
 import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.eventstore.api.AppendId;
 
@@ -93,7 +94,7 @@ class AppliedAppendRecordingTest {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId before = AppendId.mint();
         store.recordApplied(PROJECTION_ID, before);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> true);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> CatchupPhase.REPLAYING_HISTORY);
 
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
 
@@ -123,7 +124,7 @@ class AppliedAppendRecordingTest {
     void pollReplayPhase_checks_the_phase_fresh_so_a_live_delivery_recorded_after_an_earlier_reading_survives() {
         AtomicBoolean replaying = new AtomicBoolean(true);
         AppliedAppendStore store = AppliedAppendStore.inMemory();
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, replaying::get);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> replaying.get() ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.LIVE);
 
         // A poller would have read "replaying" here...
         assertThat(replaying.get()).isTrue();
@@ -146,7 +147,7 @@ class AppliedAppendRecordingTest {
     @Test
     void a_replay_episode_clears_the_store_at_most_once_across_every_delivery_seen_while_replaying() {
         List<String> clears = new ArrayList<>();
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> true);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> CatchupPhase.REPLAYING_HISTORY);
 
         for (int i = 0; i < 1000; i++) {
             recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
@@ -161,7 +162,7 @@ class AppliedAppendRecordingTest {
     void a_new_replay_episode_after_going_live_is_cleared_again() {
         List<String> clears = new ArrayList<>();
         AtomicBoolean replaying = new AtomicBoolean(true);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), replaying::get);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> replaying.get() ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.LIVE);
 
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
@@ -184,7 +185,7 @@ class AppliedAppendRecordingTest {
     void a_failing_clear_is_retried_every_delivery_until_it_succeeds_then_suppressed_for_the_rest_of_the_episode() {
         List<String> clears = new ArrayList<>();
         AtomicBoolean clearShouldFail = new AtomicBoolean(true);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, clearShouldFail), () -> true);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, clearShouldFail), () -> CatchupPhase.REPLAYING_HISTORY);
 
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));

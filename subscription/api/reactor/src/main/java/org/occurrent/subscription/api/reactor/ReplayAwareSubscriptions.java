@@ -48,4 +48,24 @@ public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
      * @return {@code true} while a replay for this id is in flight.
      */
     boolean isCatchingUp(String subscriptionId);
+
+    /**
+     * Whether {@code subscriptionId} is still being given the events that already existed when its replay started,
+     * rather than the ones written since. A catch-up usually has both parts. It reads the history it set out to read,
+     * then reconciles whatever arrived while it was doing that, and only then hands over, so this answers
+     * {@code false} while {@link #isCatchingUp(String)} still answers {@code true}.
+     * <p>
+     * The default answers {@link #isCatchingUp(String)}, which is the safe answer for a model that cannot tell the
+     * two apart. A recording projection then records nothing until the handover
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
+     * decision 6), which costs it the appends the reconciliation delivered, since for some of those the
+     * reconciliation is the only delivery they get. Override this if your model reconciles, and answer {@code false}
+     * once its history read is done.
+     *
+     * @param subscriptionId The subscription to ask about.
+     * @return {@code true} while this id is reading history it already had.
+     */
+    default boolean isReplayingHistory(String subscriptionId) {
+        return isCatchingUp(subscriptionId);
+    }
 }
