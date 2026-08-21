@@ -429,10 +429,25 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         try {
             model.acceptRedeliverable(cloudEvent);
         } catch (BlockingHandover.PreDispatchRefusalException e) {
+            // Not proof by itself that THIS bridge's own model has a permanently failed catch-up: the matched
+            // handler can call a different CatchupThenPushSubscriptionModel or DomainEventFeed whose own catch-up
+            // has failed, and that exception type escapes unwrapped from inside the handler too. routeReportingMatch
+            // tells them apart already: NOT_DELIVERABLE is only ever reported for a refusal decided before this
+            // model's own dispatch was attempted (RoutingAction.Refusal, unwrapped to this exact exception type).
+            // Any other outcome, DELIVERED above all, means the matched handler here genuinely ran, and whatever it
+            // threw calling something else is that handler's own ordinary failure, not this bridge's model refusing
+            // anything.
+            RoutingOutcome outcome = outcomeChannel.takeLastOutcome();
+            if (outcome != RoutingOutcome.NOT_DELIVERABLE) {
+                log.debug("A filter or handler failed for a message on queue \"{}\", delivery tag {}, with a " +
+                        "PreDispatchRefusalException from a different handover than this bridge's own model.",
+                        queue, deliveryTag, e);
+                routeFailure(deliveryTag, deliveryGeneration, delivery.getProperties(), delivery.getBody());
+                return;
+            }
             // A CatchupThenPushSubscriptionModel wrapping this bridge's model has a permanently failed catch-up.
             // Permanent, exactly like an unreadable live filter: stop rather than park or redeliver into the same
             // refusal forever. See the class javadoc.
-            outcomeChannel.takeLastOutcome();
             log.error("A catch-up wrapping this bridge's model has permanently failed for queue \"{}\". Stopping " +
                     "this bridge rather than parking or committing into the same refusal. Delivery tag {}, and " +
                     "every other tag this bridge is still holding, is requeued by the channel this permanent stop " +

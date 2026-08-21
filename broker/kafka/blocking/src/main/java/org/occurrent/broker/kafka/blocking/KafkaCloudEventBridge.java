@@ -484,10 +484,22 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             model.acceptRedeliverable(cloudEvent);
             outcome = outcomeChannel.takeLastOutcome();
         } catch (BlockingHandover.PreDispatchRefusalException e) {
+            // Not proof by itself that THIS bridge's own model has a permanently failed catch-up: the matched
+            // handler can call a different CatchupThenPushSubscriptionModel whose own catch-up has failed, and that
+            // exception type escapes unwrapped from inside the handler too. routeReportingMatch tells them apart
+            // already: NOT_DELIVERABLE is only ever reported for a refusal decided before this model's own dispatch
+            // was attempted. Any other outcome, DELIVERED above all, means the matched handler here genuinely ran,
+            // and whatever it threw calling something else is that handler's own ordinary failure.
+            outcome = outcomeChannel.takeLastOutcome();
+            if (outcome != RoutingOutcome.NOT_DELIVERABLE) {
+                log.debug("A filter or handler failed for a record on topic \"{}\" partition {} offset {}, with a " +
+                        "PreDispatchRefusalException from a different handover than this bridge's own model.",
+                        record.topic(), record.partition(), record.offset(), e);
+                return resolve(record, toCommit, failureAction.apply(record));
+            }
             // A CatchupThenPushSubscriptionModel wrapping this bridge's model has a permanently failed catch-up.
             // Permanent, exactly like an unreadable live filter would be: stop the whole loop rather than commit or
             // redeliver into the same refusal forever. See the class javadoc.
-            outcomeChannel.takeLastOutcome();
             log.error("A catch-up wrapping this bridge's model has permanently failed for topic \"{}\" partition " +
                     "{}. Stopping this bridge rather than committing or redelivering into the same refusal. " +
                     "Record at offset {} is left uncommitted so it is refetched by the next consumer in this " +
