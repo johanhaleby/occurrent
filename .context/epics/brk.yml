@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 119
+revision: 120
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -296,7 +296,7 @@ units:
     deliverables:
       - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
     blocking_on: []
-    next_action: "PR 889 PACING REWORK 2026-08-21T~15:3xZ: dd73bc6e4 red on both misc shards (new pacing test, 442 vs 200). Delta re-verify a5f166f10eaae4da0 MERGE-SAFE on Refusal and compare-and-remove, measured the self-cancel as a 50 percent duty cycle (timing assertion, weak bound), found the success-path compare-and-remove untested (patch saved in scratchpad). Worker a338a8ec60811f0d3 re-briefed: hold the DEFERRED delivery unacked and nack from the poll thread (prefetch 1 makes the bound one redelivery per poll interval by construction), structural assertion, apply the verifier success-path test. Two mutation checks (Kafka domain DEFERRED, RabbitMQ starter wiring) stayed unverified on Docker contention, re-run at the next verify. On the next head: gate facts, small re-verify of the hold mechanism, squash, CAS merge. Monitor bdwgc25oz active"
+    next_action: "PR 889 HOLD PACING DELIVERED 2026-08-21T~16:3xZ at 2c526a137 (Queue<Long> of held tags, drained and nacked per poll under consumeLock, close() releases, domain bridge too, success-path compare-and-remove test applied, mutations 528 vs 13 and 88 vs 14). CI running, Copilot re-requested. Re-verifier (Sonnet, worktree) on the hold mechanism edge cases plus the two Docker-blocked mutation checks. On green plus review plus MERGE-SAFE: gate facts, squash through the writing gates, CAS merge pinned to the verified head, worker posts the #885 comment, reactor-mirror brief, round-2 fixpoint. Monitor bdwgc25oz active"
     last_meaningful_progress_at: 2026-08-21T05:50:00Z
     observed: {}
     assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."
