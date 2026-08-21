@@ -54,11 +54,12 @@ import static org.awaitility.Awaitility.await;
  * both bumping a generation counter that invalidates every delivery tag captured before either fires.
  * <p>
  * Holds a {@code DEFERRED} delivery (a live message that arrives while a catch-up replay is parked), forces the
- * underlying TCP connection closed from the broker side ({@code rabbitmqctl close_connection}) so the client's
+ * underlying TCP connection closed from the broker side ({@code rabbitmqctl close_all_connections}) so the client's
  * automatic recovery reconnects with a fresh channel and a reset delivery-tag counter, then releases the parked
  * replay and asserts the held message still reaches the projection, without a stale tag ever being acknowledged
- * along the way. Best effort: the assertion runs only when {@code rabbitmqctl close_connection} actually forces
- * the drop, and reports which evidence it could gather either way if it did not.
+ * along the way. Fails outright, rather than skipping quietly, if {@code close_all_connections} itself reports a
+ * non-zero exit code: a test that can silently pass without ever forcing the drop it exists to test is worse than
+ * no test at all.
  */
 @Testcontainers
 class RabbitMqCloudEventBridgeConnectionRecoveryTest {
@@ -123,16 +124,7 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
 
             // Force the TCP connection closed from the broker side. The client's automatic recovery (enabled
             // above) reconnects on a fresh channel with delivery tags restarting at 1.
-            boolean forcedDrop = forceCloseAllConnections();
-
-            if (!forcedDrop) {
-                releaseReplay.countDown();
-                System.out.println("CLAIM 6: could not force a connection drop deterministically via "
-                        + "rabbitmqctl close_connection; only the static evidence (no ShutdownListener/"
-                        + "RecoveryListener/isOpen() anywhere in broker/rabbitmq/blocking/src/main) stands for "
-                        + "this claim.");
-                return;
-            }
+            forceCloseAllConnectionsOrFail();
 
             // Wait for the client to report the connection open again (automatic recovery completed).
             await().atMost(Duration.ofSeconds(15)).until(() -> connection.isOpen());
@@ -142,44 +134,25 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
 
             releaseReplay.countDown();
 
-            // If the message is lost outright (the reviewer's first failure mode), it never arrives even after
-            // catch-up finishes and the bridge's held-tag release logic has had many chances to run.
-            boolean delivered = false;
-            try {
-                await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(folded).contains("id-1"));
-                delivered = true;
-            } catch (org.awaitility.core.ConditionTimeoutException ignored) {
-                // Reported below either way.
-            }
-
-            System.out.println("CLAIM 6: forced connection drop succeeded. Message id-1 " +
-                    (delivered ? "was eventually delivered (broker-side requeue-on-disconnect masks pure data "
-                            + "loss for a single in-flight message; the corrupted heldDeferredDeliveryTags state "
-                            + "and any stale-tag nack failures are the observable defect instead, see the "
-                            + "bridge's own log output above for PRECONDITION_FAILED / channel-error evidence)."
-                            : "was NOT delivered within 20s after recovery: CLAIM 6's data-loss prediction is "
-                            + "directly confirmed."));
+            // The held message must still reach the projection once catch-up finishes and the bridge's own
+            // held-tag release runs, generation-fenced against the recovery this test just forced.
+            await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(folded).contains("id-1"));
         }
     }
 
     /**
-     * Best effort: closes every connection currently open on the broker via {@code rabbitmqctl close_connection},
-     * which forces this test's own AMQP connection to drop and trigger the client's automatic recovery. Returns
-     * {@code false} rather than throwing if {@code rabbitmqctl} is unavailable or the exec fails, so the caller can
-     * fall back to reporting only the static evidence.
+     * Closes every connection currently open on the broker via {@code rabbitmqctl close_all_connections}, which
+     * forces this test's own AMQP connection to drop and trigger the client's automatic recovery. Fails the test
+     * outright, rather than skipping the assertion this exists for, when the exec itself reports a non-zero exit
+     * code.
      */
-    private boolean forceCloseAllConnections() {
-        try {
-            Container.ExecResult closeResult = rabbitMQContainer.execInContainer(
-                    "rabbitmqctl", "close_all_connections", "forced-by-CLAIM-6-verification-test");
-            System.out.println("CLAIM 6 DEBUG: close_all_connections exit=" + closeResult.getExitCode()
-                    + " stdout=[" + closeResult.getStdout() + "] stderr=[" + closeResult.getStderr() + "]");
-            return closeResult.getExitCode() == 0;
-        } catch (Exception e) {
-            System.out.println("CLAIM 6 DEBUG: forceCloseAllConnections threw " + e);
-            e.printStackTrace();
-            return false;
-        }
+    private void forceCloseAllConnectionsOrFail() throws Exception {
+        Container.ExecResult closeResult = rabbitMQContainer.execInContainer(
+                "rabbitmqctl", "close_all_connections", "forced-by-connection-recovery-test");
+        assertThat(closeResult.getExitCode())
+                .as("rabbitmqctl close_all_connections must succeed for this test to force the recovery it exists "
+                        + "to exercise; stdout: %s, stderr: %s", closeResult.getStdout(), closeResult.getStderr())
+                .isZero();
     }
 
     private static void awaitLatch(CountDownLatch latch) {

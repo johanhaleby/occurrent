@@ -137,14 +137,16 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * to wire it.
  * <p>
  * <strong>A lifecycle {@link RoutingOutcome#NOT_DELIVERABLE} is paced like {@code DEFERRED}, never sent through
- * {@link DeliveryFailurePolicy}.</strong> {@code NOT_DELIVERABLE} also covers the sole subscription being paused, or
- * the model not running at all, both a lifecycle state rather than a failure, and {@link #shouldConsume()} is only
- * read once before each {@code poll()}, not per record, so a subscription paused from inside a handler mid-batch can
- * still hand this bridge a {@code NOT_DELIVERABLE} for a record later in the very same batch. When
- * {@link PushSubscriptionModel#subscriptionIds()} is empty, or the sole id is not
- * {@link PushSubscriptionModel#isRunning(String)}, right after such an outcome, this bridge seeks back and throttles
- * the partition exactly like {@link RoutingOutcome#DEFERRED}, rather than applying {@code PARK} or {@code REDELIVER}
- * to a record nothing is actually wrong with.
+ * {@link DeliveryFailurePolicy}.</strong> {@code NOT_DELIVERABLE} with no exception attached is always a lifecycle
+ * state, never a failure: the sole subscription paused, or the model not running at all (see
+ * {@code RegisteringSubscribable.routeReportingMatch}, which reports it for both without ever throwing). An earlier
+ * revision of this bridge re-read {@link PushSubscriptionModel#subscriptionIds()} and
+ * {@link PushSubscriptionModel#isRunning(String)} at this point to tell that state apart from a genuine failure
+ * reported the same way, since {@link #shouldConsume()} is only read once before each {@code poll()}, not per
+ * record, that re-read could answer differently than the outcome it was meant to explain, a subscription resumed or
+ * paused again from inside a handler mid-batch landing between the two. Paced identically to {@code DEFERRED}
+ * unconditionally instead, with no re-read: this bridge seeks back and throttles the partition, rather than
+ * applying {@code PARK} or {@code REDELIVER} to a record nothing is actually wrong with.
  * <p>
  * <strong>A permanently failed catch-up stops this bridge, it does not commit or redeliver into it.</strong> A
  * {@link CatchupThenPushSubscriptionModel} wrapping {@code model} whose replay has permanently failed refuses every
@@ -310,18 +312,6 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         return subscriptionId != null && model.isRunning(subscriptionId) && readinessSource.test(subscriptionId);
     }
 
-    // True when the model's own lifecycle, not a delivery failure, is why the routing outcome most recently reported
-    // NOT_DELIVERABLE with no exception: the sole subscription paused, or the model not running at all (see
-    // RegisteringSubscribable.routeReportingMatch, which reports NOT_DELIVERABLE for both without ever throwing).
-    // Re-read after the fact rather than trusted from before the record, since shouldConsume() is only checked once
-    // per poll, not per record, so a concurrent stop() or pauseSubscription() from inside a handler mid-batch is
-    // exactly what can land between that earlier check and a later record's own routing decision.
-    private boolean isLifecycleNotDeliverable() {
-        Set<String> subscriptionIds = model.subscriptionIds();
-        String subscriptionId = subscriptionIds.isEmpty() ? null : subscriptionIds.iterator().next();
-        return subscriptionId == null || !model.isRunning(subscriptionId);
-    }
-
     private void reconcilePauseResume(boolean shouldConsume) {
         Set<TopicPartition> assignment = consumer.assignment();
         if (assignment.isEmpty()) {
@@ -485,7 +475,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         try {
             cloudEvent = KafkaCloudEventMapper.toCloudEvent(record);
         } catch (RuntimeException e) {
-            log.warn("Failed to rebuild a CloudEvent from a record on topic \"{}\" partition {} offset {}.",
+            log.debug("Failed to rebuild a CloudEvent from a record on topic \"{}\" partition {} offset {}.",
                     record.topic(), record.partition(), record.offset(), e);
             return resolve(record, toCommit, failureAction.apply(record));
         }
@@ -510,7 +500,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             // Catches AssertionError too, since a filter or the handler can throw one, and an uncaught Error here
             // would leave the loop thread dead with the partition never advancing past this record.
             outcomeChannel.takeLastOutcome();
-            log.warn("A filter or handler failed for a record on topic \"{}\" partition {} offset {}.",
+            log.debug("A filter or handler failed for a record on topic \"{}\" partition {} offset {}.",
                     record.topic(), record.partition(), record.offset(), e);
             return resolve(record, toCommit, failureAction.apply(record));
         }
@@ -529,16 +519,20 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             stage(record, toCommit);
             return true;
         }
-        if (outcome == RoutingOutcome.DEFERRED || (outcome == RoutingOutcome.NOT_DELIVERABLE && isLifecycleNotDeliverable())) {
-            // Bypasses DeliveryFailurePolicy (and any parking) entirely: nothing here is broken, only not ready
-            // yet, or paced behind the model's own lifecycle state (see the class javadoc). Returning false,
-            // without ever calling failureAction.apply(record), reuses the same seek-back and throttledUntilNanos
-            // pacing processBatch(..) already applies for a partition it stops early, exactly the mechanism the
-            // pre-existing readinessSource-gated path already relied on.
+        if (outcome == RoutingOutcome.DEFERRED || outcome == RoutingOutcome.NOT_DELIVERABLE) {
+            // DEFERRED and a lifecycle NOT_DELIVERABLE are paced identically, unconditionally, with no re-read of
+            // the model's own running state: see the class javadoc for why an earlier revision's re-read was
+            // removed. Bypasses DeliveryFailurePolicy (and any parking) entirely: nothing here is broken, only not
+            // ready yet, or paced behind the model's own lifecycle state. Returning false, without ever calling
+            // failureAction.apply(record), reuses the same seek-back and throttledUntilNanos pacing processBatch(..)
+            // already applies for a partition it stops early, exactly the mechanism the pre-existing
+            // readinessSource-gated path already relied on.
             return false;
         }
-        log.warn("A record on topic \"{}\" partition {} offset {} was not deliverable.",
-                record.topic(), record.partition(), record.offset());
+        // Defensive: RoutingOutcome is exhaustively DELIVERED, FILTERED, DEFERRED or NOT_DELIVERABLE today, so this
+        // is unreachable, kept only against a future outcome this bridge has not been taught yet.
+        log.debug("A record on topic \"{}\" partition {} offset {} reported an outcome this bridge does not " +
+                "recognize. Routing it as a failure.", record.topic(), record.partition(), record.offset());
         return resolve(record, toCommit, failureAction.apply(record));
     }
 

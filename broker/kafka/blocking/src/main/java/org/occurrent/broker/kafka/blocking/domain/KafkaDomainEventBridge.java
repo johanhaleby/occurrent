@@ -468,7 +468,7 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         try {
             cloudEvent = KafkaCloudEventMapper.toCloudEvent(record);
         } catch (RuntimeException e) {
-            log.warn("Failed to rebuild a CloudEvent from a record on topic \"{}\" partition {} offset {}.",
+            log.debug("Failed to rebuild a CloudEvent from a record on topic \"{}\" partition {} offset {}.",
                     record.topic(), record.partition(), record.offset(), e);
             return toHandleResult(record, toCommit, failureAction.apply(record));
         }
@@ -497,7 +497,7 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
             // Either the projection handler itself threw, or the narrow registeredProjection() race the class
             // javadoc describes (an IllegalStateException that is not an UnreadableLiveFilterException). Both are
             // ordinary failure-policy cases, unlike the permanent ones caught above.
-            log.warn("The projection registered on this feed failed for a record on topic \"{}\" partition {} " +
+            log.debug("The projection registered on this feed failed for a record on topic \"{}\" partition {} " +
                     "offset {}.", record.topic(), record.partition(), record.offset(), e);
             return toHandleResult(record, toCommit, failureAction.apply(record));
         }
@@ -515,8 +515,8 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         // it only ever returns FILTERED, DELIVERED or DEFERRED, or throws one of the two exceptions caught above.
         // Kept as a defensive fallback rather than an assertion, so a future outcome this bridge does not yet know
         // about still fails safe through the configured policy instead of silently landing nowhere.
-        log.warn("A record on topic \"{}\" partition {} offset {} was not deliverable.",
-                record.topic(), record.partition(), record.offset());
+        log.debug("A record on topic \"{}\" partition {} offset {} reported an outcome this bridge does not " +
+                "recognize. Routing it as a failure.", record.topic(), record.partition(), record.offset());
         return toHandleResult(record, toCommit, failureAction.apply(record));
     }
 

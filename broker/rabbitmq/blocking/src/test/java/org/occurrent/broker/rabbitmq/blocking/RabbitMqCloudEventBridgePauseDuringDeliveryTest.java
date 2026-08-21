@@ -32,20 +32,29 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * The RabbitMQ half of {@code KafkaCloudEventBridgePauseDuringDeliveryTest}: {@code RoutingOutcome.NOT_DELIVERABLE}
  * covers both "the filter threw" and "the model is stopped / the subscription is paused / nothing registered"
- * alike, and only the first is a genuine failure. Because this bridge's coarse poll only cancels its consumer up
- * to one {@code pollInterval} later, a {@code pauseSubscription(id)} called from inside a message handler while
- * more messages are already queued behind it (prefetchCount == 1, so they arrive one at a time) can still hand the
- * bridge a lifecycle {@code NOT_DELIVERABLE} for a message already in flight. Before the fix this proves, every
- * such message got parked and acknowledged under {@link DeliveryFailurePolicy#PARK}, even though nothing about it
- * was broken, only paced.
+ * alike, and only the first is a genuine failure. A {@code pauseSubscription(id)} called from inside a message
+ * handler while more messages are already queued behind it (prefetchCount == 1, so they arrive one at a time) can
+ * hand the bridge a lifecycle {@code NOT_DELIVERABLE} for a message already in flight. Before the fix this proves,
+ * every such message got parked and acknowledged under {@link DeliveryFailurePolicy#PARK}, even though nothing
+ * about it was broken, only paced.
  * <p>
- * Publishes four messages, pauses the subscription from the first message's own handler while a long
- * {@code pollInterval} is in effect, and asserts none of the remaining three ever reach the parking queue, staying
- * on the source queue instead.
+ * A lifecycle {@code NOT_DELIVERABLE} is paced exactly like {@code DEFERRED}: held unacked rather than acted on
+ * immediately, so with {@code prefetchCount == 1} the broker sends nothing further on this consumer until the next
+ * poll releases it. An earlier revision of this bridge cancelled its own consumer and redelivered such a message
+ * immediately instead, to avoid that message sitting invisible for a whole {@code pollInterval}. A Copilot review
+ * ruled that immediate cancel-and-redeliver racy against {@link RabbitMqCloudEventBridge#stopPermanently()} for the
+ * same delivery tag, so this test now proves the paced behavior instead: the paused message stays invisible (held
+ * unacked, not on the source queue and not parked) until {@code pollInterval} releases it, at which point it, and
+ * every message queued behind it that the bridge was never even sent, are visible on the source queue again.
+ * <p>
+ * Publishes four messages, pauses the subscription from the first message's own handler, and asserts none of the
+ * remaining three ever reach the parking queue, staying held or on the source queue instead, becoming visible on
+ * the source queue once the next poll runs.
  */
 class RabbitMqCloudEventBridgePauseDuringDeliveryTest extends RabbitMqTestSupport {
 
@@ -64,17 +73,15 @@ class RabbitMqCloudEventBridgePauseDuringDeliveryTest extends RabbitMqTestSuppor
         model.subscribe("sub", ce -> {
             handled.add(ce.getId());
             if (ce.getId().equals("id-1")) {
-                // Paused from inside the very handler that is processing the first message. The bridge's coarse
-                // poll (pollInterval below) will not notice this for a long time, so the remaining, already-queued
-                // messages are what this test is about.
+                // Paused from inside the very handler that is processing the first message.
                 model.pauseSubscription("sub");
             }
         });
 
-        // Long enough that the coarse poll cannot possibly cancel the consumer, or release anything, during this
-        // test's own window, so any parking or acknowledging of messages 2-4 is exclusively the paused-delivery
-        // path, never the poll noticing the pause and cancelling consumption.
-        Duration pollInterval = Duration.ofSeconds(30);
+        // Long enough that the coarse poll cannot possibly have run yet by the time this test makes its first,
+        // still-held assertions, short enough that a second assertion after this interval elapses can observe the
+        // held message released back onto the source queue within the test's own timeout.
+        Duration pollInterval = Duration.ofMillis(500);
 
         try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, outcomeChannel, queue)
                 .declareTopology(false)
@@ -88,17 +95,25 @@ class RabbitMqCloudEventBridgePauseDuringDeliveryTest extends RabbitMqTestSuppor
             publish(OrderPlaced.class.getName(), "id-4");
 
             // Long enough for the bridge to have fetched and attempted every message prefetchCount == 1 would
-            // allow it to, well before the 30-second pollInterval could ever intervene.
-            Thread.sleep(2000);
+            // allow it to, short enough that the 500ms pollInterval has not yet had a chance to release anything.
+            Thread.sleep(200);
 
             assertThat(handled).as("the first message is delivered before the pause takes effect").contains("id-1");
             assertThat(queueMessageCount(parkingQueue))
                     .as("a message paced behind a mid-delivery pause must never be parked, since nothing about it is broken")
                     .isZero();
             assertThat(queueMessageCount(queue))
-                    .as("every message behind the pause must stay on the source queue rather than being silently "
-                            + "acknowledged into the parking queue")
-                    .isEqualTo(3);
+                    .as("id-2 is held unacked rather than requeued yet, so with prefetchCount == 1 the broker never "
+                            + "even sends id-3 or id-4: only id-3 and id-4 are visible as ready, id-2 is invisible")
+                    .isEqualTo(2);
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(queueMessageCount(queue))
+                            .as("once a poll releases the held id-2, every message behind the pause is visible on "
+                                    + "the source queue again rather than having been silently acknowledged into "
+                                    + "the parking queue")
+                            .isEqualTo(3));
+            assertThat(queueMessageCount(parkingQueue)).as("still never parked, after release too").isZero();
         }
     }
 

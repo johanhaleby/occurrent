@@ -188,6 +188,10 @@ public final class KafkaDeliveryFailureAction implements AutoCloseable {
     public Outcome apply(ConsumerRecord<String, byte[]> record) {
         requireNonNull(record, "record cannot be null");
         if (policy == DeliveryFailurePolicy.REDELIVER) {
+            // The one warn line this failure needs: a bridge routing a genuine failure here must not also log the
+            // same event itself, the same way a caller relying on park's own log line below already does not.
+            log.warn("Redelivering a record from topic \"{}\" partition {} offset {}; nothing consumed it.",
+                    record.topic(), record.partition(), record.offset());
             return Outcome.REDELIVER;
         }
         KafkaDestination destination = requireNonNull(parkingDestination);

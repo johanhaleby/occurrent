@@ -39,11 +39,11 @@ import java.util.function.Predicate;
  * alone. ADR 102 allows two independent {@code CatchupThenPushSubscriptionModel} instances to subscribe under the
  * same id, so an id-only lookup across every such bean in the context, {@link #isReady(ApplicationContext, String)}
  * below, can answer for a bridge with an unrelated model's wrapper, permanently starving a healthy bridge if that
- * unrelated wrapper's own catch-up has failed. When no identity match exists, this falls back to that same id-based
- * scan, but only when it is itself unambiguous, exactly one wrapper bean claims the id, the shape a wrapper built
- * and registered by hand outside the framework registrar still takes. Two or more claimants is the very ambiguity
- * this correlation exists to resolve, so guessing among them is refused the same way no claimant at all is: both
- * default to ready.
+ * unrelated wrapper's own catch-up has failed. That id-based scan is used as a fallback only when the registry bean
+ * does not exist in the context at all, a hand-built wrapper with no framework registrar in play. Once the registry
+ * bean exists, its own answer for this exact {@link PushSubscriptionModel} is authoritative, "not (yet) in it" and
+ * "definitely not wrapped" both answered the same way (ready), rather than falling through to a scan that could
+ * still land on an unrelated wrapper's answer despite an authoritative source already being available.
  * <p>
  * Looked up by a fixed bean name rather than a shared type, since this starter has no compile-time dependency on the
  * framework autoconfigure module that publishes it, per ADR 133 decision 1's deliberate decoupling. Resolved lazily,
@@ -83,38 +83,47 @@ final class CatchupThenPushReadiness {
 
     /**
      * A {@code readinessSource} predicate correlated to {@code liveFeed} by identity, lazily resolved and memoized
-     * once found. See the class javadoc.
+     * once found. See the class javadoc, and {@link #wrapperFor(ApplicationContext, PushSubscriptionModel, String,
+     * AtomicReference)} for what is and is not cached, and why.
      */
     static Predicate<String> memoized(ApplicationContext applicationContext, PushSubscriptionModel liveFeed) {
-        AtomicReference<@Nullable CatchupThenPushSubscriptionModel> resolved = new AtomicReference<>();
+        AtomicReference<@Nullable CatchupThenPushSubscriptionModel> identityMatch = new AtomicReference<>();
         return subscriptionId -> {
-            CatchupThenPushSubscriptionModel wrapper = resolved.get();
-            if (wrapper == null) {
-                wrapper = wrapperFor(applicationContext, liveFeed, subscriptionId);
-                if (wrapper != null) {
-                    resolved.set(wrapper);
-                }
-            }
+            CatchupThenPushSubscriptionModel wrapper = wrapperFor(applicationContext, liveFeed, subscriptionId, identityMatch);
             return wrapper == null || wrapper.isReadyForLiveDelivery(subscriptionId);
         };
     }
 
-    // Identity match first, from the shared registry: the correct, unambiguous answer whenever the framework
-    // module published this exact liveFeed's own wrapper. Falling back to the id-based scan below, but only when
-    // it is itself unambiguous (exactly one CatchupThenPushSubscriptionModel bean in the whole context claims this
-    // id), covers a wrapper built and registered by hand, outside the framework registrar, the same shape
-    // CatchupThenPushReadinessTest and the auto-configuration integration test both exercise. Two or more beans
-    // claiming the same id is precisely the ambiguity this identity correlation exists to resolve. Guessing among
-    // them would reintroduce it, so that case, and no claimant at all, both default to ready instead.
+    // Only a positive identity match, from the shared registry, is ever memoized into identityMatch: once the
+    // framework registrar has published this exact liveFeed's own wrapper, that mapping is never later withdrawn
+    // or replaced, so caching it is always safe and skips the registry lookup on every later poll. A caller with
+    // no bean in hand yet (the registry bean does not exist at all) or no entry for liveFeed specifically (not
+    // published yet, since bean initialization order is not guaranteed, or genuinely never wrapped) is never
+    // cached, deliberately: a "not found" answer taken while the registry has not caught up yet, and cached
+    // forever, would starve a bridge of ever seeing the real wrapper once it does appear. Re-resolved fresh, from
+    // the map, on every call instead, cheap enough (one HashMap lookup) that this costs nothing meaningful even
+    // polled forever. Once the registry bean exists at all, its answer for liveFeed is authoritative and final for
+    // that poll. The id-scan fallback below never runs, since guessing through it while an authoritative source
+    // says "not wrapped" risks matching a different, unrelated wrapper that merely shares this subscription id
+    // (ADR 102 permits exactly that), the same ambiguity the identity registry exists to resolve in the first
+    // place. The id-scan only ever runs when the registry bean is absent outright, a hand-built wrapper with no
+    // framework registrar in play at all, the shape CatchupThenPushReadinessTest and the auto-configuration
+    // integration test both exercise. Its own answer is never memoized either, since it is only ever a guess.
     @SuppressWarnings("unchecked")
-    private static @Nullable CatchupThenPushSubscriptionModel wrapperFor(ApplicationContext applicationContext, PushSubscriptionModel liveFeed, String subscriptionId) {
+    private static @Nullable CatchupThenPushSubscriptionModel wrapperFor(ApplicationContext applicationContext, PushSubscriptionModel liveFeed,
+                                                                          String subscriptionId, AtomicReference<@Nullable CatchupThenPushSubscriptionModel> identityMatch) {
+        CatchupThenPushSubscriptionModel cached = identityMatch.get();
+        if (cached != null) {
+            return cached;
+        }
         if (applicationContext.containsBean(WRAPPERS_BY_LIVE_FEED_BEAN_NAME)) {
             Map<PushSubscriptionModel, CatchupThenPushSubscriptionModel> wrappersByLiveFeed =
                     (Map<PushSubscriptionModel, CatchupThenPushSubscriptionModel>) applicationContext.getBean(WRAPPERS_BY_LIVE_FEED_BEAN_NAME, Map.class);
             CatchupThenPushSubscriptionModel byIdentity = wrappersByLiveFeed.get(liveFeed);
             if (byIdentity != null) {
-                return byIdentity;
+                identityMatch.set(byIdentity);
             }
+            return byIdentity;
         }
         CatchupThenPushSubscriptionModel unambiguousClaimant = null;
         for (CatchupThenPushSubscriptionModel wrapper : applicationContext.getBeansOfType(CatchupThenPushSubscriptionModel.class).values()) {

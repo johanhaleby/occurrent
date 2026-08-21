@@ -895,15 +895,11 @@ normal-return `NOT_DELIVERABLE` is *always* a lifecycle state today, never a fai
 `pauseSubscription`/`stop()` called from inside a handler up to one `pollInterval`/`pollTimeout` later, so a message
 already queued behind that call can still reach the bridge before the poll cancels consumption. Routed through
 `DeliveryFailurePolicy` as it was, `PARK` would park and acknowledge a message nothing is actually wrong with. Each
-CloudEvent-level bridge now re-reads the model's lifecycle state after a `NOT_DELIVERABLE` report
-(`subscriptionIds().isEmpty()` or not `isRunning(id)`) and, when it is the lifecycle case, bypasses
-`DeliveryFailurePolicy` the same way `DEFERRED` already does: Kafka seeks back and throttles the partition, reusing
-the mechanism it already has. RabbitMQ cancels its own consumer immediately, synchronously, rather than waiting for
-the next poll, then negatively acknowledges with requeue. Cancelling first, not only nacking, matters, since a
-requeue while the consumer is still active would be redelivered straight back to it at broker round-trip speed, a
-model-level pause being invisible to RabbitMQ's own flow control. The domain bridges need no equivalent change:
-`DomainEventFeed.acceptCloudEvent` has no pause concept and never returns `NOT_DELIVERABLE` at all (see the
-amendment above).
+CloudEvent-level bridge bypasses `DeliveryFailurePolicy` the same way `DEFERRED` already does: Kafka seeks back and
+throttles the partition, reusing the mechanism it already has. *(RabbitMQ's own fix here, a re-read plus an
+immediate consumer cancel, is superseded by the amendment below. This sentence is kept only as the historical record
+of what shipped first.)* The domain bridges need no equivalent change: `DomainEventFeed.acceptCloudEvent` has no
+pause concept and never returns `NOT_DELIVERABLE` at all (see the amendment above).
 
 **The cleaner long-term shape is a distinct `RoutingOutcome` value for a lifecycle refusal**, the same reasoning
 that gave `DEFERRED` its own value rather than overloading it onto `NOT_DELIVERABLE` in the first amendment above:
@@ -913,3 +909,57 @@ constant, threaded through `RegisteringSubscribable`, `PushObserver`, and every 
 enum) for a defect fully closed by a narrower, bridge-local re-read using API `RegisteringSubscribable` already
 exposes publicly (`subscriptionIds()`, `isRunning(String)`). The narrower fix ships the correctness fix now without
 reopening a settled outcome shape. Widening the enum is tracked as a follow-up rather than bundled in.
+
+## Amendment (2026-08-22): the RabbitMQ lifecycle re-read above is itself removed, held tags carry their own generation, and a permanent stop closes the channel
+
+A Copilot review of the fixpoint round above found the RabbitMQ-specific fix in the previous amendment traded one
+race for another, plus two smaller defects on the same bridges. All four apply to `RabbitMqCloudEventBridge` and
+`RabbitMqDomainEventBridge`. The third also touches both starters' `CatchupThenPushReadiness`.
+
+**The lifecycle re-read raced `stopPermanently()` for the same delivery tag.** The previous amendment's RabbitMQ fix
+re-read the model's running state after a `NOT_DELIVERABLE` report and, when it was the lifecycle case, cancelled
+the consumer and negatively acknowledged immediately rather than waiting for the next poll. That immediate action
+and a concurrent permanent stop (a `PreDispatchRefusalException` arriving on the very next delivery, say) could both
+be deciding the same tag's fate at once, with no lock ordering between them. The fix widens the safe direction instead of trying to close that race.
+A lifecycle `NOT_DELIVERABLE` is now paced exactly like `DEFERRED`, unconditionally, with no re-read at all. It costs the immediate-visibility guarantee the re-read bought (a paused
+message can now sit unacknowledged for up to one `pollInterval` instead of being requeued at once), a cost already
+paid, and accepted, everywhere `DEFERRED` itself applies. `isLifecycleNotDeliverable()` and the RabbitMQ-only
+`cancelConsumingNow()` are removed as dead code.
+
+**A held delivery tag's `channelGeneration` was checked once, at hold time, not again at release.** Both bridges
+already tracked a generation counter, bumped on an automatic connection recovery or a consumer shutdown, to stop a
+stale tag from being acknowledged after the channel that tag belonged to is gone. The check ran when a tag was
+first captured, not when it was later acted on, so a bump landing between the two left a window where a stale tag
+could still be acted on. Each held-tag deque now stores a `HeldDelivery(deliveryTag, generation)` record instead of
+a bare `long`, and every release revalidates the tag's own generation against the current one immediately before
+acting, dropping rather than redelivering a mismatch (the dead channel it belonged to already redelivered it by
+itself). `channelGeneration`'s own bump, and every immediate acknowledgement, negative acknowledgement or park this
+bridge issues, now take the same lock, so the bump can never land inside that window either.
+
+**A permanent stop left an already-held tag stuck until an operator called `close()`.** `stopPermanently()` cancelled
+the consumer and stopped the poll for good, but left the channel open with no way for a tag already held (from
+before the stop) to ever be released again, the very poll that would have released it now gone. It now releases
+every held tag, generation-safely, and then closes the consume channel itself, in that order, under the lock,
+rather than waiting for `close()`. Closing the channel also requeues the triggering delivery for a permanent catch-up
+refusal, RabbitMQ's own guarantee for a closed channel with an unacked delivery on it, so the explicit negative
+acknowledgement the previous amendment described for that case is no longer needed either. `stopPermanently()`'s own
+`catch` widens from `IOException` to `IOException | RuntimeException`, since `basicCancel` on an already-closed
+channel throws the latter.
+
+**`CatchupThenPushReadiness.memoized(...)`'s cache could lock in a wrong answer taken before the framework registrar
+had published anything for this bridge's own live feed.** The registrar publishes its shared identity-registry bean
+lazily, on its first registration, so a bridge's own poll can run before that bean exists at all, and separately,
+before this specific live feed's own entry lands in it once it does. Either "not found yet" answer used to fall
+through to an id-only scan across every wrapper bean in the context and, if that scan found an unrelated wrapper
+sharing the subscription id (ADR 102 permits exactly that), cached it as if it were the true identity match, forever.
+The fix separates the two. The id-scan fallback runs only when the registry bean is absent from the context
+outright, and once the bean exists, only a positive identity match from it is ever cached. "Not (yet) wrapped"
+re-resolves fresh, from one cheap map lookup, on every later poll instead.
+
+**Parking and redelivering a genuine failure both logged twice.** A bridge's own generic failure branch logged the
+cause at `warn` before routing to `DeliveryFailurePolicy`, and `RabbitMqDeliveryFailureAction`/`KafkaDeliveryFailureAction`
+also logged their own `park`/`redeliver` outcome, two lines for one event under `PARK`, and, once `redeliver` gained
+its own log line here too, under `REDELIVER` as well. The bridge-side cause logs move to `debug`. The action's own
+`park`/`redeliver` log is the one `warn` line an operator sees, in all four bridges and both actions. A permanent
+stop stays logged at `error`, unaffected, since it is a distinct, more serious event than an ordinary delivery
+failure.
