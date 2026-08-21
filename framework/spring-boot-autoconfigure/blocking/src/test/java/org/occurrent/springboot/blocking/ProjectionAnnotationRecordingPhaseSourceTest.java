@@ -30,6 +30,7 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.AppendId;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
+import org.occurrent.subscription.CatchupSnapshot;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
@@ -74,9 +75,10 @@ class ProjectionAnnotationRecordingPhaseSourceTest {
         // told directly what it exposes.
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) correctModel)).when(correctModel).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) correctModel).isCatchingUp(PROJECTION_ID)).thenReturn(true);
-        // Both, because a model that is catching up but past its history read is delivering events written since it
-        // started, and those are recorded. Reading history is what suppresses recording.
-        when(((ReplayAwareSubscriptions) correctModel).isReplayingHistory(PROJECTION_ID)).thenReturn(true);
+        // One reading, which is what the phase source takes, so the part and the catch-up it belongs to cannot come
+        // from two different moments. Reading history is what suppresses recording, since a catch-up past that point
+        // is delivering events written since it started and those are recorded.
+        when(((ReplayAwareSubscriptions) correctModel).catchupSnapshot(PROJECTION_ID)).thenReturn(new CatchupSnapshot(true, true, 1L));
         when(correctModel.subscribe(anyString(), any(), any(StartAt.class), any())).thenAnswer(invocation -> {
             @SuppressWarnings("unchecked")
             Consumer<CloudEvent> action = invocation.getArgument(3);
@@ -87,6 +89,7 @@ class ProjectionAnnotationRecordingPhaseSourceTest {
         Subscribable distractorModel = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) distractorModel)).when(distractorModel).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) distractorModel).isCatchingUp(anyString())).thenReturn(false);
+        when(((ReplayAwareSubscriptions) distractorModel).catchupSnapshot(anyString())).thenReturn(CatchupSnapshot.LIVE);
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
