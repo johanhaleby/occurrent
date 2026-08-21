@@ -215,10 +215,11 @@ public final class DomainEventFeed<E> {
      * the {@link Filter} {@link #register} was called with, decodes it with this feed's {@link CloudEventConverter}
      * only if it matches, delivers it, and completes with which of the three {@link RoutingOutcome}s happened. Call
      * this from a broker listener that has a CloudEvent to rebuild rather than a domain event and an
-     * {@link EventMetadata} already in hand, and acknowledge on {@link RoutingOutcome#DELIVERED} once the returned
+     * {@link EventMetadata} already in hand. Acknowledge on {@link RoutingOutcome#DELIVERED}, once the returned
      * {@link Mono} completes, and on {@link RoutingOutcome#FILTERED}, where redelivering would loop forever against
      * this same registration, since the event is not this projection's under the {@link Filter} currently
-     * registered. Named distinctly from {@link #accept(Object)} rather than
+     * registered. Redeliver instead on {@link RoutingOutcome#DEFERRED}, safe arbitrarily many times, and never
+     * acknowledge it. Named distinctly from {@link #accept(Object)} rather than
      * overloaded onto it, since a {@code DomainEventFeed<CloudEvent>} would otherwise let the compiler silently pick
      * between two overloads with different behavior for the same argument.
      * <p>
@@ -236,21 +237,26 @@ public final class DomainEventFeed<E> {
      * Whichever of the two this first call produces, a working matcher or the refusal below, is then cached and
      * reused for every call after that against the same registration, rather than rebuilt each time.
      * <p>
-     * Completes with {@link RoutingOutcome#NOT_DELIVERABLE} rather than {@link RoutingOutcome#DELIVERED} when a
-     * matching event arrives after {@link #stopCatchUp()} interrupted a replay still in flight. The catch-up-then-live
-     * engine behind this feed drops such an event rather than delivering or buffering it, and this method reads that
-     * signal back instead of assuming delivery from a normal completion.
-     * <p>
-     * A matching event that arrives <em>before</em> a stop, while the catch-up is still buffering live events for
-     * the drain that follows the replay, also completes with {@link RoutingOutcome#NOT_DELIVERABLE} if that stop
-     * lands before the buffer is drained. The returned {@link Mono} does not complete until this engine resolves
-     * the buffered acknowledgement, and a stop resolves every still-pending one as not delivered rather than
-     * leaving it to complete as though the fold had run. This differs from the blocking {@code DomainEventFeed},
-     * where a buffered payload's acceptance completes synchronously before the fold, so a stop afterwards cannot
-     * take that answer back, and {@link RoutingOutcome#DELIVERED} there means only that the payload was handed
-     * off, not that the fold has run. Either way nothing is lost, because the completion marker is never recorded
-     * for an interrupted attempt, so the next {@link #catchUpAll()} replays the whole history again, including
-     * this event, from the store.
+     * Completes with {@link RoutingOutcome#DEFERRED} rather than {@link RoutingOutcome#DELIVERED} for a matching
+     * event that arrives while the registered projection is not live yet. That covers an event fed before
+     * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has been called at all, one fed
+     * while a replay is still running, and one fed after {@link #stopCatchUp()} interrupted a replay in flight. The
+     * underlying {@code ReactiveHandover.acceptIfLive} refuses such an event outright rather than buffering it, so
+     * the returned {@link Mono} completes with {@link RoutingOutcome#DEFERRED} right away, never waiting on a
+     * replay or a drain that might resolve it only much later. One evaluation decides both the live check and the
+     * hand-over together, so there is no window between "is it live" and "hand it over" for a concurrent
+     * {@link #goLive(String)} to land in. Redelivering a {@link RoutingOutcome#DEFERRED} event is always safe. The
+     * attempt that reported it was never accepted in the first place, nothing here folded it, so retrying is safe
+     * until it completes with {@link RoutingOutcome#DELIVERED}, the same way a caller with nowhere else to
+     * redeliver from, {@link #goLive(String)} exists precisely for a registration whose events are not in the local
+     * store, gets the same outcome either way, since this feed has no way to know in advance which kind of
+     * registration it is fielding an event for. That safety does not extend past a genuine
+     * {@link RoutingOutcome#DELIVERED}: delivery is still at-least-once overall, so the fold itself must stay
+     * idempotent, the de-dup cache {@link CatchupThenLiveOptions} bounds absorbs only the replay-to-live overlap
+     * this handover already tracks, not an unbounded broker redelivery window. Nothing is lost either way a
+     * {@link RoutingOutcome#DEFERRED} event goes, because the completion marker is never recorded for an
+     * interrupted attempt, so the next {@link #catchUpAll()} replays the whole history again, including this event,
+     * from the store.
      * <p>
      * Fails with an {@link IllegalStateException} when no projection is registered, for the reason
      * {@link #accept(Object)} gives, rather than completing with {@link RoutingOutcome#NOT_DELIVERABLE}. This feed,
@@ -276,8 +282,8 @@ public final class DomainEventFeed<E> {
                 return Mono.just(RoutingOutcome.FILTERED);
             }
             E event = converter.toDomainEvent(cloudEvent);
-            return registered.catchupFeed().acceptReportingDelivery(EventMetadata.from(cloudEvent), event)
-                    .map(delivered -> delivered ? RoutingOutcome.DELIVERED : RoutingOutcome.NOT_DELIVERABLE);
+            return registered.catchupFeed().acceptIfLive(EventMetadata.from(cloudEvent), event)
+                    .map(delivered -> delivered ? RoutingOutcome.DELIVERED : RoutingOutcome.DEFERRED);
         });
     }
 

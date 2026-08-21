@@ -192,7 +192,10 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void the_observer_is_told_delivered_before_the_handler_runs() {
+    void the_observer_is_told_delivered_once_the_handler_has_run() {
+        // Reporting after the action runs, rather than before it, is what lets a catch-up-then-live engine tell
+        // DELIVERED and DEFERRED apart accurately instead of assuming delivery ahead of the fold. A direct
+        // dispatch such as this one has already run its handler by the time the observer is told.
         List<String> observed = new ArrayList<>();
         List<String> handled = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
@@ -201,7 +204,7 @@ class PushSubscriptionModelTest {
 
         StepVerifier.create(model.accept(cloudEvent("1", "NameDefined"))).verifyComplete();
 
-        assertThat(observed).containsExactly("1:DELIVERED:0");
+        assertThat(observed).containsExactly("1:DELIVERED:1");
         assertThat(handled).containsExactly("1");
     }
 

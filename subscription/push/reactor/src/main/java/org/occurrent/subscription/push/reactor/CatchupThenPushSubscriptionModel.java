@@ -29,6 +29,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.IntrospectableSubscriptions;
+import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
@@ -144,8 +145,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
         ReactiveHandover<CloudEvent> handover = ReactiveHandover.create(action, CloudEvent::getId, options, "subscription");
 
-        // Register on the live feed first, so events committing during the replay are buffered in the sink, not lost.
-        liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);
+        // Register on the live feed first, so events committing during the replay are buffered in the sink, not
+        // lost. Buffering, the write path, uses acceptReportingDelivery(..), never acceptIfLive(..), which would
+        // refuse rather than buffer a payload arriving during the replay. Only the dedicated pre-dispatch exception
+        // is wrapped as a Refusal, so routeReportingMatch reports NOT_DELIVERABLE for it and DELIVERED for a
+        // handler's own exception, the same one-evaluation fix the blocking stack already has.
+        RegisteringSubscribable.RoutingAction routingAction = cloudEvent -> handover.acceptReportingDelivery(cloudEvent)
+                .onErrorMap(ReactiveHandover.PreDispatchRefusalException.class, RegisteringSubscribable.RoutingAction.Refusal::new);
+        liveFeed.subscribeCatchupThenPush(subscriptionId, filter, StartAt.subscriptionModelDefault(), routingAction);
 
         // Kept rather than launched once, so a replay a stop interrupts can be launched again over the same handover.
         // The handover has to be the same one: it holds the live sink and the de-dup cache, so a second one would
