@@ -68,7 +68,9 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     private final ConcurrentMap<String, CatchupAttempt> currentAttempt;
     private static final ThreadLocal<@Nullable CatchupAttempt> CURRENT_ATTEMPT = new ThreadLocal<>();
     // Who to tell about each id's catch-up boundaries, registered before the subscription that produces them.
-    // Entries are removed alongside the id's other per-subscription state.
+    // Kept until this model shuts down, since the registration outlives any one catch-up: a stop and start, a
+    // resume, or a cancel and re-subscribe all run another catch-up for the same id, and a recorder that stopped
+    // being told would record that catch-up's history as though it were live.
     private final ConcurrentMap<String, CatchupListener> catchupListeners = new ConcurrentHashMap<>();
     // One lock per subscriptionId, guarding a fresh attempt's registration (startCatchupAsync), a finishing
     // attempt's checkpoint cleanup and delegate subscribe (or its cancelled-cleanup branch), and
@@ -274,7 +276,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         }
         if (currentAttempt.remove(subscriptionId, attempt)) {
             runningCatchupSubscriptions.remove(subscriptionId);
-            catchupListeners.remove(subscriptionId);
             return !attempt.cancelled;
         }
         return false;
@@ -357,7 +358,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         HandoverLock lock = tryLockHandover(subscriptionId);
         try {
             runningCatchupSubscriptions.remove(subscriptionId);
-            catchupListeners.remove(subscriptionId);
             // Flags whichever attempt is currently registered, atomically with respect to a concurrent resubscribe
             // for the same id, instead of removing or replacing the entry: a dual-mode dispatcher calls this on both
             // inner models for every cancellation, and the one with nothing running for this id must stay a no-op
@@ -497,8 +497,6 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
                 // reasoning must not clear a pause request the later attempt's caller may have just made either.
                 if (currentAttempt.remove(subscriptionId, attempt)) {
                     runningCatchupSubscriptions.remove(subscriptionId);
-                    catchupListeners.remove(subscriptionId);
-            catchupListeners.remove(subscriptionId);
                     pauseRequestedDuringCatchup.remove(subscriptionId);
                 }
                 throw failure;

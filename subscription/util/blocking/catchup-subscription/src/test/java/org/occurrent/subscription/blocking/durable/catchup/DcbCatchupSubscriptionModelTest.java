@@ -91,28 +91,45 @@ class DcbCatchupSubscriptionModelTest {
         inMemorySubscriptionModel.shutdown();
     }
 
-    // The same contract the stream model reports, through the dispatcher a DCB projection actually subscribes on.
-    // Both answer true while the history that was already there is being read, and isReplayingHistory turns false for
-    // the events appended since.
+    // The same two signals the stream model sends, through the dispatcher a DCB projection actually subscribes on.
+    // The start arrives before anything this catch-up delivers, the boundary arrives after the history that was
+    // already there and before the events appended since the catch-up started.
     @Test
-    void reports_the_history_read_and_the_reconciliation_as_different_parts_of_one_catch_up() {
+    void tells_a_listener_when_a_catch_up_starts_and_when_its_history_has_been_read() {
         appendTagged("name:1", nameDefined("history"));
 
-        CopyOnWriteArrayList<String> phasePerDelivery = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<String> signals = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<Object> episodes = new CopyOnWriteArrayList<>();
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
 
+        boolean sendsThem = subscription.listenForCatchup("subscription", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                signals.add("started");
+                episodes.add(episode);
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+                signals.add("historyRead");
+                episodes.add(episode);
+            }
+        });
+        assertThat(sendsThem).isTrue();
+
         subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
-            phasePerDelivery.add(subscription.isCatchingUp("subscription") + "/" + subscription.isReplayingHistory("subscription"));
-            // Appended from inside the history read, so it cannot be part of it and the reconciliation is what
-            // delivers it.
-            if (phasePerDelivery.size() == 1) {
+            signals.add("delivered");
+            // Appended from inside the history read, so it cannot be part of it and what delivers it is the rest of
+            // the catch-up.
+            if (signals.stream().filter("delivered"::equals).count() == 1) {
                 appendTagged("name:1", nameDefined("appendedDuringTheHistoryRead"));
             }
         }).waitUntilStarted();
 
-        await().untilAsserted(() -> assertThat(phasePerDelivery).containsExactly("true/true", "true/false"));
+        await().untilAsserted(() -> assertThat(signals).containsExactly("started", "delivered", "historyRead", "delivered"));
+        assertThat(episodes).hasSize(2);
+        assertThat(episodes.get(0)).isSameAs(episodes.get(1));
         assertThat(subscription.isCatchingUp("subscription")).isFalse();
-        assertThat(subscription.isReplayingHistory("subscription")).isFalse();
     }
 
     @Test

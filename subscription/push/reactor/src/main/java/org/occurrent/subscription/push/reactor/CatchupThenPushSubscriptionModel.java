@@ -100,7 +100,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // fails. The live feed cannot answer for them: it knows the id (this model registers there first) but it is
     // buffering rather than delivering, so it would report a subscription that is not yet folding anything as running.
     private final ConcurrentMap<String, Sinks.One<Boolean>> replayingSubscriptions = new ConcurrentHashMap<>();
-    // Who to tell about each id's catch-up boundaries, registered before the subscription that produces them.
+    // Who to tell about each id's catch-up boundaries, registered before the subscription that produces them. Kept
+    // until this model shuts down, since the registration outlives any one catch-up: a stop and start, a resume, or
+    // a cancel and re-subscribe all run another catch-up for the same id, and a recorder that stopped being told
+    // would record that catch-up's history as though it were live.
     private final ConcurrentMap<String, CatchupListener> catchupListeners = new ConcurrentHashMap<>();
     // A pause asked for while a replay is in flight. The replay itself keeps running, since resuming it would mean
     // persisting the exact replay cursor, which this model does not do. Applied at the handover instead.
@@ -275,7 +278,6 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     private void forget(String subscriptionId, Sinks.One<Boolean> replay) {
         replayingSubscriptions.remove(subscriptionId, replay);
-        catchupListeners.remove(subscriptionId);
     }
 
     /**
@@ -429,7 +431,6 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         // Removing it here is what stops a replay in flight: shouldKeepReplaying reads this map.
         replayingSubscriptions.remove(subscriptionId);
-        catchupListeners.remove(subscriptionId);
         pauseRequestedDuringReplay.remove(subscriptionId);
         // A cancel is not a stop, so nothing is kept to launch again. This is also the recovery from a failed
         // catch-up: it frees the id and releases the registration that was refusing (ADR 104).

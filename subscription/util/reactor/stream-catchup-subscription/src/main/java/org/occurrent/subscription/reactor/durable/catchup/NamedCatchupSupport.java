@@ -90,7 +90,9 @@ final class NamedCatchupSupport {
     // handOver park instead of subscribing the delegate on a stopped model. Same role as the blocking
     // AbstractCatchupSubscriptionModel's stopped flag.
     private volatile boolean stopped = false;
-    // Who to tell about each id's catch-up boundaries. Entries go when the id's replay entry does.
+    // Who to tell about each id's catch-up boundaries. Kept until this model shuts down, since the registration
+    // outlives any one catch-up and a recorder that stopped being told would record the next one's history as
+    // though it were live.
     private final ConcurrentMap<String, CatchupListener> catchupListeners = new ConcurrentHashMap<>();
 
     NamedCatchupSupport(CheckpointAwareSubscriptionModel wrapped, Class<?> modelClass) {
@@ -194,7 +196,6 @@ final class NamedCatchupSupport {
                         // installed a new state by the time a stale failure reaches here. A plain remove(id) would
                         // delete that new attempt's entry instead of this dead one's.
                         catchingUp.remove(subscriptionId, state);
-            catchupListeners.remove(subscriptionId);
                         state.started.tryEmitError(throwable);
                     });
             state.replaying.set(replaying);
@@ -255,7 +256,6 @@ final class NamedCatchupSupport {
             // the blocking catch-up models had the same shape without those guards (#737), so every removal site in
             // this class stays identity-checked rather than leaning on an invariant proved only by hand.
             catchingUp.remove(subscriptionId, state);
-            catchupListeners.remove(subscriptionId);
             delegated.waitUntilStarted().subscribe(unused -> {
             }, state.started::tryEmitError, state.started::tryEmitEmpty);
         }
@@ -387,6 +387,7 @@ final class NamedCatchupSupport {
     }
 
     void shutdown() {
+        catchupListeners.clear();
         new ArrayList<>(catchingUp.keySet()).forEach(subscriptionId -> {
             CatchupState state = catchingUp.remove(subscriptionId);
             if (state != null) {

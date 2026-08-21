@@ -26,6 +26,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.RoutingOutcome;
@@ -39,6 +40,7 @@ import reactor.test.StepVerifier;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -56,51 +58,56 @@ import static org.awaitility.Awaitility.await;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupThenPushSubscriptionModelTest {
 
-    // A completed catch-up must leave nothing behind that makes the next one look like it is past its history read.
-    // It did once: the catch-up-done signal removed the id inline before the history-done hook ran, so the hook put
-    // the id back and only a shutdown ever took it out again. A second catch-up for the same id then reported that it
-    // was reconciling for its whole history read, and a recording projection records during a reconciliation.
+    // A second catch-up for the same id announces itself and reads its own history as history. The listener is
+    // registered once, before either subscribe, and stays registered across the cancel, since the recorder behind it
+    // has a standing interest in this id's catch-ups rather than in any one of them.
     @Test
     void a_second_catch_up_for_the_same_id_reads_its_history_as_history() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
-        List<Boolean> historyDuringReplay = new CopyOnWriteArrayList<>();
-        AtomicReference<CatchupThenPushSubscriptionModel> self = new AtomicReference<>();
         AtomicInteger round = new AtomicInteger();
-        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("e" + round.incrementAndGet(), "Created"))
-                .doOnNext(__ -> historyDuringReplay.add(self.get().isReplayingHistory("proj"))), 1);
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("e" + round.incrementAndGet(), "Created")), 1);
 
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
-        self.set(model);
+        EpisodeLog log = new EpisodeLog();
+        assertThat(model.listenForCatchup("proj", log)).isTrue();
 
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block();
         model.cancelSubscription("proj");
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block();
 
-        assertThat(historyDuringReplay).containsExactly(true, true);
+        await().untilAsserted(() -> assertThat(log.signals())
+                .containsExactly("started:0", "historyRead:0", "started:1", "historyRead:1"));
     }
 
-    // A payload buffered while the history was being read is delivered once and never again, so it has to be seen as
-    // part of this catch-up rather than as live delivery, or a recording projection records it without first clearing
-    // what the rebuild is discarding.
+    // A payload buffered while the history was being read is delivered once and never again, so the boundary has to
+    // fall before that drain rather than after it. Otherwise a recording projection sees it as history and records
+    // nothing for it, and nothing else ever delivers it again.
     @Test
     void a_payload_buffered_during_the_history_read_is_delivered_as_part_of_the_catch_up() {
         PushSubscriptionModel feed = new PushSubscriptionModel();
-        List<String> snapshotPerDelivery = new CopyOnWriteArrayList<>();
-        AtomicReference<CatchupThenPushSubscriptionModel> self = new AtomicReference<>();
+        List<String> timeline = new CopyOnWriteArrayList<>();
         CloudEvent buffered = cloudEvent("buffered", "Updated");
         PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("history", "Created"))
                 .doOnNext(__ -> feed.accept(buffered).subscribe()), 1);
 
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
-        self.set(model);
+        model.listenForCatchup("proj", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                timeline.add("started");
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+                timeline.add("historyRead");
+            }
+        });
         model.subscribe("proj", null, StartAt.subscriptionModelDefault(), event -> {
-            org.occurrent.subscription.CatchupSnapshot snapshot = self.get().catchupSnapshot("proj");
-            snapshotPerDelivery.add(event.getId() + "=" + snapshot.catchingUp() + "/" + snapshot.replayingHistory());
+            timeline.add(event.getId());
             return Mono.empty();
         }).waitUntilStarted().block();
 
-        await().untilAsserted(() -> assertThat(snapshotPerDelivery).containsExactly("history=true/true", "buffered=true/false"));
-        assertThat(model.catchupSnapshot("proj")).isEqualTo(org.occurrent.subscription.CatchupSnapshot.LIVE);
+        await().untilAsserted(() -> assertThat(timeline).containsExactly("started", "history", "historyRead", "buffered"));
     }
 
     @Test
@@ -559,6 +566,38 @@ class CatchupThenPushSubscriptionModelTest {
 
     private static Function<CloudEvent, Mono<Void>> recordInto(List<String> delivered) {
         return ce -> Mono.fromRunnable(() -> delivered.add(ce.getId()));
+    }
+
+
+    // Names each catch-up by the order it was announced in, so an assertion can say which one a signal belongs to
+    // without depending on what the model uses to identify it.
+    private static final class EpisodeLog implements CatchupListener {
+        private final List<String> signals = new CopyOnWriteArrayList<>();
+        private final List<Object> episodes = new ArrayList<>();
+
+        @Override
+        public void catchupStarted(Object episode) {
+            signals.add("started:" + indexOf(episode));
+        }
+
+        @Override
+        public void historyRead(Object episode) {
+            signals.add("historyRead:" + indexOf(episode));
+        }
+
+        List<String> signals() {
+            return signals;
+        }
+
+        private synchronized int indexOf(Object episode) {
+            for (int i = 0; i < episodes.size(); i++) {
+                if (episodes.get(i) == episode) {
+                    return i;
+                }
+            }
+            episodes.add(episode);
+            return episodes.size() - 1;
+        }
     }
 
     private static PositionOrderedReader reader(Supplier<Flux<CloudEvent>> flux, long head) {

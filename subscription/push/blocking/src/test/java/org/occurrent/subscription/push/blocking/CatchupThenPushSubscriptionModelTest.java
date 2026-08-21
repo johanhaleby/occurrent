@@ -30,6 +30,7 @@ import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
@@ -52,27 +53,89 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupThenPushSubscriptionModelTest {
 
-    // A cancelled replay must not tell its replacement that it is past a history read. The marker holds the replay
-    // itself rather than only the id, so a stale one arriving late cannot match the new attempt, and the new
-    // attempt reads its own history as history.
+    // The overlap a sequential cancel and re-subscribe never creates. The first catch-up is still folding its last
+    // event when the replacement registers, so its history-read signal arrives after the replacement has already
+    // announced itself. It names the catch-up that sent it, and the replacement's recorder ignores it, which is
+    // what lets the replacement read its own history as history.
     @Test
-    void a_second_catch_up_for_the_same_id_reads_its_history_as_history() {
+    void an_overlapping_cancel_and_resubscribe_lets_the_replacement_read_its_own_history_as_history() throws Exception {
         PushSubscriptionModel feed = new PushSubscriptionModel();
-        List<Boolean> historyDuringReplay = new CopyOnWriteArrayList<>();
-        AtomicReference<CatchupThenPushSubscriptionModel> self = new AtomicReference<>();
-        AtomicInteger round = new AtomicInteger();
-        PositionOrderedReader reader = reader(() -> Stream.of(cloudEvent("e" + round.incrementAndGet(), "Created")), 1);
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
 
-        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
-        self.set(model);
+        EpisodeLog log = new EpisodeLog();
+        assertThat(model.listenForCatchup("sub", log)).isTrue();
 
-        model.subscribe("proj", null, StartAt.subscriptionModelDefault(),
-                __ -> historyDuringReplay.add(self.get().isReplayingHistory("proj"))).waitUntilStarted();
-        model.cancelSubscription("proj");
-        model.subscribe("proj", null, StartAt.subscriptionModelDefault(),
-                __ -> historyDuringReplay.add(self.get().isReplayingHistory("proj"))).waitUntilStarted();
+        CountDownLatch oldReplayParkedOnLastEvent = new CountDownLatch(1);
+        CountDownLatch releaseOldReplay = new CountDownLatch(1);
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            if (ce.getId().equals("3")) {
+                oldReplayParkedOnLastEvent.countDown();
+                awaitLatch(releaseOldReplay);
+            }
+        });
+        assertThat(oldReplayParkedOnLastEvent.await(5, TimeUnit.SECONDS)).isTrue();
 
-        assertThat(historyDuringReplay).containsExactly(true, true);
+        // The old replay is left running, blocked, entirely unaware it has been cancelled.
+        model.cancelSubscription("sub");
+
+        CountDownLatch newReplayParkedOnFirstEvent = new CountDownLatch(1);
+        CountDownLatch releaseNewReplay = new CountDownLatch(1);
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            newReplayParkedOnFirstEvent.countDown();
+            awaitLatch(releaseNewReplay);
+        });
+        assertThat(newReplayParkedOnFirstEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // The old replay finishes now, while the replacement is parked on the first event of its own history.
+        releaseOldReplay.countDown();
+        Thread.sleep(200);
+
+        // The property: nothing has told the replacement its history has been read. Two things hold it up. The old
+        // replay's completion is stopped before it speaks, and a signal it did send would name its own catch-up,
+        // which the recorder receiving it ignores (AppliedAppendRecordingTest covers that half, where a stale
+        // signal is reachable).
+        assertThat(log.signals()).doesNotContain("historyRead:1");
+        assertThat(log.signals()).containsExactly("started:0", "started:1");
+
+        releaseNewReplay.countDown();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!log.signals().contains("historyRead:1") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(log.signals()).containsExactly("started:0", "started:1", "historyRead:1");
+    }
+
+    // Names each catch-up by the order it was announced in, so an assertion can say which one a signal belongs to
+    // without depending on what the model uses to identify it.
+    private static final class EpisodeLog implements CatchupListener {
+        private final List<String> signals = new CopyOnWriteArrayList<>();
+        private final List<Object> episodes = new ArrayList<>();
+
+        @Override
+        public void catchupStarted(Object episode) {
+            signals.add("started:" + indexOf(episode));
+        }
+
+        @Override
+        public void historyRead(Object episode) {
+            signals.add("historyRead:" + indexOf(episode));
+        }
+
+        List<String> signals() {
+            return signals;
+        }
+
+        private synchronized int indexOf(Object episode) {
+            for (int i = 0; i < episodes.size(); i++) {
+                if (episodes.get(i) == episode) {
+                    return i;
+                }
+            }
+            episodes.add(episode);
+            return episodes.size() - 1;
+        }
     }
 
     @Test
