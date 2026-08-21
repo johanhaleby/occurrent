@@ -256,15 +256,43 @@ defect and fixed it in [#730](https://github.com/johanhaleby/occurrent/issues/73
 the wait's remaining time. Both stacks apply that limit here, so the timeout the caller asked for is the one they
 get.
 
-### 6. Nothing is recorded while a projection is replaying
+### 6. Nothing is recorded while a projection is reading history
 
-A recorder records an identifier only when its projection is delivering live events. During a replay it records
-nothing at all.
+A recorder records an identifier only when its projection is past the history its replay set out to read. While that
+history is being read it records nothing at all.
 
 One rule closes all three problems from the context above. A full replay inserts nothing, so the volume problem
 disappears. An identifier is never recorded for an update that a coalescing view buffered rather than wrote,
 because the recorder does not run during the replay when buffering happens. And an abandoned replay has nothing
 recorded to become untrue when the buffer is discarded.
+
+A catch-up is two parts, not one, and this rule is about the first of them. Every catch-up in this library reads the
+history that already existed when it started, and then delivers the events written while it was doing that. The
+blocking stream model reads a delta by insertion order after its bulk read, the position models reconcile up to a
+freshly read head, and the push model drains the live events it buffered during the replay. All three deliver those
+events through the same action the history went through, and for some of them that is the only delivery there will
+ever be, because the live subscription resumes past them or the broker was already told they were handled.
+
+So a recorder that treated the whole catch-up as a replay would record nothing for an append the projection did
+apply, and a wait for that append would never finish. That is what
+[#890](https://github.com/johanhaleby/occurrent/issues/890) reports. The three reasons above are reasons about
+history and none of them reaches the second part. Its volume is what the application wrote during the replay, which
+is the volume the same projection would record if it were already live. A coalescing view buffers only after
+`ReplayAware.replayStarted()`, which no subscription-fed composition ever calls, so on the path this matters for
+nothing is buffered at all. And decision 7's clear is a precondition there exactly as it is everywhere else.
+
+The recorder therefore asks which part of the catch-up a delivery belongs to, rather than whether a catch-up is
+running. `ReplayAwareSubscriptions` gains `isReplayingHistory(subscriptionId)` on both stacks for the models to
+answer with, defaulting to `isCatchingUp(subscriptionId)`, so a model that cannot tell the two apart keeps the older
+behaviour and loses those appends rather than recording something untrue.
+
+Where each model announces the change matters as much as that it does. It has to happen after the last history event
+has been applied and before the first of the others is, which is not the same as when the source of history runs
+out. The reactor models apply the projection's own action inside the replay pipeline for that reason, since
+`concatMap` prefetches and a signal placed between the two halves upstream of it would fire while a prefetch worth
+of history was still waiting to be applied. The push models announce it at the buffer drain rather than beside
+`replayCompleted()`, since a projection that was already caught up skips the replay entirely and never reaches that
+call.
 
 The check is asked per delivery. On subscription-fed paths it is the same question the saga timer already asks, so
 the recorder takes a `BooleanSupplier` built from `isCatchingUp(subscriptionId)`. On the pull paths, where
@@ -289,6 +317,20 @@ the two that can be decided at wiring time, no store bean and `mode = SYNCHRONOU
 
 A projection clears its membership records before recording resumes after any observation that it is replaying.
 `clear(projectionId)` deletes them, and until that delete has come back successfully the recorder records nothing.
+
+That holds in the second part of a catch-up too, and there it needs one addition, because that part records. An
+append applied while the clear is still owed cannot be written yet, since the delete that is owed would remove it
+again, and it cannot be skipped either, since that part of the catch-up is the only delivery it gets. So it
+waits, and is written once the clear lands. The wait is bounded at a thousand appends, and past that the oldest are
+dropped with a warning. That bound reads like the delivery caches elsewhere in this library and behaves in the
+opposite direction. An id evicted from a `BoundedIdCache` costs a second delivery, which the at-least-once contract
+already allows, while an append dropped here is never recorded and a wait for it times out. The bound is high enough
+that reaching it means a clear has been failing for a long time, which decision 7 already logs loudly.
+
+Everything waiting is dropped whenever the projection is seen reading history again, rather than only when it goes
+live. A stop parks a replay and a start reads that history from the beginning, with nothing live in between, so a
+rule keyed on the transition to live would let a parked catch-up's appends be written into a read model that is
+being rebuilt. That is the untruth this decision exists to prevent, arriving by a different route.
 
 The precondition is what makes the rule safe rather than best effort. A clear that exhausts its retries stops the
 recorder and logs loudly, and never lets recording continue as though the clear had happened, because a transient
@@ -497,6 +539,17 @@ separately.
   restart and no replay anywhere.
 - The scheduled poll has a residual that decision 7 states. A replay shorter than the poll interval that
   delivers no event the projection handles is not observed, so its records survive.
+- An append the projection applied during the second part of a catch-up is recorded, which closes the window
+  [#890](https://github.com/johanhaleby/occurrent/issues/890) reported, where such an append could never be recorded
+  by any path and a wait for it never finished. Two losses remain and are worth naming rather than leaving to be
+  rediscovered. On the reactor stack a write whose position was reserved before the replay read the head, and that
+  committed after it, can still be read by a history window, and the reactor replay puts every id it reads into the
+  same cache its live delivery filters on, so no second delivery follows and that append is not recorded.
+  [#891](https://github.com/johanhaleby/occurrent/issues/891) tracks it. The blocking stacks do not have it, because
+  their history reads do not populate that cache and a second delivery follows. The other loss is the bound in
+  decision 7, an append dropped from the wait while a clear keeps failing.
+- Closing it needed no ordering rule and no position comparison, which is what made it closable at all. A delivery is
+  classified by which read produced it, and every closure that classified by position ran into what ADR 122 refuted.
 - Widening the two result records breaks external code two ways, and only one of them announces itself. An
   equality assertion against a whole record starts failing with no compile error, while a record deconstruction
   pattern stops compiling. The changelog entry and the migration-guide section are what tell the reader about the
