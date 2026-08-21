@@ -741,3 +741,45 @@ topic narrowing has nothing left to do and decision 5's rule that the feed remai
 rest. `KafkaTopicPerTypeDestinationResolver` stays exactly as it is, unchanged in behaviour, the documented
 alternative for a deployment that wants per-type topics and either has single-type streams or accepts the
 narrower guarantee.
+
+## Amendment (2026-08-21): readiness gate for catch-up subscriptions
+
+Decision 1 says `CatchupThenPushSubscriptionModel` keeps the shape it has, and that `PushObserver` and the outcome
+`routeReportingMatch` reports to it are the one exception. That was accurate for the single acknowledgement decision
+a CloudEvent-level bridge had, whether the routing evaluation reported `DELIVERED`. It stopped being accurate once a
+bridge feeds a `PushSubscriptionModel` that a `CatchupThenPushSubscriptionModel` wraps.
+
+The wrapper registers on the live model before its own replay finishes, so a message the bridge pulls off the broker
+during that window reaches `routeReportingMatch`, gets reported `DELIVERED`, and is only buffered by the wrapper's
+`BlockingHandover`, not yet applied to the projection. `RoutingOutcome` alone cannot tell the two apart, because the
+bridge holds only the live `PushSubscriptionModel`, never the wrapper, unchanged from decision 1. A crash before the
+buffer drains loses that event for good, and it is not recoverable from the local event store, since a consume
+bridge exists precisely to receive an event another service published, one this store never had a copy of to replay
+back. The safety constraint this amendment adds is that a bridge must never acknowledge or commit a message for a
+subscription still in catch-up replay, because the broker's own copy is the only copy of that message anywhere.
+
+`CatchupThenPushSubscriptionModel` gains `isReadyForLiveDelivery(String)`, delegating to the specific subscription's
+`BlockingHandover`, the component that actually owns the buffer, true only once that subscription's catch-up has
+reached live. `RabbitMqCloudEventBridge` and `KafkaCloudEventBridge` each gain an optional
+`readinessSource(Predicate<String>)` on their builders, `true` for every id by default so a bridge fed a bare
+`PushSubscriptionModel` with no catch-up wrapper is unaffected, and AND it into the same coarse consume/fetch poll
+decision 1 already describes for the running and paused check. `@Projection(source = PUSH)` and
+`@Saga(source = PUSH)` publish the `CatchupThenPushSubscriptionModel` each builds internally as a Spring bean named
+`"catchupThenPushSubscriptionModel-" + id`, since that object was otherwise reachable only from inside the registrar
+that built it, and application wiring needs a handle on it to pass to `readinessSource`.
+
+Decision 1's "keep the shapes they have" now reads with a second narrow exception beside `PushObserver`.
+`CatchupThenPushSubscriptionModel` gains `isReadyForLiveDelivery(String)` and, on the Spring stack, becomes
+independently reachable as a named bean rather than staying private to the registrar that builds it. Both are
+additive. Nothing about `subscribe`, the catch-up-then-live handover, or the rest of the class's existing contract
+changed, and a caller that never touches `readinessSource` sees identical behavior to before this amendment.
+
+This closes the gap for the blocking stack's CloudEvent-level bridges only. The reactor stack has no equivalent yet.
+`ReactiveHandover` has no `isReadyForLiveDelivery()`, the reactor `DomainEventFeed` never received the domain-level
+version of this fix either, and no reactor broker bridge exists yet to need one. A design that has the bridge hold
+the `CatchupThenPushSubscriptionModel` itself, giving it a `Pushable` shape so readiness reaches the per-message
+`RoutingOutcome` the way `DomainEventFeed.acceptCloudEvent` already does, was considered and rejected for this
+change, since it would falsify decision 1's "not itself a push target" rationale outright rather than adding a
+narrow exception beside it. That alternative is tracked as
+[#885](https://github.com/johanhaleby/occurrent/issues/885), pending its own decision on whether to amend decision 1
+further.
