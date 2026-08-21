@@ -204,6 +204,12 @@ class ProjectionAnnotationRecordAppliedAppendsResetMongoTest {
     // directly during development, every tick at the shipped default observed replaying=false, none ever caught the
     // window), so this test needs a poll fast enough to observe a transient state real production traffic would
     // rarely make this brief.
+    //
+    // Max is set equal to initial rather than left at the shipped default (5s). isCatchingUp is an in-memory check,
+    // so polling every 5ms for the whole 60-second wait costs nothing. Left to back off, the poll doubles its
+    // interval on every live tick and reaches the old 1s cap within about 8 ticks, so a scheduling delay under load
+    // that pushes those first few ticks past the (equally load-affected) catch-up window means the remaining 59
+    // seconds poll once a second, with no chance left to observe a phase that already ended.
     private static String[] bootArgs(String databaseName) {
         return new String[]{
                 "--spring.mongodb.uri=" + mongoDBContainer.getReplicaSetUrl(databaseName),
@@ -211,7 +217,7 @@ class ProjectionAnnotationRecordAppliedAppendsResetMongoTest {
                 "--occurrent.event-store.capabilities=stream",
                 "--occurrent.cloud-event-converter.cloud-event-source=urn:occurrent:" + databaseName,
                 "--occurrent.projection.applied-append.replay-poll.initial=5ms",
-                "--occurrent.projection.applied-append.replay-poll.max=1s"
+                "--occurrent.projection.applied-append.replay-poll.max=5ms"
         };
     }
 
