@@ -804,6 +804,85 @@ class CatchupThenPushSubscriptionModelTest {
                 + "caught up").isTrue();
     }
 
+    /**
+     * A fresh-context verify of the fix above caught a narrower window it still left open: the post-loop
+     * {@code keepReplaying()} check and {@code markCaughtUp()} are separate steps with nothing re-checked in
+     * between, so an old replay whose ownership lapses after that check has already passed, but before
+     * {@code markCaughtUp()} and the pending-pause consumption actually run, still reaches both. Parking the old
+     * replay on a buffered live event's fold during {@code drainBufferAndGoLive()}, which only runs after the
+     * post-loop check has already passed, reproduces exactly that window.
+     */
+    @Test
+    void an_old_replays_ownership_lapsing_after_the_post_loop_check_still_does_not_write_the_new_subscriptions_marker_or_consume_its_pending_pause() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+
+        CountDownLatch oldReplayParkedOnHistoricalEvent = new CountDownLatch(1);
+        CountDownLatch releaseHistoricalEvent = new CountDownLatch(1);
+        CountDownLatch oldReplayParkedOnBufferedLiveEvent = new CountDownLatch(1);
+        CountDownLatch releaseBufferedLiveEvent = new CountDownLatch(1);
+        List<String> oldReplayFolded = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            oldReplayFolded.add(ce.getId());
+            if (ce.getId().equals("1")) {
+                oldReplayParkedOnHistoricalEvent.countDown();
+                awaitLatch(releaseHistoricalEvent);
+            } else if (ce.getId().equals("2-live")) {
+                oldReplayParkedOnBufferedLiveEvent.countDown();
+                awaitLatch(releaseBufferedLiveEvent);
+            }
+        });
+        assertThat(oldReplayParkedOnHistoricalEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Written once the replay's own history query has already run, so this arrives as a live event the
+        // still-replaying handover only buffers, not as part of the replay itself.
+        store.write("s1", List.of(cloudEvent("2-live", "Updated")));
+
+        // Unblocks the historical fold. hasNext() is now false, so the post-loop keepReplaying() check runs next,
+        // still true (ownership has not moved yet), and drainBufferAndGoLive() delivers the one buffered event.
+        releaseHistoricalEvent.countDown();
+        assertThat(oldReplayParkedOnBufferedLiveEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // The post-loop check has already passed by now. Ownership moves here, while the old replay is parked
+        // mid-drain, after that check and before markCaughtUp().
+        model.cancelSubscription("sub");
+        CountDownLatch newReplayParkedOnFirstEvent = new CountDownLatch(1);
+        CountDownLatch releaseNewReplay = new CountDownLatch(1);
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            newReplayParkedOnFirstEvent.countDown();
+            awaitLatch(releaseNewReplay);
+        });
+        assertThat(newReplayParkedOnFirstEvent.await(5, TimeUnit.SECONDS)).isTrue();
+        model.pauseSubscription("sub");
+        assertThat(model.isPaused("sub")).isTrue();
+
+        // The old replay's drain finishes only now, well after the id moved on.
+        releaseBufferedLiveEvent.countDown();
+        Thread.sleep(200);
+        assertThat(oldReplayFolded).containsExactly("1", "2-live");
+
+        assertThat(marker.exists("sub")).as("the old replay's late completion must not mark the new subscription "
+                        + "caught up, even though its own post-loop keepReplaying() check already passed before "
+                        + "ownership moved")
+                .isFalse();
+        assertThat(feed.isPaused("sub")).as("the pending pause survives the old replay's late completion, still "
+                + "waiting for the new replay's own completion to apply it").isFalse();
+        assertThat(model.isPaused("sub")).as("still pending, not lost").isTrue();
+
+        releaseNewReplay.countDown();
+        long pauseDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!feed.isPaused("sub") && System.nanoTime() < pauseDeadline) {
+            Thread.sleep(10);
+        }
+        assertThat(feed.isPaused("sub")).as("the new replay's own completion applies the pause that was always "
+                + "meant for it").isTrue();
+        assertThat(marker.exists("sub")).as("only the new replay's own completion marks this subscription "
+                + "caught up").isTrue();
+    }
+
     @Test
     void starting_the_model_without_resuming_subscriptions_leaves_a_stopped_replay_for_resume_to_pick_up() throws Exception {
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();

@@ -277,7 +277,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public void markCaughtUp() {
-                CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId);
+                completeIfStillOwned(subscriptionId, self.get(), () -> CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId));
             }
         };
 
@@ -317,16 +317,24 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 return false;
             }
             // By identity, for the same reason the failure path above is: this replay's own completion must never
-            // evict a newer launcher a cancelSubscription(id) plus subscribe(id, ...) already put there.
+            // evict a newer launcher a cancelSubscription(id) plus subscribe(id, ...) already put there. Forgetting
+            // the entry and applying the pending pause are one guarded step with markCaughtUp's own check, so a
+            // cancelSubscription(id) plus subscribe(id, ...) landing between the post-loop keepReplaying() check
+            // inside catchUp(..) and here still finds this replay's ownership already gone and does neither.
             interruptibleReplays.remove(subscriptionId, ownLaunch.get());
-            forget(subscriptionId, self.get());
-            applyPendingPauseIfAny(subscriptionId);
+            completeIfStillOwned(subscriptionId, self.get(), () -> {
+                replayingSubscriptions.remove(subscriptionId, self.get());
+                applyPendingPauseIfAny(subscriptionId);
+            });
             return true;
         });
         self.set(replay);
         // Registered before the thread starts, so isRunning(id) answers for it the moment subscribe returns rather than
-        // whenever the replay thread happens to get scheduled.
-        replayingSubscriptions.put(subscriptionId, replay);
+        // whenever the replay thread happens to get scheduled. Synchronized with completeIfStillOwned's own check, so
+        // a new registration here can never land in the middle of an old replay's late, id-scoped completion.
+        synchronized (this) {
+            replayingSubscriptions.put(subscriptionId, replay);
+        }
         Thread.ofVirtual().name("occurrent-push-catchup-" + subscriptionId).start(replay);
         return replay;
     }
@@ -357,6 +365,18 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     private void forget(String subscriptionId, @Nullable Future<Boolean> replay) {
         if (replay != null) {
             replayingSubscriptions.remove(subscriptionId, replay);
+        }
+    }
+
+    // The ownership check and the id-scoped write or side effect it guards have to be one step, or a stale replay's
+    // own late completion can still act on an id a cancelSubscription(id) plus subscribe(id, ...) already gave to a
+    // newer one, even though the per-payload and post-loop keepReplaying() checks inside catchUp(..) both passed.
+    // Synchronized on the same monitor launchReplay's own replayingSubscriptions.put(..) and cancelSubscription's
+    // replayingSubscriptions.remove(..) use, for the same reason relaunchInterruptedReplay already is: lifecycle
+    // calls are rare enough that the lock costs nothing.
+    private synchronized void completeIfStillOwned(String subscriptionId, @Nullable Future<Boolean> replay, Runnable completion) {
+        if (replay != null && replayingSubscriptions.get(subscriptionId) == replay) {
+            completion.run();
         }
     }
 
@@ -516,8 +536,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     @Override
     public void cancelSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        // Removing it here is what stops a replay in flight: shouldKeepReplaying reads this map.
-        replayingSubscriptions.remove(subscriptionId);
+        // Removing it here is what stops a replay in flight: shouldKeepReplaying reads this map. Synchronized with
+        // completeIfStillOwned's own check, for the same reason launchReplay's put(..) is.
+        synchronized (this) {
+            replayingSubscriptions.remove(subscriptionId);
+        }
         pauseRequestedDuringReplay.remove(subscriptionId);
         // A cancel is not a stop, so nothing is kept to launch again. This is also the recovery from a failed
         // catch-up: it frees the id and releases the registration that was refusing (ADR 104).
