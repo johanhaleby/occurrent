@@ -32,6 +32,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Fallback;
 import org.springframework.context.annotation.Lazy;
 
+import java.util.Set;
+
 /**
  * The domain-level half of the Kafka broker auto-configuration, in its own package the way
  * {@code org.occurrent.broker.kafka.blocking.domain} sits beside the CloudEvent-level classes it wraps.
@@ -45,6 +47,13 @@ import org.springframework.context.annotation.Lazy;
  */
 @Configuration(proxyBeanMethods = false)
 public class KafkaDomainBrokerConfiguration {
+
+    /**
+     * The two bean names the {@code @Fallback} {@code CloudEventSink} this starter and the RabbitMQ starter each
+     * register under, the only ambiguity {@link #resolveCloudEventSink} treats as expected rather than as a
+     * genuine application misconfiguration.
+     */
+    private static final Set<String> STARTER_FALLBACK_SINK_BEAN_NAMES = Set.of("occurrentKafkaCloudEventSink", "occurrentRabbitMqCloudEventSink");
 
     /**
      * {@code @Lazy}: instantiating this pulls in the {@code CloudEventSink} bean as a dependency, and that bean is
@@ -70,12 +79,24 @@ public class KafkaDomainBrokerConfiguration {
         return KafkaDomainEventSink.using(resolveCloudEventSink(cloudEventSinkProvider, ownCloudEventSinkProvider), converter);
     }
 
+    /**
+     * An application declaring two non-fallback {@code CloudEventSink} beans with no {@code @Primary} is a
+     * genuine configuration error, one Spring already rejects loudly through {@code cloudEventSinkProvider}. The
+     * only ambiguity this method absorbs instead of rethrowing is the one both broker starters cause on purpose,
+     * so a check against the exact pair of bean names {@link #STARTER_FALLBACK_SINK_BEAN_NAMES} distinguishes the
+     * two, catching every {@code NoUniqueBeanDefinitionException} regardless of which beans caused it would route
+     * a genuine user mistake through this starter's own sink silently instead, the exact wrong-sink failure mode
+     * fixing the two-starter case was meant to eliminate.
+     */
     private static CloudEventSink resolveCloudEventSink(ObjectProvider<CloudEventSink> cloudEventSinkProvider,
                                                           ObjectProvider<CloudEventSink> ownCloudEventSinkProvider) {
         try {
             return cloudEventSinkProvider.getObject();
-        } catch (NoUniqueBeanDefinitionException ambiguousBetweenBrokerStarters) {
-            return ownCloudEventSinkProvider.getObject();
+        } catch (NoUniqueBeanDefinitionException ambiguous) {
+            if (Set.copyOf(ambiguous.getBeanNamesFound()).equals(STARTER_FALLBACK_SINK_BEAN_NAMES)) {
+                return ownCloudEventSinkProvider.getObject();
+            }
+            throw ambiguous;
         }
     }
 

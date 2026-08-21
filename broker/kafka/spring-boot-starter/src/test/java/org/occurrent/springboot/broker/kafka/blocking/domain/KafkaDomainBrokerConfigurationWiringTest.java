@@ -24,6 +24,7 @@ import org.occurrent.broker.api.blocking.CloudEventSink;
 import org.occurrent.broker.api.blocking.DomainEventSink;
 import org.occurrent.springboot.broker.kafka.blocking.EnableOccurrentKafkaBroker;
 import org.occurrent.springboot.broker.kafka.blocking.KafkaBrokerProperties;
+import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -32,6 +33,7 @@ import org.springframework.context.annotation.Fallback;
 import java.net.URI;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -129,6 +131,25 @@ class KafkaDomainBrokerConfigurationWiringTest {
     }
 
     /**
+     * Two non-fallback {@code CloudEventSink} beans with no {@code @Primary} is a genuine application
+     * misconfiguration, not the known two-starter tie {@link KafkaDomainBrokerConfiguration#resolveCloudEventSink}
+     * absorbs. It must fail loud naming both candidates rather than silently routing domain events through this
+     * starter's own fallback sink, an earlier version of that method's catch block did exactly that for every
+     * ambiguity regardless of which beans caused it.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void two_user_supplied_cloud_event_sinks_with_no_primary_fail_loud_rather_than_silently_falling_back() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(CloudEventConverterSupplyingConfiguration.class, KafkaDomainBrokerConfiguration.class)
+                .withBean(KafkaBrokerProperties.class, KafkaBrokerProperties::new)
+                .withBean("firstUserCloudEventSink", CloudEventSink.class, () -> mock(CloudEventSink.class))
+                .withBean("secondUserCloudEventSink", CloudEventSink.class, () -> mock(CloudEventSink.class))
+                .run(context -> assertThatThrownBy(() -> context.getBean(DomainEventSink.class))
+                        .hasRootCauseInstanceOf(NoUniqueBeanDefinitionException.class));
+    }
+
+    /**
      * With no user override and both starters' {@code @Fallback} sinks present, type resolution is genuinely
      * ambiguous, so {@link KafkaDomainBrokerConfiguration#occurrentKafkaDomainEventSink} falls back to the bean
      * literally named {@code occurrentKafkaCloudEventSink} rather than throwing
@@ -143,7 +164,7 @@ class KafkaDomainBrokerConfigurationWiringTest {
                     DomainEventSink<Object> domainSink = context.getBean(DomainEventSink.class);
                     domainSink.publish(new Object());
                     CloudEventSink ownSink = context.getBean("occurrentKafkaCloudEventSink", CloudEventSink.class);
-                    CloudEventSink competingSink = context.getBean("competingCloudEventSink", CloudEventSink.class);
+                    CloudEventSink competingSink = context.getBean("occurrentRabbitMqCloudEventSink", CloudEventSink.class);
                     verify(ownSink).publish(CONVERTED_EVENT);
                     verifyNoInteractions(competingSink);
                 });
@@ -201,11 +222,16 @@ class KafkaDomainBrokerConfigurationWiringTest {
 
         @Bean(name = "occurrentKafkaCloudEventSink")
         @Fallback
-        CloudEventSink correctCloudEventSink() {
+        CloudEventSink ownCloudEventSink() {
             return mock(CloudEventSink.class);
         }
 
-        @Bean
+        /**
+         * Named exactly as the real RabbitMQ starter's own {@code occurrentRabbitMqCloudEventSink} bean would be,
+         * the detail {@link KafkaDomainBrokerConfiguration#STARTER_FALLBACK_SINK_BEAN_NAMES} checks against to
+         * tell this legitimate two-starter tie apart from a genuine application misconfiguration.
+         */
+        @Bean(name = "occurrentRabbitMqCloudEventSink")
         @Fallback
         CloudEventSink competingCloudEventSink() {
             return mock(CloudEventSink.class);

@@ -71,6 +71,18 @@ class OccurrentKafkaAutoConfigurationWiringTest {
                 .run(context -> assertThat(context).hasSingleBean(KafkaCloudEventBridgeFactory.class));
     }
 
+    /**
+     * {@code bootstrap-servers[0]=} with nothing after the {@code =} binds to a list holding one blank string,
+     * nonempty but configuring no actual server, the same reading the scalar form {@code bootstrap-servers=}
+     * already rejects. {@link KafkaBootstrapServersConfiguredCondition} must reject this indexed form the same
+     * way, rather than activating the starter on a blank entry that only fails once Kafka's own client uses it.
+     */
+    @Test
+    void does_not_activate_for_an_indexed_form_with_only_a_blank_element() {
+        contextRunner.withPropertyValues("occurrent.broker.kafka.bootstrap-servers[0]=")
+                .run(context -> assertThat(context).doesNotHaveBean(KafkaCloudEventBridgeFactory.class));
+    }
+
     @Test
     void resolver_bean_activates_once_the_topic_property_is_present() {
         contextRunner.withPropertyValues(
