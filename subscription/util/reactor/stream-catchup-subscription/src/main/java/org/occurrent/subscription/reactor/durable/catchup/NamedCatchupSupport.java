@@ -118,7 +118,7 @@ final class NamedCatchupSupport {
      */
     long catchupGeneration(String subscriptionId) {
         CatchupState state = catchingUp.get(subscriptionId);
-        return state == null ? 0L : state.generation;
+        return state == null ? 0L : state.generation.get();
     }
 
     boolean isReplayingHistory(String subscriptionId) {
@@ -159,8 +159,9 @@ final class NamedCatchupSupport {
         // position (re-adding ids to the cache is a no-op; re-delivering replayed events is at-least-once).
         state.launcher = () -> {
             // A relaunch reads the history again from the same start position, so this attempt starts in the history
-            // part of its catch-up however far the previous run got.
+            // part of its catch-up however far the previous run got, and counts as a different catch-up.
             state.replayingHistory.set(true);
+            state.generation.set(CATCHUP_GENERATIONS.incrementAndGet());
             // Token before replay, replay through the caller's action (no retry, failure is loud), then delegate live.
             Disposable replaying = pipeline.captureLiveToken(wrapped)
                     .flatMapMany(liveToken -> pipeline.replayApplying(startPosition, cache,
@@ -399,8 +400,10 @@ final class NamedCatchupSupport {
         // written since the replay started. Back to true whenever the replay is relaunched, since that reads the
         // history again from the same start position.
         final AtomicBoolean replayingHistory = new AtomicBoolean(true);
-        // Numbers this catch-up so a caller that only samples the model can tell it from the next one for the same id.
-        final long generation = CATCHUP_GENERATIONS.incrementAndGet();
+        // Numbers this catch-up so a caller that only samples the model can tell it from the next one for the same
+        // id. Assigned on every launch rather than once here, because a stop parks this same state and a start runs
+        // its launcher again, which reads the history from the beginning and is a different catch-up.
+        final java.util.concurrent.atomic.AtomicLong generation = new java.util.concurrent.atomic.AtomicLong();
         // The replay, relaunchable: assigned once in subscribeWithCatchup before the state is published, run under
         // the state monitor by the initial subscribe and by start(..) for parked subscriptions.
         volatile Runnable launcher = () -> {

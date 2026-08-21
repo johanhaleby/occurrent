@@ -156,8 +156,15 @@ public final class AppliedAppendRecording {
      * observation would run one delete per replayed event instead of one per episode.
      */
     private CatchupPhase observePhase() {
-        CatchupPhase current = lifecycleReplaying ? CatchupPhase.REPLAYING_HISTORY : phase.currentPhase();
+        // The generation is read first, and a catch-up that ended between the two reads is settled in favour of the
+        // first one. Going from a catch-up to none means it finished, so this call is live whatever the second read
+        // said, and without that a reconciliation the second read reported would clear appends the catch-up that just
+        // finished had recorded, with nothing left to deliver them again. Only a change to zero counts, because a
+        // composition that cannot supply a generation at all answers zero for everything, replays included.
         long generation = lifecycleReplaying ? lastGeneration : phase.currentGeneration();
+        boolean catchupEndedBetweenTheReads = generation == 0L && lastGeneration != 0L;
+        CatchupPhase current = lifecycleReplaying ? CatchupPhase.REPLAYING_HISTORY
+                : catchupEndedBetweenTheReads ? CatchupPhase.LIVE : phase.currentPhase();
         if (generation != lastGeneration) {
             // A different catch-up than the one the last observation saw, so nothing this recorder learned during
             // that one applies here. This is what makes the clear happen even when the handover, the live gap and

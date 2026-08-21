@@ -430,6 +430,41 @@ class AppliedAppendRecordingTest {
         assertThat(store.hasApplied(PROJECTION_ID, secondCatchup)).isTrue();
     }
 
+    // The phase and the catch-up it belongs to are two reads, and a catch-up can end between them. Answering that
+    // there is no catch-up settles it, because otherwise the reconciliation the first read reported would clear the
+    // appends the catch-up that just finished had recorded, and nothing would deliver them again.
+    @Test
+    void a_catch_up_that_ends_between_the_two_reads_does_not_clear_what_it_just_recorded() {
+        List<String> clears = new ArrayList<>();
+        AppliedAppendStore store = clearCountingStore(clears, new AtomicBoolean(false));
+        AppendId recordedByTheCatchup = AppendId.mint();
+        AtomicBoolean seenRunning = new AtomicBoolean(false);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, new ReplayPhase() {
+            @Override
+            public CatchupPhase currentPhase() {
+                return CatchupPhase.RECONCILING;
+            }
+
+            @Override
+            public long currentGeneration() {
+                // The catch-up is over by the time this is read, after an earlier delivery saw it running.
+                return seenRunning.get() ? 0L : 7L;
+            }
+        });
+        store.recordApplied(PROJECTION_ID, recordedByTheCatchup);
+
+        // One delivery while the catch-up is genuinely running, so the recorder has a generation to compare against.
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        clears.clear();
+        seenRunning.set(true);
+        store.recordApplied(PROJECTION_ID, recordedByTheCatchup);
+
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+
+        assertThat(clears).isEmpty();
+        assertThat(store.hasApplied(PROJECTION_ID, recordedByTheCatchup)).isTrue();
+    }
+
     // Staying in the history read must not start a new episode on every event, which is what the per-episode latch
     // is for. Only the edge from the reconciliation back to history does.
     @Test
