@@ -638,6 +638,151 @@ class CatchupThenPushSubscriptionModelTest {
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
     }
 
+    // --- isReadyForLiveDelivery(String), the accessor a CloudEvent-level broker bridge gates its own consumption on
+    // (RabbitMqCloudEventBridge and KafkaCloudEventBridge's readinessSource), so a message buffered here rather than
+    // applied to the projection is never acknowledged away before it is actually safe. ---
+
+    @Test
+    void an_id_the_model_has_never_seen_is_not_ready_for_live_delivery() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        assertThat(model.isReadyForLiveDelivery("never-subscribed")).isFalse();
+    }
+
+    @Test
+    void is_ready_for_live_delivery_is_false_while_the_replay_is_still_running_and_true_once_it_drains() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        CountDownLatch replayReached = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            replayReached.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayReached.await(10, TimeUnit.SECONDS)).isTrue();
+
+        // Not yet. The replay is still applying its history, and a bridge reading this must not pull a message off
+        // the broker while it answers false, or an event only buffered here could be acknowledged before it is
+        // actually safe.
+        assertThat(model.isReadyForLiveDelivery("proj")).isFalse();
+
+        releaseReplay.countDown();
+        subscription.waitUntilStarted();
+
+        assertThat(model.isReadyForLiveDelivery("proj")).isTrue();
+    }
+
+    /**
+     * The buffering case specifically, distinct from the mid-replay case above. A live event that arrives while the
+     * replay is still in flight is only queued in the handover, not yet applied to the projection, so readiness must
+     * stay false for it too until the drain actually runs, the same "buffered, not durable" state
+     * {@code BlockingHandover} documents.
+     */
+    @Test
+    void is_ready_for_live_delivery_is_false_while_a_live_event_is_only_buffered_ahead_of_the_drain() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(__ -> {
+        });
+        store.write("s1", List.of(cloudEvent("1", "Created")));
+
+        CountDownLatch replayStarted = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            delivered.add(ce.getId());
+            replayStarted.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replayStarted.await(5, TimeUnit.SECONDS)).isTrue();
+
+        feed.accept(cloudEvent("live", "Updated"));
+        // Buffered, not yet applied. Still not ready, even though the live feed already accepted the event.
+        assertThat(model.isReadyForLiveDelivery("proj")).isFalse();
+        assertThat(delivered).doesNotContain("live");
+
+        releaseReplay.countDown();
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+        assertThat(model.isReadyForLiveDelivery("proj")).isTrue();
+        assertThat(delivered).containsExactly("1", "live");
+    }
+
+    @Test
+    void is_ready_for_live_delivery_stays_false_across_a_stop_mid_replay_and_becomes_true_once_a_relaunch_drains() throws Exception {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated")));
+
+        CountDownLatch firstFolded = new CountDownLatch(1);
+        CountDownLatch releaseFold = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            folded.add(ce.getId());
+            firstFolded.countDown();
+            awaitLatch(releaseFold);
+        });
+
+        assertThat(firstFolded.await(5, TimeUnit.SECONDS)).isTrue();
+        model.stop();
+        releaseFold.countDown();
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
+
+        // Stopped, same handover kept. Still not ready, not merely "unknown".
+        assertThat(model.isReadyForLiveDelivery("proj")).isFalse();
+
+        model.start(true);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!marker.exists("proj") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+
+        assertThat(model.isReadyForLiveDelivery("proj")).isTrue();
+    }
+
+    @Test
+    void is_ready_for_live_delivery_is_permanently_false_after_a_catch_up_failure() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), feed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        });
+        assertThat(catchThrowable(subscription::waitUntilStarted)).isInstanceOf(IllegalStateException.class);
+
+        assertThat(model.isReadyForLiveDelivery("sub")).isFalse();
+
+        // Restarting a failed catch-up does not clear the failure (only cancelSubscription + a fresh subscribe does),
+        // so this must keep answering false rather than flip true just because start(true) ran.
+        model.stop();
+        model.start(true);
+
+        assertThat(model.isReadyForLiveDelivery("sub")).isFalse();
+    }
+
+    @Test
+    void is_ready_for_live_delivery_is_false_once_a_subscription_is_cancelled() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        }).waitUntilStarted();
+        assertThat(model.isReadyForLiveDelivery("proj")).isTrue();
+
+        model.cancelSubscription("proj");
+
+        // The handover is gone along with the registration, the same "nothing here is tracking this id" answer as
+        // an id never subscribed at all.
+        assertThat(model.isReadyForLiveDelivery("proj")).isFalse();
+    }
+
     private static void awaitLatch(CountDownLatch latch) {
         try {
             if (!latch.await(5, TimeUnit.SECONDS)) {

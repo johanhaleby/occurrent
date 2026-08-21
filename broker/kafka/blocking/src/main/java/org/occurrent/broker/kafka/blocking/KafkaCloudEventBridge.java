@@ -43,6 +43,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
 import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
@@ -120,7 +121,14 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * pause an assignment that already exists, and the assignment itself is only created by a {@code poll()} call, so a
  * fresh {@code Consumer}'s very first fetch can still return records before pausing has ever had a chance to apply.
  * When that happens this bridge seeks every affected partition back to the earliest record that poll returned,
- * rather than silently dropping what it already fetched but was never entitled to feed the model.
+ * rather than silently dropping what it already fetched but was never entitled to feed the model. The same recheck
+ * also reads {@link Builder#readinessSource(Predicate)} for the subscription id, {@code true} by default, so this
+ * bridge never fetches while a {@link CatchupThenPushSubscriptionModel} wrapping {@code model} is still replaying or
+ * draining into it. Records queue up on the broker instead of being pulled off and buffered here, since staging a
+ * record for commit on {@link RoutingOutcome#DELIVERED} while the wrapper has only buffered it, not yet applied it,
+ * is exactly the loss a consume bridge exists to prevent. This is independent of, and layered underneath, the
+ * per-partition throttle below, which pauses only a poisoned partition. This gate pauses the whole assignment
+ * instead, the same as the running check above. See {@link Builder#readinessSource(Predicate)} for how to wire it.
  * <p>
  * <strong>Ordering.</strong> A partitioned topic gives no global order. Two events on different partitions can be
  * processed in either order by this bridge, whatever their publish order was. Events for one stream stay in order
@@ -140,6 +148,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     private final Duration closeTimeout;
     private final RetryStrategy commitRetryStrategy;
     private final KafkaDeliveryFailureAction failureAction;
+    private final Predicate<String> readinessSource;
     private final Thread loopThread;
 
     // Touched only by the loop thread. A partition this batch seeked back to (a poison record) is paused here
@@ -161,7 +170,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
 
     private KafkaCloudEventBridge(KafkaConsumer<String, byte[]> consumer, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel,
                                    Duration pollTimeout, Duration closeTimeout, RetryStrategy commitRetryStrategy,
-                                   KafkaDeliveryFailureAction failureAction, String groupId) {
+                                   KafkaDeliveryFailureAction failureAction, String groupId, Predicate<String> readinessSource) {
         this.consumer = consumer;
         this.model = model;
         this.outcomeChannel = outcomeChannel;
@@ -169,6 +178,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         this.closeTimeout = closeTimeout;
         this.commitRetryStrategy = commitRetryStrategy;
         this.failureAction = failureAction;
+        this.readinessSource = readinessSource;
         this.loopThread = new Thread(this::runLoop, "kafka-cloudevent-bridge-" + groupId);
         this.loopThread.setDaemon(true);
     }
@@ -262,7 +272,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     private boolean shouldConsume() {
         Set<String> subscriptionIds = model.subscriptionIds();
         String subscriptionId = subscriptionIds.isEmpty() ? null : subscriptionIds.iterator().next();
-        return subscriptionId != null && model.isRunning(subscriptionId);
+        return subscriptionId != null && model.isRunning(subscriptionId) && readinessSource.test(subscriptionId);
     }
 
     private void reconcilePauseResume(boolean shouldConsume) {
@@ -505,6 +515,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         private Duration pollTimeout = Duration.ofSeconds(1);
         private Duration closeTimeout = Duration.ofSeconds(30);
         private RetryStrategy commitRetryStrategy = defaultCommitRetryStrategy();
+        private Predicate<String> readinessSource = subscriptionId -> true;
 
         private Builder(Map<String, Object> consumerConfig, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel) {
             requireNonNull(consumerConfig, "consumerConfig cannot be null");
@@ -615,6 +626,28 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Asked, alongside {@code model}'s own running state, on every coarse lifecycle recheck (see the class
+         * javadoc). {@code true} for every subscription id by default, which is exactly right for {@code model} fed
+         * directly with no catch-up in front of it, or for {@code catchup = NONE}, since no wrapper exists there to
+         * buffer anything for this to protect against.
+         * <p>
+         * Wrap {@code model} in a {@link CatchupThenPushSubscriptionModel} and pass
+         * {@code catchupThenPush::isReadyForLiveDelivery} here, so this bridge stops fetching for as long as that
+         * wrapper's replay is still running or draining, and resumes once it reaches live. Without this, a record
+         * this bridge stages for commit on {@link RoutingOutcome#DELIVERED} while the wrapper is only buffering it
+         * is durable nowhere but this process's memory until the drain completes. A crash before that loses it for
+         * good, which the local event store cannot restore for an event a consume bridge exists precisely to
+         * receive from another service. Built by an {@code @Projection(source = PUSH)} or {@code @Saga(source =
+         * PUSH)} bean instead of by hand, the wrapper is published as a Spring bean named
+         * {@code "catchupThenPushSubscriptionModel-" + id}, so {@code applicationContext.getBean(name,
+         * CatchupThenPushSubscriptionModel.class)::isReadyForLiveDelivery} reaches the same object.
+         */
+        public Builder readinessSource(Predicate<String> readinessSource) {
+            this.readinessSource = requireNonNull(readinessSource, "readinessSource cannot be null");
+            return this;
+        }
+
         public KafkaCloudEventBridge build() {
             if (bindings == null && resolver == null) {
                 throw new IllegalStateException("A resolver(...), or explicit bindings(...), is required");
@@ -649,7 +682,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
                 failureAction = KafkaDeliveryFailureAction.create(consumerConfig, deliveryFailurePolicy, parkingDestination, log);
                 Set<KafkaDestination> destinations = KafkaTopology.topicsToSubscribe(resolver, bindingFilter, bindings);
                 KafkaTopology.subscribe(consumer, destinations);
-                KafkaCloudEventBridge bridge = new KafkaCloudEventBridge(consumer, model, outcomeChannel, pollTimeout, closeTimeout, commitRetryStrategy, failureAction, groupId.toString());
+                KafkaCloudEventBridge bridge = new KafkaCloudEventBridge(consumer, model, outcomeChannel, pollTimeout, closeTimeout, commitRetryStrategy, failureAction, groupId.toString(), readinessSource);
                 bridge.loopThread.start();
                 return bridge;
             } catch (RuntimeException e) {

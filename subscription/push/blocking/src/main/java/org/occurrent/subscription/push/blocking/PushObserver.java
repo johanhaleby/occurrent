@@ -40,6 +40,18 @@ import org.occurrent.subscription.RoutingOutcome;
  * decision is made from, so the two can never disagree, and no lifecycle transition landing between the evaluation
  * and this call can change which outcome is reported.
  * <p>
+ * <strong>{@link RoutingOutcome#DELIVERED} alone is not enough to acknowledge when this model is wrapped in a
+ * {@link CatchupThenPushSubscriptionModel}.</strong> That wrapper registers on this model before its own replay
+ * finishes, so an event delivered while the replay is still running, or still draining, is only buffered there, not
+ * yet applied to the projection, and {@code DELIVERED} is reported the moment the filter matches, before that
+ * buffering decision is made. A caller feeding this model from a broker and wrapping it in a catch-up must
+ * additionally gate its own acknowledgement on the wrapper's
+ * {@link CatchupThenPushSubscriptionModel#isReadyForLiveDelivery(String)} for the same subscription id, never on
+ * {@code DELIVERED} by itself, or a crash before the buffer drains permanently loses an event nothing durable
+ * backs. {@code RabbitMqCloudEventBridge} and {@code KafkaCloudEventBridge} do this through their own
+ * {@code readinessSource}. Fed directly, with no catch-up wrapper in front, {@code DELIVERED} alone is exactly
+ * what it always was, safe to acknowledge on once {@code accept(...)} returns.
+ * <p>
  * A filter that throws while being evaluated (a supplied {@code DataFieldReader} can) never gets to answer whether
  * it matched. A {@link RuntimeException} or {@link AssertionError} is reported to the observer as
  * {@link RoutingOutcome#NOT_DELIVERABLE} instead, standing in for the answer that never came, never as

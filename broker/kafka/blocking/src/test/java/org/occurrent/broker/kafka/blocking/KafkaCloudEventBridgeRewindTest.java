@@ -42,6 +42,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -242,10 +243,14 @@ class KafkaCloudEventBridgeRewindTest {
                     Map.of(), DeliveryFailurePolicy.REDELIVER, null, LoggerFactory.getLogger(KafkaCloudEventBridgeRewindTest.class));
             Constructor<KafkaCloudEventBridge> constructor = KafkaCloudEventBridge.class.getDeclaredConstructor(
                     KafkaConsumer.class, PushSubscriptionModel.class, RoutingOutcomeChannel.class, Duration.class,
-                    Duration.class, RetryStrategy.class, KafkaDeliveryFailureAction.class, String.class);
+                    Duration.class, RetryStrategy.class, KafkaDeliveryFailureAction.class, String.class, Predicate.class);
             constructor.setAccessible(true);
+            // readinessSource fixed at "always ready" here: none of this class's cases are about the catch-up
+            // readiness gate, which KafkaCloudEventBridgeReadinessTest covers on its own, through the public
+            // builder rather than reflection.
+            Predicate<String> alwaysReady = subscriptionId -> true;
             return constructor.newInstance(consumer, model, outcomeChannel, Duration.ofSeconds(1), closeTimeout,
-                    defaultCommitRetryStrategyForTesting(), failureAction, "test-group");
+                    defaultCommitRetryStrategyForTesting(), failureAction, "test-group", alwaysReady);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Could not construct " + KafkaCloudEventBridge.class.getSimpleName() + " for testing", unwrap(e));
         }

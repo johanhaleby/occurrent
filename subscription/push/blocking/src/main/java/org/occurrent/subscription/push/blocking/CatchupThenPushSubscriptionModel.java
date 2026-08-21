@@ -114,6 +114,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // interrupted, which start(true) and resumeSubscription bring back. Without this a stop during a replay was
     // permanent, because the replay is the only thing that reaches the handover (ADR 104).
     private final ConcurrentMap<String, Supplier<Future<Boolean>>> interruptibleReplays = new ConcurrentHashMap<>();
+    // The handover backing each subscription id currently registered here, so isReadyForLiveDelivery(String) can ask
+    // the one component that actually owns the buffer rather than track readiness separately. Populated once, in
+    // subscribe(), and kept for the id's whole lifetime (a stop-then-relaunch reuses the same handover), removed only
+    // by cancelSubscription and shutdown.
+    private final ConcurrentMap<String, BlockingHandover<CloudEvent>> handoversBySubscriptionId = new ConcurrentHashMap<>();
 
     /**
      * @param reader          Reads the projection's history in position order for the catch-up replay.
@@ -179,12 +184,42 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // lost in the gap between the replay head and going live.
         liveFeed.subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), handover::accept);
 
+        // Kept for isReadyForLiveDelivery(String), which answers off this exact handover rather than off any state
+        // this model tracks of its own (a shadow flag a second component maintains can drift from the buffer it is
+        // supposed to describe). Set only once liveFeed.subscribe(...) above has succeeded, so a duplicate id never
+        // leaves an orphaned entry mapped for a subscription that was refused.
+        handoversBySubscriptionId.put(subscriptionId, handover);
+
         // Kept rather than launched once, so a replay a stop interrupts can be launched again over the same handover.
         // The handover has to be the same one: it holds the live buffer and the de-dup cache, so a second one would
         // replay into a projection that had already seen part of the history.
         Supplier<Future<Boolean>> launch = () -> launchReplay(subscriptionId, handover, replayFilter);
         interruptibleReplays.put(subscriptionId, launch);
         return new CatchingUpSubscription(subscriptionId, launch.get());
+    }
+
+    /**
+     * Whether a live event fed to {@code subscriptionId}'s registration right now would actually reach the
+     * projection, rather than only being buffered against a replay still in flight or not yet started. Delegates
+     * straight to the {@link BlockingHandover} this subscription's catch-up owns. See
+     * {@link BlockingHandover#isReadyForLiveDelivery()} for exactly what that answers and why. In short, {@code true}
+     * only once the catch-up has reached live, {@code false} while replaying or buffering ahead of its own drain, and
+     * {@code false} forever after a catch-up failure.
+     * <p>
+     * A CloudEvent-level broker bridge that feeds the live {@link PushSubscriptionModel} this model wraps needs this
+     * so it can avoid pulling a message off the broker only to have it buffered here rather than applied to the
+     * projection. Without it, the bridge's own {@code RoutingOutcome}-based acknowledgement would ack a message this
+     * handover has only buffered, which is safe against the local store but not against a message a consume bridge
+     * exists precisely to receive from another service, one the local replay can never restore. {@code false} for a
+     * {@code subscriptionId} this model never subscribed, or already cancelled, the safe answer for an id nothing
+     * here is tracking.
+     *
+     * @param subscriptionId The subscription to ask about.
+     */
+    public boolean isReadyForLiveDelivery(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        BlockingHandover<CloudEvent> handover = handoversBySubscriptionId.get(subscriptionId);
+        return handover != null && handover.isReadyForLiveDelivery();
     }
 
     // Starts one replay for subscriptionId and returns its handle. Called by subscribe, and again by start(true) or
@@ -453,6 +488,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // A cancel is not a stop, so nothing is kept to launch again. This is also the recovery from a failed
         // catch-up: it frees the id and releases the registration that was refusing (ADR 104).
         interruptibleReplays.remove(subscriptionId);
+        handoversBySubscriptionId.remove(subscriptionId);
         liveFeed.cancelSubscription(subscriptionId);
     }
 
@@ -472,6 +508,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         pauseRequestedDuringReplay.clear();
         // Unlike stop(), a shutdown keeps nothing to launch again: it drops the registrations too.
         interruptibleReplays.clear();
+        handoversBySubscriptionId.clear();
         liveFeed.shutdown();
     }
 

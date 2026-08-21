@@ -183,9 +183,16 @@ public final class RabbitMqCloudEventLevelBootstrap implements AutoCloseable {
             // skipping a replay the read model never actually got. See the class javadoc.
             CheckpointStorage catchupMarker = new InMemoryCheckpointStorage();
             catchupThenPush = new CatchupThenPushSubscriptionModel(eventStore, pushModel, catchupMarker);
+            // A separate, effectively-final reference for the method reference below. catchupThenPush itself is
+            // reassigned above (from the null this try/catch needs for cleanup), so it cannot be captured directly.
+            final CatchupThenPushSubscriptionModel catchupThenPushForReadiness = catchupThenPush;
 
             bridge = RabbitMqCloudEventBridge.builder(rabbitConnection, pushModel, outcomeChannel, QUEUE)
                     .resolver(resolver)
+                    // Without this, the bridge would ack a message on RoutingOutcome.DELIVERED the instant it
+                    // matches, even while catchupThenPush's replay is still running or draining and has only
+                    // buffered it, not folded it. See RabbitMqCloudEventBridge.Builder#readinessSource's own javadoc.
+                    .readinessSource(catchupThenPushForReadiness::isReadyForLiveDelivery)
                     .build();
 
             Map<String, OrderStatusProjection.OrderStatusView> orderStatusViews = new ConcurrentHashMap<>();

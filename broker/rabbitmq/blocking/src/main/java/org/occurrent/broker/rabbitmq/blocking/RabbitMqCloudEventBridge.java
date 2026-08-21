@@ -40,6 +40,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
 
@@ -78,6 +79,12 @@ import static java.util.Objects.requireNonNull;
  * subscription, not consuming otherwise. This is deliberately coarse, a small delay either way is harmless, and it
  * exists so this bridge never feeds a stopped or paused model, which per ADR 85 and ADR 104 drops the event rather
  * than holding it. Never used to decide a single message; that decision comes from the {@link RoutingOutcome} above.
+ * The same poll also reads {@link Builder#readinessSource(Predicate)} for the subscription id, {@code true} by
+ * default, so this bridge never pulls a message off the queue while a {@link CatchupThenPushSubscriptionModel}
+ * wrapping {@code model} is still replaying or draining into it. The message waits on the broker instead of being
+ * buffered here, since acknowledging on {@link RoutingOutcome#DELIVERED} a message the wrapper has only buffered,
+ * not yet applied, is exactly the loss a consume bridge exists to prevent. See
+ * {@link Builder#readinessSource(Predicate)} for how to wire it.
  */
 public final class RabbitMqCloudEventBridge implements AutoCloseable {
 
@@ -90,13 +97,15 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     private final int prefetchCount;
     private final Duration pollInterval;
     private final RabbitMqDeliveryFailureAction failureAction;
+    private final Predicate<String> readinessSource;
     private final ScheduledExecutorService scheduler;
 
     private final Lock consumeLock = new ReentrantLock();
     private @Nullable String consumerTag;
 
     private RabbitMqCloudEventBridge(PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, Channel consumeChannel,
-                                      String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction) {
+                                      String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction,
+                                      Predicate<String> readinessSource) {
         this.model = model;
         this.outcomeChannel = outcomeChannel;
         this.consumeChannel = consumeChannel;
@@ -104,6 +113,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         this.prefetchCount = prefetchCount;
         this.pollInterval = pollInterval;
         this.failureAction = failureAction;
+        this.readinessSource = readinessSource;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "rabbitmq-cloudevent-bridge-" + queue);
             thread.setDaemon(true);
@@ -140,15 +150,15 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
-    // Coarse lifecycle control, per the class javadoc: consumes while the model has a running subscription, not
-    // otherwise, checked on a fixed poll rather than on every message. subscriptionIds() has at most one element by
-    // ADR 90 (PushSubscriptionModel declares Consumers.ONE), so there is never an ambiguity about which id to ask
-    // isRunning(...) about.
+    // Coarse lifecycle control, per the class javadoc: consumes while the model has a running subscription and
+    // readinessSource agrees, not otherwise, checked on a fixed poll rather than on every message. subscriptionIds()
+    // has at most one element by ADR 90 (PushSubscriptionModel declares Consumers.ONE), so there is never an
+    // ambiguity about which id to ask isRunning(...) or readinessSource about.
     private void reconcileConsumption() {
         try {
             Set<String> subscriptionIds = model.subscriptionIds();
             String subscriptionId = subscriptionIds.isEmpty() ? null : subscriptionIds.iterator().next();
-            boolean shouldConsume = subscriptionId != null && model.isRunning(subscriptionId);
+            boolean shouldConsume = subscriptionId != null && model.isRunning(subscriptionId) && readinessSource.test(subscriptionId);
             consumeLock.lock();
             try {
                 if (shouldConsume && consumerTag == null) {
@@ -246,6 +256,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         private @Nullable RabbitMqDestination parkingDestination;
         private Duration pollInterval = Duration.ofSeconds(1);
         private int prefetchCount = 1;
+        private Predicate<String> readinessSource = subscriptionId -> true;
 
         private Builder(Connection connection, PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, String queue) {
             this.connection = requireNonNull(connection, "connection cannot be null");
@@ -344,6 +355,28 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Asked, alongside {@code model}'s own running state, on every coarse lifecycle poll (see the class
+         * javadoc). {@code true} for every subscription id by default, which is exactly right for {@code model} fed
+         * directly with no catch-up in front of it, or for {@code catchup = NONE}, since no wrapper exists there to
+         * buffer anything for this to protect against.
+         * <p>
+         * Wrap {@code model} in a {@link CatchupThenPushSubscriptionModel} and pass
+         * {@code catchupThenPush::isReadyForLiveDelivery} here, so this bridge stops pulling from the queue for as
+         * long as that wrapper's replay is still running or draining, and resumes once it reaches live. Without
+         * this, a message this bridge acknowledges on {@link RoutingOutcome#DELIVERED} while the wrapper is only
+         * buffering it is durable nowhere but this process's memory until the drain completes. A crash before that
+         * loses it for good, which the local event store cannot restore for an event a consume bridge exists
+         * precisely to receive from another service. Built by an {@code @Projection(source = PUSH)} or
+         * {@code @Saga(source = PUSH)} bean instead of by hand, the wrapper is published as a Spring bean named
+         * {@code "catchupThenPushSubscriptionModel-" + id}, so {@code applicationContext.getBean(name,
+         * CatchupThenPushSubscriptionModel.class)::isReadyForLiveDelivery} reaches the same object.
+         */
+        public Builder readinessSource(Predicate<String> readinessSource) {
+            this.readinessSource = requireNonNull(readinessSource, "readinessSource cannot be null");
+            return this;
+        }
+
         public RabbitMqCloudEventBridge build() {
             if (declareTopology && bindings == null && resolver == null) {
                 throw new IllegalStateException("A resolver(...), or explicit bindings(...), is required unless declareTopology(false) is set");
@@ -360,7 +393,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             try {
                 failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log);
                 bridge = new RabbitMqCloudEventBridge(model, outcomeChannel, channel, queue, prefetchCount,
-                        pollInterval, failureAction);
+                        pollInterval, failureAction, readinessSource);
                 bridge.start(this);
                 return bridge;
             } catch (RuntimeException e) {
