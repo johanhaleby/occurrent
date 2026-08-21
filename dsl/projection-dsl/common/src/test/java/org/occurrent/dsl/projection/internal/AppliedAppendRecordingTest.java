@@ -23,6 +23,7 @@ import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.CatchupPhase;
+import org.occurrent.dsl.projection.CatchupSnapshot;
 import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.eventstore.api.AppendId;
 
@@ -96,7 +97,7 @@ class AppliedAppendRecordingTest {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId before = AppendId.mint();
         store.recordApplied(PROJECTION_ID, before);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> CatchupPhase.REPLAYING_HISTORY);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> CatchupSnapshot.readingHistory(1L));
 
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
 
@@ -126,7 +127,7 @@ class AppliedAppendRecordingTest {
     void pollReplayPhase_checks_the_phase_fresh_so_a_live_delivery_recorded_after_an_earlier_reading_survives() {
         AtomicBoolean replaying = new AtomicBoolean(true);
         AppliedAppendStore store = AppliedAppendStore.inMemory();
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> replaying.get() ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.LIVE);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> replaying.get() ? CatchupSnapshot.readingHistory(1L) : CatchupSnapshot.LIVE);
 
         // A poller would have read "replaying" here...
         assertThat(replaying.get()).isTrue();
@@ -149,7 +150,7 @@ class AppliedAppendRecordingTest {
     @Test
     void a_replay_episode_clears_the_store_at_most_once_across_every_delivery_seen_while_replaying() {
         List<String> clears = new ArrayList<>();
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> CatchupPhase.REPLAYING_HISTORY);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> CatchupSnapshot.readingHistory(1L));
 
         for (int i = 0; i < 1000; i++) {
             recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
@@ -164,7 +165,7 @@ class AppliedAppendRecordingTest {
     void a_new_replay_episode_after_going_live_is_cleared_again() {
         List<String> clears = new ArrayList<>();
         AtomicBoolean replaying = new AtomicBoolean(true);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> replaying.get() ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.LIVE);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> replaying.get() ? CatchupSnapshot.readingHistory(1L) : CatchupSnapshot.LIVE);
 
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
@@ -187,7 +188,7 @@ class AppliedAppendRecordingTest {
     void a_failing_clear_is_retried_every_delivery_until_it_succeeds_then_suppressed_for_the_rest_of_the_episode() {
         List<String> clears = new ArrayList<>();
         AtomicBoolean clearShouldFail = new AtomicBoolean(true);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, clearShouldFail), () -> CatchupPhase.REPLAYING_HISTORY);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, clearShouldFail), () -> CatchupSnapshot.readingHistory(1L));
 
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
@@ -224,7 +225,7 @@ class AppliedAppendRecordingTest {
     void an_append_handled_during_the_reconciliation_is_recorded_even_though_the_catch_up_has_not_handed_over() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AtomicReference<CatchupPhase> phase = new AtomicReference<>(CatchupPhase.REPLAYING_HISTORY);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, phase::get);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> new CatchupSnapshot(phase.get(), phase.get() == CatchupPhase.LIVE ? 0L : 1L));
 
         AppendId history = AppendId.mint();
         recording.recordIfReady(metadataWithAppendId(history));
@@ -243,7 +244,7 @@ class AppliedAppendRecordingTest {
     @Test
     void the_reconciliation_clears_once_before_it_records_and_not_again_per_delivery() {
         List<String> clears = new ArrayList<>();
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> CatchupPhase.RECONCILING);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> new CatchupSnapshot(CatchupPhase.RECONCILING, 1L));
 
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
@@ -259,7 +260,7 @@ class AppliedAppendRecordingTest {
         List<String> clears = new ArrayList<>();
         AtomicBoolean clearShouldFail = new AtomicBoolean(true);
         AppliedAppendStore store = clearCountingStore(clears, clearShouldFail);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> CatchupPhase.RECONCILING);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> new CatchupSnapshot(CatchupPhase.RECONCILING, 1L));
 
         AppendId first = AppendId.mint();
         AppendId second = AppendId.mint();
@@ -281,7 +282,7 @@ class AppliedAppendRecordingTest {
     void appends_waiting_for_a_clear_are_written_by_the_next_delivery_when_something_else_made_that_clear_succeed() {
         AtomicBoolean clearShouldFail = new AtomicBoolean(true);
         AppliedAppendStore store = clearCountingStore(new ArrayList<>(), clearShouldFail);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> CatchupPhase.RECONCILING);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> new CatchupSnapshot(CatchupPhase.RECONCILING, 1L));
 
         AppendId waiting = AppendId.mint();
         recording.recordIfReady(metadataWithAppendId(waiting));
@@ -303,7 +304,7 @@ class AppliedAppendRecordingTest {
         AtomicBoolean clearShouldFail = new AtomicBoolean(true);
         AppliedAppendStore store = clearCountingStore(new ArrayList<>(), clearShouldFail);
         AtomicReference<CatchupPhase> phase = new AtomicReference<>(CatchupPhase.RECONCILING);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, phase::get);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> new CatchupSnapshot(phase.get(), phase.get() == CatchupPhase.LIVE ? 0L : 1L));
 
         AppendId waiting = AppendId.mint();
         recording.recordIfReady(metadataWithAppendId(waiting));
@@ -331,7 +332,7 @@ class AppliedAppendRecordingTest {
         AtomicBoolean clearShouldFail = new AtomicBoolean(true);
         AppliedAppendStore store = clearCountingStore(new ArrayList<>(), clearShouldFail);
         AtomicReference<CatchupPhase> phase = new AtomicReference<>(CatchupPhase.RECONCILING);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, phase::get);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> new CatchupSnapshot(phase.get(), phase.get() == CatchupPhase.LIVE ? 0L : 1L));
 
         AppendId parked = AppendId.mint();
         recording.recordIfReady(metadataWithAppendId(parked));
@@ -354,7 +355,7 @@ class AppliedAppendRecordingTest {
     void a_replay_relaunched_from_the_reconciliation_clears_again_with_no_live_delivery_in_between() {
         List<String> clears = new ArrayList<>();
         AtomicReference<CatchupPhase> phase = new AtomicReference<>(CatchupPhase.REPLAYING_HISTORY);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), phase::get);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> new CatchupSnapshot(phase.get(), phase.get() == CatchupPhase.LIVE ? 0L : 1L));
 
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         phase.set(CatchupPhase.RECONCILING);
@@ -375,7 +376,7 @@ class AppliedAppendRecordingTest {
         AtomicBoolean clearShouldFail = new AtomicBoolean(true);
         AppliedAppendStore store = clearCountingStore(new ArrayList<>(), clearShouldFail);
         AtomicReference<CatchupPhase> phase = new AtomicReference<>(CatchupPhase.RECONCILING);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, phase::get);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> new CatchupSnapshot(phase.get(), phase.get() == CatchupPhase.LIVE ? 0L : 1L));
 
         AppendId firstCatchup = AppendId.mint();
         recording.recordIfReady(metadataWithAppendId(firstCatchup));
@@ -405,17 +406,7 @@ class AppliedAppendRecordingTest {
         AtomicReference<CatchupPhase> phase = new AtomicReference<>(CatchupPhase.RECONCILING);
         AtomicLong generation = new AtomicLong(1);
         AppliedAppendStore store = clearCountingStore(clears, new AtomicBoolean(false));
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, new ReplayPhase() {
-            @Override
-            public CatchupPhase currentPhase() {
-                return phase.get();
-            }
-
-            @Override
-            public long currentGeneration() {
-                return generation.get();
-            }
-        });
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> new CatchupSnapshot(phase.get(), generation.get()));
 
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         assertThat(clears).hasSize(1);
@@ -430,35 +421,24 @@ class AppliedAppendRecordingTest {
         assertThat(store.hasApplied(PROJECTION_ID, secondCatchup)).isTrue();
     }
 
-    // The phase and the catch-up it belongs to are two reads, and a catch-up can end between them. Answering that
-    // there is no catch-up settles it, because otherwise the reconciliation the first read reported would clear the
-    // appends the catch-up that just finished had recorded, and nothing would deliver them again.
+    // A recorder decides from one reading, so it can never act on a pair that never existed, a reconciliation
+    // belonging to a catch-up that has already finished. Constructing that pair by hand is the only way to reach it,
+    // and this asserts what the recorder does with the honest pair the models actually hand it.
     @Test
-    void a_catch_up_that_ends_between_the_two_reads_does_not_clear_what_it_just_recorded() {
+    void a_catch_up_that_has_finished_reads_as_live_and_clears_nothing() {
         List<String> clears = new ArrayList<>();
         AppliedAppendStore store = clearCountingStore(clears, new AtomicBoolean(false));
         AppendId recordedByTheCatchup = AppendId.mint();
-        AtomicBoolean seenRunning = new AtomicBoolean(false);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, new ReplayPhase() {
-            @Override
-            public CatchupPhase currentPhase() {
-                return CatchupPhase.RECONCILING;
-            }
+        AtomicReference<CatchupSnapshot> snapshot = new AtomicReference<>(new CatchupSnapshot(CatchupPhase.RECONCILING, 7L));
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, snapshot::get);
 
-            @Override
-            public long currentGeneration() {
-                // The catch-up is over by the time this is read, after an earlier delivery saw it running.
-                return seenRunning.get() ? 0L : 7L;
-            }
-        });
-        store.recordApplied(PROJECTION_ID, recordedByTheCatchup);
-
-        // One delivery while the catch-up is genuinely running, so the recorder has a generation to compare against.
-        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        recording.recordIfReady(metadataWithAppendId(recordedByTheCatchup));
+        assertThat(store.hasApplied(PROJECTION_ID, recordedByTheCatchup)).isTrue();
         clears.clear();
-        seenRunning.set(true);
-        store.recordApplied(PROJECTION_ID, recordedByTheCatchup);
 
+        // The catch-up finished, which the model reports as one reading rather than as a phase and a number that can
+        // disagree.
+        snapshot.set(CatchupSnapshot.LIVE);
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
 
         assertThat(clears).isEmpty();
@@ -470,7 +450,7 @@ class AppliedAppendRecordingTest {
     @Test
     void staying_in_the_history_read_still_clears_only_once() {
         List<String> clears = new ArrayList<>();
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> CatchupPhase.REPLAYING_HISTORY);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> CatchupSnapshot.readingHistory(1L));
 
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));

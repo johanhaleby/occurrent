@@ -39,25 +39,19 @@ import org.jspecify.annotations.NullMarked;
 @FunctionalInterface
 public interface ReplayPhase {
 
-    /** Which part of a catch-up the projection this phase describes is in right now. */
-    CatchupPhase currentPhase();
-
     /**
-     * Which catch-up the projection is in, as a value that changes when a new one starts and is {@code 0} while it is
-     * live. A recorder samples this rather than watching every transition, so without it two catch-ups in a row look
-     * like one when nothing sampled the gap between them, and the second would record without first clearing what the
-     * rebuild is discarding.
+     * One reading of where the projection is, taken as a single value.
      * <p>
-     * The default cannot tell two apart, which is the honest answer for a composition that has nothing to derive it
-     * from.
+     * A single value because a recorder samples this rather than watching every transition, and cannot hold the
+     * composition still between two calls. It needs two things, which part of a catch-up a delivery belongs to and
+     * which catch-up that is, and reading them separately lets a catch-up finish in between and produce a pair that
+     * never existed, on which the recorder would undo work that catch-up had correctly done.
      */
-    default long currentGeneration() {
-        return 0L;
-    }
+    CatchupSnapshot current();
 
     /**
      * A phase for a composition that never replays: an in-memory model, a durable-only model with no catch-up layer,
-     * or a push feed with {@code catchup = NONE}. Always answers {@link CatchupPhase#LIVE}.
+     * or a push feed with {@code catchup = NONE}. Always answers {@link CatchupSnapshot#LIVE}.
      * <p>
      * Always the same instance, so a caller distinguishing this known case from an unresolved one can compare with
      * {@code ==} rather than needing its own sentinel. A non-capturing lambda expression here would not give that
@@ -70,6 +64,6 @@ public interface ReplayPhase {
     // Interfaces cannot declare a private field, so the singleton instance neverReplays() hands out lives here
     // instead, in a nested class initialized on first use.
     class NeverReplays {
-        private static final ReplayPhase INSTANCE = () -> CatchupPhase.LIVE;
+        private static final ReplayPhase INSTANCE = () -> CatchupSnapshot.LIVE;
     }
 }

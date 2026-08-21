@@ -194,6 +194,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             }
 
             @Override
+            public void liveDrained() {
+                // Kept registered until here rather than dropped when the catch-up reports done, because the payloads
+                // buffered while the history was read are delivered after that and each of them exactly once. A
+                // recording projection has to see them as part of this catch-up, not as live delivery.
+                forget(subscriptionId, replayDone);
+            }
+
+            @Override
             public void historyDone() {
                 // Written only while this replay still owns the id, and taken back if a replacement took it over in
                 // between, because a cancellation permits an immediate resubscribe while this one is still unwinding
@@ -213,7 +221,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 caughtUp -> {
                     if (caughtUp) {
                         interruptibleReplays.remove(subscriptionId);
-                        forget(subscriptionId, replayDone);
+                        // Not forgotten here: liveDrained does it, once the payloads buffered during the history read
+                        // have been delivered.
                         applyPendingPauseIfAny(subscriptionId);
                     } else {
                         // Stopped rather than failed, so the handover is intact, nothing is marked, and both the
@@ -358,6 +367,21 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     public long catchupGeneration(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return replayingSubscriptions.containsKey(subscriptionId) ? catchupGenerations.getOrDefault(subscriptionId, 0L) : 0L;
+    }
+
+    /**
+     * One reading of this id's catch-up, taken from the replay it belongs to, so the part and the catch-up can never
+     * come from two different moments.
+     */
+    @Override
+    public org.occurrent.subscription.CatchupSnapshot catchupSnapshot(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        Sinks.One<Boolean> replay = replayingSubscriptions.get(subscriptionId);
+        if (replay == null) {
+            return org.occurrent.subscription.CatchupSnapshot.LIVE;
+        }
+        boolean readingHistory = reconcilingSubscriptions.get(subscriptionId) != replay;
+        return new org.occurrent.subscription.CatchupSnapshot(true, readingHistory, catchupGenerations.getOrDefault(subscriptionId, 0L));
     }
 
     @Override

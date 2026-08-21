@@ -27,7 +27,7 @@ class ReplayPhaseTest {
 
     @Test
     void neverReplays_answers_false() {
-        assertThat(ReplayPhase.neverReplays().currentPhase()).isEqualTo(CatchupPhase.LIVE);
+        assertThat(ReplayPhase.neverReplays().current()).isEqualTo(CatchupSnapshot.LIVE);
     }
 
     @Test

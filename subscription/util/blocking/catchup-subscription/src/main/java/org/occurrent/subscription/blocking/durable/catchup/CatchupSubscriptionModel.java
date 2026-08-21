@@ -336,6 +336,18 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         return presentCatchupModels().mapToLong(model -> model.catchupGeneration(subscriptionId)).filter(g -> g != 0L).findFirst().orElse(0L);
     }
 
+    /**
+     * Asked of the mode-specific models the same way {@link #isReplayingHistory(String)} is, so the whole reading
+     * comes from the one model that owns this id rather than from several.
+     */
+    @Override
+    public org.occurrent.subscription.CatchupSnapshot catchupSnapshot(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return presentCatchupModels().map(model -> model.catchupSnapshot(subscriptionId))
+                .filter(org.occurrent.subscription.CatchupSnapshot::catchingUp)
+                .findFirst().orElse(org.occurrent.subscription.CatchupSnapshot.LIVE);
+    }
+
     @Override
     public boolean isPaused(String subscriptionId) {
         return presentCatchupModels().anyMatch(model -> model.isPaused(subscriptionId))

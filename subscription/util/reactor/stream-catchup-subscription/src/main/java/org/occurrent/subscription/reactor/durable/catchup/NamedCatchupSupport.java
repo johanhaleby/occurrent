@@ -116,6 +116,18 @@ final class NamedCatchupSupport {
      * rather than the events written since. False for an id with no replay in flight, so a handed-over subscription
      * and one this model never saw read the same, matching {@link #isCatchingUp(String)}.
      */
+    // One map read, so the part and the catch-up it belongs to can never come from two different moments. The two
+    // fields inside the state are separate volatiles, but only the launcher writes them and it writes the generation
+    // last, so a reader that saw this generation saw at least this launch's history flag.
+    org.occurrent.subscription.CatchupSnapshot catchupSnapshot(String subscriptionId) {
+        CatchupState state = catchingUp.get(subscriptionId);
+        if (state == null) {
+            return org.occurrent.subscription.CatchupSnapshot.LIVE;
+        }
+        long generation = state.generation.get();
+        return new org.occurrent.subscription.CatchupSnapshot(true, state.replayingHistory.get(), generation);
+    }
+
     long catchupGeneration(String subscriptionId) {
         CatchupState state = catchingUp.get(subscriptionId);
         return state == null ? 0L : state.generation.get();

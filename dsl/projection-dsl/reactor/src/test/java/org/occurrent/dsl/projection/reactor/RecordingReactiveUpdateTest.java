@@ -23,6 +23,7 @@ import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.CatchupPhase;
+import org.occurrent.dsl.projection.CatchupSnapshot;
 import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.eventstore.api.AppendId;
 import reactor.core.publisher.Mono;
@@ -58,7 +59,7 @@ class RecordingReactiveUpdateTest {
     void nothing_is_recorded_while_the_phase_says_replaying() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
-        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store, () -> CatchupPhase.REPLAYING_HISTORY);
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store, () -> CatchupSnapshot.readingHistory(1L));
 
         StepVerifier.create(recording.apply(metadataWithAppendId(appendId), "event")).verifyComplete();
 
@@ -113,7 +114,7 @@ class RecordingReactiveUpdateTest {
         AppendId before = AppendId.mint();
         store.recordApplied(PROJECTION_ID, before);
         AtomicBoolean replaying = new AtomicBoolean(false);
-        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store, () -> replaying.get() ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.LIVE);
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store, () -> replaying.get() ? CatchupSnapshot.readingHistory(1L) : CatchupSnapshot.LIVE);
 
         recording.replayObserved();
 

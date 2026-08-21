@@ -27,6 +27,7 @@ import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.projection.CatchupPhase;
+import org.occurrent.dsl.projection.CatchupSnapshot;
 import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.dsl.projection.reactor.DomainEventFeed;
@@ -353,17 +354,7 @@ class ProjectionAnnotationRegistrar {
         Optional<ReplayAwareSubscriptions> direct = capability == null ? Optional.empty() : capability.capability(ReplayAwareSubscriptions.class);
         if (direct.isPresent()) {
             ReplayAwareSubscriptions replayAware = direct.get();
-            return new ReplayPhaseResolution(new ReplayPhase() {
-            @Override
-            public CatchupPhase currentPhase() {
-                return catchupPhaseOf(replayAware, id);
-            }
-
-            @Override
-            public long currentGeneration() {
-                return replayAware.catchupGeneration(id);
-            }
-        }, true, false);
+            return new ReplayPhaseResolution(() -> snapshotOf(replayAware.catchupSnapshot(id)), true, false);
         }
         log.warn("@Projection '{}' sets recordAppliedAppends = true, but its subscription model ({}) does not expose " +
                         "whether it is replaying. The default reactive Mongo composition does not have this problem; a " +
@@ -376,25 +367,16 @@ class ProjectionAnnotationRegistrar {
         return new ReplayPhaseResolution(ReplayPhase.neverReplays(), false, true);
     }
 
-    // isCatchingUp is read first on purpose. Both answers come from the same per-id state, which only moves one way,
-    // so reading them in this order can at worst report a reconciliation for a delivery that has just gone live,
-    // which still clears and still records. The other order could report history for a live delivery and drop a
-    // record, which is the defect this phase exists to fix.
-    private static CatchupPhase catchupPhaseOf(ReplayAwareSubscriptions replayAware, String id) {
-        if (!replayAware.isCatchingUp(id)) {
-            return CatchupPhase.LIVE;
-        }
-        return replayAware.isReplayingHistory(id) ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.RECONCILING;
-    }
 
-    // The push catch-up model answers both questions itself. It reports a reconciliation while the live events
-    // buffered during the replay are being handed to the projection, which is the only delivery those events get,
-    // since the broker was already told they were handled.
-    private static CatchupPhase pushCatchupPhaseOf(CatchupThenPushSubscriptionModel model, String id) {
-        if (!model.isCatchingUp(id)) {
-            return CatchupPhase.LIVE;
+
+
+    // Maps the one reading a subscription model gives onto the one the projection DSL takes. A catch-up that is not
+    // reading history is delivering what was written since it started, which a recording projection records.
+    private static CatchupSnapshot snapshotOf(org.occurrent.subscription.CatchupSnapshot snapshot) {
+        if (!snapshot.catchingUp()) {
+            return CatchupSnapshot.LIVE;
         }
-        return model.isReplayingHistory(id) ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.RECONCILING;
+        return new CatchupSnapshot(snapshot.replayingHistory() ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.RECONCILING, snapshot.generation());
     }
 
     private record ReplayPhaseResolution(ReplayPhase phase, boolean registerWithPoll, boolean replayAwarenessUnknown) {
@@ -534,17 +516,7 @@ class ProjectionAnnotationRegistrar {
             withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
             subscribable = model;
             if (annotation.recordAppliedAppends()) {
-                recordingResolution = new ReplayPhaseResolution(new ReplayPhase() {
-                @Override
-                public CatchupPhase currentPhase() {
-                    return pushCatchupPhaseOf(model, id);
-                }
-
-                @Override
-                public long currentGeneration() {
-                    return model.catchupGeneration(id);
-                }
-            }, true, false);
+                recordingResolution = new ReplayPhaseResolution(() -> snapshotOf(model.catchupSnapshot(id)), true, false);
             }
         } else {
             // catchup = NONE never replays, so it is live as soon as it is running. Asked rather than recorded because

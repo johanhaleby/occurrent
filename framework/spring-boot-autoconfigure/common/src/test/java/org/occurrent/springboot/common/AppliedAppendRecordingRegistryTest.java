@@ -24,6 +24,7 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendRecorder;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.CatchupPhase;
+import org.occurrent.dsl.projection.CatchupSnapshot;
 import org.occurrent.dsl.projection.internal.AppliedAppendRecording;
 import org.occurrent.eventstore.api.AppendId;
 
@@ -198,7 +199,7 @@ class AppliedAppendRecordingRegistryTest {
         AppendId before = AppendId.mint();
         store.recordApplied("orders", before);
         AtomicBoolean replaying = new AtomicBoolean(true);
-        AppliedAppendRecording recording = new AppliedAppendRecording("orders", store, () -> replaying.get() ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.LIVE);
+        AppliedAppendRecording recording = new AppliedAppendRecording("orders", store, () -> replaying.get() ? CatchupSnapshot.readingHistory(1L) : CatchupSnapshot.LIVE);
         registry.register("orders", adapting(recording));
 
         registry.tick("orders");

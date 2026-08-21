@@ -100,8 +100,13 @@ class StreamCatchupSubscriptionModelTest {
         CopyOnWriteArrayList<String> phasePerDelivery = new CopyOnWriteArrayList<>();
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
 
+        CopyOnWriteArrayList<Long> generationPerDelivery = new CopyOnWriteArrayList<>();
         subscription.subscribe("subscription", StartAtTime.beginningOfTime(), cloudEvent -> {
-            phasePerDelivery.add(subscription.isCatchingUp("subscription") + "/" + subscription.isReplayingHistory("subscription"));
+            // One reading, which is what a recorder decides from, so the part and the catch-up it belongs to can
+            // never come from two different moments.
+            org.occurrent.subscription.CatchupSnapshot snapshot = subscription.catchupSnapshot("subscription");
+            phasePerDelivery.add(snapshot.catchingUp() + "/" + snapshot.replayingHistory());
+            generationPerDelivery.add(snapshot.generation());
             // Written from inside the history read, so it cannot be part of it and the reconciliation is what
             // delivers it.
             if (phasePerDelivery.size() == 1) {
@@ -110,8 +115,10 @@ class StreamCatchupSubscriptionModelTest {
         }).waitUntilStarted();
 
         await().untilAsserted(() -> assertThat(phasePerDelivery).containsExactly("true/true", "true/false"));
-        assertThat(subscription.isCatchingUp("subscription")).isFalse();
-        assertThat(subscription.isReplayingHistory("subscription")).isFalse();
+        // Both deliveries name the same catch-up, and it is gone once the subscription has handed over.
+        assertThat(generationPerDelivery).hasSize(2);
+        assertThat(generationPerDelivery.get(0)).isEqualTo(generationPerDelivery.get(1)).isNotZero();
+        assertThat(subscription.catchupSnapshot("subscription")).isEqualTo(org.occurrent.subscription.CatchupSnapshot.LIVE);
     }
 
     @Test

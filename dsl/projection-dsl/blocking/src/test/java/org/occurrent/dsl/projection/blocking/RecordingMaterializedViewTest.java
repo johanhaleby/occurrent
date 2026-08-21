@@ -23,6 +23,7 @@ import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.CatchupPhase;
+import org.occurrent.dsl.projection.CatchupSnapshot;
 import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ReplayAware;
@@ -61,7 +62,7 @@ class RecordingMaterializedViewTest {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
 
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, store, () -> CatchupPhase.REPLAYING_HISTORY);
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, store, () -> CatchupSnapshot.readingHistory(1L));
 
         recording.update(metadataWithAppendId(appendId), "event");
 
@@ -117,7 +118,7 @@ class RecordingMaterializedViewTest {
         AppendId before = AppendId.mint();
         store.recordApplied(PROJECTION_ID, before);
         AtomicBoolean replaying = new AtomicBoolean(false);
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store, () -> replaying.get() ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.LIVE);
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store, () -> replaying.get() ? CatchupSnapshot.readingHistory(1L) : CatchupSnapshot.LIVE);
 
         recording.replayObserved();
 

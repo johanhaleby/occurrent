@@ -21,6 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.CatchupPhase;
+import org.occurrent.dsl.projection.CatchupSnapshot;
 import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.eventstore.api.AppendId;
 import org.slf4j.Logger;
@@ -156,15 +157,12 @@ public final class AppliedAppendRecording {
      * observation would run one delete per replayed event instead of one per episode.
      */
     private CatchupPhase observePhase() {
-        // The generation is read first, and a catch-up that ended between the two reads is settled in favour of the
-        // first one. Going from a catch-up to none means it finished, so this call is live whatever the second read
-        // said, and without that a reconciliation the second read reported would clear appends the catch-up that just
-        // finished had recorded, with nothing left to deliver them again. Only a change to zero counts, because a
-        // composition that cannot supply a generation at all answers zero for everything, replays included.
-        long generation = lifecycleReplaying ? lastGeneration : phase.currentGeneration();
-        boolean catchupEndedBetweenTheReads = generation == 0L && lastGeneration != 0L;
-        CatchupPhase current = lifecycleReplaying ? CatchupPhase.REPLAYING_HISTORY
-                : catchupEndedBetweenTheReads ? CatchupPhase.LIVE : phase.currentPhase();
+        // One reading, so the part and the catch-up it belongs to always come from the same moment. Two reads let a
+        // catch-up finish in between and hand back a pair that never existed, and acting on that pair clears appends
+        // the finished catch-up had correctly recorded.
+        CatchupSnapshot snapshot = lifecycleReplaying ? CatchupSnapshot.readingHistory(lastGeneration) : phase.current();
+        CatchupPhase current = snapshot.phase();
+        long generation = snapshot.generation();
         if (generation != lastGeneration) {
             // A different catch-up than the one the last observation saw, so nothing this recorder learned during
             // that one applies here. This is what makes the clear happen even when the handover, the live gap and

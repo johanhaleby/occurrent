@@ -18,6 +18,7 @@ package org.occurrent.subscription.blocking.durable.catchup;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.CatchupSnapshot;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
@@ -148,6 +149,16 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     public boolean isCatchingUp(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return runningCatchupSubscriptions.containsKey(subscriptionId);
+    }
+
+    /**
+     * One map read, so the part and the catch-up it belongs to can never come from two different moments.
+     */
+    @Override
+    public CatchupSnapshot catchupSnapshot(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        CatchupRun run = runningCatchupSubscriptions.get(subscriptionId);
+        return run == null ? CatchupSnapshot.LIVE : new CatchupSnapshot(true, run.part() == CatchupPart.HISTORY, run.generation());
     }
 
     @Override

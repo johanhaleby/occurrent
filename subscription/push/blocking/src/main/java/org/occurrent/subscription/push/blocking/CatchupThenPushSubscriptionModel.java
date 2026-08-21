@@ -448,6 +448,21 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         return replayingSubscriptions.containsKey(subscriptionId) ? catchupGenerations.getOrDefault(subscriptionId, 0L) : 0L;
     }
 
+    /**
+     * One reading of this id's catch-up, taken from the replay it belongs to, so the part and the catch-up can never
+     * come from two different moments.
+     */
+    @Override
+    public org.occurrent.subscription.CatchupSnapshot catchupSnapshot(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        Future<Boolean> replay = replayingSubscriptions.get(subscriptionId);
+        if (replay == null) {
+            return org.occurrent.subscription.CatchupSnapshot.LIVE;
+        }
+        boolean readingHistory = reconcilingSubscriptions.get(subscriptionId) != replay;
+        return new org.occurrent.subscription.CatchupSnapshot(true, readingHistory, catchupGenerations.getOrDefault(subscriptionId, 0L));
+    }
+
     @Override
     public boolean isReplayingHistory(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");

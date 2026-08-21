@@ -17,6 +17,7 @@
 package org.occurrent.subscription.api.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.CatchupSnapshot;
 
 import java.util.Optional;
 
@@ -81,6 +82,22 @@ public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
      */
     default long catchupGeneration(String subscriptionId) {
         return isCatchingUp(subscriptionId) ? 1L : 0L;
+    }
+
+    /**
+     * Everything a recorder needs about {@code subscriptionId}'s catch-up, read as one value under whatever the model
+     * uses to keep that state consistent. Prefer this to the three questions above when acting on the answer, because
+     * a catch-up can finish between two separate calls and produce a pair that never existed.
+     * <p>
+     * The default composes the three, which is honest for a model whose state is a single map read anyway, and is the
+     * one to override when yours is not.
+     *
+     * @param subscriptionId The subscription to ask about.
+     * @return One reading of this subscription's catch-up.
+     */
+    default CatchupSnapshot catchupSnapshot(String subscriptionId) {
+        boolean catchingUp = isCatchingUp(subscriptionId);
+        return catchingUp ? new CatchupSnapshot(true, isReplayingHistory(subscriptionId), catchupGeneration(subscriptionId)) : CatchupSnapshot.LIVE;
     }
 
     /**

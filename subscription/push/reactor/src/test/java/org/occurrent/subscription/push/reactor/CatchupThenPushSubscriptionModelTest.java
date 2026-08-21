@@ -77,6 +77,30 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(historyDuringReplay).containsExactly(true, true);
     }
 
+    // A payload buffered while the history was being read is delivered once and never again, so it has to be seen as
+    // part of this catch-up rather than as live delivery, or a recording projection records it without first clearing
+    // what the rebuild is discarding.
+    @Test
+    void a_payload_buffered_during_the_history_read_is_delivered_as_part_of_the_catch_up() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> snapshotPerDelivery = new CopyOnWriteArrayList<>();
+        AtomicReference<CatchupThenPushSubscriptionModel> self = new AtomicReference<>();
+        CloudEvent buffered = cloudEvent("buffered", "Updated");
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("history", "Created"))
+                .doOnNext(__ -> feed.accept(buffered).subscribe()), 1);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        self.set(model);
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), event -> {
+            org.occurrent.subscription.CatchupSnapshot snapshot = self.get().catchupSnapshot("proj");
+            snapshotPerDelivery.add(event.getId() + "=" + snapshot.catchingUp() + "/" + snapshot.replayingHistory());
+            return Mono.empty();
+        }).waitUntilStarted().block();
+
+        await().untilAsserted(() -> assertThat(snapshotPerDelivery).containsExactly("history=true/true", "buffered=true/false"));
+        assertThat(model.catchupSnapshot("proj")).isEqualTo(org.occurrent.subscription.CatchupSnapshot.LIVE);
+    }
+
     @Test
     void catches_up_history_then_delivers_the_live_feed() {
         PushSubscriptionModel feed = new PushSubscriptionModel();

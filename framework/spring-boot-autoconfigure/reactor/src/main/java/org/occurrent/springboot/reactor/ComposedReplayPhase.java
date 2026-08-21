@@ -19,6 +19,7 @@ package org.occurrent.springboot.reactor;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.projection.CatchupPhase;
+import org.occurrent.dsl.projection.CatchupSnapshot;
 import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 
@@ -86,28 +87,16 @@ public final class ComposedReplayPhase {
         if (capability == null) {
             return Optional.of(ReplayPhase.neverReplays());
         }
-        return Optional.of(new ReplayPhase() {
-            @Override
-            public CatchupPhase currentPhase() {
-                return catchupPhaseOf(capability, subscriptionId);
-            }
-
-            @Override
-            public long currentGeneration() {
-                return capability.catchupGeneration(subscriptionId);
-            }
-        });
+        return Optional.of(() -> snapshotOf(capability.catchupSnapshot(subscriptionId)));
     }
 
-    // isCatchingUp is read first on purpose. Both answers come from the same per-id state, which only moves one way,
-    // so reading them in this order can at worst report a reconciliation for a delivery that has just gone live,
-    // which still clears and still records. The other order could report history for a live delivery and drop a
-    // record.
-    private static CatchupPhase catchupPhaseOf(ReplayAwareSubscriptions capability, String subscriptionId) {
-        if (!capability.isCatchingUp(subscriptionId)) {
-            return CatchupPhase.LIVE;
+    // Maps the one reading the subscription model gives onto the one the projection DSL takes. A catch-up that is not
+    // reading history is delivering what was written since it started, which a recording projection records.
+    private static CatchupSnapshot snapshotOf(org.occurrent.subscription.CatchupSnapshot snapshot) {
+        if (!snapshot.catchingUp()) {
+            return CatchupSnapshot.LIVE;
         }
-        return capability.isReplayingHistory(subscriptionId) ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.RECONCILING;
+        return new CatchupSnapshot(snapshot.replayingHistory() ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.RECONCILING, snapshot.generation());
     }
 
     /**

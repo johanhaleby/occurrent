@@ -308,6 +308,12 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
     }
 
     @Override
+    public org.occurrent.subscription.CatchupSnapshot catchupSnapshot(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return namedSubscriptions.catchupSnapshot(subscriptionId);
+    }
+
+    @Override
     public void shutdown() {
         namedSubscriptions.shutdown();
     }
