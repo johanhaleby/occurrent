@@ -278,9 +278,9 @@ public final class AppliedAppendRecording {
             if (pendingClear) {
                 attemptClear();
             }
-            if (!readingHistory) {
-                flushAwaitingClear();
-            }
+            // Nothing is ever waiting while the history is being read, since a catch-up start drops what the
+            // previous one held and a delivery during the history read buffers nothing.
+            flushAwaitingClear();
             return pendingClear;
         }
     }
