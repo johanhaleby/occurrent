@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 142
+revision: 143
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -296,7 +296,7 @@ units:
     deliverables:
       - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
     blocking_on: []
-    next_action: "PR 895 FINAL ROUND 2026-08-22T~00:3xZ: 5/5 green on e9488829b, Copilot 10 new threads, none silent-hazard, all carried to #893 items 14 to 19 with reasoned-decline replies (worker posting, no push). Delta verifier (Sonnet, Docker) on e9488829b covering round-one mechanics (HeldDelivery generation records, lifecycle as DEFERRED, registry identity and memoization, permanent stop releasing tags and closing the channel, nested-refusal outcome read). First verifier a8280435e8557c01b consolidated verdict still pending on 67fd24531. On MERGE-SAFE plus the replies standing: ayi pre-merge heads-up, squash through the writing gates, CAS merge pinned to e9488829b. Monitor bkc4p3e8e active"
+    next_action: "FIXPOINT PR A MERGED 2026-08-22T~01:5xZ as 35d77cdbb (CAS pin e9488829b, 5/5 green, delta verify MERGE-SAFE, ten final-round threads carried to #893 items 14 to 19 with reasoned replies, #893 item 20 the probe-test isolation), branch deleted, ayi told. Verifier tests saved at scratchpad verifier-895-tests.patch for PR B or the round-3 addendum. PR B (shared handover and model files: #893 items 1, 4, 9, 10, 11, 12, 13, 14 and the reactor findings 2, 5, 6, 7, 8, 9, 10 of round 2, demonstrator tests in demonstrator-tests.patch) waits for ayi PR 892 squash per dec-0014. Round 3 review after PR B merges; the cap then ends the loop and routes remainders to Johan. Monitor bkc4p3e8e active"
     last_meaningful_progress_at: 2026-08-21T05:50:00Z
     observed: {}
     assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."
