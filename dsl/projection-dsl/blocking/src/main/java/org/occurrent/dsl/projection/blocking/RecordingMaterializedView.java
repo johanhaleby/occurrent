@@ -134,6 +134,13 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
         if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayAbandoned();
         }
-        // No boundary for a replay that stopped part way through. The next one announces itself.
+        // The history read is over even though it was cut short, and a pull feed goes on delivering live events
+        // to this same view afterwards, which are applied and are recorded. The clear the replay owed stays owed.
+        // A subscription model sends nothing here instead, since a stopped catch-up delivers nothing more until a
+        // new one announces itself.
+        Object started = feedEpisode;
+        if (started != null) {
+            recording.historyRead(started);
+        }
     }
 }

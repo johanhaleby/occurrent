@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.eventstore.api.AppendId;
 
@@ -59,7 +58,7 @@ class RecordingMaterializedViewPartialVisibilityTest {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
 
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, store);
 
         // First event of a two-event append.
         recording.update(metadataWithAppendId(appendId), "event-1");

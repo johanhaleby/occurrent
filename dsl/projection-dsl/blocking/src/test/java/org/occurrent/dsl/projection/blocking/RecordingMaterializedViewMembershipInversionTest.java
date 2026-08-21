@@ -30,7 +30,6 @@ import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.Projection;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.AppendId;
@@ -157,7 +156,7 @@ class RecordingMaterializedViewMembershipInversionTest {
                 List<AppendId> recordedInOrder = new CopyOnWriteArrayList<>();
                 AppliedAppendStore observedStore = recordingSpy(appliedAppendStore, recordedInOrder);
                 MaterializedView<Ticked> view = Projections.materializedView(projection, repository, PROJECTION_ID);
-                MaterializedView<Ticked> recordingView = Projections.recordingAppliedAppends(view, PROJECTION_ID, observedStore, ReplayPhase.neverReplays());
+                MaterializedView<Ticked> recordingView = Projections.recordingAppliedAppends(view, PROJECTION_ID, observedStore);
                 ProjectionRunner<Ticked> runner = ProjectionRunner.stream(recorderModel, converter);
                 Subscription recordingSubscription = runner.project(PROJECTION_ID, projection, recordingView, StartAt.now());
                 assertThat(recordingSubscription.waitUntilStarted(Duration.ofSeconds(20))).as("the recording subscription never started").isTrue();

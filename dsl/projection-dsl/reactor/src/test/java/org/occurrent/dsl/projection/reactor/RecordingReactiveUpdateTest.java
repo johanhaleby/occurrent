@@ -22,9 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
-import org.occurrent.dsl.projection.CatchupPhase;
-import org.occurrent.dsl.projection.CatchupSnapshot;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.eventstore.api.AppendId;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -48,7 +45,7 @@ class RecordingReactiveUpdateTest {
         BiFunction<EventMetadata, String, Mono<Void>> delegate = orderTrackingDelegate(order, "delegate");
         AppliedAppendStore store = orderTrackingStore(AppliedAppendStore.inMemory(), order, "record");
 
-        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(delegate, PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(delegate, PROJECTION_ID, store);
 
         StepVerifier.create(recording.apply(metadataWithAppendId(AppendId.mint()), "event")).verifyComplete();
 
@@ -56,11 +53,12 @@ class RecordingReactiveUpdateTest {
     }
 
     @Test
-    void nothing_is_recorded_while_the_phase_says_replaying() {
+    void nothing_is_recorded_while_a_catch_up_is_reading_its_history() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
-        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store, () -> CatchupSnapshot.readingHistory(1L));
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store);
 
+        recording.catchupStarted(new Object());
         StepVerifier.create(recording.apply(metadataWithAppendId(appendId), "event")).verifyComplete();
 
         assertThat(store.hasApplied(PROJECTION_ID, appendId)).isFalse();
@@ -71,7 +69,7 @@ class RecordingReactiveUpdateTest {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
         BiFunction<EventMetadata, String, Mono<Void>> delegate = (metadata, event) -> Mono.error(new RuntimeException("delegate failed"));
-        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(delegate, PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(delegate, PROJECTION_ID, store);
 
         StepVerifier.create(recording.apply(metadataWithAppendId(appendId), "event")).verifyError(RuntimeException.class);
 
@@ -81,7 +79,7 @@ class RecordingReactiveUpdateTest {
     @Test
     void an_event_with_no_appendid_extension_is_skipped_without_erroring() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
-        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store);
 
         StepVerifier.create(recording.apply(EventMetadata.empty(), "event")).verifyComplete();
     }
@@ -89,7 +87,7 @@ class RecordingReactiveUpdateTest {
     @Test
     void an_event_with_a_malformed_non_uuid_appendid_is_skipped_without_erroring() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
-        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store);
         EventMetadata malformed = new EventMetadata(Map.of(OccurrentCloudEventExtension.APPEND_ID, "not-a-uuid"));
 
         StepVerifier.create(recording.apply(malformed, "event")).verifyComplete();
@@ -100,7 +98,7 @@ class RecordingReactiveUpdateTest {
         List<String> storeCalls = new ArrayList<>();
         AppliedAppendStore store = orderTrackingStore(AppliedAppendStore.inMemory(), storeCalls, "recordApplied");
         AppendId appendId = AppendId.mint();
-        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store);
 
         StepVerifier.create(recording.apply(metadataWithAppendId(appendId), "event1")).verifyComplete();
         StepVerifier.create(recording.apply(metadataWithAppendId(appendId), "event2")).verifyComplete();
@@ -109,17 +107,19 @@ class RecordingReactiveUpdateTest {
     }
 
     @Test
-    void replayObserved_clears_and_recording_resumes() {
+    void a_catch_up_clears_and_recording_resumes_once_its_history_has_been_read() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId before = AppendId.mint();
         store.recordApplied(PROJECTION_ID, before);
-        AtomicBoolean replaying = new AtomicBoolean(false);
-        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store, () -> replaying.get() ? CatchupSnapshot.readingHistory(1L) : CatchupSnapshot.LIVE);
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store);
+        Object episode = new Object();
 
-        recording.replayObserved();
+        recording.catchupStarted(episode);
+        recording.pollForClear();
 
         assertThat(store.hasApplied(PROJECTION_ID, before)).isFalse();
 
+        recording.historyRead(episode);
         AppendId after = AppendId.mint();
         StepVerifier.create(recording.apply(metadataWithAppendId(after), "event")).verifyComplete();
 
@@ -130,9 +130,12 @@ class RecordingReactiveUpdateTest {
     void a_failing_clear_leaves_the_recorder_non_recording_and_a_later_successful_clear_re_enables_it() {
         FlakyClearStore store = new FlakyClearStore();
         AppendId first = AppendId.mint();
-        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store);
 
-        recording.replayObserved(); // marks pendingClear, first clear attempt fails
+        Object episode = new Object();
+        recording.catchupStarted(episode);
+        recording.historyRead(episode);
+        recording.pollForClear(); // first clear attempt, which fails
         StepVerifier.create(recording.apply(metadataWithAppendId(first), "event-during-failed-clear")).verifyComplete();
         assertThat(store.hasApplied(PROJECTION_ID, first)).isFalse();
 
@@ -147,7 +150,7 @@ class RecordingReactiveUpdateTest {
     void nothing_is_recorded_for_a_delegate_that_reports_skipping_the_event() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
-        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(skippingDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(skippingDelegate(), PROJECTION_ID, store);
 
         StepVerifier.create(recording.apply(metadataWithAppendId(appendId), "event")).verifyComplete();
 
@@ -158,7 +161,7 @@ class RecordingReactiveUpdateTest {
     void an_applied_event_is_still_recorded_when_the_delegate_can_report_skipping() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
-        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(applyingDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(applyingDelegate(), PROJECTION_ID, store);
 
         StepVerifier.create(recording.apply(metadataWithAppendId(appendId), "event")).verifyComplete();
 
@@ -196,7 +199,7 @@ class RecordingReactiveUpdateTest {
 
     private static RecordingReactiveUpdate<String> newRecordingWithDelegateLifecycle(BiFunction<EventMetadata, String, Mono<Void>> update, ReactiveReplayAware lifecycle) {
         BiFunction<EventMetadata, String, Mono<Void>> delegate = new DelegateWithLifecycle(update, lifecycle);
-        return new RecordingReactiveUpdate<>(delegate, PROJECTION_ID, AppliedAppendStore.inMemory(), ReplayPhase.neverReplays());
+        return new RecordingReactiveUpdate<>(delegate, PROJECTION_ID, AppliedAppendStore.inMemory());
     }
 
     private static final class DelegateWithLifecycle implements BiFunction<EventMetadata, String, Mono<Void>>, ReactiveReplayAware {
