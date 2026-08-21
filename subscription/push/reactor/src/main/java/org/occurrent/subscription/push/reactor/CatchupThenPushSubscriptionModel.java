@@ -363,14 +363,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     /**
-     * Whether the history read for {@code subscriptionId} is still running, rather than the live events buffered
-     * while it ran being delivered. Those are handed over exactly once, since the feed that supplied them was already
-     * told they were handled, so a recording projection has to treat them as live rather than as part of a replay.
-     * <p>
-     * The catch-up-done signal usually removes this id before the buffer is drained, so the answer here is normally
-     * already false by then. This does not lean on that ordering, which nothing declares.
+     * Whether {@code subscriptionId} is paused, counting a pause asked for while its replay was still running and
+     * not yet applied to the live feed.
      */
-
     @Override
     public boolean isPaused(String subscriptionId) {
         return pauseRequestedDuringReplay.containsKey(subscriptionId) || liveFeed.isPaused(subscriptionId);

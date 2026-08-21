@@ -530,11 +530,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     /**
-     * Whether the history read for {@code subscriptionId} is still running, rather than the live events buffered
-     * while it ran being delivered. Those are handed over exactly once, since the feed that supplied them was already
-     * told they were handled, so a recording projection has to treat them as live rather than as part of a replay.
+     * Pauses {@code subscriptionId}, or records that a pause was asked for when its replay is still running, since
+     * a replay does not go through the live feed and pausing there would report a subscription paused while its
+     * history keeps being handled. A recorded pause is applied at the handover.
      */
-
     @Override
     public void pauseSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");

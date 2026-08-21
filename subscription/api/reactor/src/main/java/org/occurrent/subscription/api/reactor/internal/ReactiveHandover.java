@@ -395,9 +395,7 @@ public final class ReactiveHandover<T> {
                     drainedSource.set(source);
                     source.historyDone();
                     // Taken after historyDone, so nothing that arrives from here on is counted as part of the drain.
-                    if (remainingInDrain.compareAndSet(-1L, liveBuffer.size()) && remainingInDrain.get() == 0L) {
-                        source.liveDrained();
-                    }
+                    remainingInDrain.compareAndSet(-1L, liveBuffer.size());
                 }))
                 .then(recordMarker)
                 .doOnSuccess(ignored -> {
@@ -405,6 +403,13 @@ public final class ReactiveHandover<T> {
                     // flips its own live field. A payload acceptIfLive(..) sees after this point is treated as live
                     // even while whatever buffered ahead of it during the replay is still being delivered.
                     live = true;
+                    // An empty buffer has nothing to deliver, so its drain is over the moment the handover is.
+                    // Signalled here rather than beside historyDone, so a listener that frees the id on this cannot
+                    // do it while the marker is still unwritten. A buffer with anything in it reaches liveDrained
+                    // from the last delivery instead, which also runs after this point.
+                    if (remainingInDrain.get() == 0L) {
+                        source.liveDrained();
+                    }
                     catchupDone.tryEmitValue(true);
                 })
                 .thenMany(liveSink.asFlux().concatMap(this::deliver))

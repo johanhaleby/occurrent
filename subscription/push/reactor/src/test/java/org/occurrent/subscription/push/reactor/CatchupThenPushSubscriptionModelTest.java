@@ -26,11 +26,14 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
@@ -169,6 +172,62 @@ class CatchupThenPushSubscriptionModelTest {
         // (ReactiveHandover completes the catch-up signal before draining the live buffer, on purpose). "late" is
         // live-buffered rather than replayed, so it is only folded during that later drain, off this thread.
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "2", "late"));
+    }
+
+    // isCatchingUp answers for the whole catch-up, marker included, so it must not turn false while the marker
+    // write is still in flight. A crash in that window leaves no marker on a subscription that already said it was
+    // live, and the saga timer gate and every readiness probe read the same answer.
+    @Test
+    void a_catch_up_with_nothing_buffered_still_reports_catching_up_until_its_marker_is_written() throws Exception {
+        HeldMarkerStorage marker = new HeldMarkerStorage();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
+        // Nothing is pushed to the feed while the replay runs, so the live buffer is empty at the drain.
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        // Parked inside the marker write, which is after the replay and after the drain point, and before the
+        // handover has finished.
+        assertThat(marker.writeStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(model.isCatchingUp("proj"))
+                .as("the marker is not written yet, so this catch-up is not over")
+                .isTrue();
+
+        marker.release.countDown();
+        subscription.waitUntilStarted().block(Duration.ofSeconds(5));
+
+        await().untilAsserted(() -> assertThat(model.isCatchingUp("proj")).isFalse());
+    }
+
+    // Holds the marker write open so a test can look at the model while the handover is half done.
+    private static final class HeldMarkerStorage implements CheckpointStorage {
+        final CountDownLatch writeStarted = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+
+        @Override
+        public Mono<Checkpoint> read(String subscriptionId) {
+            return Mono.empty();
+        }
+
+        @Override
+        public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            return Mono.fromCallable(() -> {
+                writeStarted.countDown();
+                awaitLatch(release);
+                return checkpoint;
+            }).subscribeOn(Schedulers.boundedElastic());
+        }
+
+        @Override
+        public Mono<Long> writeVersion(String subscriptionId) {
+            return Mono.empty();
+        }
+
+        @Override
+        public Mono<Void> delete(String subscriptionId) {
+            return Mono.empty();
+        }
     }
 
     @Test
