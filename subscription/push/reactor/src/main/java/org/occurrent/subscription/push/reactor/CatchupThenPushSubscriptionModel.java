@@ -98,6 +98,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // fails. The live feed cannot answer for them: it knows the id (this model registers there first) but it is
     // buffering rather than delivering, so it would report a subscription that is not yet folding anything as running.
     private final ConcurrentMap<String, Sinks.One<Boolean>> replayingSubscriptions = new ConcurrentHashMap<>();
+    // Ids whose history read is done and whose buffered live events are being delivered. Kept beside
+    // replayingSubscriptions rather than replacing its value, because isCatchingUp and isRunning both read that map
+    // and neither changes here. Entries are removed by forget, alongside the replay entry itself.
+    private final Set<String> reconcilingSubscriptions = ConcurrentHashMap.newKeySet();
     // A pause asked for while a replay is in flight. The replay itself keeps running, since resuming it would mean
     // persisting the exact replay cursor, which this model does not do. Applied at the handover instead.
     private final ConcurrentMap<String, Boolean> pauseRequestedDuringReplay = new ConcurrentHashMap<>();
@@ -178,6 +182,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             public Mono<Void> markCaughtUp() {
                 return CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId);
             }
+
+            @Override
+            public void historyDone() {
+                reconcilingSubscriptions.add(subscriptionId);
+            }
         });
 
         // Subscribed here rather than only handed back, so a caller that never waits still gets the bookkeeping below.
@@ -238,6 +247,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     private void forget(String subscriptionId) {
         replayingSubscriptions.remove(subscriptionId);
+        reconcilingSubscriptions.remove(subscriptionId);
     }
 
     /**
@@ -312,6 +322,20 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     public boolean isCatchingUp(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return replayingSubscriptions.containsKey(subscriptionId);
+    }
+
+    /**
+     * Whether the history read for {@code subscriptionId} is still running, rather than the live events buffered
+     * while it ran being delivered. Those are handed over exactly once, since the feed that supplied them was already
+     * told they were handled, so a recording projection has to treat them as live rather than as part of a replay.
+     * <p>
+     * The catch-up-done signal usually removes this id before the buffer is drained, so the answer here is normally
+     * already false by then. This does not lean on that ordering, which nothing declares.
+     */
+    @Override
+    public boolean isReplayingHistory(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return replayingSubscriptions.containsKey(subscriptionId) && !reconcilingSubscriptions.contains(subscriptionId);
     }
 
     @Override
@@ -392,6 +416,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         shuttingDown = true;
         awaitReplays(SHUTDOWN_REPLAY_TIMEOUT);
         replayingSubscriptions.clear();
+        reconcilingSubscriptions.clear();
         pauseRequestedDuringReplay.clear();
         // Unlike stop(), a shutdown keeps nothing to launch again: it drops the registrations too.
         interruptibleReplays.clear();

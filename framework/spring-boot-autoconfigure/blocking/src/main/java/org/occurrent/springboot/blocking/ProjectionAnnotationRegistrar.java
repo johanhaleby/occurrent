@@ -28,6 +28,7 @@ import org.occurrent.dsl.dcb.blocking.DcbSubscriptions;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
+import org.occurrent.dsl.projection.CatchupPhase;
 import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.dsl.projection.blocking.ProjectionRunner;
@@ -306,8 +307,29 @@ class ProjectionAnnotationRegistrar {
     // Empty means the composition cannot say, so it is treated as never replaying.
     private RecordingPhase asynchronousSubscribablePhase(String id, SubscriptionModelCapability capability) {
         Optional<ReplayAwareSubscriptions> replayAware = ReplayAwareSubscriptions.findIn(capability);
-        ReplayPhase phase = replayAware.<ReplayPhase>map(r -> () -> r.isCatchingUp(id)).orElseGet(ReplayPhase::neverReplays);
+        ReplayPhase phase = replayAware.<ReplayPhase>map(r -> () -> catchupPhaseOf(r, id)).orElseGet(ReplayPhase::neverReplays);
         return new RecordingPhase(phase, replayAware.isPresent());
+    }
+
+    // isCatchingUp is read first on purpose. Both answers come from the same per-id state, which only moves one way,
+    // so reading them in this order can at worst report a reconciliation for a delivery that has just gone live,
+    // which still clears and still records. The other order could report history for a live delivery and drop a
+    // record, which is the defect this phase exists to fix.
+    private static CatchupPhase catchupPhaseOf(ReplayAwareSubscriptions replayAware, String id) {
+        if (!replayAware.isCatchingUp(id)) {
+            return CatchupPhase.LIVE;
+        }
+        return replayAware.isReplayingHistory(id) ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.RECONCILING;
+    }
+
+    // The push catch-up model answers both questions itself, so this reads the same way as the event-store version
+    // above. It reports a reconciliation while the live events buffered during the replay are being handed to the
+    // projection, which is the only delivery those events get, since the broker was already told they were handled.
+    private static CatchupPhase pushCatchupPhaseOf(CatchupThenPushSubscriptionModel model, String id) {
+        if (!model.isCatchingUp(id)) {
+            return CatchupPhase.LIVE;
+        }
+        return model.isReplayingHistory(id) ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.RECONCILING;
     }
 
     // Wraps materializedView in the applied-append recorder when the annotation asks for it, resolving the phase
@@ -563,7 +585,7 @@ class ProjectionAnnotationRegistrar {
             // reports catching up again instead of staying at whatever it reached the first time.
             withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
             subscribable = model;
-            phase = () -> model.isCatchingUp(id);
+            phase = () -> pushCatchupPhaseOf(model, id);
         } else {
             // catchup = NONE never replays, so it is live as soon as it is running. Asked rather than recorded because
             // occurrent.subscription.mode = manual defers the subscription, and a recorded Live would tell a readiness

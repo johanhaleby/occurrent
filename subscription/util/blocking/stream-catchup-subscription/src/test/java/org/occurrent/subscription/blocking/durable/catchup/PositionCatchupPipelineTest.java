@@ -55,7 +55,8 @@ class PositionCatchupPipelineTest {
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000);
 
         long cursor = assertTimeoutPreemptively(Duration.ofSeconds(5), () ->
-                pipeline.replay(0, () -> true, (events, ignoredCache) -> events.forEach(e -> delivered.add(e.getId())), cache));
+                pipeline.replay(0, () -> true, (events, ignoredCache) -> events.forEach(e -> delivered.add(e.getId())), cache, () -> {
+                    }));
 
         assertThat(cursor).isEqualTo(20L);
         assertThat(delivered).isEqualTo(idsInRange(1, 20));
@@ -74,7 +75,8 @@ class PositionCatchupPipelineTest {
         BoundedIdCache cache = new BoundedIdCache(1000);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000);
 
-        long cursor = pipeline.replay(0, () -> true, (events, ignoredCache) -> events.forEach(CloudEvent::getId), cache);
+        long cursor = pipeline.replay(0, () -> true, (events, ignoredCache) -> events.forEach(CloudEvent::getId), cache, () -> {
+        });
 
         assertThat(cursor).isEqualTo(30L);
         assertThat(headReads).hasValue(2);

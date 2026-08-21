@@ -122,6 +122,20 @@ public final class ReactiveHandover<T> {
          */
         default void replayAbandoned() {
         }
+
+        /**
+         * The history this catch-up was going to read has been read, and the live payloads buffered while it ran are
+         * about to be delivered. Called immediately before every drain, including the one for a source that was
+         * already caught up and replayed nothing, which is what makes it different from {@link #replayCompleted()}.
+         * <p>
+         * A buffered payload is delivered exactly once and never again, since whoever fed it here has already been
+         * told it was handled, so a source that reports its own catch-up phase has to stop calling this part of the
+         * work a replay before the drain rather than after it
+         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
+         * decision 6). The default does nothing.
+         */
+        default void historyDone() {
+        }
     }
 
     private final Function<T, Mono<Void>> deliver;
@@ -281,6 +295,10 @@ public final class ReactiveHandover<T> {
         replayFolded
                 .then(recordMarker)
                 .doOnSuccess(ignored -> catchupDone.tryEmitValue(true))
+                // Before the drain and on every path into it, including the already-caught-up one that skipped the
+                // replay entirely, so a source reporting its own catch-up phase has stopped calling this a replay by
+                // the time a buffered payload is delivered.
+                .then(Mono.fromRunnable(source::historyDone))
                 .thenMany(liveSink.asFlux().concatMap(this::deliver))
                 // This engine subscribes its own pipeline rather than handing it back, so without a scheduler the
                 // replay would run on whoever called catchUp, which is the Spring refresh thread for an annotated

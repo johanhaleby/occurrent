@@ -180,7 +180,8 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         };
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(dcbReader, windowSize);
         pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId),
-                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache), catchupPhaseCache);
+                (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache), catchupPhaseCache,
+                () -> beginReconcile(subscriptionId));
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
         // blocking stream catch-up. Unlocked, a cancelSubscription or a fresh subscribe for this id could land in

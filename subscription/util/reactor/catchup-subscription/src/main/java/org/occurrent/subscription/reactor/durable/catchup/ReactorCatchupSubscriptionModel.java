@@ -223,6 +223,18 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         return innerModelCatchingUp(subscriptionId) != null;
     }
 
+    /**
+     * Asked of whichever inner model owns this id, since only it knows which part of its catch-up it has reached.
+     * Left to the default here and a projection fed through this model would record nothing for the events its
+     * reconciliation delivered.
+     */
+    @Override
+    public boolean isReplayingHistory(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        SubscriptionModel owner = innerModelCatchingUp(subscriptionId);
+        return owner instanceof ReplayAwareSubscriptions replayAware && replayAware.isReplayingHistory(subscriptionId);
+    }
+
     private @Nullable SubscriptionModel innerModelCatchingUp(String subscriptionId) {
         if (streamCatchupSubscriptionModel != null && streamCatchupSubscriptionModel.isCatchingUp(subscriptionId)) {
             return streamCatchupSubscriptionModel;

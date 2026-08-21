@@ -314,6 +314,18 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
         return presentCatchupModels().anyMatch(model -> model.isCatchingUp(subscriptionId));
     }
 
+    /**
+     * Asked of the mode-specific models the same way {@link #isCatchingUp(String)} is, since only the one running
+     * this id can say which part of its catch-up it has reached. Without this the default would answer
+     * {@code isCatchingUp}, and a projection fed through this dispatcher would record nothing for the events its
+     * reconciliation delivered.
+     */
+    @Override
+    public boolean isReplayingHistory(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return presentCatchupModels().anyMatch(model -> model.isReplayingHistory(subscriptionId));
+    }
+
     @Override
     public boolean isPaused(String subscriptionId) {
         return presentCatchupModels().anyMatch(model -> model.isPaused(subscriptionId))

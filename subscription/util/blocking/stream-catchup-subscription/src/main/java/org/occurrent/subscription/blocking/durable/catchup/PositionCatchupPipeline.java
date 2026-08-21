@@ -73,13 +73,21 @@ final class PositionCatchupPipeline {
      * reconcile start (it does not chase a moving head), handing each read window to {@code deliver}. Returns the
      * position the replay reached, which is the resume boundary the caller hands over to live delivery.
      *
-     * @param keepRunning Checked before every window read; stops the replay early on cancellation or shutdown.
-     * @param deliver     Called with each window's events (bulk windows get a {@code null} cache, reconciliation
-     *                    windows get {@code cache}) so the caller can dedupe, persist checkpoints and deliver.
+     * @param keepRunning       Checked before every window read; stops the replay early on cancellation or shutdown.
+     * @param deliver           Called with each window's events (bulk windows get a {@code null} cache,
+     *                          reconciliation windows get {@code cache}) so the caller can dedupe, persist
+     *                          checkpoints and deliver.
+     * @param reconcileStarting Run once the history windows have all been delivered and before the reconciliation
+     *                          reads anything.
      */
-    long replay(long startPosition, BooleanSupplier keepRunning, BiConsumer<Stream<CloudEvent>, @Nullable BoundedIdCache> deliver, BoundedIdCache cache) {
+    long replay(long startPosition, BooleanSupplier keepRunning, BiConsumer<Stream<CloudEvent>, @Nullable BoundedIdCache> deliver, BoundedIdCache cache, Runnable reconcileStarting) {
         long bulkHead = reader.currentHead();
         long cursor = windows(startPosition, bulkHead, keepRunning, deliver, null);
+
+        // Run after the history windows rather than before them, so a caller that tracks which part of the catch-up
+        // it is in moves only once every history event has been delivered. Delivery here is synchronous, so the
+        // windows call above returning means exactly that.
+        reconcileStarting.run();
 
         // Snapshot the head once and reconcile up to it. Re-reading a moving head would advance forever under
         // sustained writes and never hand over to live (livelock). Anything after the snapshot is covered by the

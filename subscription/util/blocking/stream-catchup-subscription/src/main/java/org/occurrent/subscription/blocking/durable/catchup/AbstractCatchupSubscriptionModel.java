@@ -50,7 +50,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     protected final CheckpointAwareSubscriptionModel subscriptionModel;
     protected final CatchupSubscriptionModelConfig config;
     protected final Class<?> subscriptionModelContextType;
-    protected final ConcurrentMap<String, Boolean> runningCatchupSubscriptions;
+    protected final ConcurrentMap<String, CatchupPart> runningCatchupSubscriptions;
     // Pause requested for a subscriptionId while its replay is still in-flight, before the delegate knows the id.
     // Applied via applyPendingPauseIfAny once the live delegate subscription exists.
     protected final ConcurrentMap<String, Boolean> pauseRequestedDuringCatchup = new ConcurrentHashMap<>();
@@ -110,7 +110,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     static final class SharedCatchupState {
         private final ConcurrentMap<String, ReentrantLock> handoverLocks = new ConcurrentHashMap<>();
         private final ConcurrentMap<String, CatchupAttempt> currentAttempt = new ConcurrentHashMap<>();
-        private final ConcurrentMap<String, Boolean> runningCatchupSubscriptions = new ConcurrentHashMap<>();
+        private final ConcurrentMap<String, CatchupPart> runningCatchupSubscriptions = new ConcurrentHashMap<>();
     }
 
     // Reports subscriptionModelContextType (the dispatcher's type when wrapped) so a caller's StartAt.dynamic
@@ -145,6 +145,34 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     public boolean isCatchingUp(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return runningCatchupSubscriptions.containsKey(subscriptionId);
+    }
+
+    @Override
+    public boolean isReplayingHistory(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return runningCatchupSubscriptions.get(subscriptionId) == CatchupPart.HISTORY;
+    }
+
+    /**
+     * Which part of a catch-up a registered id is in. A replay reads the history that was already there, then
+     * reconciles what arrived while it was reading, and {@link #isCatchingUp(String)} is true for both. An id that
+     * is not registered has neither value, which is what makes an unknown id and a handed-over one read the same.
+     */
+    protected enum CatchupPart {
+        HISTORY, RECONCILE
+    }
+
+    /**
+     * Moves this attempt's id from the history part of its catch-up to the reconciliation, called by a subclass once
+     * its history read has delivered everything it read. Identity-checked the same way {@link #shouldKeepReplaying}
+     * is, so an attempt a later one has already taken over cannot move the later one's phase. Only meaningful on the
+     * virtual thread {@link #startCatchupAsync} started for this attempt.
+     */
+    protected void beginReconcile(String subscriptionId) {
+        CatchupAttempt attempt = CURRENT_ATTEMPT.get();
+        if (currentAttempt.get(subscriptionId) == attempt) {
+            runningCatchupSubscriptions.replace(subscriptionId, CatchupPart.HISTORY, CatchupPart.RECONCILE);
+        }
     }
 
     @Override
@@ -439,7 +467,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // the earlier attempt's late checkpoint delete runs, wiping out what this attempt just wrote instead of
         // its own.
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
-            runningCatchupSubscriptions.put(subscriptionId, true);
+            runningCatchupSubscriptions.put(subscriptionId, CatchupPart.HISTORY);
             currentAttempt.put(subscriptionId, attempt);
         }
         // catchup itself ends its attempt's ownership on normal completion (via endReplayIfStillCurrent), and

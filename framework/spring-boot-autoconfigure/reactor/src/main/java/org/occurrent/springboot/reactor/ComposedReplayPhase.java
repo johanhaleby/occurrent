@@ -18,6 +18,7 @@ package org.occurrent.springboot.reactor;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.dsl.projection.CatchupPhase;
 import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 
@@ -85,7 +86,18 @@ public final class ComposedReplayPhase {
         if (capability == null) {
             return Optional.of(ReplayPhase.neverReplays());
         }
-        return Optional.of(() -> capability.isCatchingUp(subscriptionId));
+        return Optional.of(() -> catchupPhaseOf(capability, subscriptionId));
+    }
+
+    // isCatchingUp is read first on purpose. Both answers come from the same per-id state, which only moves one way,
+    // so reading them in this order can at worst report a reconciliation for a delivery that has just gone live,
+    // which still clears and still records. The other order could report history for a live delivery and drop a
+    // record.
+    private static CatchupPhase catchupPhaseOf(ReplayAwareSubscriptions capability, String subscriptionId) {
+        if (!capability.isCatchingUp(subscriptionId)) {
+            return CatchupPhase.LIVE;
+        }
+        return capability.isReplayingHistory(subscriptionId) ? CatchupPhase.REPLAYING_HISTORY : CatchupPhase.RECONCILING;
     }
 
     /**

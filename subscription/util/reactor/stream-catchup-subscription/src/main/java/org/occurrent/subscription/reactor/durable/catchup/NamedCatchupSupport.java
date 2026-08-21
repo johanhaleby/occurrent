@@ -108,6 +108,16 @@ final class NamedCatchupSupport {
         return catchingUp.containsKey(subscriptionId);
     }
 
+    /**
+     * Whether the replay for {@code subscriptionId} is still reading the history that was there when it started,
+     * rather than the events written since. False for an id with no replay in flight, so a handed-over subscription
+     * and one this model never saw read the same, matching {@link #isCatchingUp(String)}.
+     */
+    boolean isReplayingHistory(String subscriptionId) {
+        CatchupState state = catchingUp.get(subscriptionId);
+        return state != null && state.replayingHistory.get();
+    }
+
     private SubscriptionModel requireNamed() {
         if (named == null) {
             throw new IllegalStateException(modelClass.getSimpleName() + " can only manage named subscriptions when the model it wraps manages them itself (implements " + SubscriptionModel.class.getSimpleName() + "). The wrapped " + wrapped.getClass().getName() + " only offers the plain (cold) subscribe(filter, startAt) primitive, so use that primitive directly, or wrap a model that manages named subscriptions.");
@@ -140,12 +150,15 @@ final class NamedCatchupSupport {
         // The replay is relaunchable: stop() aborts and parks it, start(..) runs this again from the same start
         // position (re-adding ids to the cache is a no-op; re-delivering replayed events is at-least-once).
         state.launcher = () -> {
+            // A relaunch reads the history again from the same start position, so this attempt starts in the history
+            // part of its catch-up however far the previous run got.
+            state.replayingHistory.set(true);
             // Token before replay, replay through the caller's action (no retry, failure is loud), then delegate live.
             Disposable replaying = pipeline.captureLiveToken(wrapped)
-                    .flatMapMany(liveToken -> pipeline.replay(startPosition, cache)
-                            // A stop between dispose landing and this event truncates here, before the action runs.
-                            .takeWhile(cloudEvent -> !stopped && !state.cancelled.get())
-                            .concatMap(action)
+                    .flatMapMany(liveToken -> pipeline.replayApplying(startPosition, cache,
+                                    // A stop between dispose landing and this event truncates here, before the action runs.
+                                    () -> !stopped && !state.cancelled.get(), action,
+                                    () -> state.replayingHistory.set(false))
                             .thenMany(Flux.defer(() -> {
                                 handOver(subscriptionId, state, delegate, liveSubscriptionFilter, StartAt.checkpoint(liveToken), liveAction);
                                 return Flux.empty();
@@ -374,6 +387,10 @@ final class NamedCatchupSupport {
         final AtomicBoolean cancelled = new AtomicBoolean(false);
         final AtomicBoolean handedOver = new AtomicBoolean(false);
         final Sinks.Empty<Void> started = Sinks.empty();
+        // False once the history read has handed everything it read to the action, so what follows is the events
+        // written since the replay started. Back to true whenever the replay is relaunched, since that reads the
+        // history again from the same start position.
+        final AtomicBoolean replayingHistory = new AtomicBoolean(true);
         // The replay, relaunchable: assigned once in subscribeWithCatchup before the state is published, run under
         // the state monitor by the initial subscribe and by start(..) for parked subscriptions.
         volatile Runnable launcher = () -> {

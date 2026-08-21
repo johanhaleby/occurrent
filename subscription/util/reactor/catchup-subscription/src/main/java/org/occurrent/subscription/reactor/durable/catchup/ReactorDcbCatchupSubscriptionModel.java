@@ -248,6 +248,12 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
     }
 
     @Override
+    public boolean isReplayingHistory(String subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        return namedSubscriptions.isReplayingHistory(subscriptionId);
+    }
+
+    @Override
     public void shutdown() {
         namedSubscriptions.shutdown();
     }
