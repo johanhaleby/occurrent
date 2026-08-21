@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 71
-updated_at: 2026-08-21T22:29:33Z
+revision: 72
+updated_at: 2026-08-21T23:08:48Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -294,8 +294,8 @@ units:
       - {check: manual_approval, ref: "design gate: plan handed to the orchestrator, approved by Johan (revision 3 approved as dec-0016, second design round for the push-based start signal per dec-0019 approved as revision 7 plus six amendments, dec-0020, 2026-08-21T18:00:01Z)", met: true, evidence: "Plan revision 3 approved 2026-08-21T10:42:42Z (dec-0016) with four in-place amendments after three fresh-context passes. Johan ruled scope (code fix, push models in) and delegated docs, decided append-identity only"}
       - {check: pr_merged, ref: 892, met: false, evidence: null}
     blocking_on: []
-    next_action: "Copilot on 9f8121d1 (2026-08-21T22:29:33Z): three comments. One real ordering point (ReactiveHandover empty-buffer path runs liveDrained before the marker and live flip, so isCatchingUp reads false early), two stale javadoc blocks. Routed, one push, one more Copilot round, then the gate. A new code defect in that round goes to Johan before any fix. CI 27/27 on 9f8121d1, verify items all closed"
-    last_meaningful_progress_at: 2026-08-21T22:29:33Z
+    next_action: "Copilot on dfac04bc (2026-08-21T23:08:48Z): historyRead contends on clearLock (thread plus suppressed), pull feeds never register the clear-retry poll (two suppressed, the lie-true direction), a stale launch late catchupStarted adopted over the replacement on reactor named (suppressed). One more round under dec-0019 (journaled dec-0022), not a pause. Then the gate"
+    last_meaningful_progress_at: 2026-08-21T23:08:48Z
     observed:
       pr_892: {head: 09c2207795e5767e1fb84d04a21c021c05924939, branch: "ayi/u11-replay-window-recording", rollup: "implementation complete 2026-08-21T20:44:11Z, code head 2ecb3a46 matrix read separately, prose head 05919f41 three light checks green. Earlier: 27 green on c019e860. was CONFLICTING after brk PR 889 (11b1fa91a), main merged in at e02f7a5f 2026-08-21T16:04:59Z, overlap on BlockingHandover, blocking CatchupThenPushSubscriptionModel and its test, blocking ProjectionAnnotationRegistrar, changelog", review: "four Copilot rounds, round 4 two threads plus one suppressed open, cap thread reasoned-declined, three earlier threads replied and resolved", delivery: "DELIVERY_RESULT blocked received 2026-08-21T15:26:34Z, invariant over one CatchupSnapshot, mutation proofs listed, address used api-review-verification-c3b0ea-e5", via: "monitor PR-DELTA", at: 2026-08-21T12:41:30Z}
     assessment: "Adopted by Johan's structured-ask ruling 2026-08-21 (dec-0012, code fix now over docs addendum and deferral). Reopens ADR 132 decision 6 before 0.34.0. Mechanism verified in code on both stacks by a fresh-context Opus pass, citations on #890."
