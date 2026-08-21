@@ -131,4 +131,30 @@ class RabbitMqDeliveryFailureActionTest {
                 .containsEntry("tenant", "acme")
                 .containsEntry("parked-reason", "handler-failure");
     }
+
+    /**
+     * On a colliding key, {@code parkingDestination}'s own header value wins over the delivery's original one,
+     * matching {@link RabbitMqDeliveryFailureAction}'s documented merge order. Disjoint keys alone cannot tell a
+     * correct merge from one whose precedence is silently reversed.
+     */
+    @Test
+    void apply_lets_the_parking_destinations_header_win_over_the_originals_on_a_colliding_key() throws Exception {
+        Channel consumeChannel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey")
+                .withHeaders(Map.of("parked-reason", "destination-value"));
+        BasicProperties originalProperties = new BasicProperties.Builder()
+                .headers(Map.of("parked-reason", "original-value"))
+                .build();
+        byte[] originalBody = "payload".getBytes();
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK,
+                parkingPublisher, parkingDestination, LoggerFactory.getLogger(getClass()));
+
+        action.apply(42L, originalProperties, originalBody);
+
+        ArgumentCaptor<BasicProperties> parkedPropertiesCaptor = ArgumentCaptor.forClass(BasicProperties.class);
+        verify(parkingPublisher).publish(eq("exchange"), eq("routingKey"), parkedPropertiesCaptor.capture(), eq(originalBody));
+        assertThat(parkedPropertiesCaptor.getValue().getHeaders())
+                .containsEntry("parked-reason", "destination-value");
+    }
 }

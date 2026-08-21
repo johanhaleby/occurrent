@@ -22,6 +22,7 @@ import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
@@ -29,6 +30,8 @@ import org.apache.kafka.common.errors.NotCoordinatorException;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.record.TimestampType;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.mockito.ArgumentCaptor;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.broker.kafka.blocking.KafkaDeliveryFailureAction;
@@ -53,6 +56,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -82,6 +86,7 @@ class KafkaDomainEventBridgePermanentStopTest {
     private static final TopicPartition PARTITION_1 = new TopicPartition("test-topic", 1);
 
     @Test
+    @Timeout(10)
     void a_permanent_stops_final_commit_is_a_single_best_effort_attempt_not_an_unbounded_retry() throws Exception {
         KafkaConsumer<String, byte[]> consumer = mock(KafkaConsumer.class);
         when(consumer.groupMetadata()).thenReturn(new ConsumerGroupMetadata("test-group"));
@@ -112,12 +117,24 @@ class KafkaDomainEventBridgePermanentStopTest {
         batch.put(PARTITION_1, List.of(decodableRecord(PARTITION_1, 7L)));
         ConsumerRecords<String, byte[]> records = new ConsumerRecords<>(batch);
 
-        invokeProcessBatch(bridge, records);
+        boolean shouldContinue = invokeProcessBatch(bridge, records);
+
+        // processBatch returns false once permanentStop is set, the same signal the poll loop above it uses to stop
+        // calling in. A regression that fell through to the generic catch instead of the UnreadableLiveFilterException
+        // one would still commit once and leave this assertion the only thing catching the wrong branch.
+        assertThat(shouldContinue).isFalse();
 
         // With the flags set before the commit, running already reads false when commitWithRetry's shutdown
         // predicate is evaluated, so the retry gives up after this one attempt instead of retrying the persistent
         // NotCoordinatorException with backoff, uncapped, forever.
-        verify(consumer, times(1)).commitSync(any(Map.class));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<TopicPartition, OffsetAndMetadata>> commitCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(consumer, times(1)).commitSync(commitCaptor.capture());
+        // Only partition 0's undecodable record ever staged an offset. Partition 1 never reached the feed
+        // successfully, so nothing on it belongs in this commit. A stray entry here would mean the permanent-stop
+        // record itself got staged instead of triggering the stop.
+        assertThat(commitCaptor.getValue())
+                .containsExactly(Map.entry(PARTITION_0, new OffsetAndMetadata(6L)));
     }
 
     private static ConsumerRecord<String, byte[]> decodableRecord(TopicPartition partition, long offset) {
@@ -131,8 +148,9 @@ class KafkaDomainEventBridgePermanentStopTest {
                 TimestampType.CREATE_TIME, ConsumerRecord.NULL_SIZE, value.length, "stream-1", value, headers, Optional.empty());
     }
 
-    // No cloudEvents_ headers at all, so KafkaCloudEventMapper.toCloudEvent throws before this record ever
-    // reaches the feed, the same shape KafkaCloudEventMapperTest already proves for the mapper itself.
+    // No ce_ headers at all, Kafka's own binary-mode prefix, so KafkaCloudEventMapper.toCloudEvent throws before
+    // this record ever reaches the feed, the same shape KafkaCloudEventMapperTest already proves for the mapper
+    // itself.
     private static ConsumerRecord<String, byte[]> undecodableRecord(TopicPartition partition, long offset) {
         byte[] value = "not a cloud event".getBytes(StandardCharsets.UTF_8);
         return new ConsumerRecord<>(partition.topic(), partition.partition(), offset, ConsumerRecord.NO_TIMESTAMP,
@@ -178,11 +196,11 @@ class KafkaDomainEventBridgePermanentStopTest {
         }
     }
 
-    private static void invokeProcessBatch(KafkaDomainEventBridge<String> bridge, ConsumerRecords<String, byte[]> records) throws Exception {
+    private static boolean invokeProcessBatch(KafkaDomainEventBridge<String> bridge, ConsumerRecords<String, byte[]> records) throws Exception {
         try {
             Method method = KafkaDomainEventBridge.class.getDeclaredMethod("processBatch", ConsumerRecords.class);
             method.setAccessible(true);
-            method.invoke(bridge, records);
+            return (boolean) method.invoke(bridge, records);
         } catch (InvocationTargetException e) {
             if (e.getTargetException() instanceof RuntimeException runtimeException) {
                 throw runtimeException;
