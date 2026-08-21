@@ -28,7 +28,7 @@ import org.occurrent.dsl.view.ReplayAware;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The recording view {@link Projections#recordingAppliedAppends(MaterializedView, String, AppliedAppendStore, ReplayPhase)}
+ * The recording view {@link Projections#recordingAppliedAppends(MaterializedView, String, AppliedAppendStore)}
  * builds
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>).
  * Always delegates {@link #update(EventMetadata, Object)} first, then records the delivered event's append id into
@@ -41,7 +41,7 @@ import static java.util.Objects.requireNonNull;
  * Implements {@link ReplayAware} and forwards every call to the delegate when it is one too, so a batching view
  * underneath keeps batching, and drives its own replay bookkeeping either way: a domain-feed or catch-up-feed
  * composition is the only source of these calls (see {@code CatchupProjectionFeed}), so this is also this class's
- * only replay signal on that path, distinct from the {@link ReplayPhase} a subscription-fed composition supplies
+ * only replay signal on that path, mapped onto the same two catch-up signals a subscription model sends
  * instead. The first {@link MaterializedView} wrapping another {@link MaterializedView} in this library.
  */
 @NullMarked

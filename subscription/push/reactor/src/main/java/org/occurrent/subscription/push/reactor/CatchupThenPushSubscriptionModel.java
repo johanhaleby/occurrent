@@ -34,6 +34,7 @@ import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.internal.ReplayFilters;
 import org.slf4j.Logger;
@@ -99,16 +100,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // fails. The live feed cannot answer for them: it knows the id (this model registers there first) but it is
     // buffering rather than delivering, so it would report a subscription that is not yet folding anything as running.
     private final ConcurrentMap<String, Sinks.One<Boolean>> replayingSubscriptions = new ConcurrentHashMap<>();
-    // The replay whose history read is done, per subscription id, so what follows it is the live events buffered
-    // while it ran. Holds the replay itself rather than just the id, because a cancellation permits an immediate
-    // resubscribe while the old replay is still unwinding, and an id-only marker that old replay adds afterwards
-    // would tell the replacement it was past a history read it has not started.
-    private final ConcurrentMap<String, Sinks.One<Boolean>> reconcilingSubscriptions = new ConcurrentHashMap<>();
-    // Numbers each catch-up per subscription id, so a caller that only samples this model can tell one from the next.
-    // An entry outlives its catch-up, which costs nothing: a subscription id is application-defined and
-    // low-cardinality here, the same reason the other per-id registries keep theirs.
-    private final ConcurrentMap<String, Long> catchupGenerations = new ConcurrentHashMap<>();
-    private static final java.util.concurrent.atomic.AtomicLong CATCHUP_GENERATIONS = new java.util.concurrent.atomic.AtomicLong();
+    // Who to tell about each id's catch-up boundaries, registered before the subscription that produces them.
+    private final ConcurrentMap<String, CatchupListener> catchupListeners = new ConcurrentHashMap<>();
     // A pause asked for while a replay is in flight. The replay itself keeps running, since resuming it would mean
     // persisting the exact replay cursor, which this model does not do. Applied at the handover instead.
     private final ConcurrentMap<String, Boolean> pauseRequestedDuringReplay = new ConcurrentHashMap<>();
@@ -175,9 +168,13 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         Sinks.One<Boolean> replayDone = Sinks.one();
         // Cleared here rather than only on the exit paths, so this attempt starts in the history part of its
         // catch-up whatever the previous attempt for the same id left behind.
-        reconcilingSubscriptions.remove(subscriptionId);
-        catchupGenerations.put(subscriptionId, CATCHUP_GENERATIONS.incrementAndGet());
         replayingSubscriptions.put(subscriptionId, replayDone);
+        // Sent where the id is taken and before the replay below runs, so it always precedes anything this
+        // attempt delivers. The replay itself is the episode, so a later attempt for the same id starts its own.
+        CatchupListener startListener = catchupListeners.get(subscriptionId);
+        if (startListener != null) {
+            startListener.catchupStarted(replayDone);
+        }
 
         Mono<Boolean> catchupDone = handover.catchUp(new ReactiveHandover.Source<>() {
             @Override
@@ -210,14 +207,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public void historyDone() {
-                // Written only while this replay still owns the id, and taken back if a replacement took it over in
-                // between, because a cancellation permits an immediate resubscribe while this one is still unwinding
-                // and its marker would otherwise tell the replacement it is past a history read it has not started.
-                if (replayingSubscriptions.get(subscriptionId) == replayDone) {
-                    reconcilingSubscriptions.put(subscriptionId, replayDone);
-                    if (replayingSubscriptions.get(subscriptionId) != replayDone) {
-                        reconcilingSubscriptions.remove(subscriptionId, replayDone);
-                    }
+                // The replay itself is the episode, so a listener a later attempt for this id has since started
+                // ignores this and no lock is needed to keep this attempt from speaking for that one.
+                CatchupListener listener = catchupListeners.get(subscriptionId);
+                if (listener != null) {
+                    listener.historyRead(replayDone);
                 }
             }
         });
@@ -281,7 +275,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     private void forget(String subscriptionId, Sinks.One<Boolean> replay) {
         replayingSubscriptions.remove(subscriptionId, replay);
-        reconcilingSubscriptions.remove(subscriptionId, replay);
+        catchupListeners.remove(subscriptionId);
     }
 
     /**
@@ -353,6 +347,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * reports, which is why the handover needs an answer of its own.
      */
     @Override
+    public boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
+        catchupListeners.put(subscriptionId, listener);
+        return true;
+    }
+
+    @Override
     public boolean isCatchingUp(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return replayingSubscriptions.containsKey(subscriptionId);
@@ -366,37 +368,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * The catch-up-done signal usually removes this id before the buffer is drained, so the answer here is normally
      * already false by then. This does not lean on that ordering, which nothing declares.
      */
-    /**
-     * Which catch-up this id is in, so a caller that only samples this model can tell one from the next. Derived from
-     * the replay's own identity, which already changes per attempt.
-     */
-    @Override
-    public long catchupGeneration(String subscriptionId) {
-        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        return replayingSubscriptions.containsKey(subscriptionId) ? catchupGenerations.getOrDefault(subscriptionId, 0L) : 0L;
-    }
 
-    /**
-     * One reading of this id's catch-up, taken from the replay it belongs to, so the part and the catch-up can never
-     * come from two different moments.
-     */
-    @Override
-    public org.occurrent.subscription.CatchupSnapshot catchupSnapshot(String subscriptionId) {
-        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        Sinks.One<Boolean> replay = replayingSubscriptions.get(subscriptionId);
-        if (replay == null) {
-            return org.occurrent.subscription.CatchupSnapshot.LIVE;
-        }
-        boolean readingHistory = reconcilingSubscriptions.get(subscriptionId) != replay;
-        return new org.occurrent.subscription.CatchupSnapshot(true, readingHistory, catchupGenerations.getOrDefault(subscriptionId, 0L));
-    }
 
-    @Override
-    public boolean isReplayingHistory(String subscriptionId) {
-        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        Sinks.One<Boolean> replay = replayingSubscriptions.get(subscriptionId);
-        return replay != null && reconcilingSubscriptions.get(subscriptionId) != replay;
-    }
 
     @Override
     public boolean isPaused(String subscriptionId) {
@@ -456,7 +429,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         // Removing it here is what stops a replay in flight: shouldKeepReplaying reads this map.
         replayingSubscriptions.remove(subscriptionId);
-        reconcilingSubscriptions.remove(subscriptionId);
+        catchupListeners.remove(subscriptionId);
         pauseRequestedDuringReplay.remove(subscriptionId);
         // A cancel is not a stop, so nothing is kept to launch again. This is also the recovery from a failed
         // catch-up: it frees the id and releases the registration that was refusing (ADR 104).
@@ -477,7 +450,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         shuttingDown = true;
         awaitReplays(SHUTDOWN_REPLAY_TIMEOUT);
         replayingSubscriptions.clear();
-        reconcilingSubscriptions.clear();
+        catchupListeners.clear();
         pauseRequestedDuringReplay.clear();
         // Unlike stop(), a shutdown keeps nothing to launch again: it drops the registrations too.
         interruptibleReplays.clear();

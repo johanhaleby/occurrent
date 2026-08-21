@@ -24,6 +24,7 @@ import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
@@ -223,36 +224,29 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         return innerModelCatchingUp(subscriptionId) != null;
     }
 
-    /**
-     * Asked of whichever inner model owns this id, since only it knows which part of its catch-up it has reached.
-     * Left to the default here and a projection fed through this model would record nothing for the events its
-     * reconciliation delivered.
-     */
-    @Override
-    public boolean isReplayingHistory(String subscriptionId) {
-        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        SubscriptionModel owner = innerModelCatchingUp(subscriptionId);
-        return owner instanceof ReplayAwareSubscriptions replayAware && replayAware.isReplayingHistory(subscriptionId);
-    }
+
+
 
     /**
-     * Asked of whichever inner model owns this id, for the same reason {@link #isReplayingHistory(String)} is.
+     * Registered on every present inner model, since which one ends up running this id is not known until it
+     * subscribes. Answers true only when every one of them accepts, so a model that cannot report its boundaries
+     * makes the whole registration false and the caller falls back to polling.
      */
     @Override
-    public long catchupGeneration(String subscriptionId) {
+    public boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        SubscriptionModel owner = innerModelCatchingUp(subscriptionId);
-        return owner instanceof ReplayAwareSubscriptions replayAware ? replayAware.catchupGeneration(subscriptionId) : 0L;
-    }
-
-    /**
-     * Asked of whichever inner model owns this id, for the same reason {@link #isReplayingHistory(String)} is.
-     */
-    @Override
-    public org.occurrent.subscription.CatchupSnapshot catchupSnapshot(String subscriptionId) {
-        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        SubscriptionModel owner = innerModelCatchingUp(subscriptionId);
-        return owner instanceof ReplayAwareSubscriptions replayAware ? replayAware.catchupSnapshot(subscriptionId) : org.occurrent.subscription.CatchupSnapshot.LIVE;
+        Objects.requireNonNull(listener, "listener cannot be null");
+        boolean all = true;
+        if (streamCatchupSubscriptionModel != null) {
+            all = streamCatchupSubscriptionModel.listenForCatchup(subscriptionId, listener) && all;
+        }
+        if (dcbCatchupSubscriptionModel != null) {
+            all = dcbCatchupSubscriptionModel.listenForCatchup(subscriptionId, listener) && all;
+        }
+        if (agnosticCatchupSubscriptionModel != null) {
+            all = agnosticCatchupSubscriptionModel.listenForCatchup(subscriptionId, listener) && all;
+        }
+        return all;
     }
 
     private @Nullable SubscriptionModel innerModelCatchingUp(String subscriptionId) {

@@ -296,22 +296,14 @@ public class ReactorStreamCatchupSubscriptionModel implements CheckpointAwareSub
     }
 
     @Override
-    public boolean isReplayingHistory(String subscriptionId) {
+    public boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        return namedSubscriptions.isReplayingHistory(subscriptionId);
+        Objects.requireNonNull(listener, "listener cannot be null");
+        return namedSubscriptions.listenForCatchup(subscriptionId, listener);
     }
 
-    @Override
-    public long catchupGeneration(String subscriptionId) {
-        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        return namedSubscriptions.catchupGeneration(subscriptionId);
-    }
 
-    @Override
-    public org.occurrent.subscription.CatchupSnapshot catchupSnapshot(String subscriptionId) {
-        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        return namedSubscriptions.catchupSnapshot(subscriptionId);
-    }
+
 
     @Override
     public void shutdown() {

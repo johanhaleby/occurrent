@@ -24,7 +24,7 @@ import org.jspecify.annotations.NullMarked;
  * afterwards by the {@code @Projection(recordAppliedAppends = true)} registrar to decide whether warning about a
  * default-position projection that never resets is a fact this registrar can verify.
  * <p>
- * The blocking stack's minimal equivalent of the reactor stack's {@code ComposedReplayPhase.defaultBypassesCatchup()},
+ * The blocking stack's minimal equivalent of the reactor stack's {@code ComposedCatchupModel.defaultBypassesCatchup()},
  * just the known-fact half, not a port of its full replay-phase machinery. This stack's capability lookup already
  * unwraps a wrapper chain to find {@code ReplayAwareSubscriptions} on its own (ADR 132 decision 8), so it has no
  * equivalent gap on that side to work around.

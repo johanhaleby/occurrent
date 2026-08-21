@@ -30,7 +30,7 @@ import java.util.function.BiFunction;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The reactive update {@link Projections#recordingAppliedAppends(BiFunction, String, AppliedAppendStore, ReplayPhase)}
+ * The reactive update {@link Projections#recordingAppliedAppends(BiFunction, String, AppliedAppendStore)}
  * builds
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>).
  * Applies the wrapped update and then, once it completes, records the delivered event's append id, so the recorded

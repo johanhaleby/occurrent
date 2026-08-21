@@ -49,7 +49,7 @@ import org.occurrent.filtermatching.jackson.JacksonDataFieldReader;
 import org.occurrent.retry.Backoff;
 import org.occurrent.springboot.common.*;
 import org.occurrent.springboot.common.OccurrentProperties.EventStoreProperties;
-import org.occurrent.springboot.reactor.ComposedReplayPhase;
+import org.occurrent.springboot.reactor.ComposedCatchupModel;
 import org.occurrent.springboot.reactor.DefaultReactiveSnapshotStoreProvider;
 import org.occurrent.springboot.reactor.OccurrentReactiveAnnotationConfiguration;
 import org.occurrent.springboot.reactor.OccurrentReactorBeanNames;
@@ -216,7 +216,7 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     @Conditional(OnSubscriptionsNotDisabledCondition.class)
     public ReactorDurableSubscriptionModel occurrentDurableSubscriptionModel(ReactiveMongoOperations mongo, CheckpointStorage storage,
                                                                              OccurrentProperties occurrentProperties, ObjectProvider<DcbEventStore> dcbEventStore,
-                                                                             ApplicationContext applicationContext, ComposedReplayPhase composedReplayPhase) {
+                                                                             ApplicationContext applicationContext, ComposedCatchupModel composedCatchupModel) {
         EventStoreProperties eventStoreProperties = occurrentProperties.getEventStore();
         ReactorMongoSubscriptionModel mongoSubscriptionModel = new ReactorMongoSubscriptionModel(mongo, eventStoreProperties.resolveCollection(), eventStoreProperties.resolveTimeRepresentation(),
                 ReactorMongoSubscriptionModelConfig.withConfig().restartSubscriptionsOnChangeStreamHistoryLost(occurrentProperties.getSubscription().resolveRestartOnChangeStreamHistoryLost()));
@@ -227,11 +227,11 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         // findable on catchupLayer itself, a ReactorCatchupSubscriptionModel when one composed, but not on the
         // ReactorDurableSubscriptionModel wrapping it, since this stack's capability lookup does not unwrap
         // (ADR 132 decision 8, #842).
-        composedReplayPhase.suppliedBy(catchupLayer);
+        composedCatchupModel.suppliedBy(catchupLayer);
         // A default StartAt resolves to StartAt.subscriptionModelDefault() (see StartPositionSupport), which both
         // the stream and DCB catch-up layers composeCatchupLayer can build classify as live, the same as a
         // checkpoint that is neither global nor time-based, so a wiped checkpoint changes nothing for it either.
-        composedReplayPhase.defaultBypassesCatchup();
+        composedCatchupModel.defaultBypassesCatchup();
         ReactorDurableSubscriptionModel durableSubscriptionModel = new ReactorDurableSubscriptionModel(catchupLayer, storage, durableConfig);
         if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
             // Stopped here rather than after the annotations are scanned, so every subscription is registered on a
@@ -243,13 +243,13 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
     }
 
     /**
-     * The {@link ComposedReplayPhase} bean {@link #occurrentDurableSubscriptionModel} fills. A plain {@code @Bean}
+     * The {@link ComposedCatchupModel} bean {@link #occurrentDurableSubscriptionModel} fills. A plain {@code @Bean}
      * rather than {@code @ConditionalOnMissingBean}: an application has no reason to supply its own, since nothing
      * public composes a catch-up layer outside this configuration, and the one caller that fills it is right above.
      */
     @Bean
-    public ComposedReplayPhase occurrentComposedReplayPhase() {
-        return new ComposedReplayPhase();
+    public ComposedCatchupModel occurrentComposedCatchupModel() {
+        return new ComposedCatchupModel();
     }
 
     /**

@@ -24,14 +24,14 @@ import org.jspecify.annotations.NullMarked;
  * decision 7). Implemented by both {@code RecordingMaterializedView} (blocking) and {@code RecordingReactiveUpdate}
  * (reactor).
  * <p>
- * A recording wrapper already reacts to a replay it can see for itself, through the {@link ReplayPhase} it was built
- * with or the view-DSL replay lifecycle it forwards. These hooks cover what neither of those catches. A replay whose
- * deliveries are all filtered out server-side never delivers anything for the wrapper to check, and a clear can fail
- * while that replay is going on. The Spring Boot registrars' poll calls {@link #pollReplayPhase()} on a schedule,
- * which re-checks the phase itself before reacting, so a clear owed from a replay the phase no longer reports (it
- * ended, possibly before a live delivery ever reached the wrapper to retry it there) still gets retried until it
- * succeeds, and a poll whose earlier reading of the phase is already stale by the time it acts cannot wipe a live
- * append the wrapper recorded in the meantime.
+ * A recording wrapper is told when a catch-up begins and when its history has been read, by whoever owns that
+ * catch-up. That is the subscription model for a projection fed by one, and the view-DSL replay lifecycle for a
+ * projection fed by a pull feed.
+ * <p>
+ * {@link #pollForClear()} covers the one thing those two signals leave open. The clear a catch-up start owes runs
+ * against a store that can be momentarily unavailable, and the catch-up it belongs to can end without ever
+ * delivering anything the wrapper could retry it on, since a replay filtered out server-side delivers nothing. The
+ * Spring Boot registrars call it on a schedule until the clear succeeds.
  */
 @NullMarked
 public interface AppliedAppendRecorder {
