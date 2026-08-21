@@ -25,8 +25,10 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbSubscriptionFilter;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
@@ -266,6 +268,57 @@ class CatchupThenPushSubscriptionModelTest {
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
         assertThat(model.isRunning("sub")).isTrue();
+    }
+
+    /**
+     * The reactor mirror of the blocking
+     * {@code a_catch_up_failure_reports_not_deliverable_rather_than_delivered_on_the_broker_path} test. A refusal
+     * decided before any dispatch was attempted (ReactiveHandover's catchUpFailure) must report
+     * {@link RoutingOutcome#NOT_DELIVERABLE}, never {@link RoutingOutcome#DELIVERED}, so a caller applies its own
+     * failure policy instead of acknowledging a message nothing consumed.
+     */
+    @Test
+    void a_catch_up_failure_reports_not_deliverable_rather_than_delivered() {
+        List<RoutingOutcome> observed = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+        PositionOrderedReader failingReader = failingReader();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader, liveFeed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        Throwable replayFailure = catchThrowable(() -> subscription.waitUntilStarted().block());
+        assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")).block());
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+    }
+
+    /**
+     * The reactor mirror of the blocking
+     * {@code a_handlers_own_illegalstateexception_reports_delivered_rather_than_not_deliverable_on_the_broker_path}
+     * test. Catching every {@code IllegalStateException} the handover errors with, rather than only
+     * {@code ReactiveHandover.PreDispatchRefusalException}, would wrap a handler's own thrown
+     * {@code IllegalStateException} as a {@code RoutingAction.Refusal} too, misreporting a handler that genuinely
+     * ran and failed as {@link RoutingOutcome#NOT_DELIVERABLE} instead of {@link RoutingOutcome#DELIVERED}.
+     */
+    @Test
+    void a_handlers_own_illegalstateexception_reports_delivered_rather_than_not_deliverable() {
+        List<RoutingOutcome> observed = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+        RuntimeException handlerFailure = new IllegalStateException("handler boom");
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Flux::empty, 0), liveFeed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+                ce -> Mono.error(handlerFailure));
+        assertThat(subscription.waitUntilStarted().block(Duration.ofSeconds(5))).isNull();
+
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")).block());
+
+        assertThat(thrown).isSameAs(handlerFailure);
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
     }
 
     @Test

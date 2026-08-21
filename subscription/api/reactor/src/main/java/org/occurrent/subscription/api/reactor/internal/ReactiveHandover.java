@@ -124,6 +124,25 @@ public final class ReactiveHandover<T> {
         }
     }
 
+    /**
+     * Thrown by {@link #acceptReportingDelivery(Object)} and {@link #acceptIfLive(Object)} for a refusal decided
+     * before any dispatch was attempted, a permanently failed catch-up, a full live buffer with nothing draining
+     * it, or a {@code dedupId} function that returned {@code null} for the payload, none of them a delivery.
+     * Distinct from any other {@link IllegalStateException} either method can error with, in particular one a
+     * delivered payload's own handler errors with, so a caller that needs to tell those apart can catch this type
+     * specifically instead of classifying every {@link IllegalStateException} alike. Mirrors
+     * {@code BlockingHandover.PreDispatchRefusalException}.
+     */
+    public static final class PreDispatchRefusalException extends IllegalStateException {
+        PreDispatchRefusalException(String message) {
+            super(message);
+        }
+
+        PreDispatchRefusalException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+
     private final Function<T, Mono<Void>> deliver;
     private final Function<T, String> dedupId;
     private final String noun;
@@ -136,6 +155,10 @@ public final class ReactiveHandover<T> {
     private final Set<MonoSink<Boolean>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
     private volatile boolean stopped = false;
+    // Set once, right before the buffered live payloads are drained on a successful catch-up, and never cleared
+    // afterwards, mirroring BlockingHandover's live field. acceptIfLive(..) reads this to refuse a payload outright,
+    // without ever touching liveSink, rather than buffering it the way acceptReportingDelivery(..) does.
+    private volatile boolean live = false;
 
     private ReactiveHandover(Function<T, Mono<Void>> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
         this.deliver = deliver;
@@ -192,45 +215,89 @@ public final class ReactiveHandover<T> {
      */
     public Mono<Boolean> acceptReportingDelivery(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
+        return Mono.create(ackSink -> bufferOrDeliverLive(payload, ackSink));
+    }
+
+    /**
+     * As {@link #acceptReportingDelivery(Object)}, except a payload that would only buffer is refused instead:
+     * completed {@code false} without ever reaching {@link #liveSink}. For a caller that can redeliver the same
+     * payload later, a buffered payload is strictly worse than a refused one, since a buffered payload has already
+     * been reported handled by the time this completes, while a refused one has not, and can safely be offered
+     * again.
+     * <p>
+     * A payload fed while this handover is stopped is refused the same way, for the same reason. Nothing is
+     * currently draining a buffer for it to wait in. Mirrors {@code BlockingHandover.acceptIfLive(Object)}.
+     *
+     * @return A {@link Mono} that completes with {@code true} once the payload has genuinely landed, delivered live
+     *         just now, or already delivered by an earlier attempt. {@code false} whenever this call did not
+     *         deliver it, whether because this handover is not live yet, is stopped, or a concurrent delivery of
+     *         the same payload is already running elsewhere. Every {@code false} is safe to retry. Errors with
+     *         {@link PreDispatchRefusalException} for the same reasons {@link #acceptReportingDelivery(Object)}
+     *         does, checked first, before the live check, so a payload fed after a permanently failed catch-up
+     *         fails fast rather than completing {@code false} forever for a caller to retry a catch-up that is
+     *         never coming back.
+     */
+    public Mono<Boolean> acceptIfLive(T payload) {
+        Objects.requireNonNull(payload, "payload cannot be null");
         return Mono.create(ackSink -> {
-            ackSink.onDispose(() -> pendingLiveAcks.remove(ackSink));
             Throwable failure = terminalError.get();
             if (failure != null) {
                 ackSink.error(catchUpFailed(failure));
                 return;
             }
-            if (stopped) {
-                // Dropped rather than buffered, and the ack completes rather than failing: the replay that would have
-                // drained this buffer was stopped, so nothing is coming to fold it. Dropped, not deferred (ADR 85).
+            if (!live) {
+                // Refuse without buffering, unlike acceptReportingDelivery. Covers "never started", "still
+                // replaying", and "stopped mid-replay" alike, all three are "not live", and a caller here has
+                // already promised it can redeliver, so there is nothing to gain by holding the payload instead of
+                // asking again later.
                 ackSink.success(false);
                 return;
             }
-            pendingLiveAcks.add(ackSink);
-            // Re-check both after registering. A stop or a failure landing between the checks above and this add
-            // would otherwise leave the ack unresolved, because the handler that resolves the pending acks has
-            // already run, and the caller's Mono would never complete.
-            failure = terminalError.get();
-            if (failure != null) {
-                ackSink.error(catchUpFailed(failure));
-                return;
-            }
-            if (stopped) {
-                ackSink.success(false);
-                return;
-            }
-            String key;
-            try {
-                key = dedupKey(payload);
-            } catch (RuntimeException keyFailure) {
-                ackSink.error(keyFailure);
-                return;
-            }
-            Item item = new Item(() -> deliver.apply(payload), key, ackSink);
-            Sinks.EmitResult result = liveSink.tryEmitNext(item);
-            if (result.isFailure()) {
-                ackSink.error(new IllegalStateException(HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
-            }
+            bufferOrDeliverLive(payload, ackSink);
         });
+    }
+
+    // Shared by acceptReportingDelivery(..) and, once live, by acceptIfLive(..): registers the pending ack, re-checks
+    // the terminal failure and stopped flag under the same race window acceptReportingDelivery has always had to
+    // guard, then reserves the dedup key and hands the item to liveSink for the concatMap pipeline to drain.
+    private void bufferOrDeliverLive(T payload, MonoSink<Boolean> ackSink) {
+        ackSink.onDispose(() -> pendingLiveAcks.remove(ackSink));
+        Throwable failure = terminalError.get();
+        if (failure != null) {
+            ackSink.error(catchUpFailed(failure));
+            return;
+        }
+        if (stopped) {
+            // Dropped rather than buffered, and the ack completes rather than failing. The replay that would have
+            // drained this buffer was stopped, so nothing is coming to fold it. Dropped, not deferred (ADR 85).
+            ackSink.success(false);
+            return;
+        }
+        pendingLiveAcks.add(ackSink);
+        // Re-check both after registering. A stop or a failure landing between the checks above and this add
+        // would otherwise leave the ack unresolved, because the handler that resolves the pending acks has
+        // already run, and the caller's Mono would never complete.
+        failure = terminalError.get();
+        if (failure != null) {
+            ackSink.error(catchUpFailed(failure));
+            return;
+        }
+        if (stopped) {
+            ackSink.success(false);
+            return;
+        }
+        String key;
+        try {
+            key = dedupKey(payload);
+        } catch (RuntimeException keyFailure) {
+            ackSink.error(keyFailure);
+            return;
+        }
+        Item item = new Item(() -> deliver.apply(payload), key, ackSink);
+        Sinks.EmitResult result = liveSink.tryEmitNext(item);
+        if (result.isFailure()) {
+            ackSink.error(new PreDispatchRefusalException(HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
+        }
     }
 
     /**
@@ -280,7 +347,13 @@ public final class ReactiveHandover<T> {
 
         replayFolded
                 .then(recordMarker)
-                .doOnSuccess(ignored -> catchupDone.tryEmitValue(true))
+                .doOnSuccess(ignored -> {
+                    // Set before the live sink starts draining, the same point BlockingHandover.drainBufferAndGoLive
+                    // flips its own live field. A payload acceptIfLive(..) sees after this point is treated as live
+                    // even while whatever buffered ahead of it during the replay is still being delivered.
+                    live = true;
+                    catchupDone.tryEmitValue(true);
+                })
                 .thenMany(liveSink.asFlux().concatMap(this::deliver))
                 // This engine subscribes its own pipeline rather than handing it back, so without a scheduler the
                 // replay would run on whoever called catchUp, which is the Spring refresh thread for an annotated
@@ -374,15 +447,15 @@ public final class ReactiveHandover<T> {
     // The blocking engine wraps its terminal failure in this message and this one used to propagate the raw cause, so
     // the same refusal read as a transient handler error on one stack and as a terminal one on the other. The recovery
     // differs (retry versus release and set up again), which is exactly what the message says, so both stacks say it.
-    private IllegalStateException catchUpFailed(Throwable cause) {
-        return new IllegalStateException(HandoverMessages.catchUpFailed(noun), cause);
+    private PreDispatchRefusalException catchUpFailed(Throwable cause) {
+        return new PreDispatchRefusalException(HandoverMessages.catchUpFailed(noun), cause);
     }
 
     @SuppressWarnings("ConstantValue") // The function is declared non-null, but it is caller-supplied and unenforced.
     private String dedupKey(T payload) {
         String key = dedupId.apply(payload);
         if (key == null) {
-            throw new IllegalStateException(HandoverMessages.dedupKeyRequired());
+            throw new PreDispatchRefusalException(HandoverMessages.dedupKeyRequired());
         }
         return key;
     }

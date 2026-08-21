@@ -848,3 +848,13 @@ that issue proposed, and this amendment's own predecessor line of investigation 
 name, is rejected a second time, for a different reason than decision 1's original one. `CatchupThenPushSubscriptionModel`'s
 public constructors shipped in 0.33.0, so giving it a `Pushable` shape would require changing released API, not
 merely revisiting a design choice. The fix that actually closes the gap needed no new push target at all.
+
+The reactor follow-up promised above has landed. `RegisteringSubscribable.routeReportingMatch` on the reactor stack
+now reports from a new `Mono<Boolean>`-returning `RoutingAction`, run before the report rather than after, and
+`subscribe(...)` keeps its released `Function<CloudEvent, Mono<Void>>` signature by wrapping every event it delivers
+as `DELIVERED`. `ReactiveHandover` gains `acceptIfLive(T)` beside `accept(T)`/`acceptReportingDelivery(T)`, refusing
+a payload outright rather than buffering it while not live, behind a dedicated
+`ReactiveHandover.PreDispatchRefusalException` mirroring the blocking one. `DomainEventFeed.acceptCloudEvent` and
+`CatchupProjectionFeed` report `DEFERRED` instead of `NOT_DELIVERABLE` for an event that arrives before the
+registered projection is live, through that same `acceptIfLive`, closing the gap this amendment left open for the
+reactor `DomainEventFeed`.

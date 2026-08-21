@@ -304,6 +304,87 @@ class ReactiveHandoverTest {
                         .hasMessage(HandoverMessages.dedupKeyRequired()));
     }
 
+    // acceptIfLive(..): a caller that can redeliver, unlike accept(..)/acceptReportingDelivery(..), which keep
+    // buffering when not live, proved unchanged by acceptReportingDelivery_still_buffers_a_payload_offered_before_catch_up
+    // below and by live_payloads_accepted_before_catch_up_are_buffered_and_delivered_after_the_replay_in_order above,
+    // still exercised through accept(..) itself, the write path's only entry point.
+
+    @Test
+    void acceptReportingDelivery_still_buffers_a_payload_offered_before_catch_up() throws Exception {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String> handover = handover(delivered);
+
+        // Not yet subscribed to a pipeline, so this only proves it was accepted rather than refused; the ack itself
+        // resolves once catchUp below drains it.
+        CompletableFuture<Boolean> l1 = handover.acceptReportingDelivery("L1").toFuture();
+
+        handover.catchUp(source(List.of("R1"), false)).block(Duration.ofSeconds(5));
+        assertThat(l1.get(5, TimeUnit.SECONDS)).as("buffered then genuinely delivered, not dropped").isTrue();
+
+        assertThat(delivered).containsExactly("R1", "L1");
+    }
+
+    @Test
+    void acceptIfLive_refuses_without_buffering_when_not_live() {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String> handover = handover(delivered);
+
+        StepVerifier.create(handover.acceptIfLive("L1")).expectNext(false).verifyComplete();
+        assertThat(delivered).as("refused outright, never buffered").isEmpty();
+
+        // Proof it was truly refused rather than silently buffered. A catch-up that reaches live delivers only the
+        // replay's own history, never the refused payload.
+        handover.catchUp(source(List.of("R1"), false)).block(Duration.ofSeconds(5));
+        assertThat(delivered).containsExactly("R1");
+    }
+
+    @Test
+    void acceptIfLive_delivers_when_live() {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String> handover = handover(delivered);
+        handover.catchUp(source(List.of(), true)).block(Duration.ofSeconds(5));
+
+        StepVerifier.create(handover.acceptIfLive("L1")).expectNext(true).verifyComplete();
+
+        assertThat(delivered).containsExactly("L1");
+    }
+
+    @Test
+    void acceptIfLive_reports_true_for_a_key_an_earlier_attempt_already_delivered() {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String> handover = handover(delivered);
+        handover.catchUp(source(List.of(), true)).block(Duration.ofSeconds(5));
+
+        StepVerifier.create(handover.acceptIfLive("L1")).expectNext(true).verifyComplete();
+        StepVerifier.create(handover.acceptIfLive("L1"))
+                .as("already delivered, so a redelivery still lands true")
+                .expectNext(true).verifyComplete();
+
+        assertThat(delivered).as("folded once, not twice").containsExactly("L1");
+    }
+
+    /**
+     * The regression guard for the same bug class {@code BlockingHandover.acceptIfLive}'s test of the same name
+     * guards. Reading the terminal failure after the live check would let a permanently failed catch-up complete
+     * {@code false} (redeliver forever) instead of erroring, turning a real failure into an unbounded
+     * bypass-of-every-delivery-failure-policy loop. The terminal failure must be checked, and errored on, before the
+     * live check, exactly as {@link ReactiveHandover#acceptReportingDelivery(Object)} already orders it.
+     */
+    @Test
+    void acceptIfLive_errors_rather_than_defers_after_a_catch_up_failure() {
+        ReactiveHandover<String> handover = handover(new ArrayList<>());
+        RuntimeException replayFailure = new RuntimeException("replay boom");
+        FakeSource failingSource = source(List.of(), false);
+        failingSource.replayFailure = replayFailure;
+        StepVerifier.create(handover.catchUp(failingSource)).verifyErrorMessage("replay boom");
+
+        StepVerifier.create(handover.acceptIfLive("L1"))
+                .verifyErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("Catch-up failed")
+                        .hasCauseReference(replayFailure));
+    }
+
     // --- helpers ---
 
     private static ReactiveHandover<String> handover(List<String> delivered) {
