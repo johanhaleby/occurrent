@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.broker.api.blocking.CloudEventSink;
 import org.occurrent.broker.api.blocking.DomainEventSink;
+import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventSink;
 import org.occurrent.springboot.broker.rabbitmq.blocking.EnableOccurrentRabbitMqBroker;
 import org.occurrent.springboot.broker.rabbitmq.blocking.RabbitMqBrokerProperties;
 import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
@@ -190,6 +191,36 @@ class RabbitMqDomainBrokerConfigurationWiringTest {
                     CloudEventSink ownSink = context.getBean("occurrentRabbitMqCloudEventSink", CloudEventSink.class);
                     verify(ownSink).publish(CONVERTED_EVENT);
                 });
+    }
+
+    /**
+     * Declaring the concrete {@link RabbitMqDomainEventSink} return type on
+     * {@link RabbitMqDomainBrokerConfiguration#occurrentRabbitMqDomainEventSink}, rather than the shared
+     * {@link DomainEventSink} interface, means a caller can inject that concrete type directly and resolve it
+     * unambiguously even with a second, differently-typed {@code DomainEventSink} bean also present, standing in
+     * for the Kafka starter's own {@code KafkaDomainEventSink}. Unqualified {@code DomainEventSink} injection
+     * stays ambiguous here, this test is specifically about the concrete type.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void the_concrete_domain_sink_type_resolves_unambiguously_with_both_starters_present() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(PrerequisiteSupplyingConfiguration.class, TwoFallbackCloudEventSinksConfiguration.class, RabbitMqDomainBrokerConfiguration.class, CompetingDomainEventSinkConfiguration.class)
+                .run(context -> assertThat(context.getBean(RabbitMqDomainEventSink.class)).isNotNull());
+    }
+
+    /**
+     * Stands in for the Kafka starter's own {@code KafkaDomainEventSink} bean, a different concrete class also
+     * implementing {@link DomainEventSink}, the situation an application enabling both broker starters together
+     * ends up in.
+     */
+    @Configuration(proxyBeanMethods = false)
+    static class CompetingDomainEventSinkConfiguration {
+        @Bean
+        @SuppressWarnings("unchecked")
+        DomainEventSink<Object> competingDomainEventSink() {
+            return mock(DomainEventSink.class);
+        }
     }
 
     /**

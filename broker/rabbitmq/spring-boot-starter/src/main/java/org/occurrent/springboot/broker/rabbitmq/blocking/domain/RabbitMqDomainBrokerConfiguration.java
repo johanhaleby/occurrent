@@ -69,14 +69,23 @@ public class RabbitMqDomainBrokerConfiguration {
      * {@code ownCloudEventSinkProvider}, which names this starter's own bean directly. An earlier version named
      * that bean unconditionally, which fixed the two-starter ambiguity but silently shadowed a genuine application
      * override, since a literal bean-name lookup never runs {@code @Fallback} scoring at all.
+     * <p>
+     * Declared as returning {@link RabbitMqDomainEventSink}, not the {@link DomainEventSink} interface it
+     * implements. Spring's pre-instantiation type matching goes by the declared return type, so a plain
+     * {@code DomainEventSink<E>} return here would hide which transport built this bean, leaving a caller in a
+     * dual-starter context no way to select it other than by the same internal bean name
+     * {@link #resolveCloudEventSink} uses. Injecting {@code RabbitMqDomainEventSink<E>} directly is unambiguous
+     * even with both starters present, since only this bean produces that concrete type.
+     * {@code @Fallback} still applies through the implemented interface, for the unqualified
+     * {@code DomainEventSink<E>} injection point everything above this paragraph describes.
      */
     @Bean
     @Lazy
     @Fallback
     @ConditionalOnBean(CloudEventConverter.class)
-    <E> DomainEventSink<E> occurrentRabbitMqDomainEventSink(ObjectProvider<CloudEventSink> cloudEventSinkProvider,
-                                                             @Qualifier("occurrentRabbitMqCloudEventSink") ObjectProvider<CloudEventSink> ownCloudEventSinkProvider,
-                                                             CloudEventConverter<E> converter) {
+    <E> RabbitMqDomainEventSink<E> occurrentRabbitMqDomainEventSink(ObjectProvider<CloudEventSink> cloudEventSinkProvider,
+                                                                     @Qualifier("occurrentRabbitMqCloudEventSink") ObjectProvider<CloudEventSink> ownCloudEventSinkProvider,
+                                                                     CloudEventConverter<E> converter) {
         return RabbitMqDomainEventSink.using(resolveCloudEventSink(cloudEventSinkProvider, ownCloudEventSinkProvider), converter);
     }
 
