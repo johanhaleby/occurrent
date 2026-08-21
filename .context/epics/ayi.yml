@@ -1,7 +1,7 @@
 schema_version: 1
 epic: ayi
-revision: 47
-updated_at: 2026-08-21T06:15:46Z
+revision: 48
+updated_at: 2026-08-21T06:26:44Z
 updated_by: local_3c7455d7-46ac-48bf-9295-f3fe35aa3608
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: ".context/orchestrator-policy.yml (standing merge, sibling-green leniency, reasoned-decline threads, memory-checkpoint commit and push). Epic-specific rulings by Johan at the 2026-08-17 approval gate: meta-plan revision 6 APPROVED; review stopping rule is blocker-only reopens after the U7 fixpoint with a cap of 3 rounds, remainders come back as one structured ask; D2 shape delegated to the orchestrator on AGENTS.md principles and decided as the soft widening (derivation in ORCHESTRATOR.md, ayi section). Design-gate rule: U1's ADR PR merges only after Johan closes the design gate explicitly."
@@ -206,7 +206,7 @@ units:
     last_meaningful_progress_at: 2026-08-18T20:17:44Z
     observed:
       plan: {path: "scratchpad/u4-approved-plan.md in the session scratchpad", approved: 2026-08-18T19:00:00Z, at: 2026-08-18T19:05:00Z}
-      pr_860: {head: 1197507e2aeee43486dc8806155b5a734acac88a, branch: "ayi/u4-recording-projections", rollup: "0fail running", review: "not yet arrived", via: "monitor PR-OPENED", at: 2026-08-18T20:17:44Z}
+      pr_860: {head: 1197507e2aeee43486dc8806155b5a734acac88a, branch: "ayi/u4-recording-projections", rollup: "2fail DONE then rerun in flight", review: "COMMENTED round 1, zero threads, body clean", via: "monitor PR-DELTA plus gh reads", at: 2026-08-18T20:17:44Z}
       takeover: {commit: 824a093cf, note: "two research forks implemented off-script, combined state committed then fork files reviewed as untrusted, single-writer since", at: 2026-08-18T20:17:44Z}
     assessment: "Subagent unit under Unattended, two-phase with the plan gate at the orchestrator. Five rulings recorded in ORCHESTRATOR.md: ReplayPhase named type reconciling ADR decisions 6 and 8, WARN fallback without issue numbers in log text, failed-clear retries every tick with ERROR-once logging, shared autoconfigure-common dependency on projection-dsl-common, push-with-catch-up registers with the poll. Planning verified the reactive catch-up layer is never a bean and has no accessor, so the autoconfiguration holder (ComposedReplayPhase) is the only possible phase source there."
   U5:
@@ -269,7 +269,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: 888, met: false, evidence: null}
     blocking_on: []
-    next_action: "ci-wait on PR 888 head 64139950. At checks done plus Copilot review: four-fact gate, adversarial verify of the poll-cap diagnosis and the mutation claim, then CAS merge"
+    next_action: "HELD on head 64139950: framework/java-25 failed the sibling test an_ordinary_reset (never red on main), plausibly caused by the shared bootArgs 5ms cap. Evidence and gate rule sent to the worker 2026-08-21T06:26:44Z, expected progress by 2026-08-21T08:26:44Z. A green rerun of this head does not merge. Copilot round 1 clean (overview only, no suppressed block)"
     last_meaningful_progress_at: 2026-08-21T05:33:25Z
     observed:
       pr_888: {head: 64139950be9e76bbafe1da18dcfed42ec8dbc183, branch: "ayi/u10-flaky-filtered-rebuild", rollup: "0fail running", review: "not yet arrived", via: "monitor PR-OPENED", at: 2026-08-21T06:15:46Z}
