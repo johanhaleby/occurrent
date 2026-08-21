@@ -346,6 +346,44 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         }
     }
 
+    /**
+     * The {@code ce_id} assertion above only proves the CloudEvents mapping survived, which the pre-fix rebuilt
+     * path already carried too. What that path lost was everything else, the original key, a header outside the
+     * CloudEvents mapping, and the parking destination's own configured headers. All three together, on the same
+     * parked record, are what actually distinguishes {@link KafkaDeliveryFailureAction#apply(ConsumerRecord)}'s
+     * republish-unchanged behaviour from a rebuild.
+     */
+    @Test
+    void parks_a_decodable_delivery_preserving_the_original_key_a_non_cloudevent_header_and_the_parking_destinations_own_header() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        String parkingTopic = createTopic(1);
+        KafkaDestination parkingDestination = KafkaDestination.of(parkingTopic)
+                .withHeaders(Map.of("parked-reason", "handler-failure"));
+
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        model.subscribe("sub", cloudEvent -> {
+            throw new RuntimeException("always fails");
+        });
+
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+                .bindings(Set.of(KafkaDestination.of(topic)))
+                .pollTimeout(POLL_TIMEOUT)
+                .onDeliveryFailure(DeliveryFailurePolicy.PARK)
+                .parkingDestination(parkingDestination)
+                .build()) {
+            publishCloudEvent(topic, null, "stream-1", orderPlaced("id-1"), Map.of("tenant", "acme"));
+
+            ConsumerRecord<String, byte[]> parked = consumeOneRecord(parkingTopic);
+            assertThat(parked.key()).isEqualTo("stream-1");
+            assertThat(headerValue(parked, "tenant")).isEqualTo("acme");
+            assertThat(headerValue(parked, "parked-reason")).isEqualTo("handler-failure");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(committedOffset(groupId, new TopicPartition(topic, 0))).isEqualTo(1L));
+        }
+    }
+
     @Test
     void an_undecodable_message_is_parked_with_its_raw_bytes_and_the_original_commits_once_confirmed() throws Exception {
         String groupId = "group-" + UUID.randomUUID();

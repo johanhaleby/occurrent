@@ -146,9 +146,11 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
     // reconcilePauseResume(boolean)/processBatch(...) for the per-partition poison-record throttle this backs.
     private final Map<TopicPartition, Long> throttledUntilMillis = new HashMap<>();
 
-    // Set by close() to System.currentTimeMillis() + closeTimeout, Long.MAX_VALUE until then. See
-    // KafkaCloudEventBridge's own field of the same name and commitWithRetry(...) for what this bounds.
-    private volatile long closeDeadlineMillis = Long.MAX_VALUE;
+    // Set by close() to System.nanoTime() + closeTimeout, Long.MAX_VALUE until then. System.nanoTime() rather than
+    // currentTimeMillis(), so a wall-clock correction after close() can never let remainingCloseBudget() outlive
+    // what close() actually promised. See KafkaCloudEventBridge's own field of the same name and
+    // commitWithRetry(...) for what this bounds.
+    private volatile long closeDeadlineNanos = Long.MAX_VALUE;
 
     private volatile boolean running = true;
     private volatile boolean permanentlyStopped = false;
@@ -422,11 +424,11 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         }
     }
 
-    // The wall-clock budget close() gave this loop thread to finish, floored at zero once it has already elapsed,
-    // so the WakeupException retry commit above can never block past what close() promised its own caller to wait.
+    // The budget close() gave this loop thread to finish, floored at zero once it has already elapsed, so the
+    // WakeupException retry commit above can never block past what close() promised its own caller to wait.
     private Duration remainingCloseBudget() {
-        long remainingMillis = closeDeadlineMillis - System.currentTimeMillis();
-        return Duration.ofMillis(Math.max(remainingMillis, 0));
+        long remainingNanos = closeDeadlineNanos - System.nanoTime();
+        return Duration.ofNanos(Math.max(remainingNanos, 0));
     }
 
     // Sleeps for duration, restoring the interrupt flag rather than propagating it, since the loop thread has
@@ -503,7 +505,7 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
     @Override
     public void close() {
         running = false;
-        closeDeadlineMillis = System.currentTimeMillis() + closeTimeout.toMillis();
+        closeDeadlineNanos = System.nanoTime() + closeTimeout.toNanos();
         try {
             consumer.wakeup();
         } catch (RuntimeException ignored) {

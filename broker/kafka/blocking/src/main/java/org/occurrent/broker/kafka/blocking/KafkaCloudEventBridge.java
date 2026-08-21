@@ -148,10 +148,12 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     // never held up by a poison record on a different one. See reconcilePauseResume(boolean) and processBatch(...).
     private final Map<TopicPartition, Long> throttledUntilMillis = new HashMap<>();
 
-    // Set by close() to System.currentTimeMillis() + closeTimeout, Long.MAX_VALUE until then. Lets the loop thread
-    // bound its own WakeupException commit retry in commitWithRetry(...) to what remains of the wait close()
-    // promised, rather than blocking on a bare commitSync(Map) past closeTimeout. See that method's own comment.
-    private volatile long closeDeadlineMillis = Long.MAX_VALUE;
+    // Set by close() to System.nanoTime() + closeTimeout, Long.MAX_VALUE until then. System.nanoTime() rather than
+    // currentTimeMillis(), so a wall-clock correction after close() can never let remainingCloseBudget() outlive
+    // what close() actually promised. Lets the loop thread bound its own WakeupException commit retry in
+    // commitWithRetry(...) to what remains of that wait, rather than blocking on a bare commitSync(Map) past
+    // closeTimeout. See that method's own comment.
+    private volatile long closeDeadlineNanos = Long.MAX_VALUE;
 
     private volatile boolean running = true;
 
@@ -399,11 +401,11 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         }
     }
 
-    // The wall-clock budget close() gave this loop thread to finish, floored at zero once it has already elapsed,
-    // so the WakeupException retry commit above can never block past what close() promised its own caller to wait.
+    // The budget close() gave this loop thread to finish, floored at zero once it has already elapsed, so the
+    // WakeupException retry commit above can never block past what close() promised its own caller to wait.
     private Duration remainingCloseBudget() {
-        long remainingMillis = closeDeadlineMillis - System.currentTimeMillis();
-        return Duration.ofMillis(Math.max(remainingMillis, 0));
+        long remainingNanos = closeDeadlineNanos - System.nanoTime();
+        return Duration.ofNanos(Math.max(remainingNanos, 0));
     }
 
     // Sleeps for duration, restoring the interrupt flag rather than propagating it, since the loop thread has
@@ -473,7 +475,7 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     @Override
     public void close() {
         running = false;
-        closeDeadlineMillis = System.currentTimeMillis() + closeTimeout.toMillis();
+        closeDeadlineNanos = System.nanoTime() + closeTimeout.toNanos();
         try {
             consumer.wakeup();
         } catch (RuntimeException ignored) {
