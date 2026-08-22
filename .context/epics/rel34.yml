@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 30
-updated_at: '2026-08-22T15:35:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U7 merged, five units done)
+revision: 61
+updated_at: '2026-08-22T16:32:31+00:00'
+updated_by: 'orchestrator rel34: U10 settled and re-verifying, R2 checklist confirmed still true'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -10,9 +10,9 @@ authority: 'see .context/orchestrator-policy.yml (standing merge auto_epic_prs, 
   green, allow_reasoned_declines threads, memory checkpoints with [ci skip]); no session-scoped deviations.
   Plan at /Users/johan/.claude/plans/rel34-0-34-0-release.md, PENDING Johan''s approval. Milestone 0.34.0
   is number 3, existing, not created. Mode ATTENDED. ADR reservation ledger opens at 0134 (max across
-  origin/main and every remote branch is 0133, audited 2026-08-22T07:0xZ). Cross-epic: rel34''s sweeps
+  origin/main and every remote branch is 0133, audited 2026-08-22T07:20:10Z). Cross-epic: rel34''s sweeps
   exclude #388, #421, #893, #896 (brk''s); brk''s sweeps exclude every rel34 unit; coordination only through
-  .context/ORCHESTRATOR.md. PLAN GATE CLOSED 2026-08-22T07:25Z by Johan''s four structured-ask rulings
+  .context/ORCHESTRATOR.md. PLAN GATE CLOSED 2026-08-22T07:33:33Z by Johan''s four structured-ask rulings
   (journal dec-0001 to dec-0004). C1 STOPPING RULE: MAJOR-AND-ABOVE reopens rel34''s scope after a clean
   round, cap 3 rounds, remainder returns as ONE structured ask and reaching the cap is reported as reaching
   the cap, never as convergence. Below major is filed as 0.35.0 issues. sdi (#721/#725) is a SIBLING epic,
@@ -23,8 +23,9 @@ pending_actions:
   target: rel34/U3 worker, ListAgents name peaceful-curran-e041e6-4a, relaying dec-0005
   expected: 'U3 acknowledges and resumes coding. Observable as a push to rel34/u3-never-replays-warning-identity
     touching OccurrentMongoAutoConfiguration.java, or a reply message. NOT safe to repeat: a second copy
-    of a ruling can read as a revised ruling.'
-  status: PENDING
+    of a ruling can read as a revised ruling. RESOLVED: the worker acknowledged and PR 902 merged as squash
+    4f12b2ffb, #871 CLOSED.'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-22T07:58:00+00:00'
@@ -47,26 +48,27 @@ units:
     - check: pr_merged
       ref: 900
       met: true
-      evidence: 'CAS-MERGED 2026-08-22T09:5xZ pinned to d4df542fdc93d8fa6d37f6afb5348f0c3ef628d5, squash
+      evidence: 'CAS-MERGED 2026-08-22T08:51:37Z pinned to d4df542fdc93d8fa6d37f6afb5348f0c3ef628d5, squash
         a45a17a08. Gate: Copilot reviewed the EXACT current head at 08:49:51Z (commit_id compared, not
         presence), Approval recommended, 0 new comments, Balanced, no suppressed block with the read confirmed
         to return rows; 0 unresolved threads by isResolved==false alone; mergeable; prose-only so no adversarial
         pass, and no workflow ran because markdown-only pushes are paths-ignored by design rather than
         because of the [ci skip] marker.'
     - check: branch_pushed
-      ref: null
+      ref: docs/802-push-observation-hook
       met: true
       evidence: Both held docs branches carry the corrections and are NOT merged, correctly. docs/append-identity's
         news post now names all six outcomes and splits them right (DELIVERED and FILTERED as a subscription
         seeing the event, the other four as nothing receiving it). docs/802-push-observation-hook has
         zero occurrences of the non-compiling (cloudEvent, matched) lambda. PR 74 still sits cleanly on
         69.
+      repo: occurrent-org/occurrent-org.github.io
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T09:55:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T08:53:11+00:00'
     observed:
       dispatch:
-        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+        note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
@@ -91,14 +93,14 @@ units:
           reports DEFERRED, I had read the same diff and missed it, and a correction to an overclaimed
           guarantee is exactly the edit that overclaims in a new direction.'
         via: gh api pulls/900/reviews commit_id compared to headRefOid
-        at: '2026-08-22T09:30:00+00:00'
+        at: '2026-08-22T08:47:06+00:00'
       enumeration_value:
         note: 'The code-side enumeration found a FIFTH and SIXTH surface the brief never named: PR 74
           independently rewrote the same docs section as PR 69, a genuine textual conflict now known before
           release day rather than discovered while merging held branches under time pressure; and PR 72
           carries a duplicate news post that the take-73''s rule already disposes of.'
         via: worker report, dispositions verified
-        at: '2026-08-22T09:55:00+00:00'
+        at: '2026-08-22T08:53:11+00:00'
     assessment: One invariant, four surfaces, two repos. The boolean-to-three fix already shipped once
       and was stale on arrival; the enumeration is derived from RoutingOutcome.java, not from a findings
       list. Takes PR 69's repair out of brk/U8's scope, recorded in ORCHESTRATOR.md. docs/append-identity
@@ -109,7 +111,7 @@ units:
     goal: 'updateEvent no longer rewrites the stored position as a BSON string and no longer drops dcbTags.
       Invariant: a document round-tripped through convertToDocument preserves position as int64 and preserves
       dcbTags, at all three write-back sites (SpringMongoEventStore:356, MongoEventStore:756, ReactorMongoEventStore:904).'
-    phase: RUNNING
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -124,13 +126,26 @@ units:
       ref: 876
       met: false
       evidence: ''
-    blocking_on: []
-    next_action: worker fixing the returned-CloudEvent position defect; re-verify after, earlier HELD
-      verdicts do not cover it
-    last_meaningful_progress_at: '2026-08-22T10:10:00+00:00'
+    - check: issue_closed
+      ref: 927
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 907
+      met: false
+      evidence: ''
+    blocking_on:
+    - what: 'PR 901 held by the orchestrator gate. Clears when the worker pushes a test for an original
+        with no tags whose updater forges some, proving the withoutExtension(TAGS) branch, plus #927''s
+        streamId and streamVersion, and the gate re-runs from the top on the new head.'
+      since: '2026-08-22T15:11:57+00:00'
+      recheck_after: '2026-08-22T15:56:57+00:00'
+    next_action: worker adds the forged-tags-on-a-non-DCB-original test, verifies it fails with preserveTags
+      reverted, then the gate re-runs
+    last_meaningful_progress_at: '2026-08-22T12:04:08+00:00'
     observed:
       dispatch:
-        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+        note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
@@ -148,7 +163,7 @@ units:
           absent from present rather than truncating. One Colima replica-set flake was correctly diagnosed
           as the known 2GB VM infra issue and retried, not reported as a failure.'
         via: orchestrator adversarial verify subagent
-        at: '2026-08-22T08:55:00+00:00'
+        at: '2026-08-22T08:30:57+00:00'
       routed_edge:
         note: 'The pass flagged one edge OUTSIDE the claim''s scope, which I verified against the diff
           before routing: preservePositionAndDcbTags reapplies the ORIGINAL event''s tags to the dcbTags
@@ -157,7 +172,7 @@ units:
           silently. Filed as #904, milestone 0.35.0, marker carried. Deferred rather than folded into
           U2 because #876 is a silent-corruption fix on the critical path and this edge regresses nothing.'
         via: gh pr diff 901 read directly
-        at: '2026-08-22T08:55:00+00:00'
+        at: '2026-08-22T08:30:57+00:00'
       scope_growth:
         note: 'PR 901 gained NEW production code during its rebase that was NOT in the head the first
           adversarial pass verified: DcbCloudEvents.preserveTags(original, updated), public, in the published
@@ -172,7 +187,7 @@ units:
           and isDcbEvent, or in an internal package per this repo''s own convention (the mutable saga
           registry lives in dsl.saga.internal for exactly this reason). Asked, not ruled.'
         via: gh pr view --json files compared across heads, gh pr diff
-        at: '2026-08-22T09:05:00+00:00'
+        at: '2026-08-22T08:36:56+00:00'
       verify_discipline:
         note: 'Head moved three times in fifteen minutes (9a2337dbf, b733100d8, d9589f867) while verify
           passes ran. DO NOT spawn a pass per push. The rule: verify once the worker declares itself settled,
@@ -180,7 +195,7 @@ units:
           verdict carries; any code delta means re-verify. The first pass HELD against 9a2337dbf and does
           NOT cover preserveTags; a second is running against b733100d8.'
         via: orchestrator
-        at: '2026-08-22T09:05:00+00:00'
+        at: '2026-08-22T08:36:56+00:00'
       adversarial_verify_2:
         note: 'HELD against b733100d8, scoped to the new preserveTags and its three call sites. Real MongoDB
           8.0 via Testcontainers, reading BOTH the raw dcbTags BSON array and the dcbtags extension on
@@ -197,12 +212,12 @@ units:
           rather than reported as defects: the Colima container flake, and a shared ~/.m2 race from a
           concurrent session that surfaced as NoSuchMethodError on the very method under test.'
         via: orchestrator adversarial verify subagent, second pass
-        at: '2026-08-22T09:40:00+00:00'
+        at: '2026-08-22T08:49:26+00:00'
       blocked_on_suppressed_finding:
-        note: 'MERGE BLOCKED 2026-08-22T10:0xZ. Copilot''s verdict on d9589f867 was ''Needs a closer look'',
-          NOT approval, and its body carried a suppressed comment. Zero unresolved threads and a green
-          26-check rollup were both true and both blind to it. CONFIRMED by reading the code, not taken
-          from the report: preserveAppendId and preserveTags operate on the CloudEvent, preservePositionAndDcbTags
+        note: 'MERGE BLOCKED 2026-08-22T09:03:54Z. Copilot''s verdict on d9589f867 was ''Needs a closer
+          look'', NOT approval, and its body carried a suppressed comment. Zero unresolved threads and
+          a green 26-check rollup were both true and both blind to it. CONFIRMED by reading the code,
+          not taken from the report: preserveAppendId and preserveTags operate on the CloudEvent, preservePositionAndDcbTags
           operates only on the Document, and every store ends `return Optional.of(updatedCloudEvent)`,
           so updateEvent STORES the correct position and RETURNS an event whose position is absent or
           forged. Same divergence class as #904. Second half: `if (position > 0)` has no else, so a position
@@ -211,7 +226,104 @@ units:
           originals that HAVE a position. The stated claim never mentioned the absent case, so no falsification
           attempt constructed one.'
         via: gh api pulls/901/reviews body plus reading MongoEventStore.updateEvent
-        at: '2026-08-22T10:10:00+00:00'
+        at: '2026-08-22T09:03:54+00:00'
+      reverify_preserve_position:
+        note: 'HELD against 39d9a6ef0, the head carrying the preservePosition fix that the earlier verdict
+          did not cover. Real Mongo via Testcontainers across all three stores, and it ran the check that
+          would have caught the ORIGINAL defect: comparing the RETURNED CloudEvent against the stored
+          BSON reconstructed via DcbDocumentMapper.toCloudEvent in the SAME test, rather than each against
+          the original independently, which is what let the first defect through. Cases: original with
+          a position updated to none; original with NO position whose updater FORGES one, the exact prior
+          regression; an empty tag set distinguished from an absent one on both sides; a non-DCB original
+          whose updater invents tags; a DCB original whose updater drops them; two consecutive adversarial
+          updates; and cross-store agreement on every case. Also established statically that chaining
+          preserveAppendId then preservePosition then preserveTags cannot undo an earlier step, since
+          each rebuilds targeting only its own named extension.'
+        via: orchestrator adversarial verify subagent
+        at: '2026-08-22T12:20:43+00:00'
+      routed_927:
+        note: 'INCIDENTAL out-of-scope finding, filed as #927: when an updater returns an event built
+          from scratch, updateEvent''s RETURNED event never regains streamid and streamversion. Those
+          are baked into the stored document through convertToDocument''s parameters and never reapplied
+          to the object handed back. Pre-existing and untouched by this PR, but it is the THIRD instance
+          of the same shape on the same method: PR 901 closes the position instance (#876) and the DCB-tags
+          instance (#904), and the pass confirmed position, tags and appendId all agree between returned
+          event and document in every case, so this is what is left. Orchestrator recommends ADOPTING
+          into 0.34.0 on the symmetry argument, with the counter-argument (genuinely pre-existing, and
+          0.34.0 has grown a lot) stated on the issue. Johan''s call.'
+        via: adversarial verify subagent, verified reproducible
+        at: '2026-08-22T12:20:43+00:00'
+      gate_blocked_no_review_on_head:
+        note: 'MERGE BLOCKED again, on a different failure mode from last time. All three workflow runs
+          on 39d9a6ef0 are completed/success, unresolved review threads are ZERO, and the adversarial
+          verdict is HELD against this exact head. Still not mergeable, because Copilot''s most recent
+          review is on d9589f867, the head that was blocked for the suppressed finding, and the preservePosition
+          fix that answered it produced 39d9a6ef0 which Copilot has never seen. Checked by comparing each
+          review''s commit_id against the head rather than by counting reviews. Re-review requested via
+          GraphQL requestReviews with botIds. Copilot is absent from suggestedActors on this repository
+          (its only filters are CAN_BE_ASSIGNED and CAN_BE_AUTHOR), so the bot id came from an existing
+          review''s author via an ''... on Bot{id}'' fragment: BOT_kgDOCnlnWA. Request verified present
+          in reviewRequests afterwards, since a wrong id succeeds while requesting nobody.'
+        via: gh api pulls/901/reviews + graphql reviewRequests
+        at: '2026-08-22T12:39:33+00:00'
+      copilot_coverage_finding_confirmed:
+        note: 'Copilot reviewed 39d9a6ef0 after the re-review request and returned ''Changes recommended''
+          at Balanced effort (read from the review body, not assumed), one comment, no suppressed block.
+          CONFIRMED by reading the tests rather than taking the report: the three store tests cover a
+          stream event keeping position, a DCB event keeping position and tags, a fresh replacement keeping
+          original tags, a forged POSITION on an unpositioned event, and a second update. NONE covers
+          an original with no tags whose updater forges some, which is the CloudEventBuilder.v1(updated).withoutExtension(TAGS).build()
+          branch enforcing the ''cannot pick up tags it never had'' half of preserveTags'' javadoc guarantee.
+          NOTE ON MY OWN VERIFICATION, worth keeping: adversarial_verify_2 DID exercise this branch and
+          found the code correct, but it ran in a throwaway harness. Code-is-correct and the-shipped-suite-would-catch-a-regression
+          are DIFFERENT claims, and only the second one gates a merge. I conflated them. The harness disappears,
+          the suite is what remains. Said so on the PR.'
+        via: gh api pulls/901/reviews + reading the three test files at pr901
+        at: '2026-08-22T12:54:55+00:00'
+      927_folded_in:
+        note: '#927 adopted into 0.34.0 on Johan''s ruling and added to THIS unit rather than dispatched
+          separately. The returned event never regains streamId and streamVersion when an updater builds
+          a replacement from scratch, because they are baked into the stored document through convertToDocument''s
+          parameters and never reapplied to the object handed back. Third instance of one defect class
+          on updateEvent: this PR closes the position instance (#876) and the DCB-tags instance (#904),
+          and its own verification confirmed position, tags and appendId all agree between the returned
+          event and the document in every case tried, so these two fields are what remains. Into U2 because
+          901 must push again for the coverage test regardless, so it costs a commit rather than a review
+          cycle, and a separate unit would rebuild the same setup across the same three stores and collide
+          on the same files. NOT a regression from 901 and 901 does not touch it.'
+        via: Johan's structured-ask ruling
+        at: '2026-08-22T14:02:19+00:00'
+      holds_were_prose_only:
+        note: SELF-AUDIT prompted by sdi finding the same defect in its own file. FIVE rel34 units (U2,
+          U4, U6, U10, U16) were marked BLOCKED with the reason recorded ONLY in next_action prose, and
+          blocking_on empty on every one. epic-state.py derives phase from deliverables, blocking_on and
+          session, and never from prose, so derive computed these as READY or RUNNING while every human-readable
+          surface said held. A restarted orchestrator would have treated five in-flight held PRs as dispatchable.
+          Same defect sdi hit, where its U2 was READY by the graph and held only by a sentence in ORCHESTRATOR.md.
+          Fixed by writing each hold into blocking_on with its CLEARING CONDITION stated as an observable
+          event rather than as a description of the problem, so a restart can tell whether it still holds.
+        via: self-audit against epic-state.py's phase derivation
+        at: '2026-08-22T15:11:32+00:00'
+      907_folded_in:
+        note: '#907 adopted into U2 on Johan''s ruling. ReactorMongoEventStore.updateEvent calls .log()
+          on the reactive pipeline that reads the event to update, so the full found document INCLUDING
+          ITS DATA PAYLOAD is logged at INFO. Filed by this unit''s own worker while working on #876.
+          Folded here rather than dispatched because it is one line on the same method PR 901 already
+          changes, and 901 must push again for its coverage test regardless. U2''s gate now covers four
+          issues: #876, #904, #927 and #907.'
+        via: Johan's structured-ask ruling
+        at: '2026-08-22T15:23:44+00:00'
+      timestamps_track_the_blocker:
+        note: 'sdi flagged the signature and it was present here: five BLOCKED units all shared last_meaningful_progress_at
+          2026-08-22T15:11:32 to the second, which is one write of mine adding blocking_on. On a BLOCKED
+          unit that field was therefore reporting MY attention rather than the blocker moving, so STALLED
+          would have been a claim about the orchestrator and not about the work. Repaired by setting each
+          held unit''s timestamp from its PR''s last commit date, read from gh. STALLED now means the
+          worker has not pushed, which is the signal worth having. The rule generalises: for a unit blocked
+          on someone else''s artifact, the progress timestamp comes from that artifact, never from the
+          orchestrator''s own bookkeeping write.'
+        via: sdi's shared-timestamp signature check + gh pr view commits
+        at: '2026-08-22T15:24:12+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
@@ -226,7 +338,7 @@ units:
       boolean, so a custom Subscriptions/StreamSubscriptions/DcbSubscriptions composition whose DEFAULT
       does replay no longer gets a warning claiming it never replays. Mirror the reactor pattern, which
       already carries owner facts on ComposedReplayPhase.
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -234,19 +346,23 @@ units:
       Sonnet/medium
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: ''
+      ref: 902
+      met: true
+      evidence: 'CAS-MERGED pinned to 094d29757, squash 4f12b2ffb. Full gate verified independently rather
+        than from the worker''s report: head matched the pin, Java CI completed/success, 0 unresolved
+        threads, Copilot APPROVED ON THE CURRENT HEAD at 12:16Z with 0 new comments, and no suppressed
+        block anywhere on this PR. Adversarial re-verify falsified the CLAIM rather than the code, the
+        javadoc was narrowed, and the orchestrator read the correction directly.'
     - check: issue_closed
       ref: 871
-      met: false
-      evidence: ''
+      met: true
+      evidence: '#871 CLOSED by the merge, verified.'
     blocking_on: []
-    next_action: worker narrowing the javadoc overclaim; head moving, diff the delta before merging
-    last_meaningful_progress_at: '2026-08-22T14:20:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T12:24:01+00:00'
     observed:
       dispatch:
-        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+        note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
@@ -260,7 +376,7 @@ units:
           re-milestoned to 0.35.0 an hour earlier, and it cost a rerun on an unrelated PR within that
           hour.'
         via: delegated log triage plus gh run list
-        at: '2026-08-22T09:30:00+00:00'
+        at: '2026-08-22T08:47:06+00:00'
       adversarial_verify:
         note: 'FALSIFIED, merge BLOCKED. Verdict: HELD only for the shipped starter wiring as-is, FALSIFIED
           as a general claim. isDefaultKnownLiveOnlyFor is a bare reference check with no unwrapping,
@@ -277,7 +393,7 @@ units:
           UNVERIFIED GAP surfaced: suppliedBy has no once-only guard, a second call silently overwrites
           the first, and no path in this starter was found that calls it twice.'
         via: orchestrator adversarial verify subagent
-        at: '2026-08-22T10:55:00+00:00'
+        at: '2026-08-22T09:16:02+00:00'
       reverify:
         note: 'RE-VERIFY against 7d63c9c8b: FALSIFIED but against the CLAIM, not the code. AopProxyUtils.getSingletonTarget
           only unwraps something implementing Advised, so genuine Spring AOP proxies (ProxyFactory, which
@@ -295,7 +411,7 @@ units:
           regression shape; and the once-only guard verified against the real call site as unreachable
           twice.'
         via: orchestrator re-verify subagent
-        at: '2026-08-22T14:20:00+00:00'
+        at: '2026-08-22T11:32:03+00:00'
       introduction_proxy:
         note: 'A THIRD defect, found by the Copilot re-review the orchestrator insisted on for PR 908
           and ported here proactively by the worker: a valid AOP INTRODUCTION proxy, one implementing
@@ -304,10 +420,22 @@ units:
           fixed. ultimateTarget now stops unwrapping one layer short when the next target does not itself
           implement the interface, with a DelegatingIntroductionInterceptor-backed test on both stacks.'
         via: worker message, Copilot re-review on 908
-        at: '2026-08-22T14:20:00+00:00'
+        at: '2026-08-22T11:32:03+00:00'
+      path_to_merge:
+        note: 'The longest route of any unit today, and every step mattered. The brief''s file boundary
+          was WRONG, since the fix is structurally cross-module, and the worker returned BLOCKED before
+          writing a line rather than reasoning past it. The adversarial pass FALSIFIED it: a proxy made
+          the warning go silent for the composition it exists to serve, worse than the bug. A Copilot
+          re-review the orchestrator insisted on found a ClassCastException on introduction proxies that
+          would have failed startup outright. The re-verify then falsified the CLAIM, and in doing so
+          corrected the ORCHESTRATOR: the original falsification described the trigger as any BeanPostProcessor
+          when the unwrap only misses non-Advised wrappers. The same analysis that shipped this established
+          that the reactor twin does NOT exist, closing #903 and #909 as not reproducible.'
+        via: orchestrator
+        at: '2026-08-22T12:24:01+00:00'
     assessment: 'Warning-only defect, recording itself stays correct. Fix shape agreed in the issue body.
       Touches the blocking registrar, so U6 follows this unit rather than running beside it. OWNERSHIP
-      EXTENDED by dec-0005 (2026-08-22T07:58Z) to framework/spring-boot-starter-mongodb/.../OccurrentMongoAutoConfiguration.java,
+      EXTENDED by dec-0005 (2026-08-22T07:55:05Z) to framework/spring-boot-starter-mongodb/.../OccurrentMongoAutoConfiguration.java,
       scoped to occurrentComposedDefaultStartPosition() and the existing defaultBypassesCatchup() call
       inside occurrentCompetingDurableSubscriptionModel(...), plus that module''s tests. The brief''s
       original boundary was unreachable: the reactor pattern it names, ComposedCatchupModel.suppliedBy(Object),
@@ -319,7 +447,7 @@ units:
       write paths' retry so a store outage cannot block delivery forever, gives the compound applied-append
       index the same conflict recovery the TTL index has, and honours the blocking wait's deadline on
       a stalled connection.
-    phase: PLANNED
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -345,9 +473,15 @@ units:
       ref: 879
       met: false
       evidence: ''
-    blocking_on: []
-    next_action: worker adding the ADR 132 correction (granted); then adversarial verify, then the gate
-    last_meaningful_progress_at: '2026-08-22T11:50:00+00:00'
+    blocking_on:
+    - what: PR 914 held by the orchestrator gate on three grouped defects. Clears when the reactive first-read
+        overclaim is corrected on all three prose surfaces in one pass, the retry context is preserved
+        in all three wrappers including the one only in the suppressed block, and the attempt ceiling
+        either rejects values above it or honours them.
+      since: '2026-08-22T15:11:57+00:00'
+      recheck_after: '2026-08-22T15:56:57+00:00'
+    next_action: worker answers three grouped defects on 914, then the gate re-runs from the top
+    last_meaningful_progress_at: '2026-08-22T12:53:20+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -364,7 +498,7 @@ units:
           RESIDUAL STATED RATHER THAN HIDDEN: this bounds attempts, only the MongoDB client can bound
           time, and a read already in flight when a deadline passes is not interrupted.'
         via: worker DELIVERY_RESULT, gate facts verified independently
-        at: '2026-08-22T11:50:00+00:00'
+        at: '2026-08-22T10:38:17+00:00'
       adr132_granted:
         note: '#915 (ADR 132 decision 5 stale on three counts plus its property list) GRANTED into PR
           914 rather than becoming a separate unit. Not scope widening: the brief''s invariant requirement
@@ -374,23 +508,78 @@ units:
           in any release, so AGENTS.md permits correcting it in place. A markdown-only push does not re-run
           the matrix here, so the 26 green contexts stand.'
         via: orchestrator ruling
-        at: '2026-08-22T11:50:00+00:00'
-    assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:50Z after
+        at: '2026-08-22T10:38:17+00:00'
+      reverify_2:
+        note: 'FALSIFIED a SECOND time, reactive stack only, and again by the fix itself. Defect 1, the
+          unbounded retry, is CLOSED on both stacks: the 1000 ceiling is enforced identically, verified
+          at 999, 1000 and 1500 configured attempts, and never shortens a policy already below it; the
+          real source of the original 203,766-calls measurement was the auto-configuration building Retry.backoff(Long.MAX_VALUE),
+          now bounded. Defect 2''s fix introduced a new asymmetry: ReactiveMongoAppliedAppendStore.readOnceBoundedBy
+          now reads `remainingNanos > 0 ? read.block(Duration.ofNanos(remainingNanos)) : read.block()`,
+          so an ALREADY-ELAPSED deadline falls to the UNBOUNDED block and the whole retry budget runs.
+          Measured with the shipped default: 9.9 SECONDS and 10 store calls, against 22ms and 1 call on
+          the blocking store for the same case. The branch is new in the fix commit c0d8a29b4, and the
+          added test covers only the conflicting-index and successful-but-false variants, never a genuinely
+          failing ordinary read at Duration.ZERO, which is why it shipped green. SECOND, a contract question
+          rather than a bug: the same block timeout cuts off a slow but SUCCESSFUL reactive read, turning
+          a true answer false (300ms read against a 100ms wait answered false where blocking answered
+          true). Pre-existing and disclosed in the ADR, but the INTERFACE javadoc the worker just added
+          says every implementation owes not answering false about an append it holds, and the reactive
+          store does not. Either the claim narrows or the store changes; a contract on the interface that
+          an implementation does not meet is the exact drift moving it up there was meant to prevent.'
+        via: orchestrator re-verify subagent, measured
+        at: '2026-08-22T12:22:23+00:00'
+      rebased_and_mergeable:
+        note: 'Worker fixed the twice-falsified reactive defect and rebased. Head e2554fdc, MERGEABLE,
+          CI running. The fix makes readOnceBoundedBy retry against a deadline-aware wrapper rather than
+          the raw policy, so the deadline stops the retries as well as the reads, and the already-elapsed
+          case makes exactly one call on both stacks. The worker reproduced my measurement before and
+          after rather than trusting the fix: 9.017s with the deadline-aware retry removed, matching my
+          9.9s, and one read under two seconds with it. It also NARROWED the interface contract rather
+          than changing the reactive store, so the interface now promises only that a wait asks the store
+          at least once before honouring the timeout, and names the blocking-versus-reactive difference
+          explicitly with a characterization test on both halves. Declining to make the reactive store
+          wait for a slow read is correct: that would mean dropping block(Duration), which is the only
+          reason its wait honours the caller''s timeout, and #878 credits it with exactly that.'
+        via: worker message + gh pr view
+        at: '2026-08-22T12:54:55+00:00'
+      copilot_five_findings_three_defects:
+        note: 'HELD. Copilot returned ''Changes recommended'' at Balanced effort on e2554fdc, five comments,
+          ONE OF THEM SUPPRESSED rather than threaded. They group to three defects. (1) THREE prose surfaces
+          still claim the reactive store always stops at the deadline or returns on time, which is false
+          for a zero or already-expired timeout because readOnceBoundedBy runs the mandatory first read
+          through an unbounded block(): ReactiveMongoAppliedAppendStore.java:86, AppliedAppendStore.java:147,
+          ADR 0132 line 286. This is the SECOND time today that a fix to an overclaim left siblings of
+          the overclaim in place, 928 being the other, so it was routed as one property to check across
+          every surface in a single pass rather than three fixes. (2) Retry''s no-argument constructor
+          drops the caller''s retry context in neverRetryingAConflictingIndex, the permanent-error wrapper
+          and retryUntil, so a caller''s hooks reading RetrySignal.retryContextView() stop seeing what
+          they supplied. One instance threaded at line 375, the SECOND ONLY IN THE SUPPRESSED BLOCK at
+          line 391, which creates no thread, so a green rollup with the threads answered would still have
+          shipped half of it. (3) The configured attempt count has no upper bound while both stores stop
+          at MAX_ATTEMPTS_CEILING, so a configured 2000 is accepted and silently performs 1000. The other
+          end of the ceiling defect U4 itself found.'
+        via: gh api pulls/914/reviews + graphql reviewThreads
+        at: '2026-08-22T13:44:39+00:00'
+    assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:30:57Z after
       a scoping read, which is why #878 moved here from U5. The read found two collisions the original
       split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
       and U5''s #891 needs the reactor ProjectionAnnotationRegistrar and ComposedCatchupModel, which are
       exactly the two files U12 was handed minutes earlier. U4 as re-scoped owns the store and wait surface
-      and touches NO reactor registrar, so it is disjoint from U12 and dispatchable now.'
+      and touches NO reactor registrar, so it is disjoint from U12 and dispatchable now. TWICE FALSIFIED,
+      each time by its own preceding fix. That is a signal about this surface rather than about the worker:
+      the applied-append store''s wait path has a blocking implementation that folds the deadline into
+      a retry predicate and a reactive one that folds it into a block timeout, and those two mechanisms
+      disagree at every boundary case. Relevant to C1: this area should get more than one round.'
   U5:
     issue: 878
     goal: A reactor projection that applies an append always records it, so waitUntilApplied cannot time
       out on a write that did land.
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
-    depends_on:
-    - U12
-    session: null
+    depends_on: []
+    session: chip task_ea20e8b3, plan-first, Opus/high
     deliverables:
     - check: pr_merged
       ref: null
@@ -401,9 +590,21 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch to the U12 worker once PR for U12 merges, it will own those reactor files
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    next_action: await the plan at the plan gate, do not expect code
+    last_meaningful_progress_at: '2026-08-22T15:30:25+00:00'
+    observed:
+      dispatched_plan_first:
+        note: 'Dispatched PLAN FIRST rather than as an implementation, because #891''s own filer recorded
+          that every fix they found decides by position and ADR 122 stands against deciding by position.
+          A blind implementation dispatch would have produced either a design decision taken by a worker
+          without a gate, or a stall. Kept in 0.34.0 on AGENTS.md line 109 rather than asked: a wait that
+          times out on a write that succeeded is a known hole in correctness, which that line says is
+          not a follow-up candidate. The brief says so explicitly and gives the worker room to report
+          back if the fix turns out disproportionate, which is a finding rather than a decision it may
+          take. The brief also forbids writing an ADR or taking a number unilaterally: 0135 is free and
+          shared across three fleets, so a claim goes through the orchestrator.'
+        via: orchestrator
+        at: '2026-08-22T15:30:25+00:00'
     assessment: '#891 ALONE now; #878 moved to U4. Sequenced behind U12 rather than run beside it: #891''s
       fix path runs through framework/spring-boot-autoconfigure/reactor ProjectionAnnotationRegistrar.java
       and ComposedCatchupModel.java, the two files U12 owns. Give it to the U12 worker when U12 merges,
@@ -414,28 +615,161 @@ units:
     issue: 837
     goal: Transaction advice on subscription handler methods is no longer silently bypassed. Invariant
       stated over the registrar's proxying path, then checked against every registrar surface in one pass.
-    phase: PLANNED
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on:
     - U3
-    session: null
+    session: local_53811444-7045-4edd-afdb-ec20a97a4ee1, worktree amazing-shannon-db71fe, branch johan/amazing-shannon-db71fe
+      off main. Launched on claude-sonnet-5 at effort high, read from session metadata rather than assumed.
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 933
       met: false
       evidence: ''
     - check: issue_closed
       ref: 837
       met: false
       evidence: ''
-    blocking_on: []
-    next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
-    assessment: 'Shipped defect present in the occurrent-0.33.0 tag. Was routed into the #725 implementation
-      epic on 2026-08-17; the triage sweep made it a standalone 0.34.0 fix because sdi has not started.
-      Follows U3 on registrar file ownership.'
+    blocking_on:
+    - what: PR 933 held by the orchestrator gate on the no-regression floor. Clears when the shared resolve
+        helper falls back to the raw bean wherever the resolved target cannot take the method, and processSynchronousSubscribeAnnotation
+        routes through that same helper rather than its own bare getBean.
+      since: '2026-08-22T15:11:57+00:00'
+      recheck_after: '2026-08-22T15:56:57+00:00'
+    next_action: worker adds the no-regression floor to its resolve helper and routes the fourth call
+      site through it
+    last_meaningful_progress_at: '2026-08-22T14:50:03+00:00'
+    observed:
+      scope_derived_by_orchestrator:
+        note: 'Enumerated the invocation sites myself rather than trusting the issue text. The defect
+          is SIX handler-invocation sites in TWO files and THREE are already correct. Blocking SubscriptionAnnotationRegistrar
+          lines 95, 119, 189 pass the raw bean; lines 150-151 (processSynchronousSubscribeAnnotation)
+          already look the bean up by name INSIDE the handler lambda and carry a comment stating the whole
+          problem. Reactor file: same three defects at 106, 127, 200, same correct path at 163-164. The
+          lookup must stay inside the lambda, at event-delivery time, because during postProcessBeforeInitialization
+          the bean is unfinished. The three broken methods do not receive beanName today, so it must be
+          threaded down from registerSubscriptions / postProcessBeforeInitialization. OUT OF SCOPE and
+          verified, not assumed: Projection, Saga and Snapshot registrars on both stacks never invoke
+          a handler per event at all. They call SubscriptionAnnotations.invokeDescriptorFactory(..) ONCE
+          at registration and per-event work runs through the returned descriptor. That factory call does
+          use the raw bean, which is the sibling finding #837''s own body calls a separate issue, and
+          it belongs to sdi.'
+        via: grep over all five registrars and both bean post processors
+        at: '2026-08-22T12:37:06+00:00'
+      sdi_fence:
+        note: sdi's U6 (descriptor paths in both SubscriptionAnnotationRegistrar files, move to afterSingletonsInstantiated)
+          and its U7 (annotation-set normalization across the other five registrars and both BPPs) rewrite
+          these exact files, but BOTH are BLOCKED behind sdi's rename and annotation work, and sdi's only
+          open PR (924) touches framework/annotations and rewrite/ only. No file collision today. rel34/U6
+          owns the two SubscriptionAnnotationRegistrar files until it merges; sdi must preserve the by-name
+          lookup when it reworks them. Fence stated to sdi's orchestrator.
+        via: sdi epic state + gh pr view 924
+        at: '2026-08-22T12:37:06+00:00'
+      sdi_fence_accepted:
+        note: 'sdi''s orchestrator accepted the fence and recorded the invariant against its own U6 in
+          the sdi epic state, in the terms given: target is what the context yields FOR THE BEAN NAME,
+          looked up INSIDE the handler lambda at EVENT-DELIVERY time, never the post processor''s instance,
+          and the lookup POINT matters as much as the lookup. It agreed the afterSingletonsInstantiated
+          move is exactly where this could be silently reverted, and its U6 brief will require a test
+          that still FAILS if the target goes back to the raw bean. It also accepted invokeDescriptorFactory
+          as sdi''s own open design question (recorded against its U2 and U6) after checking my analysis
+          rather than taking it, so that finding is owned and will not fall between the fleets.'
+        via: cross-session message from [sdi] Orchestrator
+        at: '2026-08-22T12:41:01+00:00'
+      sdi_count_correction_did_not_reach_rel34:
+        note: 'sdi corrected its own registrar call-site split from 17 non-DCB / 4 DCB to 16 / 5, total
+          21 unchanged, and asked whether the wrong number had reached any rel34 brief. Checked rather
+          than assumed: grepped every brief in the briefs directory and the whole epic state. It did NOT.
+          The only call-site count in any rel34 brief is U6''s own ''SIX call sites in TWO files'', which
+          I derived myself from the registrars. Nothing to correct here.'
+        via: grep over briefs/ and rel34.yml
+        at: '2026-08-22T12:41:01+00:00'
+      chip_title_gate_failed:
+        note: 'PROCESS FAILURE, mine. The chip went out titled ''Fix #837: @Transactional silently bypassed
+          on subscription handlers'' with no sigil, no epic, no unit and no model suffix. SKILL.md:383
+          makes the title check a literal gate before every spawn and records this exact failure happening
+          to two brk chips earlier the same day. The mechanism is identical: the spawn tool''s own hint
+          asks for an imperative action phrase under 60 chars, I composed from that hint instead of from
+          the fleet rule, and never ran the gate. The skill says compose from the rule FIRST and only
+          then check the length hint. rel34''s other eight chips were correct because gen_briefs.py composed
+          their titles; this one was hand-written at the call site, which is where the tool''s hint wins.
+          COST: the Sonnet/high recommendation reached the worker via the brief but never reached Johan,
+          because a chip''s prompt is not shown in the UI. He picked the model with no recommendation
+          visible. It happened to launch on exactly claude-sonnet-5 / high, so nothing was lost this time,
+          which is luck rather than the gate working. REMEDY APPLIED per the skill: retitled the running
+          session to ''⌁[rel34/U6#837] Fix silent transaction bypass · Sonnet/high'' (59 chars, both gates
+          re-run and passing), and the actual launched model and effort read from session metadata and
+          recorded in this unit''s session field. First composition was 61 chars and failed the length
+          gate, so the summary was trimmed rather than the suffix, since the suffix is the part that must
+          survive.'
+        via: orchestrator self-check against SKILL.md:383
+        at: '2026-08-22T12:57:57+00:00'
+      pr_opened:
+        note: 'PR 933 on rel34/u6-transactional-subscription-handlers, 5 files: both SubscriptionAnnotationRegistrar
+          files, one Mongo test per stack, and changelog.md. No migration guide file, consistent with
+          its Changes-not-Breaking call. Scope matches the brief exactly and the descriptor-factory fence
+          held. It ARGUED the changelog call rather than defaulting: #### Changes because the annotation
+          never worked and the fix needs no caller action, but the entry says out loud that a handler
+          which ran without a transaction now runs inside one, which can change its rollback and failure
+          behaviour. That is the judgement I asked for and it matches my own reading. TESTS ARE BEHAVIOURAL,
+          not mechanism checks: each handler is @Transactional and records whether TransactionSynchronizationManager.isActualTransactionActive()
+          answers true while it runs, which is only true if the handler ran through its proxy. The reactor
+          version correctly uses forCurrentTransaction() instead, since the reactive transaction context
+          lives in the Reactor Context rather than a thread-local. Six tests, one per annotation per stack.
+          MUTATION VERIFIED by the worker: reverting the registrar fix failed all six (false or an empty
+          recording instead of true), restoring it passed all six. Not yet independently re-verified by
+          the orchestrator.'
+        via: gh pr view 933
+        at: '2026-08-22T14:08:17+00:00'
+      jdk_proxy_defect_from_my_brief:
+        note: 'HELD, and the cause traces to MY BRIEF. Copilot at Balanced effort: with spring.aop.proxy-target-class=false,
+          getBean(beanName) returns a JDK INTERFACE proxy which is not an instance of the concrete class
+          declaring the Method the registrar holds from registration, so Method.invoke rejects the receiver
+          and the handler NEVER RUNS AT ALL. That is WORSE than #837 itself: before the fix the handler
+          ran without advice, after it the handler does not run, which is a regression for anyone setting
+          proxy-target-class=false. Two threads plus FOUR MORE instances in the SUPPRESSED block, which
+          opens no threads, so a green rollup with both threads answered would have shipped most of it.
+          MY ERROR: the brief told the worker the correct path was already in the file and to follow processSynchronousSubscribeAnnotation.
+          Verified against origin/main: that path does getBean then invoke with NO AOP-aware method resolution
+          anywhere in either file. It is correct about proxy-versus-raw-target, which is what #837 is
+          about, and wrong about JDK proxies. Following it faithfully propagated the defect to three more
+          sites per file. SCOPE GREW to EIGHT sites, four per file: @SynchronousSubscription has carried
+          this since it shipped, on both stacks, and it is in the same method of the same file the worker
+          is already editing. Routed as one property checked across every invocation site in one pass
+          rather than six point fixes. NOT A CRITICISM OF THE DELIVERY: the six existing tests are behavioural
+          rather than proxy-identity assertions, mutation-verified in both directions, and correctly use
+          forCurrentTransaction() on the reactor side. What is missing is a configuration axis, proxy-target-class=false,
+          which Boot''s default subclass proxies hide.'
+        via: gh api pulls/933/reviews, verified against origin/main
+        at: '2026-08-22T14:26:58+00:00'
+      startup_hang_found_and_ruling:
+        note: 'Worker found a defect the brief did not anticipate and STRICTLY WORSE than #837 itself:
+          a @Transactional handler with startAt=BEGINNING and startupMode=WAIT_UNTIL_STARTED replays synchronously
+          inside the BeanPostProcessor, on the thread still creating that bean, so getBean(beanName) asks
+          the factory for a singleton it is mid-creating and Spring Boot hangs forever. Reproduced (timeout
+          90 killed at exit 124), fixed with an isCurrentlyInCreation check falling back to the raw bean,
+          reverted to confirm the hang returns, restored, regression test per stack. It also routed four
+          more defects to #935 (JDK interface proxy, prototype scope, private or final methods on a CGLIB
+          proxy, FactoryBean beans), all of which also affect the pre-existing processSynchronousSubscribeAnnotation.
+          ORCHESTRATOR RULING, overruling the worker in part: #935''s scope is right and goes to sdi,
+          but a NO-REGRESSION FLOOR must land in 933. Before this PR those three paths invoked the raw
+          bean, so in those configurations the handler RAN and merely lost its advice; after it they resolve
+          by name and Method.invoke throws, so the handler does not run at all. 933 converts ''advice
+          silently missing'' into ''delivery silently broken'' for those users, which is a regression
+          this PR introduces and cannot ship behind an issue. Not a restructuring: the worker ALREADY
+          built the shared resolve helper at lines 71-72, so the fix is that helper plus routing the fourth
+          call site at line 173 through it instead of its own bare getBean. Changelog placement upheld
+          against the worker''s own reviewer, on evidence: change streams require a replica set and every
+          subscription model here is change-stream based, so any deployment that can run these three annotations
+          already supports multi-document transactions.'
+        via: 'worker DELIVERY_RESULT + my own read of pr933 and #935'
+        at: '2026-08-22T15:01:48+00:00'
+    assessment: 'Dispatched 2026-08-22 as a chip after U3 merged. The 2026-08-17 deferral to the ADR 127
+      epic and my own 2026-08-22 supersede were BOTH argued on premises that did not survive. The deferral
+      assumed a large fix that the epic would rewrite immediately; the supersede assumed the epic had
+      not started, which Johan falsified hours later by starting sdi. The decision that holds is argued
+      from the code and is now the standing routing comment on #837.'
   U7:
     issue: 866
     goal: RetryExecution's shutdown predicate is checked during the backoff sleep, not only before it,
@@ -466,7 +800,7 @@ units:
       evidence: '#866 CLOSED, and #917 closed by the same PR.'
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T15:35:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T11:54:37+00:00'
     observed:
       self_review:
         note: The worker's own local review found TWO real design issues in its first pass, both fixed
@@ -476,7 +810,7 @@ units:
           for one attempt. Both are the kind a passing test suite would not have surfaced, since neither
           changes the returned value.
         via: worker message
-        at: '2026-08-22T12:20:00+00:00'
+        at: '2026-08-22T10:47:53+00:00'
       issue_917:
         note: '#917, RabbitMqCloudEventSink.close()''s javadoc describes the before-only shutdown check
           and goes stale the moment #916 merges. FOLDED INTO PR 916 rather than taken as a follow-up,
@@ -486,7 +820,7 @@ units:
           carrying a javadoc that contradicts its own code in between. U10 (#867) owns broker/rabbitmq/blocking/**
           and is fenced out of this one file.'
         via: orchestrator ruling
-        at: '2026-08-22T12:20:00+00:00'
+        at: '2026-08-22T10:47:53+00:00'
       reverify:
         note: 'FALSIFIED narrowly on one clause: ''the caller''s retryIf is invoked exactly once per attempt''
           is false, because applyShutdownPredicate combines the two predicates with Predicate.and, which
@@ -499,7 +833,7 @@ units:
           THE OTHER THREE CLAUSES HELD across 12 scenarios plus the module''s 51 tests, including a backoff
           shorter than the poll interval being polled once at 10ms rather than padded.'
         via: orchestrator adversarial verify subagent
-        at: '2026-08-22T14:20:00+00:00'
+        at: '2026-08-22T11:32:03+00:00'
     assessment: Shipped defect confirmed present in the occurrent-0.33.0 tag. Bounded.
   U8:
     issue: 834
@@ -527,10 +861,10 @@ units:
       evidence: CLOSED by the merge, verified; in-progress label released by the worker when the PR opened.
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T08:45:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T08:30:57+00:00'
     observed:
       dispatch:
-        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+        note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
@@ -568,7 +902,7 @@ units:
           claim 3 HELD (grep for preconditions: returns exactly the two files, and the store-neutral recipe''s
           yaml key renames carry no precondition and no value check). Nothing left unverified.'
         via: orchestrator adversarial verify subagent under Johan's dec-0006 grant
-        at: '2026-08-22T08:40:00+00:00'
+        at: '2026-08-22T08:23:49+00:00'
       merge_gate:
         note: HELD, and the reason is specific rather than caution. Head 65220005 is Copilot-clean on
           the CURRENT head (reviewed 08:10Z, Approval recommended, 0 new comments, no suppressed block,
@@ -579,13 +913,13 @@ units:
           grant permits merging when a sibling has PASSED; neither misc sibling has completed, so the
           grant does not reach this case.
         via: gh pr view statusCheckRollup, .github/workflows/maven.yml:243-250
-        at: '2026-08-22T08:40:00+00:00'
+        at: '2026-08-22T08:23:49+00:00'
       hygiene:
-        note: Worktree removed and local branch johan/relaxed-bardeen-0a12f8 deleted 2026-08-22T09:2xZ
+        note: Worktree removed and local branch johan/relaxed-bardeen-0a12f8 deleted 2026-08-22T08:47:06Z
           after confirming the worktree was clean, its head equalled the merged pin, and the remote branch
           was already gone (deleted by the merge). Session archiving batches at epic closeout.
         via: git worktree remove, git branch -D
-        at: '2026-08-22T09:30:00+00:00'
+        at: '2026-08-22T08:47:06+00:00'
     assessment: 'Shipped defect in rewrite/src/main/resources/META-INF/rewrite/subscription-mode-0_32.yml,
       verified by git ls-tree against the tag. Same class as #828 (already closed), so read that fix first.'
   U9:
@@ -617,7 +951,7 @@ units:
       evidence: '#753 CLOSED by the merge, verified.'
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T13:50:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T11:23:29+00:00'
     observed:
       adr_immutability:
         note: 'COMPLIANT, verified against the tag rather than assumed. ADR 0124 IS in the occurrent-0.33.0
@@ -628,7 +962,7 @@ units:
           notably candid: it records that the earlier decision to leave the exemption held while the loss
           stayed invisible, and that this is what changed.'
         via: git ls-tree occurrent-0.33.0 plus diff inspection
-        at: '2026-08-22T10:25:00+00:00'
+        at: '2026-08-22T09:11:19+00:00'
       surface_timing:
         note: 'The pass established that refusal TIMING is not uniform across the six registration surfaces:
           a saga throws at build(), the Spring registrars at bean processing, ProjectionRunner and DomainEventFeed
@@ -637,23 +971,24 @@ units:
           this explicitly rather than claiming uniform registration-time refusal, which is why it is not
           a finding.'
         via: adversarial verify subagent
-        at: '2026-08-22T13:50:00+00:00'
+        at: '2026-08-22T11:23:29+00:00'
     assessment: 'Decided IN 0.34.0 by the orchestrator on Johan''s conditional delegation at the triage
       sweep, derivation recorded in ORCHESTRATOR.md. Do not re-ask. Reachability is low (records and Kotlin
       data classes are implicitly final) but the failure is silent event loss with no log or exception,
       and deferring only adds another release of undetectable loss before the same break arrives. SEMANTIC
-      GATE REPORTED BY sdi 2026-08-22T08:0xZ, record #753''s merge in ORCHESTRATOR.md when it lands: #753
-      changes EventTypeExpansion in common/filter, whose deriveFilter is what dsl/subscription-dsl/common/.../SubscriptionFilters.kt
-      calls today and what sdi''s new descriptor selector must call, and one of #753''s own remedies (refusing
-      a non-final concrete declared event type) changes what a descriptor accepts. So sdi''s descriptor
-      unit waits on #753 whatever directory the fix lands in. This does not change #753''s scope. It does
-      add a brief requirement: U9 must state the deriveFilter contract change explicitly in its DELIVERY_RESULT,
-      because a downstream epic consumes it.'
+      GATE REPORTED BY sdi 2026-08-22T08:15:54Z (UNVERIFIED, a cross-fleet report no external system owns),
+      record #753''s merge in ORCHESTRATOR.md when it lands: #753 changes EventTypeExpansion in common/filter,
+      whose deriveFilter is what dsl/subscription-dsl/common/.../SubscriptionFilters.kt calls today and
+      what sdi''s new descriptor selector must call, and one of #753''s own remedies (refusing a non-final
+      concrete declared event type) changes what a descriptor accepts. So sdi''s descriptor unit waits
+      on #753 whatever directory the fix lands in. This does not change #753''s scope. It does add a brief
+      requirement: U9 must state the deriveFilter contract change explicitly in its DELIVERY_RESULT, because
+      a downstream epic consumes it.'
   U10:
     issue: 867
     goal: The RabbitMQ bridge survives a transient broker outage at startup rather than failing the application
       context.
-    phase: PLANNED
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -667,9 +1002,14 @@ units:
       ref: 867
       met: false
       evidence: ''
-    blocking_on: []
-    next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T13:20:00+00:00'
+    blocking_on:
+    - what: PR 919 held by a falsified adversarial pass. Clears when RabbitMqBuildFailureClassifier.isTransient
+        returns for every cause chain a caller can construct, including one that loops back on itself,
+        with a test carrying a timeout.
+      since: '2026-08-22T15:11:57+00:00'
+      recheck_after: '2026-08-22T15:56:57+00:00'
+    next_action: await the fresh adversarial verdict on 7434393a and CI, then merge if both clear
+    last_meaningful_progress_at: '2026-08-22T16:32:31+00:00'
     observed:
       gate_919:
         note: 'PR 919 opened, all ten dispatched units now have PRs. TWO FAILURES on test (example-projection)
@@ -677,7 +1017,41 @@ units:
           shard from the Kafka one. Triage delegated. A both-JDK failure in one shard reads as a regression
           from the change rather than infrastructure.'
         via: gh pr view, gh run list, graphql reviewThreads
-        at: '2026-08-22T13:20:00+00:00'
+        at: '2026-08-22T11:15:31+00:00'
+      adversarial_919_falsified:
+        note: 'FALSIFIED, and on the one hazard the brief named. RabbitMqBuildFailureClassifier.isTransient
+          never returns for a cause chain that loops, because shutdownSignalIn walks getCause() with no
+          visited set. Two exceptions that cause each other are constructible through Throwable.initCause
+          alone, no reflection. Confirmed empirically under a five second watchdog thread: HUNG, not slow.
+          retryIf calls the classifier synchronously inside the retry loop, so build() hangs with it and
+          neither the next attempt nor the rethrow ever happens, which is what breaks the total ''if and
+          only if'' claim. Everything else HELD with repro: five permanent codes refused at depth 1/2/3
+          under two wrapper types, CONNECTION_FORCED and REPLY_SUCCESS both transient so only the five
+          are special-cased, null reason transient, permanent beats a transient wrapper, an outermost
+          ShutdownSignalException''s own code decides since the walk returns at the first one, exhaustion
+          is exactly 10 attempts rethrowing the last attempt''s own exception object with backoff 0.1/0.2/0.4/0.8/1.6
+          then 2s, and openConfirmChannel closes its own half-open channel so 10 attempts leave no channels
+          behind. NOT run, both needing a broker: the Testcontainers outage test and the RabbitMQ example
+          smoke test. Held on PR 919 as a comment, outcome stated without prescribing the mechanism.'
+        via: adversarial verify subagent a713afbdeed49388d
+        at: '2026-08-22T12:31:11+00:00'
+      fix_and_settled_declaration:
+        note: 'Worker fixed the non-terminating classifier with an identity-based visited set (IdentityHashMap-backed),
+          the technique Throwable.printStackTrace uses, and added a test with the exact falsifying repro
+          under assertTimeoutPreemptively(5s). MUTATION VERIFIED BEFORE PUSHING, with the timing and the
+          stack trace quoted: reverted the fix, the new test timed out at 5000ms pointing at shutdownSignalIn;
+          restored, it passes in under a second and the 12-test classifier suite stays green. Documented
+          the always-returns guarantee in the class javadoc, which is the property the invariant claims.
+          Then rebased onto 3e66afc76 for a changelog-only conflict, which was the SAME-ENTRY case rather
+          than two entries: main''s df0548bfa had added its own sentence and #922 to the same paragraph.
+          Kept main''s version as the base, re-inserted its own sentence at the same position, added #867
+          to the existing Resolves list rather than keeping two competing lists, and verified both sentences
+          and all three issue links appear exactly once before pushing. That is the resolution shape U4
+          had to discover the hard way and my brief originally got wrong. 26 unit tests green, force-pushed
+          with --force-with-lease, head 7434393a. Fresh adversarial pass dispatched, since the head moved
+          past the one the falsifying verdict covered and the earlier HELD findings do not carry forward.'
+        via: worker report + gh pr view
+        at: '2026-08-22T16:32:31+00:00'
     assessment: 'Decided IN by derivation, not asked: AGENTS.md:120 requires every component to ship production
       ready including surviving a transient outage of the store it talks to, and the broker modules ship
       for the first time in 0.34.0. The earlier decline for PR 861 is one of the deferrals the triage
@@ -695,13 +1069,10 @@ units:
     - U1
     - U10
     - U11
-    - U12
     - U13
     - U14
     - U15
     - U16
-    - U17
-    - U18
     - U2
     - U3
     - U4
@@ -737,7 +1108,7 @@ units:
           sdi''s landing unit creates one or uses one. A worker told to add an entry under a heading that
           is not there is exactly who invents a premature `### 0.35.0`, which AGENTS.md forbids by name.'
         via: sdi cross-epic message, verified with git show 4c04880e5 and git ls-tree occurrent-0.33.0
-        at: '2026-08-22T11:30:00+00:00'
+        at: '2026-08-22T10:35:04+00:00'
       seeding_decision:
         note: 'DECIDED, and relayed to sdi so its U8 brief could unblock. The cut SEEDS a fresh `### Changelog
           next version`, BARE, with no subsection headings under it. Derivation: the failure this removes
@@ -749,7 +1120,21 @@ units:
           the next entry goes. Reversible: omit the line and the first writer creates the heading, which
           is the 0.33.0 precedent.'
         via: orchestrator decision under AGENTS.md
-        at: '2026-08-22T11:50:00+00:00'
+        at: '2026-08-22T10:38:17+00:00'
+      cancelled_deps_made_the_cut_unreachable:
+        note: 'STRUCTURAL DEFECT, found by auditing why units stayed PLANNED. R1 and C1 listed U12, U17
+          and U18 among their depends_on, and all three are CANCELLED. epic-state.py derives READY only
+          when EVERY dependency is DONE, and a cancelled unit never becomes DONE, so R1 (the changelog
+          cut) and C1 (the final adversarial review) could NEVER have derived READY no matter how much
+          real work finished. The release cut was unreachable by the graph. Removed the cancelled units
+          from every depends_on list: {''U5'': [''U12''], ''R1'': [''U12'', ''U17'', ''U18''], ''C1'':
+          [''U12'', ''U17'', ''U18''], ''U18'': [''U12'']}. U5''s case was the same defect with a real
+          consequence attached: it was sequenced behind U12 because U12 owned the two reactor files its
+          fix path runs through, and U12''s cancellation left that sequencing reason void while the dependency
+          kept it PLANNED. U5 is now dispatchable. Note this was invisible while the fabricated timestamps
+          disabled health derivation, since a unit that can never derive READY also never derives STALLED.'
+        via: self-audit of depends_on against phase
+        at: '2026-08-22T15:20:02+00:00'
     assessment: 'AGENTS.md:71-73: cutting a release renames the heading, it does not restructure the section.
       Runs after the last gating merge and after C1 reaches fixpoint.'
   R2:
@@ -760,7 +1145,7 @@ units:
       news date replacing the 2026-08-25 placeholder, the _config.yml occurrentversion bump, deletion
       of the superseded docs/saga-step-conditions-added-tag branch, and preview/0.34.0 rebuilt and verified
       per branch tip.'
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on:
@@ -772,23 +1157,120 @@ units:
       ref: null
       met: false
       evidence: ''
-    blocking_on: []
-    next_action: hold until brk closes and the PR 69 versus PR 74 docs.md conflict is ruled, then rebuild
-      preview and produce the verified merge checklist
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    - check: issue_closed
+      ref: 421
+      met: false
+      evidence: ''
+    blocking_on:
+    - what: 'Awaiting Johan''s approval of the published held-docs merge checklist at https://claude.ai/code/artifact/8f365680-763a-4b73-8127-89c2f10adf2d
+        . Clears when he approves it, or asks for changes. Its own re-verification trigger is separate:
+        if docs/421-broker-modules has moved off 0ba67fd on release day, the trial merge is redone before
+        the checklist is trusted.'
+      since: '2026-08-22T15:14:59+00:00'
+      recheck_after: '2026-08-22T15:59:59+00:00'
+    next_action: Johan approves the published checklist, then rebuild preview/0.34.0 from the merged result
+    last_meaningful_progress_at: '2026-08-22T15:14:59+00:00'
     observed:
       preview_state:
-        note: 'Checked 2026-08-22T10:3xZ. preview/0.34.0 is behind TWO held branches by one commit each:
-          docs/802-push-observation-hook (U1''s six-outcome rewrite) and docs/421-broker-modules (brk''s).
-          The other five are behind=0. So preview does NOT currently show the merged result, which is
-          a definition-of-done item. REBUILD DELIBERATELY DEFERRED, not overlooked: those two branches
-          are exactly the pair carrying the unresolved conflict U1 surfaced, where both independently
+        note: 'Checked 2026-08-22T09:13:10Z. preview/0.34.0 is behind TWO held branches by one commit
+          each: docs/802-push-observation-hook (U1''s six-outcome rewrite) and docs/421-broker-modules
+          (brk''s). The other five are behind=0. So preview does NOT currently show the merged result,
+          which is a definition-of-done item. REBUILD DELIBERATELY DEFERRED, not overlooked: those two
+          branches are exactly the pair carrying the unresolved conflict U1 surfaced, where both independently
           rewrote the same ''Observing pushed events'' section and both versions are independently correct.
           Rebuilding now would bake in a resolution that would have to be redone, and 421 is still moving
           under brk. Rebuild once brk closes and the 69-versus-74 conflict is ruled on. docs/saga-step-conditions-added-tag
           still exists and is still the superseded no-op branch to DELETE rather than merge.'
         via: gh api compare per branch tip against preview
-        at: '2026-08-22T10:35:00+00:00'
+        at: '2026-08-22T09:13:10+00:00'
+      held_set_now_eight:
+        note: 'The held docs set is now EIGHT PRs, not seven: 68, 69, 70, 71, 72, 73, 74 and the new 76
+          from rel34/U15. The superseded branch docs/saga-step-conditions-added-tag is still to be DELETED
+          rather than merged, so the count of docs/* branches is nine while the merge set is eight. preview/0.34.0
+          must be rebuilt to include 76 as well as the PR 69 and PR 74 heads it is already behind.'
+        via: orchestrator
+        at: '2026-08-22T12:24:51+00:00'
+      trial_merge_all_eight:
+        note: 'Ran a REAL trial merge of all eight held branches in a throwaway worktree rather than reasoning
+          about the conflict map. Verified tips: 802-push-observation-hook 7b4d224, 421-broker-modules
+          0ba67fd, append-identity 4510fe5, 439-store-neutral-mongodb-config-keys b00ade3, 773-764-flow-saga-stepwindow-declared-events
+          436b76c, remove-saga-join e535a2c, 0.34.0-declared-event-types 0b9a7f7, 0.34.0-release-notes
+          3b8b561. ALL EIGHT merge with exactly ONE conflicting file, js/_partials/main.js, every time.
+          Nothing else conflicts anywhere.'
+        via: git worktree + sequential git merge
+        at: '2026-08-22T12:47:31+00:00'
+      keep_all_lines_is_wrong:
+        note: 'CORRECTION to this unit''s own recorded conflict map and to U15''s report. Both say the
+          main.js resolution is ''keep all lines'' or ''keep all three''. That is NOT sufficient and produces
+          a BROKEN SITE. Each branch''s addedTags entry is the LAST entry in its own version, so none
+          of them carries a trailing comma. Keeping all the lines yields three consecutive entries with
+          no commas between them, and node --check exits 1 with SyntaxError: Unexpected string at the
+          projection-annotation-applied-appends line. Since main.js is what renders the ''Added in vX''
+          badges, the failure is silent in review and visible only as the site''s JavaScript dying. The
+          correct rule is KEEP ALL LINES AND ADD THE MISSING COMMAS, every entry except the last needs
+          a trailing comma. Verified: after adding them node --check exits 0. Entries that must all be
+          present are push-subscription-blocking-observer, broker-subscriptions-blocking, projection-annotation-applied-appends
+          and deriving-the-event-filter, all 0.34.0.'
+        via: node --check on the merged tree, before and after
+        at: '2026-08-22T12:47:31+00:00'
+      conflict_69_vs_74_is_gone:
+        note: 'The PR 69 versus PR 74 conflict that gated the preview rebuild NO LONGER EXISTS as a conflict
+          and needs NO ruling from Johan. Both branches moved on 2026-08-22 and now merge cleanly, verified
+          by git merge-tree --write-tree and by a real merge. They turn out to be COMPLEMENTARY rather
+          than competing: REFUSED appears zero times on 69''s tip and four times in the merged file, so
+          74 contributes content 69 never had. The merged section has ONE heading and all six shipped
+          RoutingOutcome values (DELIVERED, FILTERED, NOT_DELIVERABLE, DEFERRED, UNAVAILABLE, REFUSED),
+          checked against the enum in the code. What the clean merge DOES leave is duplication git cannot
+          see: inside ''Observing pushed events'' two paragraphs are byte-identical duplicates (the observer-throws
+          paragraph and the other-Error paragraph, one copy from each branch), and the filter-throws paragraph
+          appears in two variants. The two variants AGREE in substance, both say NOT_DELIVERABLE and both
+          say the exception still propagates after the observer is told, so this is deletion rather than
+          a decision. Keep PR 74''s variant, which additionally names the contrast with FILTERED, and
+          delete PR 69''s plus one copy of each duplicated paragraph.'
+        via: trial merge + grep against RoutingOutcome.java
+        at: '2026-08-22T12:47:31+00:00'
+      news_post_addadd_is_moot:
+        note: 'The recorded rule ''the news-post add/add resolved in 73''s favour'' is OBSOLETE. PR 73
+          (append-identity) and PR 72 (0.34.0-release-notes) both add _posts/news/2026-08-25-0_34_0.md
+          and the two files are BYTE-IDENTICAL, same blob 3a9efc21300b0579a32c2f6444b9d1d0294187ff, so
+          git merges them silently and there is nothing to resolve. Fragile though: if either branch''s
+          news post changes before release day the add/add becomes a real conflict again, so re-check
+          the blob hashes on the day. Johan''s definition-of-done item ''take append-identity''s news
+          post and fix its stale PushObserver highlight first'' is ALREADY SATISFIED on both branches.
+          The highlight now names all six values, says RoutingOutcome rather than boolean, and gives the
+          correct rule that you may acknowledge on DELIVERED and FILTERED and never on the other four.
+          The 2026-08-25 date in the filename and front matter is still the placeholder to replace.'
+        via: git hash-object on both blobs + reading the post
+        at: '2026-08-22T12:47:31+00:00'
+      checklist_published:
+        note: The verified checklist is published at https://claude.ai/code/artifact/8f365680-763a-4b73-8127-89c2f10adf2d
+          , covering the branch to delete rather than merge, the eight-branch merge order with tips, the
+          corrected main.js comma rule, the three paragraph deletions in 'Observing pushed events', the
+          news post date placeholder and version bump, and the preview rebuild with a per-branch ancestor
+          check. It states its own invalidation trigger, that docs/421-broker-modules belongs to brk and
+          is still moving, so a tip other than 0ba67fd on the day means redoing the trial merge. The manual_approval
+          deliverable is met when Johan approves it.
+        via: orchestrator
+        at: '2026-08-22T12:50:59+00:00'
+      421_is_r2s:
+        note: '#421 (document broker-backed subscriptions on occurrent.org) was showing as a 0.34.0 milestone
+          item owned by no unit. It is R2''s: the work is the held docs branch docs/421-broker-modules,
+          tip 0ba67fd, which is PR 74 and one of the eight branches in R2''s verified merge order. It
+          closes when the docs merge on release day. Attached rather than asked, since the branch is already
+          in R2''s checklist.'
+        via: gh issue view 421 + the held docs branch
+        at: '2026-08-22T15:23:44+00:00'
+      checklist_still_true:
+        note: 'Re-verified the published checklist''s own invalidation trigger rather than waiting for
+          release day. All EIGHT held branch tips still match what the artifact names: 802-push-observation-hook
+          7b4d224, 421-broker-modules 0ba67fd, append-identity 4510fe5, 439-store-neutral-mongodb-config-keys
+          b00ade3, 773-764-flow-saga-stepwindow-declared-events 436b76c, remove-saga-join e535a2c, 0.34.0-declared-event-types
+          0b9a7f7, 0.34.0-release-notes 3b8b561. Zero drift, so the trial-merge result and the corrected
+          main.js comma rule still hold. docs/saga-step-conditions-added-tag is still present at e7165c9
+          and still to be DELETED rather than merged. Worth re-running on the day, but brk finishing means
+          421 is now stable rather than moving.'
+        via: git rev-parse against the docs remote
+        at: '2026-08-22T16:32:31+00:00'
     assessment: 'Seven PRs, not eight branches: docs/saga-step-conditions-added-tag adds a line docs main
       already carries. preview/0.34.0 was behind docs/421-broker-modules by one commit at registration,
       so preview is verified per branch rather than assumed current.'
@@ -809,11 +1291,9 @@ units:
       ref: null
       met: false
       evidence: ''
-    blocking_on:
-    - brk U17, the RabbitMqCloudEventBridgeConnectionRecoveryTest verdict; brk does not close until it
-      is in
+    blocking_on: []
     next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    last_meaningful_progress_at: '2026-08-22T15:07:04+00:00'
     observed:
       brk_gate:
         note: 'brk''s closing condition is now EXACTLY ONE PR. PR 910 merged as cacdc25b9 closing brk
@@ -822,9 +1302,9 @@ units:
           No production code, so nothing changes for rel34''s shard reading beyond one fewer flake. rel34''s
           U17 was retired into this.'
         via: brk orchestrator messages, cross-checked against the merge commit
-        at: '2026-08-22T13:20:00+00:00'
+        at: '2026-08-22T11:15:31+00:00'
       gate_widened:
-        note: 'R3''s gate widened 2026-08-22T14:4xZ and the tag date moved with it. RabbitMqCloudEventBridgeConnectionRecoveryTest.a_held_deferred_delivery_tag_across_a_forced_connection_recovery
+        note: 'R3''s gate widened 2026-08-22T11:36:28Z and the tag date moved with it. RabbitMqCloudEventBridgeConnectionRecoveryTest.a_held_deferred_delivery_tag_across_a_forced_connection_recovery
           failed on rel34''s PR 914 in a module 914 does not touch. rel34 routed it to brk rather than
           filing it as a flake, on the reasoning that a connection-recovery test timing out while waiting
           for a held deferred delivery tag pins the EXACT guarantee brk''s merged PR 895 was written to
@@ -839,7 +1319,7 @@ units:
           both-JDK failure that was a real regression; and main''s last COMPLETED run, cacdc25b9, is green
           with that test present. That rules out deterministically broken, not an intermittent race.'
         via: brk orchestrator messages, gh run list, statusCheckRollup per JDK
-        at: '2026-08-22T14:45:00+00:00'
+        at: '2026-08-22T11:36:28+00:00'
       brk_920_merged:
         note: 'brk PR 920 merged as cfee1477b and #884 is closed by it, so brk''s remaining item before
           closing is U17 alone. Adjacent brk finding for awareness, not action: the Kafka starter leaves
@@ -847,16 +1327,50 @@ units:
           before its first rebalance never sees it. Pre-existing since the starter shipped, filed as #893
           item 34 for Johan to rule, and no change to rel34''s tag unless he rules it in.'
         via: brk orchestrator message
-        at: '2026-08-22T15:10:00+00:00'
+        at: '2026-08-22T11:45:54+00:00'
+      issue_922_verdict:
+        note: 'NOT A FLAKE. A PRODUCTION SILENT STALL, in code already on main. The channel-generation
+          fence brk''s PR 895 added to RabbitMqCloudEventBridge is the defect: amqp-client 5.33.1 re-issues
+          basic.consume BEFORE it runs recovery listeners, so the first redelivery after a connection
+          recovery arrives under the OLD generation, the fence drops it unacked, and with prefetchCount
+          1 the bridge silently stops consuming until it is closed. Reproduced DETERMINISTICALLY, a slow
+          RecoveryListener registered before the bridge''s makes it fail every time, and shown to pass
+          with the fence neutralised. The fence guards a hazard the client already prevents, since RecoveryAwareChannelN
+          keeps delivery tags monotonic across recoveries and no-ops acks on stale tags. No message is
+          lost, it stays unacked and requeues on close, but a consumer that silently stops consuming is
+          as bad. Fix is to REMOVE the fence, production change in broker/rabbitmq/blocking, brk has a
+          plan-first Opus worker on it with a regression test from the deterministic probe. HOW IT WAS
+          NEARLY MISSED, and this is the part worth keeping: it presented as a test failure on rel34''s
+          PR 914, in a module 914 does not touch, JDK-asymmetric, with main''s last completed run green.
+          Every signal invited filing it as a flake. rel34 refused to, on one argument: the test asserts
+          the exact property PR 895 was written to guarantee, so if it can fail then either the guarantee
+          can fail or the test does not pin it down. It was the first.'
+        via: 'brk orchestrator verdict on #922'
+        at: '2026-08-22T12:11:27+00:00'
+      brk_finished:
+        note: 'brk is FINISHED as of 2026-08-22T14:57:25Z: 17 units DONE, #388 closed, last brk commit
+          df0548bfa, monitor retired, sessions archived, #893 left open as the remainder. R3''s gate on
+          brk is CLEARED. Verified myself that PR 930 merged as df0548bfa and that it survives sdi''s
+          revert branch as an ancestor. #922 was still OPEN when I checked, brk said it was closing it,
+          so re-check before R4.'
+        via: brk orchestrator + gh pr view 930
+        at: '2026-08-22T15:01:48+00:00'
+      sibling_epics_cleared:
+        note: R3 no longer waits on any sibling epic. brk FINISHED at 14:57:25Z with df0548bfa as its
+          last commit. sdi has HELD entirely and, after 47e282805, has nothing on main and nothing in
+          flight. What remains for the tag is rel34's own units plus R1 and R2.
+        via: brk and sdi orchestrators, verified against main
+        at: '2026-08-22T15:07:04+00:00'
     assessment: 'Johan''s manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
       The orchestrator hands him the checklist and verifies the observable results. The 1000-file allowance
-      is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z:
-      #721 and #725 were re-milestoned from 0.34.0 to 0.35.0, verified on both issues and in milestone
-      3''s counts (open 19, closed 35). sdi brought the question back to Johan with a sizing measurement
-      attached (eleven units, a 115-file rename, 138 source files) and recommended the move. dec-0001''s
-      ''R3 gates on sdi'' is therefore SUPERSEDED; R3 now gates on brk alone. #837, #871 and #753 stay
-      rel34''s and stay in 0.34.0, and must NOT be reprioritised on sdi''s behalf now that the fence costs
-      the release nothing.'
+      is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z
+      (UNVERIFIED, a cross-fleet coordination event that no GitHub object owns, so nothing external can
+      settle it): #721 and #725 were re-milestoned from 0.34.0 to 0.35.0, verified on both issues and
+      in milestone 3''s counts (open 19, closed 35). sdi brought the question back to Johan with a sizing
+      measurement attached (eleven units, a 115-file rename, 138 source files) and recommended the move.
+      dec-0001''s ''R3 gates on sdi'' is therefore SUPERSEDED; R3 now gates on brk alone. #837, #871 and
+      #753 stay rel34''s and stay in 0.34.0, and must NOT be reprioritised on sdi''s behalf now that the
+      fence costs the release nothing.'
   R4:
     issue: 740
     goal: '#740 closed as shipped and #361 closed as its duplicate, milestone 0.34.0 drained of rel34-owned
@@ -895,13 +1409,10 @@ units:
     - U1
     - U10
     - U11
-    - U12
     - U13
     - U14
     - U15
     - U16
-    - U17
-    - U18
     - U2
     - U3
     - U4
@@ -935,7 +1446,8 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: chip task_9dddd2de, worktree determined-euclid-f4836e, Opus/high
+    session: chip task_61a17509, worktree via zealous-williamson-0ad901-c9, Opus/high, implementing ADR
+      134
     deliverables:
     - check: manual_approval
       ref: 911
@@ -946,7 +1458,7 @@ units:
         review with NO suppressed block, ADR number unchanged at 0134. No further review round requested,
         deliberately.'
     - check: pr_merged
-      ref: null
+      ref: 938
       met: false
       evidence: ''
     - check: issue_closed
@@ -954,9 +1466,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: 'implementation is SEPARATE work and #818 stays open; dispatch as its own plan-approved
-      unit at Opus/high per the worker''s own derived recommendation'
-    last_meaningful_progress_at: '2026-08-22T13:00:00+00:00'
+    next_action: await the worker's settled report and CI, then gate with an adversarial pass
+    last_meaningful_progress_at: '2026-08-22T16:23:11+00:00'
     observed:
       design_gate:
         note: 'ADR 134 delivered as PR 911, Proposed, design only, no code. NOT merged on green: a plan-first
@@ -975,7 +1486,7 @@ units:
           is a migration-guide section and no recipe. MY OWN GAP FOUND: no default value stated for the
           quarantine time budget.'
         via: read the full ADR from gh pr diff
-        at: '2026-08-22T10:25:00+00:00'
+        at: '2026-08-22T09:11:19+00:00'
       premise_check:
         note: 'TWO REAL DEFECTS in ADR 134''s premises, plus one gap, found before the design gate reached
           Johan. (1) FALSE: ''every blocking subscription model wraps the handler in executeWithRetry''.
@@ -996,7 +1507,46 @@ units:
           today, so the compile-break half of the ADR''s open question is hypothetical for user code only,
           while the silent findByStatus(ACTIVE) half is real.'
         via: orchestrator premise-verification subagent
-        at: '2026-08-22T10:55:00+00:00'
+        at: '2026-08-22T09:16:02+00:00'
+      stall_caught_a_dropped_dispatch:
+        note: 'STALL DETECTION EARNED ITS KEEP THE FIRST TIME IT COULD FIRE. Once the fabricated timestamps
+          were repaired, derive immediately flagged U11 STALLED at 4 hours. The cause was a genuine dropped
+          thread: U11''s design phase finished when ADR 134 merged as e9360c959 and Johan closed the design
+          gate, its own next_action said the implementation was separate work needing its own plan-approved
+          dispatch at Opus/high, and I never dispatched it. #818 sat OPEN on milestone 0.34.0 with no
+          PR and no claim for four hours. This is exactly the failure the completion-triggers-dispatch
+          rule exists to prevent, and the reason it was invisible is that the check meant to catch it
+          was disabled all day by timestamps I had invented. Implementation dispatched as a chip, title
+          gated BEFORE the spawn: ''⌁[rel34/U11#818] Quarantine a failing saga · Opus/high'', 54 chars.
+          The brief points at the merged ADR as authoritative for all eight decisions rather than restating
+          them, and carries forward the premise correction the design round found, that only three blocking
+          subscription models wrap the handler in executeWithRetry, which is load-bearing for decision
+          3.'
+        via: epic-state.py derive after the timestamp repair
+        at: '2026-08-22T15:14:59+00:00'
+      adr_beats_my_done_when:
+        note: 'The worker found my brief''s done_when contradicting the ADR it told the worker was authoritative:
+          I listed an OpenRewrite recipe, and ADR 134 Decision 8 plus its design-gate rulings explicitly
+          say no recipe, because one cannot know what a user''s new ''case QUARANTINED'' branch should
+          do nor rewrite the intent of a findByStatus(ACTIVE, ..) call. The worker followed the ADR, which
+          is what the brief''s own instruction required, and asked rather than assuming. Ruled: ADR wins,
+          the recipe item is struck. It also found a FIFTH break the ADR missed. SagaRunnerConfig shipped
+          in 0.33.0 with four record components, VERIFIED AGAINST THE TAG rather than inferred, and the
+          quarantine budget needs a fifth, so the canonical constructor and the deconstruction pattern
+          each break. Being absorbed with a delegating four-argument constructor and covered in the same
+          migration section. ADR 134 is merged and therefore immutable, so per AGENTS.md a correction
+          goes in a new ADR amending it by reference, which I will route after this unit lands.'
+        via: worker message + ADR 134 Decision 8
+        at: '2026-08-22T15:30:25+00:00'
+      pr_938_opened:
+        note: PR 938 on rel34/u11-quarantine-failing-saga-instance, 22 files, +1834/-35. Includes changelog.md
+          and doc/migration/upgrading-to-0.34.0.md and NO rewrite recipe, which is consistent with the
+          ruling that ADR 134 Decision 8 beats my brief's done_when. SagaRunnerConfig.java is present,
+          which is the FIFTH break the worker found that the ADR missed, verified against the 0.33.0 tag
+          rather than inferred. New types QuarantinedInstances and SagaFailure. Touches both the saga
+          DSL and SagaAnnotationRegistrar. Not yet gated, CI pending.
+        via: gh pr view 938
+        at: '2026-08-22T16:23:11+00:00'
     assessment: 'Johan ruled it IN 0.34.0 (dec-0002), overruling the recommendation to defer. Pre-existing:
       predates ADR 123 and ADR 126, both of which accepted the tradeoff deliberately, and PR 816''s review
       thread raised it against ADR 126. The event path has no equivalent of SagaExecution.pollTimers,
@@ -1034,7 +1584,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T15:10:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T11:45:54+00:00'
     observed:
       pr_908:
         head: 2170cca7184b20dc7d90f2c3dd69466890db3f9c
@@ -1050,7 +1600,7 @@ units:
           original purpose, deriving the ReplayAwareSubscriptions capability the recording and catch-up-listening
           wiring depends on, is genuinely untouched.'
         via: worker message plus gh pr view
-        at: '2026-08-22T09:30:00+00:00'
+        at: '2026-08-22T08:47:06+00:00'
       review_round:
         note: 'Copilot found 2 threads, both matching what U12''s own independent local review had already
           flagged. FIXED: raw reference comparison in isDefaultKnownLiveOnlyFor breaks under AOP proxying,
@@ -1062,7 +1612,7 @@ units:
           reviewers, but it changes RECORDING behaviour rather than the warning this unit''s remit covers,
           so routing it was correct rather than folding it in. #909 needs a routing decision.'
         via: worker message
-        at: '2026-08-22T10:10:00+00:00'
+        at: '2026-08-22T09:03:54+00:00'
       gate_908:
         note: 'Green, Java CI completed/success, ONE unresolved thread which is a legitimate reasoned
           decline under the policy: Copilot found the resolveCatchupModel gap, the worker agreed it is
@@ -1071,13 +1621,13 @@ units:
           the head is 2a0b03fef, and that delta IS the AOP proxy fix, so the substantive change is unreviewed.
           Re-review requested.'
         via: gh pr view, gh run list, graphql reviewThreads
-        at: '2026-08-22T13:20:00+00:00'
+        at: '2026-08-22T11:15:31+00:00'
     assessment: 'Adopted by Johan at a structured ask, dec-0007, on U3''s own routing recommendation after
       it found the gap while reviewing its own PR 902. Reactor twin of U3''s fix, similar size. Pre-granted
       the OccurrentReactiveMongoAutoConfiguration bean-method extension up front, because dec-0005 already
       established this fix shape is structurally cross-module and rediscovering that costs a round trip.
-      U6 (#837) must be fenced out of the two reactor files U12 owns. WITHDRAWN 2026-08-22T15:0xZ, not
-      reproducible. The reactor starter''s durable-model bean carries ONE shared @ConditionalOnMissingBean
+      U6 (#837) must be fenced out of the two reactor files U12 owns. WITHDRAWN 2026-08-22T11:45:54Z,
+      not reproducible. The reactor starter''s durable-model bean carries ONE shared @ConditionalOnMissingBean
       over both FluxSubscriptionModel and Subscribable, so the method that fills the holder runs only
       when no replacement exists and the divergence both issues describe cannot occur; the RegisteringSubscribable
       carve-out does not open a path, since that type never implements FluxSubscriptionModel and a hand-written
@@ -1112,7 +1662,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: dispatch after PR 901 merges, since both build on its fix
-    last_meaningful_progress_at: '2026-08-22T09:15:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T08:40:58+00:00'
     observed: {}
     assessment: 'THE UNIT THAT DECIDES WHAT FIXING #876 MEANS. PR 901 stops the corruption going forward
       and does not touch a document already corrupted, so without this the release ships half a fix for
@@ -1146,7 +1696,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: dispatch after PR 901 merges, since both build on its fix
-    last_meaningful_progress_at: '2026-08-22T09:15:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T08:40:58+00:00'
     observed: {}
     assessment: 'Fourth store, same defect class. Small. Shipping #876 fixed on three of four stores is
       an asymmetry the changelog would have to caveat, and InMemoryEventStore is what people write their
@@ -1159,7 +1709,7 @@ units:
       declared event types: ADR 126''s expansion across projections, DSL subscriptions, DomainEventQueries
       and @Snapshot views, and U9''s refusal of a declared type that is not sealed or final all the way
       down.'
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on:
@@ -1167,13 +1717,32 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: ''
+      ref: 76
+      met: true
+      evidence: Held docs PR occurrent-org/occurrent-org.github.io#76 on branch docs/0.34.0-declared-event-types,
+        head 0b9a7f7d0, non-draft, OPEN and HELD. NOT merged and not to be merged by the fleet. A new
+        top-level chapter 'Deriving the Event Filter' states the rule once for every place that derives
+        a filter, with a table of refused declarations and a table of where each place throws, plus corrections
+        in the Projection DSL, the saga chapter, Selective Events, the Query DSL, the Subscription DSL
+        and Snapshots. The false sentence is gone, verified by grepping the BUILT HTML for it and getting
+        zero. Adds 'deriving-the-event-filter':'0.34.0' to the addedTags map as that repo's AGENTS.md
+        requires. Copilot found a real defect twice, once in a thread and once suppressed, that OrderEvent
+        did not declare orderId so neither snippet compiled; the worker's own pass caught a second Copilot
+        missed, that Saga.create walks the hierarchy inside the factory call rather than at build(), which
+        earned its own row in the refusal table.
     blocking_on: []
-    next_action: dispatch
-    last_meaningful_progress_at: '2026-08-22T11:15:00+00:00'
-    observed: {}
+    next_action: none, the branch is HELD for release day
+    last_meaningful_progress_at: '2026-08-22T12:24:51+00:00'
+    observed:
+      collision_check:
+        note: 'The worker checked its hunks against every held branch rather than assuming: base-file
+          hunks at 151, 2131, 5044, 5071, 5227, 6157, 6795 and 6981, none overlapping a range any of the
+          seven other held branches touches, and it stayed out of ''Observing pushed events'' entirely
+          so the PR 69 versus PR 74 conflict gains no third party. The one expected textual conflict is
+          the last line of the addedTags map in js/_partials/main.js, which PRs 69, 73 and 74 also touch;
+          resolution is keep all lines, which preview/0.34.0 already demonstrates.'
+        via: worker report
+        at: '2026-08-22T12:24:51+00:00'
     assessment: Found by the orchestrator while checking a question U9 raised, not reported by any worker.
       changelog.md's FIRST highlight promises sealed supertypes now expand in projections, DSL subscriptions,
       queries and snapshot views alike. docs main line 6984 says @Projection 'does not expand or refuse
@@ -1186,7 +1755,7 @@ units:
     goal: ExecuteFilter and DcbCriteriaBuilder derive their type filters through EventTypeExpansion like
       every other derivation in the library. type and includeTypes REFUSE what they cannot expand; excludeTypes
       WIDENS to the subtypes instead.
-    phase: PLANNED
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on:
@@ -1194,17 +1763,49 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 928
       met: false
       evidence: ''
     - check: issue_closed
       ref: 912
       met: false
       evidence: ''
-    blocking_on: []
-    next_action: dispatch
-    last_meaningful_progress_at: '2026-08-22T11:15:00+00:00'
-    observed: {}
+    blocking_on:
+    - what: PR 928 held by a falsified adversarial pass. Clears when the invariant names which walk it
+        means, the ExecuteFilter javadoc stops promising a widened exclusion is always safe, and the Kotlin
+        enum with constant bodies gets advice a caller can actually act on.
+      since: '2026-08-22T15:11:57+00:00'
+      recheck_after: '2026-08-22T15:56:57+00:00'
+    next_action: worker restates the invariant's walk, corrects the excludeTypes javadoc, fixes the Kotlin
+      enum advice
+    last_meaningful_progress_at: '2026-08-22T13:00:03+00:00'
+    observed:
+      pr_opened:
+        note: PR 928 on rel34/u16-type-filter-expansion, 8 files, touching ExecuteFilter, DcbCriteriaBuilder.kt,
+          both test classes, changelog, the 0.34.0 migration guide and the upgrade-0_34 rewrite recipe.
+          Not yet gated.
+        via: gh pr view
+        at: '2026-08-22T12:31:11+00:00'
+      adversarial_928_falsified:
+        note: 'FALSIFIED, scoped to the exclusive half. excludeTypes on an abstract or interface declaration
+          whose hierarchy reopens below a sealed level excludes NOTHING at all, silently: EventTypeExpansion.java:204
+          stops the walk at the first non-sealed level and expandWhatCanBeFound then adds the declared
+          type unconditionally, naming a type string no stored event carries. Five of twenty declaration
+          forms leak; excludeTypes(Object.class) leaks all fifteen sample events. So the REVIEWER is right
+          on substance and the WORKER is right that refusing is not the fix, and the actual defect is
+          ExecuteFilter.java:93''s javadoc promising a widened exclusion is always safe and never fewer,
+          which is true and useless since never fewer than nothing is what the caller gets. Second finding,
+          unfixed: a Kotlin enum with constant bodies compiles unsealed and abstract, so both surfaces
+          refuse it advising to make it and every level below final or sealed, which is impossible for
+          that construct, and the sealed interface above it is refused too, so a Kotlin caller with one
+          enum branch cannot filter on their event root at all. HELD: inclusive half survived twenty declaration
+          forms against fifteen instances with zero misses, no disagreement between ExecuteFilter and
+          DcbCriteriaBuilder, the missing .distinct() is benign because DcbCriterion''s canonical constructor
+          collects through toUnmodifiableSet. Test-bite check: 6 of 6 and 9 of 11 fail on revert, the
+          two that stay green assert the pre-fix output and document the gap rather than covering the
+          fix.'
+        via: adversarial verify subagent
+        at: '2026-08-22T13:44:39+00:00'
     assessment: 'Johan adopted it OVERRIDING both the filing worker''s recommendation and the orchestrator''s,
       dec-0010. The override reason is the stronger one: a caller who fixes their declarations for the
       rest of the library would still find these two handing a decider nothing. THE TRAP, recorded so
@@ -1232,14 +1833,14 @@ units:
       evidence: ''
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T12:20:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T10:47:53+00:00'
     observed: {}
     assessment: 'Brought back into 0.34.0 by dec-0009 after failing three unrelated PRs in under three
       hours across both JDKs in a module none of them touched (PR 902 java-25, PR 908 java-21, a main
       run carrying a broker PR on java-21). Each cost a full matrix rerun and delayed a merge gate. brk
       records a third sighting as its #893 item 21 and is asking Johan whether the fix lands inside brk
       before it closes; COORDINATE rather than duplicating, since rel34''s tag reads main''s shards and
-      brk may already own the fix. RETIRED 2026-08-22T12:2xZ. Johan ruled #884 into brk (brk dec-0024,
+      brk may already own the fix. RETIRED 2026-08-22T10:47:53Z. Johan ruled #884 into brk (brk dec-0024,
       unit U16) an hour after ruling it into 0.34.0 here, and a brk worker is already on it investigate-then-fix,
       test-only unless it proves a readiness gap in pattern subscriptions. Retired rather than run in
       parallel: #884 and #893 item 21 are the same test, and two epics fixing one flake is the duplication
@@ -1255,8 +1856,7 @@ units:
     phase: CANCELLED
     health: UNKNOWN
     swept: true
-    depends_on:
-    - U12
+    depends_on: []
     session: null
     deliverables:
     - check: pr_merged
@@ -1269,13 +1869,13 @@ units:
       evidence: ''
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T15:10:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T11:45:54+00:00'
     observed: {}
     assessment: 'Adopted by dec-0009. Found and correctly DECLINED by the U12 worker, whose remit covered
       the warning rather than recording, and routed instead of folded in. Confirmed by two independent
       reviewers. It affects recording, which is the read-your-writes surface shipping in this release.
       Same fix shape as U3 and U12, including the AopProxyUtils.getSingletonTarget unwrapping both of
-      those needed, so give it to whichever worker still holds that context. WITHDRAWN 2026-08-22T15:0xZ,
+      those needed, so give it to whichever worker still holds that context. WITHDRAWN 2026-08-22T11:45:54Z,
       not reproducible. The reactor starter''s durable-model bean carries ONE shared @ConditionalOnMissingBean
       over both FluxSubscriptionModel and Subscribable, so the method that fills the holder runs only
       when no replacement exists and the divergence both issues describe cannot occur; the RegisteringSubscribable
@@ -1287,3 +1887,143 @@ units:
       tag, added this cycle by #869 and #892, so no external consumer can have wired it. The blocking
       twin #871 remains genuinely reachable and PR 902 stands, because there the durable model and the
       Subscriptions DSL bean are gated on two INDEPENDENT conditions rather than one shared one.'
+  U19:
+    issue: 931
+    goal: RetryStrategy.retryIf and mapRetryPredicate document that the predicate may be invoked more
+      than once per attempt, is consulted during the backoff wait as well as on failure, and must therefore
+      be free of side effects. Documentation only, no behaviour change.
+    phase: DONE
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: 937
+      met: true
+      evidence: PR 937 MERGED 2026-08-22T15:27:52Z as squash d989dbfe6, CAS-pinned to the verified head
+        de158dbe0, branch deleted. Documents on all four public executeWithRetry overloads that shutdownPredicate
+        is polled every SHUTDOWN_POLL_INTERVAL_MILLIS while a backoff is being waited out, and must therefore
+        be free of side effects.
+    - check: issue_closed
+      ref: 931
+      met: true
+      evidence: '#931 CLOSED 2026-08-22T15:27:52Z by PR 937.'
+    blocking_on: []
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T15:28:18+00:00'
+    observed:
+      origin:
+        note: 'Found by U4 the expensive way. ReactiveMongoAppliedAppendStore counted attempts inside
+          its retryIf predicate to enforce MAX_ATTEMPTS_CEILING; after #916 made the loop poll the predicate
+          during the backoff sleep, the counter advanced during sleeps too and the store stopped at roughly
+          500 attempts while documenting 1000. No conflict marker and no review would have shown it, and
+          it surfaced only because a test asserted an EXACT attempt count rather than that the loop eventually
+          stops. U4 fixed its own store by counting in the operation that reaches MongoDB and leaving
+          the predicate a pure read, and was told NOT to add the javadoc to PR 914, which is CLEAN at
+          27 of 27 and should merge rather than grow.'
+        via: U4 worker report, verified against RetryStrategy.java javadoc
+        at: '2026-08-22T13:59:02+00:00'
+      release_status_decides_the_milestone:
+        note: '0.34.0 rather than 0.35.0, decided on AGENTS.md rather than asked. #916 is merged and UNRELEASED,
+          so its entry still sits under ''### Changelog next version'', and shipping a behaviour change
+          on a public API with nothing recording it is what the documentation rule exists to prevent.
+          The sibling #921 is the same surface from the other side, where Predicate.and short-circuits
+          so retryIf is never invoked at all for an attempt whose shutdown predicate already answers stop.
+          That one PREDATES #916 and correctly stays at 0.35.0. Cross linked in both directions.'
+        via: AGENTS.md release-status rule
+        at: '2026-08-22T13:59:02+00:00'
+      dispatched:
+        note: Dispatched as a chip titled '⌁[rel34/U19#931] Document retryIf invocation · Sonnet/low',
+          57 chars, both title gates run BEFORE the spawn call this time rather than after.
+        via: orchestrator
+        at: '2026-08-22T14:02:19+00:00'
+      premise_corrected_then_delivered:
+        note: 'The worker BLOCKED rather than writing javadoc, because #931''s premise was false: sleepObservingShutdown
+          receives the RAW shutdownPredicate parameter, never retry.retryPredicate and never the combined
+          predicate applyShutdownPredicate builds, so retryIf is NOT polled during the backoff. I verified
+          that in RetryExecution on main rather than taking it. But U4''s symptom was real and I found
+          where it comes from: MongoAppliedAppendStore passes its counting predicate as executeWithRetry''s
+          SECOND parameter, which is the shutdown predicate, and that IS polled every SHUTDOWN_POLL_INTERVAL_MILLIS
+          (50ms) for the whole backoff. Same symptom, same fix U4 applied, different parameter. So #931
+          was RETARGETED rather than closed, retitled ''The shutdown predicate is polled during every
+          backoff, and nothing says so'', and the worker delivered PR 937 against the corrected scope.
+          My filing error, caught by the worker before it wrote anything.'
+        via: my read of RetryExecution + MongoAppliedAppendStore
+        at: '2026-08-22T15:01:48+00:00'
+      four_claims_verified_against_the_code:
+        note: 'Gate: Java CI with Maven completed/success on de158dbe0, Copilot ''Approval recommended''
+          at Balanced on the current head with 0 comments and NO suppressed block, zero unresolved threads.
+          Instead of a subagent pass, I verified all four documented claims against RetryExecution myself,
+          since the change is documentation and the only adversarial question is whether the prose matches
+          the code. (1) Polled every SHUTDOWN_POLL_INTERVAL_MILLIS during backoff: matches sleepObservingShutdown.
+          (2) ''Only for a failed attempt that still has attempts left'': TRUE, the sleep call sits after
+          the !shouldRetryAgain early return. (3) ''The final, exhausted attempt''s failure never invokes
+          the predicate'': TRUE, and non-obvious. shouldRetryAgain is !isExhausted(..) && retry.retryPredicate.test(e),
+          and && short-circuits, so on the exhausted attempt the combined predicate holding shutdownPredicate
+          is never reached. (4) ''Nor any failure under DontRetry'': TRUE, executeWithRetry returns the
+          function unwrapped for DontRetry so no loop runs. Worth recording as a counterexample to today''s
+          recurring pattern: this worker documented exactly what holds, including two claims that are
+          true only because of && short-circuiting and statement ordering, where 914 and 928 both shipped
+          absolutes that were false.'
+        via: my own read of RetryExecution at pr937
+        at: '2026-08-22T15:28:18+00:00'
+    assessment: Small and documentation only, but it closes a behaviour change this release introduces.
+      Registered rather than folded into U4 so PR 914 can merge on its own gate.
+cross_epic:
+  adr_number_ledger:
+    note: sdi's U12 merged as squash 5ba3b9bfa, amending ADR 0127 in place rather than taking a new number,
+      so 0135 remains FREE as of 2026-08-22T12:41:01Z. rel34 has no unit currently holding an ADR number.
+      If a rel34 unit returns BLOCKED needing one, claim it and tell sdi before writing, since sdi said
+      it will take a number above 0135 and tell rel34 first if its descriptor-factory question needs a
+      record.
+    at: '2026-08-22T12:41:01+00:00'
+  adr_0127_amended:
+    note: 'ADR 0127 is materially different from its morning text: a public catch-all handler on the descriptor
+      builder, the runner stated as the single execution path across all 21 registrar lookups within 0.35.0,
+      the call-site split corrected to 16 non-DCB and 5 DCB, and its own section 6 item 7 fixed to stop
+      pointing at upgrading-to-0.34.0.md. No rel34 brief cites ADR 0127''s CONTENT, only its existence,
+      so nothing in this epic went stale. Checked, not assumed.'
+    at: '2026-08-22T12:41:01+00:00'
+  sdi_revert_and_hold:
+    note: 'Johan ruled REVERT after I escalated #929. sdi''s PR 936 (sdi/revert-0_35-work-for-0_34-tag,
+      167 files, +723/-2901) reverts a714f8d32 (the SubscriptionHandle rename) and 6f47516c6 (the seven
+      @Occurrent* annotations). rel34 gates it since it is release-affecting. Verified independently:
+      df0548bfa is still an ancestor so brk''s fix survives; the branch reaches nothing beyond its two
+      commits plus PR 930''s own files; every 0.35.0 artifact is gone; the only surviving references are
+      in ADR 0127, which is CORRECT since an ADR records a decision and reverting an implementation does
+      not unmake it. Java CI still running at time of writing. sdi has HELD entirely: no further sdi unit
+      merges until the 0.34.0 tag exists, so sdi is no longer an input to R3. THE RULE, agreed by sdi
+      and brk both: anything merged to main before the tag ships in 0.34.0 whatever its documentation
+      says, because renaming the ''### Changelog next version'' heading is what assigns the release. MERGED
+      2026-08-22T15:06:02Z as squash 47e282805, CAS-pinned to the verified head 8ce4e8e4b, branch deleted.
+      Gate run by rel34 in full: all three workflow runs completed/success including Java CI with Maven,
+      zero unresolved threads, and NO reviews at all, which I recorded explicitly as absent rather than
+      clean. Merging without a review was a deliberate, reasoned deviation from the standing gate: a revert''s
+      risk is reaching too far, which a diff settles definitively and a review does not, and waiting would
+      have delayed a revert whose purpose is being off main before the cut. Post-merge verification on
+      main: zero 0.35.0 artifacts, zero production references to SubscriptionHandle or any @Occurrent*
+      name (the only remaining hits are in .context bookkeeping YAML), df0548bfa still an ancestor so
+      brk''s fix survives, and upgrade-0_35.yml gone so the #929 hazard is off main.'
+    at: '2026-08-22T15:01:48+00:00'
+  893_stays_with_johan:
+    note: '#893 (broker epic review round 2, roughly 35 follow-up items) STAYS on milestone 0.34.0 by
+      Johan''s ruling. He triages the items himself rather than re-milestoning on brk''s summary or spending
+      a rel34 dispatch on reading them. So it is NOT a rel34 unit and NOT an orchestrator action, but
+      it IS a milestone item, which means the milestone cannot reach zero open until he has ruled on it.
+      R4 must not treat that as a rel34 blocker.'
+    at: '2026-08-22T15:23:44+00:00'
+  all_five_workers_had_stopped:
+    note: 'MAJOR PROCESS FINDING. A check prompted by sdi''s advice to prefer a mechanism over a memory
+      turned up that ALL FIVE held-PR worker sessions were isRunning:false, last active between 12:07
+      and 14:57. Every hold I posted went onto a PR comment AFTER its worker had already stopped, so none
+      of them had been read and no work was in progress on any of the five. I had been reading ''no push''
+      as ''working'' when it meant ''ended''. The durable trace existed and had no reader, which is the
+      finding-routing protocol''s own failure mode one layer up: a PR comment cannot forget, and it also
+      cannot act. All five woken by message with their specific outstanding work: U2 on 901 (coverage
+      test plus #927 plus #907), U4 on 914 (three grouped defects, one only in the suppressed block),
+      U6 on 933 (the no-regression floor), U10 on 919 (the non-terminating classifier), U16 on 928 (the
+      javadoc overclaim and the Kotlin enum advice). The mechanism this argues for is checking session
+      liveness whenever a unit is held on a worker, rather than inferring activity from the absence of
+      a push.'
+    at: '2026-08-22T16:23:11+00:00'

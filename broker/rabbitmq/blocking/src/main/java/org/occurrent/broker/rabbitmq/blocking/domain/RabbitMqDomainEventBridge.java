@@ -20,8 +20,6 @@ import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.Delivery;
-import com.rabbitmq.client.Recoverable;
-import com.rabbitmq.client.RecoveryListener;
 import com.rabbitmq.client.ShutdownSignalException;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
@@ -49,7 +47,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongConsumer;
@@ -129,7 +126,7 @@ import static java.util.Objects.requireNonNull;
  * {@link DeliveryFailurePolicy} like any other handler failure.
  * <p>
  * On a permanent refusal this bridge logs at error once and calls {@link #stopPermanently()}, which cancels the
- * consumer, releases every tag this bridge is still holding (generation-safely, negatively acknowledged with
+ * consumer, releases every tag this bridge is still holding (negatively acknowledged with
  * requeue) and closes the consume channel, all under one lock, in that order. Closing the channel also requeues the
  * triggering delivery itself, along with anything else still unacknowledged on it, so this bridge never has to
  * acknowledge that delivery tag by hand once a permanent stop has decided to close the channel out from under it.
@@ -144,16 +141,18 @@ import static java.util.Objects.requireNonNull;
  * broker round-trips it. {@link DeliveryFailurePolicy#PARK} is unaffected: parking exists to move a failed delivery
  * out of the retry loop, not to pace it, so it still applies immediately.
  * <p>
- * <strong>A delivery tag is invalidated across an automatic connection recovery.</strong> {@code connection}'s
- * delivery tags restart at 1 on a fresh channel, so a tag captured before a recovery can silently identify a
- * completely different message afterward. This bridge tracks a generation counter, bumped under {@code consumeLock}
- * by a {@code RecoveryListener} on {@code connection} and by this bridge's own consumer shutdown callback, so the
- * bump can never interleave with a concurrent immediate acknowledgement, negative acknowledgement or park, each of
- * which re-checks the generation under that same lock immediately before acting. Both held-tag deques carry their
- * own tag's generation alongside it and are revalidated tag by tag at release time rather than cleared outright on
- * a bump, since a tag can be appended to either deque without {@code consumeLock}. A stale tag, wherever it is
- * found, is never acknowledged, negatively acknowledged or parked, logging at warn instead: the message is
- * redelivered by the broker regardless, once the dead channel's own requeue runs.
+ * <strong>A delivery tag from before an automatic connection recovery is acted on like any other.</strong> The
+ * RabbitMQ client already refuses to act on one for you. Every channel a {@code Recoverable} connection hands out
+ * offsets its own delivery tags past everything the channel it replaced ever issued, so {@code basicAck} and
+ * {@code basicNack} send nothing at all for a tag from the dead channel. A connection that never recovers
+ * automatically cannot produce such a tag either, since its channel stays dead and no further delivery arrives on
+ * it. So this bridge acknowledges or negatively acknowledges every delivery it is handed and never abandons one
+ * unacknowledged, whatever happened to the connection underneath it.
+ * <p>
+ * Under {@link DeliveryFailurePolicy#PARK} that costs one duplicate. A delivery that fails while the connection is
+ * recovering is published to the parking destination, and the acknowledgement that normally follows the park does
+ * nothing, so RabbitMQ requeues the message as well. You end up with a parked copy and a copy still on the source
+ * queue, which is the same at-least-once delivery this bridge gives you everywhere else.
  */
 public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
 
@@ -170,13 +169,6 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     private final Lock consumeLock = new ReentrantLock();
     private @Nullable String consumerTag;
 
-    // A held delivery tag together with the channelGeneration it was captured under. See RabbitMqCloudEventBridge's
-    // identical record and channelGeneration's own javadoc below. Package-private, not private, so
-    // releaseHeldDeferredDelivery(Deque, LongConsumer, long) stays directly testable, matching that method's own
-    // visibility.
-    record HeldDelivery(long deliveryTag, long generation) {
-    }
-
     // Appended to (never under consumeLock) by handleDelivery the instant a delivery reports DEFERRED, in place of
     // nacking it there and then, the same mechanism RabbitMqCloudEventBridge uses. See that class's own javadoc on
     // its equivalent field for the full reasoning. In short: with prefetchCount == 1 (the default) leaving a
@@ -185,15 +177,15 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     // is held, under consumeLock, at most once per pollInterval. A deque rather than a single held tag, so a
     // bridge configured with prefetchCount above 1 never drops an earlier held tag under a later one, and a
     // failed release can push a tag back to the front rather than only ever appending to the back.
-    private final Deque<HeldDelivery> heldDeferredDeliveryTags = new ConcurrentLinkedDeque<>();
+    private final Deque<Long> heldDeferredDeliveryTags = new ConcurrentLinkedDeque<>();
     // A REDELIVER-policy failure, held and released the same way heldDeferredDeliveryTags is (a snapshot per
-    // pollInterval under consumeLock, via the same releaseHeldDeferredDelivery(Deque, LongConsumer, long) helper),
+    // pollInterval under consumeLock, via the same releaseHeldDeferredDelivery(Deque, LongConsumer) helper),
     // instead of nacked on the spot. Without this, REDELIVER (the default policy) nacks and gets redelivered as
     // fast as the broker round-trips it for a message that fails on every attempt, unlike DEFERRED, which is
     // already paced this way, and unlike Kafka's own failure path, which is paced through its seek-back-and-throttle
     // mechanism. PARK is never held here: parking exists to move a failed delivery out of the retry loop, not to
     // pace it, so it still applies immediately, through failureAction, from the point of failure.
-    private final Deque<HeldDelivery> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
+    private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
     // Tracks whether this bridge has ever seen feed.isReadyForLiveDelivery() answer true, so reconcileConsumption
     // can tell a feed that has never gone live (still replaying, or nothing registered yet, both ordinary startup
@@ -203,11 +195,6 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     // reconcileConsumption, so the ready-to-not-ready transition is never observed twice.
     private boolean everReadyForLiveDelivery;
     private boolean readinessFailureLogged;
-    // Bumped under consumeLock on every automatic connection recovery and every consumer shutdown on this bridge's
-    // own channel, so a delivery tag captured before either event is never mistaken for a tag on the channel that
-    // replaced it, and so the bump can never interleave with a concurrent immediate acknowledgement, negative
-    // acknowledgement or park. See RabbitMqCloudEventBridge's identical field for the full reasoning.
-    private final AtomicLong channelGeneration = new AtomicLong(0);
 
     private RabbitMqDomainEventBridge(DomainEventFeed<E> feed, Channel consumeChannel, String queue, int prefetchCount,
                                        Duration pollInterval, RabbitMqDeliveryFailureAction failureAction) {
@@ -247,48 +234,7 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         } catch (IOException e) {
             throw new RabbitMqBridgeException("Failed to declare topology for queue \"" + queue + "\"", e);
         }
-        if (builder.connection instanceof Recoverable recoverableConnection) {
-            // Only a Recoverable connection (automatic recovery enabled, the client's default) ever needs this, see
-            // RabbitMqCloudEventBridge's own identical registration for the full reasoning.
-            recoverableConnection.addRecoveryListener(new RecoveryListener() {
-                @Override
-                public void handleRecovery(Recoverable recoverable) {
-                    invalidateChannelGeneration();
-                }
-
-                @Override
-                public void handleRecoveryStarted(Recoverable recoverable) {
-                }
-            });
-        }
         scheduler.scheduleWithFixedDelay(this::reconcileConsumption, 0, pollInterval.toMillis(), TimeUnit.MILLISECONDS);
-    }
-
-    // See channelGeneration's own javadoc, and RabbitMqCloudEventBridge's identical pair of methods. The bump
-    // happens under consumeLock so it can never land between an immediate action's own generation check and the
-    // AMQP call that check guards.
-    private void invalidateChannelGeneration() {
-        consumeLock.lock();
-        try {
-            channelGeneration.incrementAndGet();
-        } finally {
-            consumeLock.unlock();
-        }
-    }
-
-    private void handleConsumerShutdown(String shutdownConsumerTag, ShutdownSignalException signal) {
-        invalidateChannelGeneration();
-    }
-
-    private boolean isStaleGeneration(long deliveryGeneration) {
-        return deliveryGeneration != channelGeneration.get();
-    }
-
-    private void logStaleGeneration(long deliveryTag) {
-        log.warn("Delivery tag {} on queue \"{}\" belongs to a channel generation this bridge has since moved " +
-                "past (an automatic connection recovery, or a consumer shutdown, happened while this delivery was " +
-                "still in flight). Not acknowledging, negatively acknowledging or parking it; the broker already " +
-                "redelivers it once the dead channel's own unacked deliveries are requeued.", deliveryTag, queue);
     }
 
     // Coarse lifecycle control, per the class javadoc. Consumes only once a projection is registered and ready for
@@ -320,7 +266,7 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                 }
                 boolean shouldConsume = feed.hasProjection() && readyForLiveDelivery;
                 if (shouldConsume && consumerTag == null) {
-                    consumerTag = consumeChannel.basicConsume(queue, false, this::handleDelivery, this::handleCancel, this::handleConsumerShutdown);
+                    consumerTag = consumeChannel.basicConsume(queue, false, this::handleDelivery, this::handleCancel);
                 } else if (!shouldConsume && consumerTag != null) {
                     consumeChannel.basicCancel(consumerTag);
                     consumerTag = null;
@@ -354,7 +300,7 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     // different tag straight after. The next poll retries it. A channel that has actually died requeues
     // everything still unacked on it by itself regardless, so this is only for one that survives the failure.
     private void releaseHeldDeferredDelivery() {
-        releaseHeldDeferredDelivery(heldDeferredDeliveryTags, failureAction::redeliver, channelGeneration.get());
+        releaseHeldDeferredDelivery(heldDeferredDeliveryTags, failureAction::redeliver);
     }
 
     // Releases a REDELIVER-policy failure paced behind heldFailedDeliveryTags, the same mechanism and the same
@@ -363,29 +309,23 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     // deque holds a genuine failure, and redeliverFailure logs the one warn line that failure needs, where
     // heldDeferredDeliveryTags' own pacing release (DEFERRED) is not a failure and stays silent.
     private void releaseHeldFailedDelivery() {
-        releaseHeldDeferredDelivery(heldFailedDeliveryTags, failureAction::redeliverFailure, channelGeneration.get());
+        releaseHeldDeferredDelivery(heldFailedDeliveryTags, failureAction::redeliverFailure);
     }
 
-    // Package-private and static, parameterized on the deque, the release call and the caller's current
-    // channelGeneration, so this bridge's redelivery bookkeeping is directly testable with a stub that throws on
-    // demand, no real Channel or broker required. A held tag whose own generation no longer matches
-    // currentGeneration is dropped rather than redelivered: the channel it was captured on is already dead, and a
-    // dead channel requeues everything it was holding unacked by itself. Always called under consumeLock, the same
-    // lock a generation bump takes, so the generation this reads can never change mid-pass.
-    static void releaseHeldDeferredDelivery(Deque<HeldDelivery> heldDeferredDeliveryTags, LongConsumer redeliver, long currentGeneration) {
+    // Package-private and static, parameterized on the deque and the release call, so this bridge's redelivery
+    // bookkeeping is directly testable with a stub that throws on demand, no real Channel or broker required.
+    // Always called under consumeLock.
+    static void releaseHeldDeferredDelivery(Deque<Long> heldDeferredDeliveryTags, LongConsumer redeliver) {
         int snapshotCount = heldDeferredDeliveryTags.size();
         for (int i = 0; i < snapshotCount; i++) {
-            HeldDelivery held = heldDeferredDeliveryTags.pollFirst();
-            if (held == null) {
+            Long heldDeliveryTag = heldDeferredDeliveryTags.pollFirst();
+            if (heldDeliveryTag == null) {
                 return;
             }
-            if (held.generation() != currentGeneration) {
-                continue;
-            }
             try {
-                redeliver.accept(held.deliveryTag());
+                redeliver.accept(heldDeliveryTag);
             } catch (RuntimeException e) {
-                heldDeferredDeliveryTags.offerFirst(held);
+                heldDeferredDeliveryTags.offerFirst(heldDeliveryTag);
                 throw e;
             }
         }
@@ -404,15 +344,12 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
 
     private void handleDelivery(String deliveryConsumerTag, Delivery delivery) {
         long deliveryTag = delivery.getEnvelope().getDeliveryTag();
-        // Captured once, at the start, and checked again right before every point below that would act on
-        // deliveryTag. See channelGeneration's own javadoc and RabbitMqCloudEventBridge's identical field.
-        long deliveryGeneration = channelGeneration.get();
         CloudEvent cloudEvent;
         try {
             cloudEvent = RabbitMqCloudEventMapper.toCloudEvent(delivery.getProperties(), delivery.getBody());
         } catch (RuntimeException e) {
             log.debug("Failed to rebuild a CloudEvent from a message on queue \"{}\", delivery tag {}.", queue, deliveryTag, e);
-            routeFailure(deliveryTag, deliveryGeneration, delivery.getProperties(), delivery.getBody());
+            routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
         }
 
@@ -449,19 +386,15 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             // too, since the converter, the live matcher or the projection can throw one, and leaving it uncaught
             // would strand the delivery unacked at prefetch one. Any other Error still propagates.
             log.debug("The projection registered on queue \"{}\"'s feed failed for delivery tag {}.", queue, deliveryTag, e);
-            routeFailure(deliveryTag, deliveryGeneration, delivery.getProperties(), delivery.getBody());
-            return;
-        }
-        if (isStaleGeneration(deliveryGeneration)) {
-            logStaleGeneration(deliveryTag);
+            routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
         }
         if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
-            ackNow(deliveryTag, deliveryGeneration);
+            ackNow(deliveryTag);
         } else if (outcome == RoutingOutcome.DEFERRED) {
             // Held unacked rather than nacked here, deliberately. Never takes consumeLock here, see
             // heldDeferredDeliveryTags's own javadoc for the full reasoning.
-            heldDeferredDeliveryTags.add(new HeldDelivery(deliveryTag, deliveryGeneration));
+            heldDeferredDeliveryTags.add(deliveryTag);
         } else {
             // Unreachable today: DomainEventFeed#acceptCloudEvent never returns NOT_DELIVERABLE (see its own
             // javadoc), it only ever returns FILTERED, DELIVERED or DEFERRED, or throws one of the two exceptions
@@ -470,19 +403,15 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             // nowhere.
             log.debug("A message on queue \"{}\", delivery tag {}, reported an outcome this bridge does not " +
                     "recognize. Routing it as a failure.", queue, deliveryTag);
-            routeFailure(deliveryTag, deliveryGeneration, delivery.getProperties(), delivery.getBody());
+            routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
         }
     }
 
-    // Acknowledges deliveryTag, but only once consumeLock confirms deliveryGeneration is still current: taking the
-    // same lock a generation bump takes makes the check-then-act atomic. See channelGeneration's own javadoc.
-    private void ackNow(long deliveryTag, long deliveryGeneration) {
+    // Under consumeLock, the lock reconcileConsumption also holds across its own blocking Channel calls, so two
+    // threads never talk to consumeChannel at once.
+    private void ackNow(long deliveryTag) {
         consumeLock.lock();
         try {
-            if (isStaleGeneration(deliveryGeneration)) {
-                logStaleGeneration(deliveryTag);
-                return;
-            }
             failureAction.ack(deliveryTag);
         } finally {
             consumeLock.unlock();
@@ -495,16 +424,12 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     // to pace it. REDELIVER is paced instead, held and released once per poll exactly like a DEFERRED delivery, via
     // a second deque, so a message that fails on every attempt is bounded to one redelivery per pollInterval rather
     // than nacking as fast as the broker round-trips it. See heldFailedDeliveryTags's own javadoc.
-    private void routeFailure(long deliveryTag, long deliveryGeneration, BasicProperties properties, byte[] body) {
+    private void routeFailure(long deliveryTag, BasicProperties properties, byte[] body) {
         if (failureAction.policy() == DeliveryFailurePolicy.REDELIVER) {
-            heldFailedDeliveryTags.add(new HeldDelivery(deliveryTag, deliveryGeneration));
+            heldFailedDeliveryTags.add(deliveryTag);
         } else {
             consumeLock.lock();
             try {
-                if (isStaleGeneration(deliveryGeneration)) {
-                    logStaleGeneration(deliveryTag);
-                    return;
-                }
                 failureAction.apply(deliveryTag, properties, body);
             } finally {
                 consumeLock.unlock();
