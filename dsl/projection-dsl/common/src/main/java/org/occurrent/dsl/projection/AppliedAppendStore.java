@@ -190,7 +190,7 @@ public interface AppliedAppendStore {
     }
 
     /**
-     * How many recorded appends {@link #inMemory()} keeps per projection, 10 000. Ten times the number of appends
+     * How many recorded appends {@link #inMemory()} keeps per projection, 10,000. Ten times the number of appends
      * the recording wrapper lets wait for a clear before it drops the oldest, and far more than a wait measured in
      * seconds can still be looking for.
      */
@@ -211,8 +211,8 @@ public interface AppliedAppendStore {
      * Recording one more than that evicts the projection's oldest recorded append, and a wait for an evicted append
      * times out, the same answer the Mongo stores give for a record their TTL index has expired.
      * <p>
-     * The number of projections is not bounded, since a projection id comes from the application's own
-     * configuration rather than from anything it stores.
+     * Nothing limits how many projections the store holds appends for, since a projection id comes from the
+     * application's own configuration rather than from anything it records.
      *
      * @param maxRecordedAppendsPerProjection how many appends each projection keeps, at least 1.
      */
