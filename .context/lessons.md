@@ -1631,3 +1631,27 @@ claim (two files byte-identical across two commits). Verifying that one claim co
 established the detailed work was real, without having to trust the sender about anything. Build
 briefs so verification reports carry at least one such claim, and spot-check it whenever a
 report's provenance comes into question rather than accepting or discarding the whole thing.
+
+## Read the review VERDICT and the suppressed block, not the thread count (rel34, 2026-08-22)
+
+PR 901 reached the merge gate with a green 26-check rollup, zero unresolved review threads, and a
+worker reporting it final. All three were true. Copilot's verdict on that head was "Needs a closer
+look", and its review body carried a suppressed comment naming a real defect that no thread
+recorded.
+
+The defect: `preserveAppendId` and `preserveTags` fix the CloudEvent, `preservePositionAndDcbTags`
+fixes only the Document, and the method returns the CloudEvent. So `updateEvent` stored the right
+position and returned an event whose position was absent or forged. Plus `if (position > 0)` with
+no else, so a position forged onto an original that had none survived into the document.
+
+Two things this taught beyond the existing rule.
+
+The headline verdict is itself a fact worth reading. A yellow or blue verdict with zero threads is
+not a clean review, and nothing in the thread count or the rollup reveals it.
+
+And an adversarial pass verifies the CLAIM it was given, not the diff. This one examined that exact
+guard and reasoned it correct, because it was reasoning about originals that have a position, where
+the guard genuinely does distinguish "nothing to reapply" from "reapply it". The stated claim never
+mentioned an original WITHOUT a position, so the falsification attempt never constructed one. When
+writing the claim for a verify pass, state the absent and empty cases explicitly, or they go
+unexercised by construction.

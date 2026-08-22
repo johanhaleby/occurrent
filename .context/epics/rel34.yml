@@ -1,8 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 15
-updated_at: '2026-08-22T09:55:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U1 DONE and merged)
+revision: 16
+updated_at: '2026-08-22T10:10:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (PR 901 blocked on a suppressed-comment
+  defect, U12 filed 909)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -125,9 +126,9 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: 'waiting on the worker''s #907 fold; at merge, diff the final head against b733100d8
-      and re-verify only if the delta touches code beyond the .log() removal'
-    last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
+    next_action: worker fixing the returned-CloudEvent position defect; re-verify after, earlier HELD
+      verdicts do not cover it
+    last_meaningful_progress_at: '2026-08-22T10:10:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -198,6 +199,20 @@ units:
           concurrent session that surfaced as NoSuchMethodError on the very method under test.'
         via: orchestrator adversarial verify subagent, second pass
         at: '2026-08-22T09:40:00+00:00'
+      blocked_on_suppressed_finding:
+        note: 'MERGE BLOCKED 2026-08-22T10:0xZ. Copilot''s verdict on d9589f867 was ''Needs a closer look'',
+          NOT approval, and its body carried a suppressed comment. Zero unresolved threads and a green
+          26-check rollup were both true and both blind to it. CONFIRMED by reading the code, not taken
+          from the report: preserveAppendId and preserveTags operate on the CloudEvent, preservePositionAndDcbTags
+          operates only on the Document, and every store ends `return Optional.of(updatedCloudEvent)`,
+          so updateEvent STORES the correct position and RETURNS an event whose position is absent or
+          forged. Same divergence class as #904. Second half: `if (position > 0)` has no else, so a position
+          forged onto an original with none survives into the document. BOTH adversarial passes missed
+          this; the first examined that exact guard and reasoned it correct while reasoning only about
+          originals that HAVE a position. The stated claim never mentioned the absent case, so no falsification
+          attempt constructed one.'
+        via: gh api pulls/901/reviews body plus reading MongoEventStore.updateEvent
+        at: '2026-08-22T10:10:00+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
@@ -228,8 +243,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker resuming after dec-0005; verify the ack, then wait for its PR
-    last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
+    next_action: 26/26 green, Copilot clean on the production code, adversarial pass running
+    last_meaningful_progress_at: '2026-08-22T10:10:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -738,7 +753,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: worker implementing on a fresh branch
-    last_meaningful_progress_at: '2026-08-22T08:45:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T10:10:00+00:00'
     observed:
       pr_908:
         head: 2170cca7184b20dc7d90f2c3dd69466890db3f9c
@@ -755,6 +770,18 @@ units:
           wiring depends on, is genuinely untouched.'
         via: worker message plus gh pr view
         at: '2026-08-22T09:30:00+00:00'
+      review_round:
+        note: 'Copilot found 2 threads, both matching what U12''s own independent local review had already
+          flagged. FIXED: raw reference comparison in isDefaultKnownLiveOnlyFor breaks under AOP proxying,
+          both sides now unwrap via AopProxyUtils.getSingletonTarget, mirroring SubscriptionAnnotations''
+          own handling, with a new ComposedCatchupModelTest covering matching and mismatching proxies.
+          DECLINED with the thread left open and issue #909 filed: resolveCatchupModel has the same identity
+          gap one layer deeper, substituting the holder''s model for recording and catch-up-listening
+          regardless of whether it matches the projection''s capability. Confirmed by two independent
+          reviewers, but it changes RECORDING behaviour rather than the warning this unit''s remit covers,
+          so routing it was correct rather than folding it in. #909 needs a routing decision.'
+        via: worker message
+        at: '2026-08-22T10:10:00+00:00'
     assessment: Adopted by Johan at a structured ask, dec-0007, on U3's own routing recommendation after
       it found the gap while reviewing its own PR 902. Reactor twin of U3's fix, similar size. Pre-granted
       the OccurrentReactiveMongoAutoConfiguration bean-method extension up front, because dec-0005 already
