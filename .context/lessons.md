@@ -1543,3 +1543,50 @@ Two mutation proofs passed under their own mutation on first writing (a coin-fli
 brk and ayi shared the push handover and push model on both stacks without either coexistence note foreseeing it, which cost two mid-implementation reconciles. Once the overlap is known, the peer announces scope at PR open and again before merge, and the fleet with the larger rewrite lands first so the other writes against the merged shape.
 - 2026-08-22 brk: the orchestrator memory (ORCHESTRATOR.md, epic files, journal, lessons) is live on main, pushed there by every fleet under the memory-checkpoint grant. brk checkpointed 113 commits to its own session branch only, read a tree diff against main as "main is stale", and nearly planned a hand reconcile that would have dropped rel34's and sdi's content. Checkpoint means commit AND `git push origin HEAD:main`, and "stale" is a claim to verify with `git log origin/main -- .context/ORCHESTRATOR.md` before it enters any plan.
 - 2026-08-22 brk: untracking a file on main with `git rm --cached` lands on every other clone as a tracked-file DELETION. The next merge or pull there removes the working copy, it does not "become untracked". brk's live decision journal vanished on the merge that brought in 9eecf8b30 and was restored from the pre-merge parent. Before merging a commit that untracks a file you hold live, copy it aside, merge, then copy it back.
+
+## A GitHub comment's author tells you nothing about whether a human wrote it (rel34, 2026-08-22)
+
+Every session in this fleet commits, comments and reviews under the `johanhaleby` account, so
+`author.login` cannot distinguish the maintainer from an orchestrator or a worker. This misfired
+twice in one hour. A reply on PR 900 read as Johan answering a Copilot finding and was the U1
+worker; the matching head SHA and the first-person "Fixed in d4df542fd" gave it away. And sdi read
+#753's 2026-08-11 comment as "the issue's own author recommends leaving it unfixed" when that
+comment carries the `<!-- orchestrator-routing -->` marker and is an orchestrator's deferral, since
+superseded by the 2026-08-22 comment pulling it into 0.34.0.
+
+Three tells that actually work, in order of reliability: the `<!-- orchestrator-routing -->` marker
+means an orchestrator wrote it; a head SHA, unit id or fleet marker in the body means a worker; and
+first-person narration of an edit ("I qualified it", "Fixed in <sha>") means whichever session made
+the edit. Absence of all three is not proof a human wrote it.
+
+The cost is not academic. Reading an orchestrator's own prior reasoning as the maintainer's
+preference lets a fleet talk itself out of a decision the maintainer actually made, with no human
+ever in the loop, and it looks exactly like diligence while it happens.
+
+## Derive a file fence from callers and usages, never from declarations (rel34, 2026-08-22)
+
+Two units hit this from opposite sides on the same day. rel34/U3's brief scoped it to
+`framework/spring-boot-autoconfigure/blocking/**` because that is where `ComposedDefaultStartPosition`
+is DECLARED, but the only caller that can supply the identity it needs lives in
+`framework/spring-boot-starter-mongodb`, and the reactor pattern the brief told it to mirror is
+itself called from a starter module. No boundary drawn at the declaring module could ever have
+contained the fix. Separately, sdi measured its fence intersection with an import-anchored grep and
+undercounted, because the reactor `ProjectionAnnotationRegistrar` writes the type fully qualified
+inline and never imports it, and because the grep required a trailing semicolon and so excluded
+every Kotlin import.
+
+So: when a brief tells a unit to mirror an existing pattern, derive the ownership from where that
+pattern's CALLERS live. And when measuring an intersection, grep for the bare symbol rather than for
+import syntax, then read the hits.
+
+## Untracking a file is destructive for every other clone that holds it tracked (rel34, 2026-08-22)
+
+`git rm --cached` keeps the working copy in the clone that runs it, which is what makes it look
+safe. The resulting COMMIT records a tracked-file deletion, so every other clone applies that
+deletion and loses its working copy on the next pull or merge. brk's journal was deleted from its
+worktree by exactly this and had to be restored from the pre-merge parent. Verifying the file
+survived locally was checking the right thing in the wrong scope.
+
+Before committing an untrack, enumerate every tree that holds the file and back them up outside the
+repository. The delete-side rule applies unchanged: look at what you are deleting, everywhere it
+lives, before deleting it.
