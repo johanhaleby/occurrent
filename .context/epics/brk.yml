@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 147
+revision: 148
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -296,7 +296,7 @@ units:
     deliverables:
       - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
     blocking_on: []
-    next_action: "FIXPOINT PR B OPEN 2026-08-22T~09:xxZ as PR 896 (brk/u9-fixpoint-b, head 7e839fea3, 36 files). ayi notified of the shared-file scope. Verifier (Sonnet, worktree, Docker) attacking the plan invariant table: six-value outcome mapping, bridges acting on the outcome alone, refusal provenance, reactor ownership and F2, monitors on both stacks, emit retry, drain leak, lock order, full suites, three mutations. Worker a9f02179a679e94d8 DELIVERY_RESULT pending. On green plus review plus MERGE-SAFE: gate facts, ayi heads-up, squash through the writing gates, CAS merge, then the docs-site lines, then round 3 review. Monitor bkc4p3e8e active"
+    next_action: "PR 896 ROUND 1 2026-08-22T~10:1xZ: 5/5 green on 7e839fea3; Copilot 4 threads plus 1 suppressed routed to the worker (loss-class: the reactor doFinally forgets the in-flight marker write after a lost ownership so a replacement trusts a stale marker, now invariant F3; non-blocking retry on FAIL_NON_SERIALIZED; duplicate error log; stale domain-bridge javadoc; misplaced javadoc). Final round on the next head under the hard stop. Verifier a62e0478138a7d454 running on 7e839fea3. ayi unreachable, scope recorded on the PR, no ayi PRs open. Monitor bkc4p3e8e active"
     last_meaningful_progress_at: 2026-08-21T05:50:00Z
     observed: {}
     assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."
