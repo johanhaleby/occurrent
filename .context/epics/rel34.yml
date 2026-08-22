@@ -1,8 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 5
-updated_at: '2026-08-22T08:02:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U8 delivered PR 899, checks running)
+revision: 6
+updated_at: '2026-08-22T08:12:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U1 PR 900 open, U8 PR 899 Copilot-clean
+  and CI pending, sdi semantic gate on U9 recorded)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -45,7 +46,7 @@ units:
       Sonnet/high
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 900
       met: false
       evidence: ''
     - check: branch_pushed
@@ -53,14 +54,27 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker running, orchestrator waits for its PR or DELIVERY_RESULT
-    last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
+    next_action: U1 must request Copilot on PR 900 and report the docs-branch half plus the code-side
+      surface enumeration
+    last_meaningful_progress_at: '2026-08-22T08:12:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
+      pr_900:
+        head: 212ae0217dff9e4e6780421f2e836b8054f38cdd
+        note: 'changelog.md only, opened non-draft 08:00Z. VERIFIED by reading the diff: Highlights line
+          now reports a RoutingOutcome of six values, and the Changes entry''s development-history framing
+          is gone in five spans with no facts changed. [ci skip] on the head commit and GitHub started
+          NO workflow, correct for a semantically inert diff. GAP: no Copilot review requested at all,
+          reviewDecision empty, reviews list empty, no pending request. Automated review is independent
+          of the check matrix, so it still owes one. Told U1. Cross-epic: brk PR 898 had independently
+          rewritten changelog.md:6 to six-value wording; brk is reverting that file to main and leaving
+          both :6 and :27 to PR 900.'
+        via: monitor bzqoo36k1 PR-OPENED, gh pr diff, gh api reviews
+        at: '2026-08-22T08:12:00+00:00'
     assessment: One invariant, four surfaces, two repos. The boolean-to-three fix already shipped once
       and was stale on arrival; the enumeration is derived from RoutingOutcome.java, not from a findings
       list. Takes PR 69's repair out of brk/U8's scope, recorded in ORCHESTRATOR.md. docs/append-identity
@@ -288,6 +302,16 @@ units:
           recipe IDs are unchanged, since that is the compatibility promise the fix rests on.'
         via: monitor bzqoo36k1 PR-OPENED plus gh pr view
         at: '2026-08-22T08:02:00+00:00'
+      gate_facts:
+        note: 'Four-fact gate at 08:10Z. CHECKS: 20 of 26 pending, 0 fail. REVIEWDECISION: empty, which
+          is normal since a Copilot review lands as COMMENTED. THREADS: 0 unresolved, counted with isResolved==false
+          alone and no isOutdated conjunction. REVIEW BODIES: read directly, the read returned rows so
+          the zero is real; Copilot says Approval recommended, 0 comments generated, NO suppressed block,
+          and GitHub''s own review details line reports Review effort level: Balanced, which is sourced
+          evidence rather than a default. REMAINING BEFORE MERGE: the CI matrix, the orchestrator''s adversarial
+          verify pass, and verification of the PR body''s claim that the shipped recipe IDs are unchanged.'
+        via: gh pr view, gh api graphql reviewThreads, gh api pulls/899/reviews
+        at: '2026-08-22T08:12:00+00:00'
     assessment: 'Shipped defect in rewrite/src/main/resources/META-INF/rewrite/subscription-mode-0_32.yml,
       verified by git ls-tree against the tag. Same class as #828 (already closed), so read that fix first.'
   U9:
@@ -313,10 +337,17 @@ units:
     next_action: dispatch after plan approval
     last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
     observed: {}
-    assessment: Decided IN 0.34.0 by the orchestrator on Johan's conditional delegation at the triage
+    assessment: 'Decided IN 0.34.0 by the orchestrator on Johan''s conditional delegation at the triage
       sweep, derivation recorded in ORCHESTRATOR.md. Do not re-ask. Reachability is low (records and Kotlin
       data classes are implicitly final) but the failure is silent event loss with no log or exception,
-      and deferring only adds another release of undetectable loss before the same break arrives.
+      and deferring only adds another release of undetectable loss before the same break arrives. SEMANTIC
+      GATE REPORTED BY sdi 2026-08-22T08:0xZ, record #753''s merge in ORCHESTRATOR.md when it lands: #753
+      changes EventTypeExpansion in common/filter, whose deriveFilter is what dsl/subscription-dsl/common/.../SubscriptionFilters.kt
+      calls today and what sdi''s new descriptor selector must call, and one of #753''s own remedies (refusing
+      a non-final concrete declared event type) changes what a descriptor accepts. So sdi''s descriptor
+      unit waits on #753 whatever directory the fix lands in. This does not change #753''s scope. It does
+      add a brief requirement: U9 must state the deriveFilter contract change explicitly in its DELIVERY_RESULT,
+      because a downstream epic consumes it.'
   U10:
     issue: 867
     goal: The RabbitMQ bridge survives a transient broker outage at startup rather than failing the application
