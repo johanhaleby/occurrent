@@ -1,9 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 13
-updated_at: '2026-08-22T09:30:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U8 swept, U12 delivered PR 908, U4/U9/U11
-  dispatched, 900 held for re-review)
+revision: 14
+updated_at: '2026-08-22T09:40:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U2 re-verify HELD on b733100d8)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -111,8 +110,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker is rebasing off the changelog.md conflict; adversarial pass already HELD, so the
-      merge gate needs only checks, Copilot and threads on the rebased head
+    next_action: 'waiting on the worker''s #907 fold; at merge, diff the final head against b733100d8
+      and re-verify only if the delta touches code beyond the .log() removal'
     last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
     observed:
       dispatch:
@@ -167,6 +166,23 @@ units:
           NOT cover preserveTags; a second is running against b733100d8.'
         via: orchestrator
         at: '2026-08-22T09:05:00+00:00'
+      adversarial_verify_2:
+        note: 'HELD against b733100d8, scoped to the new preserveTags and its three call sites. Real MongoDB
+          8.0 via Testcontainers, reading BOTH the raw dcbTags BSON array and the dcbtags extension on
+          every case and comparing them. Best attack it invented unprompted: an updater that forges a
+          fake appendid AND fake tags simultaneously, run on a DCB original and a non-DCB original, specifically
+          to hit the withoutExtension(TAGS) rebuild branch AFTER preserveAppendId has already run. Real
+          values won in every store, both branches. It also diffed preservePositionAndDcbTags between
+          this head and the previously held revision 441b239d4 and found them byte-for-byte identical,
+          which is the carry-forward check done on its own initiative, so the earlier verdict''s position
+          coverage stands. Empty-tag-set versus absent is correctly distinguished by isDcbEvent. The non-DCB
+          rebuild damaged nothing else tested. All three stores agree. HONEST GAP: a non-V1 CloudEvent
+          spec version through the non-DCB rebuild was NOT exercised, reasoned as not newly introduced
+          since preserveAppendId already does the same unconditionally. Two infra issues correctly diagnosed
+          rather than reported as defects: the Colima container flake, and a shared ~/.m2 race from a
+          concurrent session that surfaced as NoSuchMethodError on the very method under test.'
+        via: orchestrator adversarial verify subagent, second pass
+        at: '2026-08-22T09:40:00+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.

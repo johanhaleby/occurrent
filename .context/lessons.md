@@ -1598,3 +1598,19 @@ survived locally was checking the right thing in the wrong scope.
 Before committing an untrack, enumerate every tree that holds the file and back them up outside the
 repository. The delete-side rule applies unchanged: look at what you are deleting, everywhere it
 lives, before deleting it.
+
+## Isolate the Maven repo when verifying while other sessions build (rel34, 2026-08-22)
+
+A verification subagent running the full test suite hit `NoSuchMethodError` on the exact method
+under test, because a concurrent session installed over the shared `~/.m2` mid-run. That failure
+is indistinguishable from a real defect in the diff being verified, which is the dangerous part:
+it points straight at the change and reads as confirmation.
+
+The known guidance here has been to always pass `-am` so dependent modules rebuild. That does not
+help when the corruption happens DURING the run. The fix that worked is an isolated local
+repository, `-Dmaven.repo.local=<throwaway dir>`, which no other session can write to.
+
+Put it in the brief for any subagent that runs a build while a fleet is active, and treat a
+`NoSuchMethodError` or `NoClassDefFoundError` naming the code under test as an infrastructure
+suspect first, not a finding. Same posture as the Colima replica-set flake: verify the
+environment before believing the diff is broken.
