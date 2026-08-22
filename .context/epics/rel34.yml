@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 46
-updated_at: '2026-08-22T14:02:19+00:00'
-updated_by: 'orchestrator rel34: #927 adopted into U2 by Johan''s ruling, U19 chip dispatched'
+revision: 47
+updated_at: '2026-08-22T14:08:17+00:00'
+updated_by: 'orchestrator rel34: U6 delivered PR 933'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -566,7 +566,7 @@ units:
       off main. Launched on claude-sonnet-5 at effort high, read from session metadata rather than assumed.
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 933
       met: false
       evidence: ''
     - check: issue_closed
@@ -574,8 +574,9 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: 'await the worker''s claim on #837 and its first push'
-    last_meaningful_progress_at: '2026-08-22T12:37:06+00:00'
+    next_action: await the worker's settled report, then run the gate and an adversarial pass on the declared
+      head
+    last_meaningful_progress_at: '2026-08-22T14:08:17+00:00'
     observed:
       scope_derived_by_orchestrator:
         note: 'Enumerated the invocation sites myself rather than trusting the issue text. The defect
@@ -641,6 +642,23 @@ units:
           survive.'
         via: orchestrator self-check against SKILL.md:383
         at: '2026-08-22T12:57:57+00:00'
+      pr_opened:
+        note: 'PR 933 on rel34/u6-transactional-subscription-handlers, 5 files: both SubscriptionAnnotationRegistrar
+          files, one Mongo test per stack, and changelog.md. No migration guide file, consistent with
+          its Changes-not-Breaking call. Scope matches the brief exactly and the descriptor-factory fence
+          held. It ARGUED the changelog call rather than defaulting: #### Changes because the annotation
+          never worked and the fix needs no caller action, but the entry says out loud that a handler
+          which ran without a transaction now runs inside one, which can change its rollback and failure
+          behaviour. That is the judgement I asked for and it matches my own reading. TESTS ARE BEHAVIOURAL,
+          not mechanism checks: each handler is @Transactional and records whether TransactionSynchronizationManager.isActualTransactionActive()
+          answers true while it runs, which is only true if the handler ran through its proxy. The reactor
+          version correctly uses forCurrentTransaction() instead, since the reactive transaction context
+          lives in the Reactor Context rather than a thread-local. Six tests, one per annotation per stack.
+          MUTATION VERIFIED by the worker: reverting the registrar fix failed all six (false or an empty
+          recording instead of true), restoring it passed all six. Not yet independently re-verified by
+          the orchestrator.'
+        via: gh pr view 933
+        at: '2026-08-22T14:08:17+00:00'
     assessment: 'Dispatched 2026-08-22 as a chip after U3 merged. The 2026-08-17 deferral to the ADR 127
       epic and my own 2026-08-22 supersede were BOTH argued on premises that did not survive. The deferral
       assumed a large fix that the epic would rewrite immediately; the supersede assumed the epic had
