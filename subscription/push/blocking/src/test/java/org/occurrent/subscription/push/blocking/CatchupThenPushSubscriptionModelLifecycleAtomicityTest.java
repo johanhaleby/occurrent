@@ -507,13 +507,17 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
         stopper.start();
         stopper.join(TimeUnit.SECONDS.toMillis(5));
 
-        assertThat(order)
+        // Read while the write is still parked, since that is the moment the assertion is about, and then the
+        // write is let go whatever it said. Asserting first would leave the write parked and the stopper blocked
+        // behind it for a minute on the one run where this regresses, which is the run that most needs to report.
+        List<String> whileTheWriteWasRunning = List.copyOf(order);
+        releaseSave.countDown();
+        stopper.join(TimeUnit.SECONDS.toMillis(10));
+
+        assertThat(whileTheWriteWasRunning)
                 .as("a stop got through while the marker write was still running, rather than queueing behind it "
                         + "on a monitor the write was holding")
                 .containsExactly("stop returned");
-
-        releaseSave.countDown();
-        stopper.join(TimeUnit.SECONDS.toMillis(10));
     }
 
     /**
