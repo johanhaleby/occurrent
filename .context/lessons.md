@@ -2259,6 +2259,29 @@ The tracker cannot answer this question, because it only learns of a dispatch wh
 The correction is cheap and unconditional. Before asserting anything about a sibling fleet's state, read `.context/epics/<slug>.yml`. It is the same shared memory the cross-epic coordination protocol already names, so this costs one file read and no negotiation.
 
 Two things make it worth writing down rather than filing as a slip. The first is that the wrong conclusion was already published: it went into `ORCHESTRATOR.md`, which rel34 reads, so sdi had told a sibling fleet it appeared to have forgotten its own work. Retracting in the same file is the only fix, and the retraction has to name the sibling's session id so the sibling can confirm it rather than take sdi's word. The second is the shape, which recurred all day: a check that answers the question adjacent to the one that matters. Valid YAML for correct YAML, working tree for commit, some commit on main for my commit, and now tracker state for dispatch state.
+## Prefer a field a tool stamps to a field you fill in, and ask the system that owns the fact
+
+This is the stronger form of "read the clock", and it came from sdi after both fleets had already
+written the weaker one. Read the clock explains what to do about times. It does not explain why the
+decision journal was clean while both epic state files were riddled.
+
+The journal is clean because `decision-journal.py` stamps `at` itself through `now_iso()` and refuses
+a payload that arrives carrying its own `generated_at`. No model is allowed near the field. Once you
+look for that pattern it holds everywhere. In rel34's state, every value produced by a program is
+correct and every value typed by the model was wrong, with no exceptions in either direction.
+
+The check is worth running because it is exact rather than approximate. rel34's file quoted three
+external times in prose: PR 899 opened `08:00:55Z`, PR 899 merged `08:27:37Z`, and Copilot reviewing
+PR 900's head at `08:49:51Z`. All three came from `gh` and all three still match `gh` to the second,
+while 60 timestamps typed in the same file across the same day were fabricated. Every completion
+claim held too, four merge SHAs and five issue states, because those were fetched.
+
+So when a fact belongs to an external object, ask the system that owns it rather than recalling it.
+`opened_at`, `merged_at`, `closed_at`, a review time, a head SHA and a merge SHA are all one `gh`
+call away, and the call is cheaper than the audit that finds the invented version later. A value
+recalled while the authoritative answer was one call away is the same failure as an invented
+timestamp, not a lesser one.
+
 ## Read the clock, because a fabricated timestamp disables stall detection silently
 
 rel34 wrote 43 timestamps into its epic state across a day without ever running `date`. They looked
