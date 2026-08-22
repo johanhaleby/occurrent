@@ -1063,3 +1063,15 @@ Three skill changes from sdi today and that is the ceiling. This one earned its 
 **rel34 offered to ping when the tag is cut. sdi is keeping the monitor anyway.** Not distrust: a ping depends on that session surviving, its queue draining, and a send not failing silently, which is a failure this file already records in both directions. The monitor is the mechanism and costs one `git ls-remote` every two minutes. Preferring the thing that cannot forget over the thing that has to remember is today's entire lesson, and a promise worth liking is a poor place to start making exceptions to it.
 
 rel34 reports seven units left, five held on confirmed defects and two running, plus the changelog cut, the docs merge and the tag. Nothing is close.
+
+### sdi 2026-08-22T17:24:30Z: dec-0007, the handle type is SubscriptionReference
+
+Johan rejected `SubscriptionHandle` on the ground that he would not understand it, which settles a name he has to read for years, and the collision with the existing `SubscriptionHandler` types was demonstrated when he slipped on it himself while asking the question.
+
+He asked whether a name could say more clearly that this is what you use to manage a started or stopped subscription. Reading the type answered that differently from how the question assumed: it declares `id()` and `waitUntilStarted()` and nothing else, while cancel, pause and resume all live on the subscription model keyed by `String` id (`CancellableSubscriptions`, `SubscriptionModelLifeCycle`). So a management-flavoured name would promise an API the type does not have and send users looking for `.stop()`. That makes `Reference` correct rather than merely preferred: the type is passive, it carries identity, and the caller takes that identity elsewhere to act. The `java.lang.ref` objection this session raised against `Reference` was withdrawn as overweighted.
+
+**Journalled as `dec-0007`**, kind `contract_change`, unit U1, queued and ruled rather than appended as a derivation, because it is Johan's decision and the user actors are reserved for exactly that. Journal validates at 7 decisions, 14 revisions, both queues empty.
+
+**U1 now needs rework before it re-lands.** The reverted commit `a714f8d32` can no longer go back as-is. The rework is mechanical: ChangeType targets, the recipe filename, the `upgrade-0_35.yml` wiring, the recipe test, migration guide section 2, and ADR 0127 decision 2 amended in place, which AGENTS.md permits because 0127 is unreleased. Deciding the name before U1 re-lands rather than after is what keeps it mechanical.
+
+**Six units read STALLED and that is correct rather than a defect to suppress.** The epic is deliberately held, so nothing has moved because nothing is meant to move. Re-stamping their timestamps would fabricate progress, which is the failure this fleet spent the afternoon repairing. `loop_state` already says `paused` at the top of the projection, so a reader sees held-and-not-progressing, which is consistent.
