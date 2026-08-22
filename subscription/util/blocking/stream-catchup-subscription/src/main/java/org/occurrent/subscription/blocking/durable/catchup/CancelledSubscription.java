@@ -22,7 +22,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import java.time.Duration;
 
 /**
- * A {@link SubscriptionHandle} handle for a catch-up that was cancelled or shut down before it could hand over to the
+ * A {@link SubscriptionHandle} for a catch-up that was cancelled or shut down before it could hand over to the
  * live delegate. {@link #waitUntilStarted(Duration)} answers {@code false}, since this subscription never started and
  * nothing will start it.
  */

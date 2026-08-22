@@ -83,7 +83,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 
 /**
  * This is a subscription that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
- * This SubscriptionHandle doesn't maintain the checkpoint, you need to store it yourself in order to continue the stream
+ * This subscription model doesn't maintain the checkpoint, you need to store it yourself in order to continue the stream
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked

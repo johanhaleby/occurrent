@@ -69,7 +69,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
 
 /**
  * This is a subscription that uses project reactor and Spring to listen to changes from an event store.
- * This SubscriptionHandle doesn't maintain the checkpoint, you need to store it yourself
+ * This subscription model doesn't maintain the checkpoint, you need to store it yourself
  * (or use another pre-existing component in conjunction with this one) in order to continue the stream from where
  * it's left off on application restart/crash etc. It produces a {@link CloudEvent} implementation of type {@link CheckpointAwareCloudEvent}
  * that includes the checkpoint. Use {@link CheckpointAwareCloudEvent#getCheckpointOrThrowIAE(CloudEvent)}

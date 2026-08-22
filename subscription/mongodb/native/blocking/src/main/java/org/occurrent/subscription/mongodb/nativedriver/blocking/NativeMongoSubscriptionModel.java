@@ -71,7 +71,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
 
 /**
  * This is a subscription that uses the "native" MongoDB Java driver (sync) to listen to changes from the event store.
- * This SubscriptionHandle doesn't maintain the checkpoint, you need to store it in order to continue the stream
+ * This subscription model doesn't maintain the checkpoint, you need to store it in order to continue the stream
  * from where it's left off on application restart/crash etc. You can do this yourself or use a
  * <a href="https://occurrent.org/documentation#blocking-subscription-checkpoint-storage">checkpoint storage implementation</a>
  * or use the {@code DurableSubscriptionModel} utility from the {@code org.occurrent:durable-subscription}
