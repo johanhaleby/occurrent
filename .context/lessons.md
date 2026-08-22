@@ -2002,3 +2002,23 @@ than diagnosing it, because a wrong owner would have concluded "flake" faster. I
 that narrowed it (JDK asymmetry, main green) as evidence rather than as a conclusion. And it said
 plainly which reading it could not rule out, so the receiving fleet knew what it was being asked to
 settle rather than to confirm.
+
+## A known production defect becomes a fleet-wide CI tax until its fix lands (rel34, 2026-08-22)
+
+Once #922 was confirmed as a real silent stall rather than a flake, its test kept failing
+intermittently on every pull request in the fleet, because the defective fence is on main and every
+branch that merges main inherits it. Four units hit it across two JDKs within a few hours, none of
+them touching the module.
+
+Two consequences worth separating, because they pull in opposite directions.
+
+Rerunning IS legitimate here, and it was not legitimate for #884. The distinction is whether a fix
+exists that the branch has not picked up. For #884 the fix had already merged, so the correct action
+was to merge main and the rerun would have been a coin toss on an already-solved problem. For #922
+no fix exists yet, so a rerun is the only way to get a green shard and there is nothing to rebase
+onto. Same red shard, opposite correct action, decided entirely by whether a landed fix exists.
+
+And the tax is worth naming to the fleet rather than letting each unit rediscover it. A worker that
+hits a known-defective test spends a triage round establishing what the orchestrator already knows.
+Tell them the test, the issue, and the instruction (rerun, do not investigate, it is owned
+elsewhere) as soon as the verdict is in.
