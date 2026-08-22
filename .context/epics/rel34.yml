@@ -1,8 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 34
-updated_at: '2026-08-22T17:20:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U3 merged, six units done)
+revision: 35
+updated_at: '2026-08-22T17:30:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U15 delivered a held docs PR, held set
+  is now EIGHT)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -855,6 +856,13 @@ units:
           still exists and is still the superseded no-op branch to DELETE rather than merge.'
         via: gh api compare per branch tip against preview
         at: '2026-08-22T10:35:00+00:00'
+      held_set_now_eight:
+        note: 'The held docs set is now EIGHT PRs, not seven: 68, 69, 70, 71, 72, 73, 74 and the new 76
+          from rel34/U15. The superseded branch docs/saga-step-conditions-added-tag is still to be DELETED
+          rather than merged, so the count of docs/* branches is nine while the merge set is eight. preview/0.34.0
+          must be rebuilt to include 76 as well as the PR 69 and PR 74 heads it is already behind.'
+        via: orchestrator
+        at: '2026-08-22T17:30:00+00:00'
     assessment: 'Seven PRs, not eight branches: docs/saga-step-conditions-added-tag adds a line docs main
       already carries. preview/0.34.0 was behind docs/421-broker-modules by one commit at registration,
       so preview is verified per branch rather than assumed current.'
@@ -1244,7 +1252,7 @@ units:
       declared event types: ADR 126''s expansion across projections, DSL subscriptions, DomainEventQueries
       and @Snapshot views, and U9''s refusal of a declared type that is not sealed or final all the way
       down.'
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on:
@@ -1253,12 +1261,31 @@ units:
     deliverables:
     - check: pr_merged
       ref: null
-      met: false
-      evidence: ''
+      met: true
+      evidence: Held docs PR occurrent-org/occurrent-org.github.io#76 on branch docs/0.34.0-declared-event-types,
+        head 0b9a7f7d0, non-draft, OPEN and HELD. NOT merged and not to be merged by the fleet. A new
+        top-level chapter 'Deriving the Event Filter' states the rule once for every place that derives
+        a filter, with a table of refused declarations and a table of where each place throws, plus corrections
+        in the Projection DSL, the saga chapter, Selective Events, the Query DSL, the Subscription DSL
+        and Snapshots. The false sentence is gone, verified by grepping the BUILT HTML for it and getting
+        zero. Adds 'deriving-the-event-filter':'0.34.0' to the addedTags map as that repo's AGENTS.md
+        requires. Copilot found a real defect twice, once in a thread and once suppressed, that OrderEvent
+        did not declare orderId so neither snippet compiled; the worker's own pass caught a second Copilot
+        missed, that Saga.create walks the hierarchy inside the factory call rather than at build(), which
+        earned its own row in the refusal table.
     blocking_on: []
-    next_action: dispatch
-    last_meaningful_progress_at: '2026-08-22T11:15:00+00:00'
-    observed: {}
+    next_action: none, the branch is HELD for release day
+    last_meaningful_progress_at: '2026-08-22T17:30:00+00:00'
+    observed:
+      collision_check:
+        note: 'The worker checked its hunks against every held branch rather than assuming: base-file
+          hunks at 151, 2131, 5044, 5071, 5227, 6157, 6795 and 6981, none overlapping a range any of the
+          seven other held branches touches, and it stayed out of ''Observing pushed events'' entirely
+          so the PR 69 versus PR 74 conflict gains no third party. The one expected textual conflict is
+          the last line of the addedTags map in js/_partials/main.js, which PRs 69, 73 and 74 also touch;
+          resolution is keep all lines, which preview/0.34.0 already demonstrates.'
+        via: worker report
+        at: '2026-08-22T17:30:00+00:00'
     assessment: Found by the orchestrator while checking a question U9 raised, not reported by any worker.
       changelog.md's FIRST highlight promises sealed supertypes now expand in projections, DSL subscriptions,
       queries and snapshot views alike. docs main line 6984 says @Projection 'does not expand or refuse
