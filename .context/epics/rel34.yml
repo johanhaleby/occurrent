@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 38
-updated_at: '2026-08-22T18:25:00+00:00'
-updated_by: 'orchestrator rel34: PR 901 gate blocked, Copilot never reviewed the current head'
+revision: 39
+updated_at: '2026-08-22T18:40:00+00:00'
+updated_by: 'orchestrator rel34: sdi accepted the registrar fence, ADR 0135 confirmed free'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -538,6 +538,25 @@ units:
           lookup when it reworks them. Fence stated to sdi's orchestrator.
         via: sdi epic state + gh pr view 924
         at: '2026-08-22T18:10:00+00:00'
+      sdi_fence_accepted:
+        note: 'sdi''s orchestrator accepted the fence and recorded the invariant against its own U6 in
+          the sdi epic state, in the terms given: target is what the context yields FOR THE BEAN NAME,
+          looked up INSIDE the handler lambda at EVENT-DELIVERY time, never the post processor''s instance,
+          and the lookup POINT matters as much as the lookup. It agreed the afterSingletonsInstantiated
+          move is exactly where this could be silently reverted, and its U6 brief will require a test
+          that still FAILS if the target goes back to the raw bean. It also accepted invokeDescriptorFactory
+          as sdi''s own open design question (recorded against its U2 and U6) after checking my analysis
+          rather than taking it, so that finding is owned and will not fall between the fleets.'
+        via: cross-session message from [sdi] Orchestrator
+        at: '2026-08-22T18:40:00+00:00'
+      sdi_count_correction_did_not_reach_rel34:
+        note: 'sdi corrected its own registrar call-site split from 17 non-DCB / 4 DCB to 16 / 5, total
+          21 unchanged, and asked whether the wrong number had reached any rel34 brief. Checked rather
+          than assumed: grepped every brief in the briefs directory and the whole epic state. It did NOT.
+          The only call-site count in any rel34 brief is U6''s own ''SIX call sites in TWO files'', which
+          I derived myself from the registrars. Nothing to correct here.'
+        via: grep over briefs/ and rel34.yml
+        at: '2026-08-22T18:40:00+00:00'
     assessment: 'Dispatched 2026-08-22 as a chip after U3 merged. The 2026-08-17 deferral to the ADR 127
       epic and my own 2026-08-22 supersede were BOTH argued on premises that did not survive. The deferral
       assumed a large fix that the epic would rewrite immediately; the supersede assumed the epic had
@@ -1462,3 +1481,18 @@ units:
       tag, added this cycle by #869 and #892, so no external consumer can have wired it. The blocking
       twin #871 remains genuinely reachable and PR 902 stands, because there the durable model and the
       Subscriptions DSL bean are gated on two INDEPENDENT conditions rather than one shared one.'
+cross_epic:
+  adr_number_ledger:
+    note: sdi's U12 merged as squash 5ba3b9bfa, amending ADR 0127 in place rather than taking a new number,
+      so 0135 remains FREE as of 2026-08-22T18:40Z. rel34 has no unit currently holding an ADR number.
+      If a rel34 unit returns BLOCKED needing one, claim it and tell sdi before writing, since sdi said
+      it will take a number above 0135 and tell rel34 first if its descriptor-factory question needs a
+      record.
+    at: '2026-08-22T18:40:00+00:00'
+  adr_0127_amended:
+    note: 'ADR 0127 is materially different from its morning text: a public catch-all handler on the descriptor
+      builder, the runner stated as the single execution path across all 21 registrar lookups within 0.35.0,
+      the call-site split corrected to 16 non-DCB and 5 DCB, and its own section 6 item 7 fixed to stop
+      pointing at upgrading-to-0.34.0.md. No rel34 brief cites ADR 0127''s CONTENT, only its existence,
+      so nothing in this epic went stale. Checked, not assumed.'
+    at: '2026-08-22T18:40:00+00:00'
