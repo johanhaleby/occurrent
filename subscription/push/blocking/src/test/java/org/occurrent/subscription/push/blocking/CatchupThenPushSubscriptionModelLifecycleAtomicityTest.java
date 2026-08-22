@@ -259,9 +259,9 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
 
     /**
      * The marker write and the ownership check that guards it are one step, so a cancel cannot take the id from an
-     * attempt whose write is already running. That is what lets every later attempt trust a marker it finds: the
-     * only attempt that can have written one is an attempt that read the whole history and owned the id throughout
-     * the write, in this process and after a restart alike.
+     * attempt whose write is already running. Only an attempt that read the whole history and owned the id
+     * throughout the write can have left a marker behind, which is what lets every later attempt trust one it
+     * finds, in this process and after a restart alike.
      * <p>
      * Asserted as an ordering rather than as a duration, so it says which of the two finished first rather than how
      * long either took. The cancel is released only once it is genuinely waiting on the monitor, which is what

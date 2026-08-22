@@ -323,24 +323,19 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
     }
 
     /**
-     * A cancel that lands while an attempt is already writing the catch-up-complete marker leaves a marker on
-     * disk that describes a history the id's next owner never read. The write cannot be called off, so the model
-     * records that it happened and the replacement reads its history rather than trusting what it finds.
-     * <p>
-     * Run with no in-memory shortcut, the marker really is written and really is read back, so nothing here
-     * depends on the model noticing the cancel in time.
-     */
-    /**
      * A marker is only ever written by an attempt that read the id's whole history and owned the id when the write
      * began, so a replacement finds a marker that describes history somebody read, and skips reading it again. The
-     * same answer a restart gets, which is the point: the model no longer says one thing to a replacement in this
-     * process and another to the first subscription after a restart, for the same durable state.
+     * same answer a restart gets, and that is the point. The model no longer says one thing to a replacement in
+     * this process and another to the first subscription after a restart, for the same durable state.
      * <p>
-     * What this no longer proves, said plainly because it used to: an earlier version of this test asserted the
+     * The cancel here arrives while the write is already running, and the write finishes anyway. That ordering is
+     * allowed rather than prevented, since what the marker claims was already true when the write began.
+     * <p>
+     * What this no longer proves, said plainly because it used to. An earlier version of this test asserted the
      * opposite, that the replacement replays. That behaviour was process-local, since the record it rested on was a
-     * map this model loses on restart, so the marker was distrusted in process and trusted after a restart. Closing
-     * that split by making the marker trustworthy is what this test now pins. A caller that wants an id to read its
-     * history again deletes the checkpoint, which is the recovery ADR 116 already documents.
+     * map this model loses on restart, so the marker was distrusted in process and trusted after a restart. This
+     * test is what would fail if that split came back. A caller that wants an id to read its history again deletes
+     * the checkpoint, which is the recovery ADR 116 already documents.
      */
     @Test
     void a_marker_written_by_an_attempt_that_owned_the_id_is_trusted_by_the_replacement() throws Exception {
@@ -621,7 +616,7 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
     }
 
     /**
-     * The invariant every later attempt's trust rests on: an attempt that lost the id writes no marker at all.
+     * The invariant every later attempt's trust rests on. An attempt that lost the id writes no marker at all.
      * <p>
      * The window is narrow and nothing outside the model reaches it, so the cancel is parked inside the handler for
      * the last replayed event. By the time that handler returns there is no event left for {@code keepReplaying()}

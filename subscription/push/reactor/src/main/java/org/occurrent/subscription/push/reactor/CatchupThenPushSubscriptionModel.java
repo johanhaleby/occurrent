@@ -242,9 +242,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             @Override
             public Mono<Void> markCaughtUp() {
                 // Asked here rather than upstream, so an attempt that lost the id between the last replayed event
-                // and this step writes nothing at all. That is what lets every later attempt trust a marker it
-                // finds: the only attempt that can write one is the attempt that owned the id when the write
-                // began, and it had read the whole history by then.
+                // and this step writes nothing at all. Only an attempt that owned the id when the write began can
+                // leave a marker behind, and it had read the whole history by then, which is what makes a marker
+                // worth trusting later.
                 return Mono.defer(() -> stillOwnsCatchup(subscriptionId, replayDone)
                         ? CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId)
                         : Mono.empty());
@@ -383,13 +383,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         }
     }
 
-    // Whether this attempt still owns the id. On the same monitor as the puts in launchReplay and the removes in
-    // cancelSubscription, so the answer cannot be taken from under a caller between asking and acting on it.
+    // Whether this attempt owned the id at the moment of asking. A sample, not a hold. The monitor is released
+    // when this returns, so a cancel can take the id away while the write this answer allowed is still running.
     //
-    // The write it guards runs outside the monitor, because a checkpoint store is someone else's code and can take
-    // as long as it likes, and every lifecycle call on this model takes the same monitor. A cancel landing while
-    // that write is in flight therefore does not stop it. It does not need to: the attempt making it had read the
-    // whole history and owned the id when it began, which is all a marker claims.
+    // Taken on the same monitor as the puts in launchReplay and the removes in cancelSubscription, so the answer
+    // is never read part way through one of those. The write itself stays outside the monitor, because a
+    // checkpoint store is someone else's code and can take as long as it likes while every lifecycle call on this
+    // model takes the same monitor. A cancel arriving mid-write does not stop it and does not need to, since the
+    // attempt had read the whole history and owned the id when the write began, which is all a marker claims.
     private synchronized boolean stillOwnsCatchup(String subscriptionId, Sinks.One<Boolean> replay) {
         return catchupOwners.get(subscriptionId) == replay;
     }
