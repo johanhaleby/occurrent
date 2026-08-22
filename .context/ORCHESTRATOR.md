@@ -897,3 +897,15 @@ The run completed so the log became retrievable. One failure: `SubscriptionModel
 **What the log points at instead.** Sixteen occurrences of MongoDB error 286, `ChangeStreamHistoryLost`, plus an `IllegalStateException: state should be: open` from the reactor model. A change stream whose resume point ages out of the oplog genuinely loses events, which is exactly the observed symptom of event "2" never arriving.
 
 That makes environmental far more likely than a regression, and "far more likely" is not a verdict. A rerun on the identical SHA is the discriminator that settles it: the code is fixed, so a pass exonerates it and a second failure makes it real. Issued at 2026-08-22T14:34:06Z, currently `in_progress`. No fix will be pushed and nothing will be claimed about the cause until it concludes.
+
+### sdi 2026-08-22T14:35:56Z: U7 brief drafted and gated, waiting rather than polling
+
+U7's brief is written and staged at `/private/tmp/claude-501/-Users-johan-devtools-java-projects-occurrent--claude-worktrees-admiring-bhabha-362d44/dd98386f-d179-41e9-99e1-54d0187ce667/scratchpad/u7-brief.md`, 74 lines, so the dispatch on PR 933's merge is a paste rather than an authoring round. Chip title validated against the gate regex before it is needed: `⌁[sdi/U7#721] Normalize the annotation set · Opus/high`, 54 characters, PASS.
+
+The brief leads with the release-blocker evidence rather than the task, carries all seven annotation pairs with the `StreamSubscription$StartPosition` nested rename called out separately, names the five registrars and both bean post processors by path, states the fence rule against PR 933's two files with the requirement to carry its advice fix forward, and specifies the two tests #929 needs with the reason they must be per registrar family rather than one overall. It also carries the changelog gate and, at the end, the three meanings of "Subscription" with U1's six wrong edits as the evidence that reading each occurrence for intent is not optional.
+
+**The fence will not clear immediately.** PR 933 is green and MERGEABLE but carries two unresolved review threads, so rel34 is still working it. That is rel34's gate and sdi has no business pushing on it.
+
+**U1's rerun is still `in_progress` and nothing will be concluded until it finishes.** One supporting observation while it runs: `test (subscription-mongodb-spring, java-21)` passed on this same head. The same fixtures on a different JDK agreeing points further away from a code regression, since a real defect in pause and hold semantics would not select a JDK. It is corroboration, not the verdict, and the rerun remains the thing that decides.
+
+No further polling. The monitor wakes on the transitions that matter.
