@@ -478,7 +478,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // The ownership check and the marker write as one step, on this id's lock rather than on the model monitor.
     // Same atomicity, since cancelSubscription and subscribe take the same lock before they move the id. What the
     // model monitor no longer does is hold every other lifecycle call for as long as a checkpoint store takes to
-    // answer, so stop, start, pause and resume get through while a write is in flight.
+    // answer, so stop, start, pause and resume get through while a write is in flight. A cancelSubscription for
+    // the same id is the exception, since it waits for the write and holds the monitor while waiting, so anything
+    // arriving behind such a cancel waits with it.
     //
     // A ReentrantLock rather than the monitor, because this runs on the replay's virtual thread and the write can
     // block on storage. Blocking inside synchronized holds the platform thread underneath for that whole span

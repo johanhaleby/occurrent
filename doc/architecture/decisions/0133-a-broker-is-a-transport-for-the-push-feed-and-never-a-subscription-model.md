@@ -1084,7 +1084,11 @@ thread underneath it too. ADR 131 decided that same tradeoff the other way for t
 reasoning applies here. The ownership question and the write now happen under a lock for that subscription id.
 `cancelSubscription` and `subscribe` take the same lock, since those are the two calls that move an id out from
 under a write, so the atomicity is unchanged. `stop`, `start`, `pause` and `resume` do not, so they no longer wait
-for a store. The model monitor is always taken before that lock and never after it, which is what keeps the two
+for a store, with one exception. A `cancelSubscription` for the same id waits for the write by design, and it is
+holding the model monitor while it does, so a lifecycle call arriving behind such a cancel waits for that store
+call after all. Removing that too means taking the per-id lock before the monitored section rather than inside it,
+in both `cancelSubscription` and `subscribe`, which is recorded on
+[#893](https://github.com/johanhaleby/occurrent/issues/893) rather than done here. The model monitor is always taken before that lock and never after it, which is what keeps the two
 from deadlocking.
 
 A registration is the only thing that creates a lock. `launchReplay` makes it under the same monitor that
