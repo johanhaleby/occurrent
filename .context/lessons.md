@@ -2497,3 +2497,15 @@ Of the five here, two were correct: their blocker is a sibling PR still open and
 The tell is a set of units sharing one timestamp to the second. That is not a fact about the units, it is the signature of a single write that touched all of them, and every one of them has been untouched since.
 
 So when a blocked unit reports STALLED, resolve which of two claims it is making before repeating it: nothing has moved, or nobody has looked. Check the blocker itself, then either re-stamp the unit or leave it stalled deliberately. And propagate a blocker change to EVERY unit that shares it rather than to the one whose entry happened to be open at the time, because the units that miss the update are exactly the ones that will later look stalled for no reason.
+
+## A mechanism built for a rule encodes a claim about which states exist, and mine could only say `active`
+
+The status page went stale a second time, an hour after the first, and the cause was the opposite of the first. The first time the loop was busy and skipped the refresh 21 times. This time the loop was correctly quiet, zero checkpoints fired between 15:22Z and 16:00Z, because sdi is waiting on a release tag that may not arrive for hours. Nothing was neglected. The projection still promised a deadline it had no intention of meeting.
+
+The skill says what to do about exactly this: when the loop is about to go quiet for longer than the deadline, set `loop_state` to `paused` instead of leaving it `active` with a deadline nobody will meet, because active plus an expired deadline is the one combination that renders as a lie rather than as silence. That passage had been read the same day. The memory file already described the epic as idle by choice rather than blocked, in those words. And the refresh still went out as `active` with a 38 minute deadline.
+
+The reason is the fix from the first failure. The refresh had been made into one script so a busy checkpoint could not skip it, and that script hardcoded `"loop_state":"active"`. It could not express `paused` at all. So the mechanism built to enforce the rule had quietly encoded only the rule's common case, and made the exception unreachable by anyone using the mechanism. Choosing `paused` was no longer a decision that could be taken at the point of use, and the missing option is invisible from there.
+
+Two things follow. A mechanism is a claim about which states exist, so when turning a rule into a command, enumerate the rule's OWN branches and make each one expressible rather than encoding the path that happened to be live when it was written. And a fix for one failure is new code, so it deserves the same suspicion as the code that failed: this one was written, verified against the case it was built for, and never checked against the neighbouring case one sentence away in the rule it implemented.
+
+The command now takes `active <stale_after> | paused | finished`, refuses an unknown state, and sends a null deadline for anything but active, which is what the schema wanted all along.
