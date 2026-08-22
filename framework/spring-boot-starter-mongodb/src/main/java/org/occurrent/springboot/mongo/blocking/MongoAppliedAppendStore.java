@@ -163,7 +163,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
                     new Update().setOnInsert(RECORDED_AT, new Date()),
                     collection);
         };
-        executeWithRetry(write, retryableFailure(), retryStrategy).run();
+        executeWithRetry(write, this::isRetryable, retryStrategy).run();
     }
 
     @Override
@@ -171,7 +171,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(appendId, "appendId cannot be null");
         Supplier<Boolean> read = () -> readOnce(projectionId, appendId);
-        return requireNonNull(executeWithRetry(read, retryableFailure(), retryStrategy).get());
+        return requireNonNull(executeWithRetry(read, this::isRetryable, retryStrategy).get());
     }
 
     private boolean readOnce(String projectionId, AppendId appendId) {
@@ -199,7 +199,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      */
     private boolean readOnceBoundedBy(String projectionId, AppendId appendId, long deadlineNanos) {
         Supplier<Boolean> read = () -> readOnce(projectionId, appendId);
-        Predicate<Throwable> notShutdownAndBeforeDeadline = e -> retryableFailure().test(e) && System.nanoTime() < deadlineNanos;
+        Predicate<Throwable> notShutdownAndBeforeDeadline = e -> isRetryable(e) && System.nanoTime() < deadlineNanos;
         try {
             return requireNonNull(executeWithRetry(read, notShutdownAndBeforeDeadline, retryStrategy).get());
         } catch (RuntimeException e) {
@@ -214,7 +214,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
             ensureIndexesOnce();
             mongoOperations.remove(query(where(PROJECTION_ID).is(projectionId)), collection);
         };
-        executeWithRetry(delete, retryableFailure(), retryStrategy).run();
+        executeWithRetry(delete, this::isRetryable, retryStrategy).run();
     }
 
     @Override
@@ -289,8 +289,8 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      * 85 on the compound index never becomes anything else, so retrying it turns a configuration mistake into a
      * call that never returns, which is the whole reason a permanent error is told apart from a transient one here.
      */
-    private Predicate<Throwable> retryableFailure() {
-        return e -> !shutdown && !(e instanceof ConflictingIndexException);
+    private boolean isRetryable(Throwable e) {
+        return !shutdown && !(e instanceof ConflictingIndexException);
     }
 
     /**
