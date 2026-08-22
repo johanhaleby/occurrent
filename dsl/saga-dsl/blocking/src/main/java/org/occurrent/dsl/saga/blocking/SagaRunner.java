@@ -31,8 +31,11 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -91,6 +94,8 @@ import static java.util.Objects.requireNonNull;
  */
 @NullMarked
 public final class SagaRunner<E, C> {
+
+    private static final Logger log = LoggerFactory.getLogger(SagaRunner.class);
 
     private final Subscribable subscriptionModel;
     private final CloudEventConverter<E> cloudEventConverter;
@@ -230,7 +235,23 @@ public final class SagaRunner<E, C> {
         ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor(daemonThreadFactory("occurrent-saga-timer-" + subscriptionId));
         long intervalMillis = config.timerPollInterval().toMillis();
         poller.scheduleWithFixedDelay(pollTask, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
-        return new SagaSubscription(subscription, poller, SagaInstances.of(stateStore), strategy, leaseKey, holderId);
+        warnIfQuarantineCannotBeReleased(subscriptionId, config);
+        return new SagaSubscription(subscription, poller, SagaInstances.of(stateStore), subscriptionModel,
+                new QuarantinedInstances<>(stateStore), strategy, leaseKey, holderId);
+    }
+
+    /**
+     * Say at startup what a release will and will not be able to do, rather than let an operator find out in the middle
+     * of the incident that produced the quarantine. A model that cannot be resumed at a chosen position can still
+     * quarantine an instance, since the event stays in the store either way, but bringing it back means abandoning the
+     * instance rather than replaying it.
+     */
+    private void warnIfQuarantineCannotBeReleased(String subscriptionId, SagaRunnerConfig config) {
+        if (config.quarantineAfter() == null || RepositionableSubscriptions.findIn(subscriptionModel).isPresent()) {
+            return;
+        }
+        log.warn("Saga subscription '{}' runs on a subscription model that cannot be resumed at a chosen position ({}), so SagaSubscription.release(sagaId) is unavailable for it. An instance whose event keeps failing for {} is still quarantined, which keeps the saga's other instances moving, but bringing it back means abandoning it with SagaStateStore.delete(sagaId) rather than replaying the event it stopped on. Set quarantineAfter to null on SagaRunnerConfig if you would rather keep the pre-0.34.0 behaviour of blocking every instance instead.",
+                subscriptionId, subscriptionModel.getClass().getName(), config.quarantineAfter());
     }
 
     /**
