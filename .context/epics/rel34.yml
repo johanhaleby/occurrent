@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 72
-updated_at: '2026-08-22T17:23:15+00:00'
-updated_by: 'orchestrator rel34: 941 CI failure is real event loss, not the environment'
+revision: 73
+updated_at: '2026-08-22T17:25:25+00:00'
+updated_by: 'orchestrator rel34: 941''s failure is documented flake 870, retracted'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -673,8 +673,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker reproduces the TCK lifecycle test on its own head and rules finding versus flake
-    last_meaningful_progress_at: '2026-08-22T17:23:15+00:00'
+    next_action: await the shard re-run, nothing else outstanding
+    last_meaningful_progress_at: '2026-08-22T17:25:25+00:00'
     observed:
       dispatched_plan_first:
         note: 'Dispatched PLAN FIRST rather than as an implementation, because #891''s own filer recorded
@@ -755,6 +755,20 @@ units:
           shard on the strength of a different failure reproduced elsewhere.'
         via: gh api actions jobs logs --allow-escape-sequences on the completed run
         at: '2026-08-22T17:23:15+00:00'
+      ci_failure_is_documented_flake_870:
+        note: 'RETRACTED my own finding. The failure is #870, open at milestone 0.35.0, ''Flaky: subscription
+          TCK lifecycle tests race the change stream pause on loaded runners''. It names the EXACT test
+          and the EXACT assertion message, a_paused_subscription_receives_what_the_fixture_declares_and_delivers_again_once_resumed
+          asserting ''the held one must arrive, and before anything published after it'', with three prior
+          occurrences in two days on PRs not touching that module, each passing on rerun. This is the
+          fourth. MY ERROR: I read the log carefully, correctly separated an assertion failure from a
+          container failure, confirmed main was green on four recent runs, and then called it a finding
+          WITHOUT searching the tracker. Main being green rules out a permanently broken shard and cannot
+          rule out an intermittent flake, which passes most of the time by definition. The worker''s original
+          reachability instinct was right and my more careful reading of the wrong evidence overruled
+          it. Shard re-run requested.'
+        via: gh issue view 870
+        at: '2026-08-22T17:25:25+00:00'
     assessment: '#891 ALONE now; #878 moved to U4. Sequenced behind U12 rather than run beside it: #891''s
       fix path runs through framework/spring-boot-autoconfigure/reactor ProjectionAnnotationRegistrar.java
       and ComposedCatchupModel.java, the two files U12 owns. Give it to the U12 worker when U12 merges,
@@ -2329,3 +2343,12 @@ cross_epic:
       more than gating them one at a time, because the condition was fleet-wide rather than a property
       of any unit.'
     at: '2026-08-22T17:01:27+00:00'
+  two_known_flakes_are_an_r3_risk:
+    note: 'TWO known flakes have now hit rel34 release PRs today, both open at milestone 0.35.0. #864,
+      CompetingConsumerSubscriptionModelTest lease race, which turned main red at the U19 merge. #870,
+      the subscription TCK lifecycle tests racing the change stream pause, now on its fourth recorded
+      occurrence, which failed PR 941. R3 IMPLICATION: the tag run needs green CI and either of these
+      can fail any run. If the tag run hits one, RE-RUN rather than investigate, and do not let it be
+      read as a regression from the release commit. Neither is a defect in rel34''s work and neither was
+      pulled into 0.34.0.'
+    at: '2026-08-22T17:25:25+00:00'

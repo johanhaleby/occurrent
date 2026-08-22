@@ -2597,3 +2597,24 @@ interpreting the old one in either direction.
 A sweep is worth more than catching these one at a time. Checking all six open PRs at once found
 four with stale reviews carrying "Changes recommended" and between one and four suppressed comments
 each, which is a fleet-wide condition rather than a property of any one unit.
+
+## Search for an existing flake issue before calling a CI failure a finding
+
+rel34 read a CI log carefully, established the failure was an assertion rather than a container error,
+confirmed the shard was green on main's last four runs, and told the worker to treat it as a finding
+against its change. It was #870, open, with the exact test name and the exact assertion message
+already recorded, plus three prior occurrences on pull requests that did not touch that module, each
+passing on rerun.
+
+Two checks are needed and only one of them was run. Main being green on recent runs rules out a
+permanently broken shard. It does not rule out an intermittent flake, which is invisible in exactly
+that evidence, because an intermittent failure passes most of the time by definition.
+
+So the sequence is: read the log, then search the tracker for the test name and the assertion text,
+then look at main. Searching is one command and it is the check that distinguishes a new defect from
+a known one. The worker's own instinct that its change could not reach the module was correct and was
+overruled by a more careful reading of the wrong evidence.
+
+The cost of getting this backwards is not only wasted work. Sending a worker to hunt a defect in its
+own change, when the change is innocent, invites it to find a plausible cause and fix something that
+was never broken.
