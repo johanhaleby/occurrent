@@ -254,6 +254,59 @@ class SubscriptionModePropertyRenameTest implements RewriteTest {
     }
 
     @Test
+    void the_default_recipe_migrates_each_profile_of_a_mixed_value_multi_document_file_on_its_own() {
+        // Regression test for #834 against the recipe users actually select, MigrateSubscriptionModeProperty_0_32,
+        // which chains the false half and the true half in one cycle over the same file. A third profile holds an
+        // unresolved placeholder, which neither half maps, so it must keep the deprecated key untouched.
+        rewriteRun(
+                yaml(
+                        """
+                        occurrent:
+                          subscription:
+                            enabled: false
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: prod
+                        occurrent:
+                          subscription:
+                            enabled: true
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: canary
+                        occurrent:
+                          subscription:
+                            enabled: ${SUBSCRIPTIONS_ON}
+                        """,
+                        """
+                        occurrent:
+                          subscription:
+                            mode: disabled
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: prod
+                        occurrent:
+                          subscription:
+                            mode: auto
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: canary
+                        occurrent:
+                          subscription:
+                            enabled: ${SUBSCRIPTIONS_ON}
+                        """
+                )
+        );
+    }
+
+    @Test
     void a_multi_document_file_where_one_profile_sets_the_deprecated_key_and_another_sets_the_new_key() {
         // Regression test for #828: DropRedundantSubscriptionEnabledInYaml_0_32 must check the replacement key
         // per document, not per file. The default profile below sets only the deprecated key and has no mode of
