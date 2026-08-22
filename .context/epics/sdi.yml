@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 42
+revision: 43
 updated_at: 2026-08-22T13:43:22Z
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -76,8 +76,8 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "Semantic gate CLEARED. Waits only on U1 now, which is still fenced on #871 and #837."
-    last_meaningful_progress_at: 2026-08-22T11:25:16Z
+    next_action: "READY by the graph since U1 merged, but DISPATCH IS HELD pending Johan's release-sequencing ruling. sdi's 0.35.0 work (U5 PR 924, U1 PR 934) is on main before rel34 cuts 0.34.0, changelog.md carries no entry for either, and a cut from the tip would ship them inside 0.34.0 along with a live UpgradeToOccurrent_0_35 that rewrites onto annotations no registrar reads (#929). rel34 owns release mechanics and is carrying the single ask; sdi is deliberately not asking in parallel. Dispatching U2 now would deepen whatever has to be undone. Descriptor package RESOLVED by reading the ADR and the tree: descriptors live in dsl/<kind>-dsl/common/.../org/occurrent/dsl/<kind>/, so Subscription<E> goes in dsl/subscription-dsl/common and does NOT reuse the FQN U1 just freed, which keeps the ChangeType recipe safe."
+    last_meaningful_progress_at: 2026-08-22T14:46:56Z
     observed:
       issue_753_resolved: {pr: 913, merged_sha: a86909f5d, merged_at: 2026-08-22T11:22:58Z, issue_state: CLOSED, contract: "EventTypeExpansion now REFUSES a concrete class that is neither final nor sealed. Up to 0.33.0 such a type was accepted with only itself in the filter, so a caller declaring class OrderPlaced and publishing a subclass of it never saw that subclass and got no warning. The four escapes the javadoc names: make the class final, seal the hierarchy, declare the concrete types, or SET AN EXPLICIT FILTER. expandWhatCanBeFound stays lenient and now counts a non-final concrete class as lenient-eligible.", via: "read the merge diff directly rather than waiting for rel34's promised delivery report", at: 2026-08-22T11:25:16Z}
     assessment: "Owns the new Java files it creates, named individually, plus the two Subscriptions.kt files inherited from U1. Developable before U1 merges, not mergeable before. WRITTEN AGAINST POST-#753 SEMANTICS: on(Class,..) inherits the refusal of a non-final non-sealed concrete class, and the tests must encode that rather than the 0.33.0 behaviour. CONVERGENCE WORTH THE BRIEF: #753's fourth named escape is an explicit filter, and an explicit filter with no typed handler is exactly the catch-all case dec-0005 added to the descriptor. Two independent requirements landed on one feature, which raises confidence the catch-all is right rather than expedient. Opus/high."
