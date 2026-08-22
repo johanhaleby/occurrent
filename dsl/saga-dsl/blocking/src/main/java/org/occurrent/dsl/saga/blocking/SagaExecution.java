@@ -106,13 +106,14 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         EventMetadata metadata = EventMetadata.from(cloudEvent);
         EventMeta meta = extractMeta(cloudEvent);
         refuseOrWarnIfRedeliveryCannotBeDetected(meta);
+        SagaInput<E> input = SagaInput.event(event, metadata);
         Duration quarantineAfter = config.quarantineAfter();
         if (quarantineAfter == null) {
-            process(sagaId, SagaInput.event(event, metadata), meta, null);
+            process(sagaId, input, meta, null);
             return;
         }
         try {
-            process(sagaId, SagaInput.event(event, metadata), meta, null);
+            process(sagaId, input, meta, null);
         } catch (RuntimeException e) {
             if (!quarantine(sagaId, meta, e, quarantineAfter)) {
                 throw e;
