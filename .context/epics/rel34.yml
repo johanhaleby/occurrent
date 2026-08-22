@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 11
-updated_at: '2026-08-22T09:05:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U2 grew public API mid-flight, verify
-  discipline recorded)
+revision: 12
+updated_at: '2026-08-22T09:15:00+00:00'
+updated_by: 'orchestrator session rel34-epic-registration-8c2066 (dec-0008: #906 as U13, #905 as U14,
+  #907 folded into PR 901)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -157,9 +157,14 @@ units:
           NOT cover preserveTags; a second is running against b733100d8.'
         via: orchestrator
         at: '2026-08-22T09:05:00+00:00'
-    assessment: Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
+    assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
+      SCOPE ADDITION dec-0008: #907 folded into PR 901 (remove the .log() leaking the full document at
+      INFO on the GDPR-redaction path), with the worker also checking the blocking stores for the same
+      site and establishing by git blame whether it predates PR 901, since that decides whether it earns
+      its own changelog entry. One further push explicitly authorized after the worker had declared the
+      head final.'
   U3:
     issue: 871
     goal: The never-replays warning is bound to the composed model's identity rather than a context-wide
@@ -473,6 +478,8 @@ units:
     - U10
     - U11
     - U12
+    - U13
+    - U14
     - U2
     - U3
     - U4
@@ -589,6 +596,8 @@ units:
     - U10
     - U11
     - U12
+    - U13
+    - U14
     - U2
     - U3
     - U4
@@ -678,3 +687,68 @@ units:
       the OccurrentReactiveMongoAutoConfiguration bean-method extension up front, because dec-0005 already
       established this fix shape is structurally cross-module and rediscovering that costs a round trip.
       U6 (#837) must be fenced out of the two reactor files U12 owns.
+  U13:
+    issue: 906
+    goal: 'Documents already corrupted by the pre-fix updateEvent bug are healed, so they stop being permanently
+      invisible to DCB reads. A repair path, not documentation alone: a corrupted document has position
+      stored as a BSON string and no indexed dcbTags array, and the DCB query filters on exists(dcbTags)
+      while the numeric position range check excludes a string, so nothing finds it and nothing repairs
+      it today.'
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - U2
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 906
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch after PR 901 merges, since both build on its fix
+    last_meaningful_progress_at: '2026-08-22T09:15:00+00:00'
+    observed: {}
+    assessment: 'THE UNIT THAT DECIDES WHAT FIXING #876 MEANS. PR 901 stops the corruption going forward
+      and does not touch a document already corrupted, so without this the release ships half a fix for
+      exactly the users who already hit the bug, and their events stay invisible forever. Johan adopted
+      it as a real heal rather than the documentation-only option, dec-0008. Design questions the unit
+      must answer rather than assume: whether PositionBackfill is the right home or a new repair path
+      is needed, how a corrupted document is even FOUND given the DCB query cannot see it, whether the
+      heal is online or an operator action, and whether tags can be reconstructed at all or only position
+      (a dropped dcbTags array may be unrecoverable, in which case say so honestly rather than pretending).
+      Likely ADR. Plan-first, Opus/high. Reserve an ADR number at dispatch if the plan gate confirms one
+      is needed.'
+  U14:
+    issue: 905
+    goal: 'InMemoryEventStore.updateEvent reapplies the original event''s position, closing the same store-owned-field
+      loss #876 fixed for the three MongoDB stores, so a fresh replacement event built by an update function
+      does not silently vanish from a DCB read filtered on position.'
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - U2
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 905
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch after PR 901 merges, since both build on its fix
+    last_meaningful_progress_at: '2026-08-22T09:15:00+00:00'
+    observed: {}
+    assessment: 'Fourth store, same defect class. Small. Shipping #876 fixed on three of four stores is
+      an asymmetry the changelog would have to caveat, and InMemoryEventStore is what people write their
+      tests against, so the gap is most visible exactly where users are trying to prove their code works.
+      The TCK already has keeps_the_events_own_append_id_even_when_the_update_function_returns_a_fresh_event,
+      which is the shape to mirror for position. Sonnet/medium.'
