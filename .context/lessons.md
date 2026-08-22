@@ -1827,3 +1827,47 @@ contexts.
 
 This is a defect in shared tooling rather than in one fleet's use of it: all three fleets on this
 repository run the v7 pattern, so all three inherit it.
+
+## The round-N fix produces the round-N+1 defect, and naming it is what makes it visible (rel34, 2026-08-22)
+
+Four instances in one epic, three of them found only because a worker or a pass said so explicitly.
+
+PR 914's worker fixed a retry predicate that ran before the backoff sleep by guarding the read
+supplier against the deadline. That guard made a zero timeout skip the store entirely, so
+`waitUntilApplied` answered false for an append it held. The fix for the round-N finding WAS the
+round-N+1 defect, in the same diff, and the worker said so in those words rather than reporting two
+unrelated findings.
+
+PR 900's Copilot round two found a factual error inside round one's own correction. PR 913's round
+two did the same on prose. brk's ADR 133 ran ten rounds each finding something real.
+
+Two things follow, and the second is the useful one.
+
+A fix to a falsification gets re-verified against the NEW head rather than inheriting the old
+verdict, and the pass is aimed at where a fix typically fails rather than at the original bug. For
+an unwrapping fix that means asking what happens when the unwrap returns null; for a guard, what
+happens at the boundary the guard introduced.
+
+And a worker who names the pattern in its own diff is doing the thing that makes it tractable.
+Reported as two findings it reads as bad luck; reported as one it reads as a shape, and the shape
+is what tells you to keep verifying rather than to trust that the third round converged.
+
+## An instruction can be unimplementable, and the worker is better placed to know (rel34, 2026-08-22)
+
+I told a unit to reject an unbounded retry policy at construction, comparing it to the blank
+collection name and negative retention that the same constructor already rejects. The worker
+established that it cannot be done: `RetryStrategy.Retry` exposes only mutators with no accessor,
+`RetryImpl.maxAttempts` is package private, and reactor's `Retry` is abstract with only
+`generateCompanion`. A store cannot ask a policy whether it terminates.
+
+The comparison I drew was the error. Those other inputs are rejectable because they are values; a
+policy is behaviour, and behaviour cannot be interrogated. The worker's alternative, enforcing a
+ceiling in the store so the CALL stops rather than the construction, was better than what I asked
+for, and it rejected a constructor-parameter variant on the grounds that signature churn across 24
+call sites is how the previous rounds each produced the next defect.
+
+So: an instruction that names a mechanism ("reject at construction") rather than an outcome ("the
+round trips must be bounded whatever policy is supplied") invites a worker to either implement the
+wrong thing or spend a round pushing back. State the outcome and let the unit find the mechanism,
+and when a worker says an instruction is unimplementable, check its evidence rather than restating
+the instruction.
