@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 62
-updated_at: '2026-08-22T16:35:34+00:00'
-updated_by: 'orchestrator rel34: U5 plan verified, core inference held, released to implement'
+revision: 70
+updated_at: '2026-08-22T17:09:06+00:00'
+updated_by: 'orchestrator rel34: U2 DONE, PR 901 merged closing four issues, U14 widened'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -111,38 +111,32 @@ units:
     goal: 'updateEvent no longer rewrites the stored position as a BSON string and no longer drops dcbTags.
       Invariant: a document round-tripped through convertToDocument preserves position as int64 and preserves
       dcbTags, at all three write-back sites (SpringMongoEventStore:356, MongoEventStore:756, ReactorMongoEventStore:904).'
-    phase: BLOCKED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: ListAgents name brave-sammet-c975a0-82, worktree brave-sammet-c975a0, chip task_8def816f,
-      Sonnet/high
+    session: null
     deliverables:
     - check: pr_merged
       ref: 901
-      met: false
-      evidence: ''
+      met: true
+      evidence: 'PR 901 MERGED 2026-08-22 as squash 80d61fcbc, CAS-pinned to the verified head a481bcbae,
+        branch deleted. Closed FOUR issues: #876, #904, #927 and #907, all CLOSED and verified.'
     - check: issue_closed
       ref: 876
-      met: false
-      evidence: ''
+      met: true
+      evidence: '#876 CLOSED by PR 901 (squash 80d61fcbc).'
     - check: issue_closed
       ref: 927
-      met: false
-      evidence: ''
+      met: true
+      evidence: '#927 CLOSED by PR 901 (squash 80d61fcbc).'
     - check: issue_closed
       ref: 907
-      met: false
-      evidence: ''
-    blocking_on:
-    - what: 'PR 901 held by the orchestrator gate. Clears when the worker pushes a test for an original
-        with no tags whose updater forges some, proving the withoutExtension(TAGS) branch, plus #927''s
-        streamId and streamVersion, and the gate re-runs from the top on the new head.'
-      since: '2026-08-22T15:11:57+00:00'
-      recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: worker adds the forged-tags-on-a-non-DCB-original test, verifies it fails with preserveTags
-      reverted, then the gate re-runs
-    last_meaningful_progress_at: '2026-08-22T12:04:08+00:00'
+      met: true
+      evidence: '#907 CLOSED by PR 901 (squash 80d61fcbc).'
+    blocking_on: []
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T17:09:06+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
@@ -324,6 +318,31 @@ units:
           orchestrator''s own bookkeeping write.'
         via: sdi's shared-timestamp signature check + gh pr view commits
         at: '2026-08-22T15:24:12+00:00'
+      gate_clear_except_the_pass:
+        note: 'Every gate fact on a481bcbae is satisfied: all four workflow runs completed/success including
+          Java CI with Maven, Copilot reviewed THIS head with ''Approval recommended'' and ZERO suppressed
+          comments, and zero unresolved threads. Only the adversarial pass remains, and it is running.
+          Not merging before it returns, because nine of nine gated PRs in this epic have carried a real
+          defect and several were invisible to exactly this combination of facts.'
+        via: gh api actions runs, pulls reviews, graphql reviewThreads
+        at: '2026-08-22T17:06:08+00:00'
+      adversarial_held_on_the_stated_claim:
+        note: 'HELD on the claim as stated, FALSIFIED on the broader property the DELIVERY_RESULT framed
+          it as. Merged because the SHIPPED prose is correctly scoped: the changelog says ''on every one
+          of the three MongoDB event stores'', and #927''s own body scopes itself the same way. The over-broad
+          framing was in a PR comment, not in anything that ships. Verified exhaustively on the three
+          Mongo stores: returned event cross-checked against the document reconstructed via DcbDocumentMapper.toCloudEvent
+          IN THE SAME TEST across six scenarios; convertToDocument writes exactly two values from a parameter
+          rather than the event, streamId and streamVersion, both now covered, and a full BSON key-and-type
+          diff found no sixth instance; chain order not load-bearing since the four preserve* methods
+          touch disjoint extensions; #907''s .log() removed rather than downgraded with zero .log( calls
+          left in the reactor store; five mutations each reddening between 2 and 7 of 8 tests, and the
+          streamIdentity mutation reddening 4 of 8 on all three stores. Minor reporting inaccuracy to
+          remember: the DELIVERY_RESULT claimed nine tests per store and twenty-seven total; surefire
+          reports EIGHT per store and twenty-four. The grep -c ''@Test'' count was inflated by the @Testcontainers
+          annotation.'
+        via: adversarial verify subagent
+        at: '2026-08-22T17:09:06+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
@@ -480,8 +499,9 @@ units:
         either rejects values above it or honours them.
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: worker answers three grouped defects on 914, then the gate re-runs from the top
-    last_meaningful_progress_at: '2026-08-22T12:53:20+00:00'
+    next_action: worker fixes two self-contradictions, adds a biting test for retryUntil, corrects the
+      :67 javadoc
+    last_meaningful_progress_at: '2026-08-22T17:03:48+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -561,6 +581,53 @@ units:
           end of the ceiling defect U4 itself found.'
         via: gh api pulls/914/reviews + graphql reviewThreads
         at: '2026-08-22T13:44:39+00:00'
+      three_defects_answered:
+        note: 'Worker answered all three and, importantly, did the SWEEP FIRST rather than point-fixing
+          the three surfaces I named. It grepped every prose surface the PR ADDS for always, never, no
+          such setting, on time and guarantee, FLATTENED ACROSS LINE WRAPS so a sentence broken over two
+          javadoc lines still matches, which is the trap that hid one last round. 37 hits, the three named
+          were the only ones of this class. Chose NARROW over BOUND with a reason I accept: any finite
+          bound on the mandatory first read is arbitrary, or short enough to cut off a read Mongo answers
+          in milliseconds, which returns false for an append the store holds, which is the defect it fixed
+          in round one. So bounding would trade this defect for that one. The property is now stated ONCE
+          in AppliedAppendStore.waitUntilApplied with the other two surfaces pointing at it rather than
+          restating it, and there is a test showing the read outlasting a zero timeout so the exception
+          is measured rather than claimed. Defect 3 REJECTED rather than honoured, with an argument I
+          accept: the ceiling exists to stop a policy that never stops on its own, not to shorten one
+          that does, so a configured 2000 silently performing 1000 is the same class of quiet difference
+          as everything else in this PR, and raising the ceiling to match would mean it is not a ceiling.
+          It also found and repaired an orphaned javadoc its OWN earlier edit created, where neverRetryingAConflictingIndex''s
+          doc had drifted above retryUntil. Copilot did not flag it and it compiles either way.'
+        via: worker report
+        at: '2026-08-22T16:43:44+00:00'
+      sweep_ran_judgement_failed:
+        note: 'FALSIFIED on the sweep and the narrowed property. THE SWEEP HIT BOTH SURVIVING OVERCLAIMS
+          AND PASSED THEM, since both contain ''never quietly shortens'' which the worker grepped for.
+          So the mechanism worked and the judgement on the hits did not, and sweeping harder is not the
+          fix. FALSIFIER 1: the property is stated TWICE in AppliedAppendStore''s own javadoc and the
+          two disagree. Line 143-145 says the reactive one returns WITHIN timeout; line 155-157 says it
+          returns after timeout PLUS the in-flight call. 155 is the leftover pre-narrowing text, so the
+          narrowing was added above it and the old absolute left below, which is the exact failure the
+          round-2 comment described, committed inside the fix for it. Empirically 155 is false: readOnceBoundedBy
+          calls read.block(Duration.ofNanos(remainingNanos)) which cancels the in-flight read, measured
+          at 158ms against a 3000ms read under a 100ms timeout where 155 predicts 3100ms. The worker''s
+          own invariant carries the same error, since ''never ends one already running'' is true of blocking
+          and false of reactive. FALSIFIER 2: fix 3 made the ceiling javadoc false on both stacks and
+          in ADR 0132. Both say no configured value reaches the ceiling; fix 3 caps the property at EXACTLY
+          the ceiling. The re-checkable form needs no build: OccurrentPropertiesTest.allows_exactly_the_number_of_attempts_the_store_will_make
+          asserts setMaxAttempts(MAX_ATTEMPTS_CEILING) is accepted while MongoAppliedAppendStore.java:102
+          says no configured value reaches it. ONE TEST IN THIS PR ASSERTS THE NEGATION OF ONE JAVADOC
+          SENTENCE IN THIS PR. Second half: a policy carrying its own onRetryExhaustedThrow has it silently
+          replaced, since the store''s wrapper errors first. SECONDARY: retryUntil''s context fix has
+          NO test that bites, reverting it leaves 23 of 23 green, and it is the wrapper the suppressed
+          comment named. And MongoAppliedAppendStore:67 states DEFAULT_MAX_ATTEMPTS as an invariant of
+          a caller-supplied argument, where the reactive twin at :77 gets it right. HELD with evidence:
+          both wrappers'' context across three entry points, the ceiling accepting 1/999/1000 and rejecting
+          1001/MAX_VALUE/0/-1/MIN_VALUE naming both numbers, constant drift tied in both starter modules,
+          fixes 2 and 3 reddening on revert, every javadoc block landing on its member 15 of 15 and 13
+          of 13, and the zero and already-expired cases making exactly one read on both stacks.'
+        via: adversarial verify subagent, empirical with mocked Mongo
+        at: '2026-08-22T17:03:48+00:00'
     assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:30:57Z after
       a scoping read, which is why #878 moved here from U5. The read found two collisions the original
       split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
@@ -582,7 +649,7 @@ units:
     session: chip task_ea20e8b3, plan-first, Opus/high
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 941
       met: false
       evidence: ''
     - check: issue_closed
@@ -590,8 +657,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: write ADR 0135 and implement, carrying the four additions from the verdict
-    last_meaningful_progress_at: '2026-08-22T16:35:34+00:00'
+    next_action: await CI and Copilot on 941, then gate with an adversarial pass
+    last_meaningful_progress_at: '2026-08-22T16:58:50+00:00'
     observed:
       dispatched_plan_first:
         note: 'Dispatched PLAN FIRST rather than as an implementation, because #891''s own filer recorded
@@ -632,6 +699,26 @@ units:
           test asserts presence and never absence.'
         via: adversarial verify subagent, empirical on mongo:8
         at: '2026-08-22T16:35:34+00:00'
+      pr_941_and_adr_0135:
+        note: 'PR 941 on johan/891-reactor-handover-dedup, 9 files +324/-48. ADR 0135 written at 11367
+          bytes. THE ADR RULING WAS FOLLOWED EXACTLY, which I verified in the diff rather than trusting.
+          ADR 0038 is touched ONLY in its Status section, changing ''Accepted'' to name the superseded
+          section, point at ADR 135 and say the rest of the decision stands, which is precisely the ADR
+          111 pattern AGENTS.md cites. Its divergence section is untouched. ADR 0132 is amended in place
+          at 9 insertions and 7 deletions, permitted because it has not shipped. ALL FOUR REQUIRED ADDITIONS
+          PRESENT, checked by grep and by reading: the corrected empirical-support claim, the Atlas null-or-empty
+          checkpoint caveat, the contradicting PositionCatchupPipeline comment quoted and answered, and
+          a dedicated ''Limits of the evidence'' section. That section states the single-primary limit
+          and says ''This ADR claims the single-primary case and no more'', states that nothing in the
+          repository tests the exclusivity direction with the TCK detail, and then adds a THIRD limit
+          nobody asked for: the new regression tests reproduce the race by having the reader report a
+          head above the last committed position, which ADR 84 permits since currentPosition() is a high-watermark,
+          and neither drives a genuinely uncommitted write across a head read the store actually performed,
+          which would need a transaction held open across it. That is the worker documenting the limits
+          of its OWN new tests unprompted, which is the behaviour that stops a reviewer discovering it
+          six months later.'
+        via: git diff origin/main...pr941 and reading ADR 0135
+        at: '2026-08-22T16:58:50+00:00'
     assessment: '#891 ALONE now; #878 moved to U4. Sequenced behind U12 rather than run beside it: #891''s
       fix path runs through framework/spring-boot-autoconfigure/reactor ProjectionAnnotationRegistrar.java
       and ComposedCatchupModel.java, the two files U12 owns. Give it to the U12 worker when U12 merges,
@@ -664,9 +751,9 @@ units:
         routes through that same helper rather than its own bare getBean.
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: worker adds the no-regression floor to its resolve helper and routes the fourth call
-      site through it
-    last_meaningful_progress_at: '2026-08-22T14:50:03+00:00'
+    next_action: worker documents the startup-replay exception in the changelog and at the fallback, then
+      the gate re-runs
+    last_meaningful_progress_at: '2026-08-22T17:01:27+00:00'
     observed:
       scope_derived_by_orchestrator:
         note: 'Enumerated the invocation sites myself rather than trusting the issue text. The defect
@@ -792,6 +879,24 @@ units:
           already supports multi-document transactions.'
         via: 'worker DELIVERY_RESULT + my own read of pr933 and #935'
         at: '2026-08-22T15:01:48+00:00'
+      hang_fix_reintroduces_837_in_one_configuration:
+        note: 'Fresh Copilot review of 6c65f6160 is ''Needs a closer look'' with TWO suppressed comments,
+          the same finding at both stacks (blocking :72, reactor :79). It is right. The isCurrentlyInCreation
+          fallback invokes the RAW bean, so a @Transactional handler with startAt=BEGINNING and startupMode=WAIT_UNTIL_STARTED
+          has its advice silently bypassed for the ENTIRE startup history replay. That is #837''s own
+          defect reintroduced by the fix for the startup hang the same worker found. RULED: the fallback
+          STAYS. Without it that configuration hangs Spring Boot forever, which is strictly worse than
+          losing advice, and the worker declared the trade honestly in its own invariant. What is wrong
+          is that a user reading a changelog entry saying the bypass is fixed will believe it applies
+          to them when it does not, and this is not a narrow window in event count, it is all of history
+          for that subscription. So the exception gets documented where a user meets it: the changelog
+          names the configuration, and the javadoc at the fallback says why the trade exists so the next
+          reader does not tidy the guard away and reintroduce the hang. Keeping the advice AND avoiding
+          the deadlock needs the afterSingletonsInstantiated move sdi owns, which this unit is fenced
+          out of. SECOND TIME TODAY an absolute claim outlived its exception INSIDE the fix for something
+          else.'
+        via: gh api pulls/933/reviews on the current head
+        at: '2026-08-22T17:01:27+00:00'
     assessment: 'Dispatched 2026-08-22 as a chip after U3 merged. The 2026-08-17 deferral to the ADR 127
       epic and my own 2026-08-22 supersede were BOTH argued on premises that did not survive. The deferral
       assumed a large fix that the epic would rewrite immediately; the supersede assumed the epic had
@@ -1035,8 +1140,9 @@ units:
         with a test carrying a timeout.
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: await the fresh adversarial verdict on 7434393a and CI, then merge if both clear
-    last_meaningful_progress_at: '2026-08-22T16:32:31+00:00'
+    next_action: worker settles the onBeforeRetry claim empirically across four sites, then requests a
+      fresh Copilot review
+    last_meaningful_progress_at: '2026-08-22T16:49:15+00:00'
     observed:
       gate_919:
         note: 'PR 919 opened, all ten dispatched units now have PRs. TWO FAILURES on test (example-projection)
@@ -1079,6 +1185,49 @@ units:
           past the one the falsifying verdict covered and the earlier HELD findings do not carry forward.'
         via: worker report + gh pr view
         at: '2026-08-22T16:32:31+00:00'
+      reverify_falsified_prose_only:
+        note: 'FALSIFIED, scoped to the javadoc''s absolute wording ONLY. Every behavioural half HELD,
+          including the cyclic fix that falsified the previous head. The input: Throwable.getCause() is
+          not final, so an override returning a FRESH object each call defeats an identity visited set
+          by construction. Not a cycle, an unbounded chain. Hangs under a five second watchdog. THE CALIBRATION
+          IS THE VALUABLE PART. The implementation is as good as the JDK''s, since Throwable.printStackTrace,
+          which the code cites as its model, loops forever on the same input. The verifier scanned all
+          91 exception classes on the test classpath that reference getCause and every override returns
+          a stable field. So this is an overclaimed absolute in prose and NOT a reachable hang. Line 54
+          claims the guarantee for ''any throwable a caller can construct''; the visited set delivers
+          it for ''any chain built through initCause''. One sentence. HELD with evidence: cyclic termination
+          across a 2-node, a 3-node, a rho-shaped 50-link chain, a cycle under RabbitMqPublishException
+          and one under an outermost ShutdownSignalException; 200,000 wrappers still correct; classification
+          unchanged across 40 combinations of five permanent codes at four depths under two close types
+          and two wrapper families; identity rather than equals confirmed; exactly 10 attempts with the
+          rethrown cause identical to the tenth attempt''s instance; 20 channels opened and 20 closed
+          under PARK with zero leaked; both mutations bite; changelog clean with #846, #867 and #922 each
+          appearing once. MY BRIEF WAS WRONG about one case: a self-causing exception is unconstructible,
+          since a.initCause(a) throws IllegalArgumentException ''Self-causation not permitted''.'
+        via: adversarial verify subagent
+        at: '2026-08-22T16:46:00+00:00'
+      four_suppressed_findings_sat_five_hours:
+        note: 'NOT MERGED despite the javadoc narrowing being correct and the diff being comments only,
+          which does let the adversarial verdict carry. Copilot''s latest review on 919 is on fe69724e3,
+          HOURS OLD, says ''Changes recommended'', and carries FOUR suppressed comments, TWO of them flagged
+          ''previously missed, in code that hasn''t changed since the last review''. They have been unaddressed
+          since 11:44:27Z. Suppressed comments open no threads, so the PR''s honest ''0 unresolved threads''
+          was blind to all four. This is the ninth time today that reading a review BODY found what the
+          thread count could not. The finding, one defect in four places (RabbitMqCloudEventBridge:853,
+          domain/RabbitMqDomainEventBridge:809, DefaultRabbitMqCloudEventBridgeFactory:84, domain/DefaultRabbitMqDomainEventBridgeFactory:79):
+          each logs ''Attempt {} of {} failed. Retrying in {}.'' from onBeforeRetry, which Copilot says
+          fires AFTER the backoff with info describing the UPCOMING attempt, so the first failure logs
+          as attempt 2 and the delay is announced after it elapsed. It recommends onRetryableError. I
+          DID NOT RELAY THIS AS SETTLED, because two credible sources contradict. Structurally Copilot
+          looks right: in RetryExecution at this head onBeforeRetry is line 179, onRetryableError 200,
+          the sleep 207, currentAttempt++ 215, so 179 is the top of the NEXT iteration and fires after
+          the previous sleep. Empirically it looks wrong: the FIRST adversarial pass ran the two-failures
+          test and observed ''Attempt 1 of 10'' then ''Attempt 2 of 10'', which is correct numbering.
+          Likely reconciliation is that the halves separate, since BeforeRetryInfoImpl is built from retryInfoWithPrevBackoff
+          and lastErr, so the NUMBER may describe the failed attempt while the TIMING is still wrong.
+          Routed to the worker to settle by running it and to report which half holds.'
+        via: gh api pulls/919/reviews + my read of RetryExecution at pr919d
+        at: '2026-08-22T16:49:15+00:00'
     assessment: 'Decided IN by derivation, not asked: AGENTS.md:120 requires every component to ship production
       ready including surviving a transient outage of the store it talks to, and the broker modules ship
       for the first time in 0.34.0. The earlier decline for PR 861 is one of the deferrals the triage
@@ -1298,6 +1447,18 @@ units:
           421 is now stable rather than moving.'
         via: git rev-parse against the docs remote
         at: '2026-08-22T16:32:31+00:00'
+      wait_until_started_workaround_absent:
+        note: 'U5 flagged that occurrent.org documents a WAIT_UNTIL_STARTED workaround for the window
+          PR 941 closes, per #891''s routing comment, and that the held docs branch would need to drop
+          or requalify it once 941 ships. CHECKED across all eight held branches rather than filed. WAIT_UNTIL_STARTED
+          appears four times on every branch and all four are pre-existing reference-table rows inherited
+          from docs main: the startupMode parameter tables for @Projection and @Saga, and the startup-mode
+          explanation table. docs/append-identity is the only branch carrying waitUntilApplied content
+          and none of its five mentions sits near a workaround. So #891''s routing comment overstates
+          what exists. Nothing goes stale when 941 lands and there is NO held branch to requalify. R2''s
+          merge order and its corrected main.js comma rule are unaffected.'
+        via: git grep across the eight held docs branches
+        at: '2026-08-22T17:06:08+00:00'
     assessment: 'Seven PRs, not eight branches: docs/saga-step-conditions-added-tag adds a line docs main
       already carries. preview/0.34.0 was behind docs/421-broker-modules by one commit at registration,
       so preview is verified per branch rather than assumed current.'
@@ -1703,9 +1864,9 @@ units:
       is needed.'
   U14:
     issue: 905
-    goal: 'InMemoryEventStore.updateEvent reapplies the original event''s position, closing the same store-owned-field
-      loss #876 fixed for the three MongoDB stores, so a fresh replacement event built by an update function
-      does not silently vanish from a DCB read filtered on position.'
+    goal: InMemoryEventStore.updateEvent reapplies EVERY value the store owns, not only position, so a
+      fresh replacement event neither loses them nor lets an updater forge them. The property is asserted
+      in the TCK rather than per store, so a fourth implementation cannot miss it the way this one did.
     phase: PLANNED
     health: PROGRESSING
     swept: false
@@ -1723,8 +1884,25 @@ units:
       evidence: ''
     blocking_on: []
     next_action: dispatch after PR 901 merges, since both build on its fix
-    last_meaningful_progress_at: '2026-08-22T08:40:58+00:00'
-    observed: {}
+    last_meaningful_progress_at: '2026-08-22T17:09:06+00:00'
+    observed:
+      widened_by_the_901_pass:
+        note: 'WIDENED from #905''s position-only scope by the adversarial pass on PR 901, which found
+          TWO MORE instances in InMemoryEventStore beyond the one #905 names. Its only preserve* call
+          is preserveAppendId at line 569, against four in each Mongo store. (1) A fresh replacement event
+          drops streamId and streamVersion, and the stream then becomes UNREADABLE, a NullPointerException
+          in calculateStreamVersion at line 743 from read() at 631. That is worse than the Mongo symptom,
+          which merely returned a lying event. (2) A forged identity is accepted verbatim: the event stays
+          physically in stream:1 while reporting streamversion 999, and read(''stream:1'').version() then
+          returns 999, which is the value stream-level optimistic concurrency is written against. THE
+          STRUCTURAL FINDING IS THE VALUABLE PART. This was invisible because the property was landed
+          as three per-store MongoDB test files rather than in the TCK, where its own twin already lives:
+          EventStoreOperationsConformance:313-325 asserts the append id survives a fresh replacement and
+          its comment says ''the store owns the append id the same way it owns streamId and streamVersion'',
+          with no sibling for the other fields. InMemoryEventStoreOperationsConformanceTest extends that
+          class, so a TCK-level test would have caught this on the first run. U14 puts it in the TCK.'
+        via: adversarial verify subagent on PR 901
+        at: '2026-08-22T17:09:06+00:00'
     assessment: 'Fourth store, same defect class. Small. Shipping #876 fixed on three of four stores is
       an asymmetry the changelog would have to caveat, and InMemoryEventStore is what people write their
       tests against, so the gap is most visible exactly where users are trying to prove their code works.
@@ -1803,9 +1981,8 @@ units:
         enum with constant bodies gets advice a caller can actually act on.
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: worker restates the invariant's walk, corrects the excludeTypes javadoc, fixes the Kotlin
-      enum advice
-    last_meaningful_progress_at: '2026-08-22T13:00:03+00:00'
+    next_action: await CI and the re-requested Copilot review on 4b8c37d6, then gate
+    last_meaningful_progress_at: '2026-08-22T16:46:00+00:00'
     observed:
       pr_opened:
         note: PR 928 on rel34/u16-type-filter-expansion, 8 files, touching ExecuteFilter, DcbCriteriaBuilder.kt,
@@ -1833,6 +2010,25 @@ units:
           fix.'
         via: adversarial verify subagent
         at: '2026-08-22T13:44:39+00:00'
+      answered_and_routed:
+        note: 'Worker accepted the finding that the fix was neither its position nor the reviewer''s.
+          Corrected the javadoc, changelog, migration guide and recipe description to say excludeTypes
+          excludes ZERO real events silently for an interface or abstract declared type whose hierarchy
+          reopens before the downward walk finds anything concrete, renamed the misleading test, and restated
+          the exclusive invariant to name the specific getPermittedSubclasses walk rather than ''reflection''
+          generally. A SECOND Copilot round landed three more findings mid-fix, all addressed: a DcbCriteriaBuilder
+          test never exercised types()''s vararg rest, and the array/primitive refusal was misfiled under
+          Changes rather than Breaking changes. Filed TWO issues rather than widening: #939 (a Kotlin
+          enum with constant bodies compiles without the implicit sealing javac gives under JLS 8.9, so
+          every EventTypeExpansion-based derivation refuses it with impossible advice) and #940 (expandWhatCanBeFound''s
+          javadoc is stale against the new safe usage). Both need EventTypeExpansion in common/filter,
+          which is shared by every derivation in the library and outside this unit''s ownership. BOTH
+          ROUTED TO 0.35.0 by me: the library refuses loudly here rather than missing events silently,
+          which is what put the sibling defect in this release, and a shared change of that reach late
+          in a release is the shape that produced #929 today. One thread stays open as a reasoned decline,
+          per policy.'
+        via: worker report + my routing
+        at: '2026-08-22T16:46:00+00:00'
     assessment: 'Johan adopted it OVERRIDING both the filing worker''s recommendation and the orchestrator''s,
       dec-0010. The override reason is the stronger one: a caller who fixes their declarations for the
       rest of the library would still find these two handing a decider nothing. THE TRAP, recorded so
@@ -2054,3 +2250,26 @@ cross_epic:
       liveness whenever a unit is held on a worker, rather than inferring activity from the absence of
       a push.'
     at: '2026-08-22T16:23:11+00:00'
+  main_is_red_on_a_known_flake:
+    note: 'main''s last code commit d989dbfe6 (the U19 merge) shows Java CI FAILURE, and it is NOT that
+      merge. PR 937 was +39/-0 on one Java file, pure javadoc additions, plus one changelog line, which
+      cannot break a test shard. The failure is CompetingConsumerSubscriptionModelTest.consumption_is_resumed_after_prohibited_when_lease_time_is_low
+      in the subscription-util-blocking java-25 shard, 1 error of 28. It is a KNOWN flake with an issue
+      already open, #864, milestone 0.35.0, which records it failing twice on 2026-08-19 on two unrelated
+      PRs with two different symptoms. The same shard passed on the two main runs before mine and example-domain
+      has been green on main throughout. RELEASE RISK for R3 rather than a blocker: the tag run needs
+      green CI and this test can fail any run. If the tag run hits it, RE-RUN rather than investigate,
+      and do not let it be mistaken for a regression from the release commit. Left at 0.35.0 where Johan
+      already triaged it.'
+    at: '2026-08-22T16:43:44+00:00'
+  stale_review_sweep_worked:
+    note: 'The fleet-wide re-review request cleared the ambiguity. Before: four of six PRs had STALE reviews
+      saying ''Changes recommended'' with one to four suppressed comments each, indistinguishable from
+      live findings. After: five of seven carry CURRENT reviews. 919 flipped from a stale ''Changes recommended''
+      with FOUR suppressed to a current ''Approval recommended'' with ZERO, which confirms those findings
+      were already fixed and that reading the stale verdict as live was the error rather than the finding
+      being real. 901 is current with Approval recommended, zero suppressed, zero unresolved. 933 is current
+      with a genuine new finding. 914 and 928 are current with one suppressed each. The sweep is worth
+      more than gating them one at a time, because the condition was fleet-wide rather than a property
+      of any unit.'
+    at: '2026-08-22T17:01:27+00:00'

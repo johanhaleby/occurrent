@@ -2552,3 +2552,48 @@ The slower mechanism is worth keeping as the backstop rather than the primary. O
 `last_meaningful_progress_at` tracks the blocked unit's PR rather than the orchestrator's own
 writes, a stopped worker eventually surfaces as STALLED. That is how the dropped U11 dispatch was
 finally caught, but it took four hours, and a held release unit cannot afford that.
+
+## Merged is not shipped, and the ADR immutability rule turns on the second
+
+AGENTS.md line 66 makes a shipped ADR immutable and lets an unshipped one be updated in place. rel34
+told a worker that ADR 134 was "immutable now that it is merged" and needed a new ADR amending it by
+reference, which was wrong and made the work harder than it had to be. ADR 134 appears in no release
+tag, because it is 0.34.0 work and 0.34.0 is not cut, so it can simply be corrected in the same pull
+request as the change that found the error.
+
+What makes this worth recording is that the same orchestrator applied the rule correctly about an
+hour later on a different unit, ruling that ADR 132 may be amended in place while ADR 38 may not,
+because ADR 38 is in the `occurrent-0.33.0` tag and ADR 132 is not. The rule was known. The first
+answer came from memory and the second came from `git ls-tree` against the tags.
+
+So the check is one command and it settles it: list the release tags and ask whether the ADR file is
+in any of them. Do that before ruling on an ADR's mutability, however recently the rule was read.
+
+There is a second-order point worth keeping. The worker in that exchange had just found a break the
+ADR missed, and found it by checking a shipped tag rather than inferring from the ADR's own list.
+Being told something inferred rather than checked, immediately after doing the opposite, is the
+version of this failure that costs credibility as well as time.
+
+## A stale review's verdict is evidence of nothing, exactly like an absent one
+
+rel34 held PR 919 on four suppressed Copilot comments that said "Changes recommended", and treated
+them as outstanding findings. The worker checked and they were already fixed, in a commit that sits
+between the head Copilot reviewed and the current one. Verified rather than taken: all four call
+sites show zero uses of the criticised listener at the current head, and the fixing commit is an
+ancestor of it while not being an ancestor of the reviewed head.
+
+The orchestrator had also framed this as two credible sources contradicting each other, because an
+earlier adversarial pass had observed the logging behaving correctly while Copilot said it did not.
+They never contradicted. Copilot reviewed a head where the defect was real and the pass ran against
+a head where it was fixed, and each was right about what it saw.
+
+So the rule has two halves and this epic has now been bitten by both. An ABSENT review looks
+identical to a clean one afterwards, which cost a merge in the morning. A STALE review looks
+identical to a live finding, which cost an unnecessary hold in the afternoon. Neither tells you
+anything about the head you intend to merge. Compare every review's `commit_id` against the current
+head before reading its verdict at all, and when it does not match, get a fresh review rather than
+interpreting the old one in either direction.
+
+A sweep is worth more than catching these one at a time. Checking all six open PRs at once found
+four with stale reviews carrying "Changes recommended" and between one and four suppressed comments
+each, which is a fleet-wide condition rather than a property of any one unit.
