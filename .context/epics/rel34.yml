@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 65
-updated_at: '2026-08-22T16:49:15+00:00'
-updated_by: 'orchestrator rel34: 919 held on four suppressed findings that sat five hours unread'
+revision: 66
+updated_at: '2026-08-22T16:58:50+00:00'
+updated_by: 'orchestrator rel34: U5 delivered PR 941 with ADR 0135, all four required additions present'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -600,7 +600,7 @@ units:
     session: chip task_ea20e8b3, plan-first, Opus/high
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 941
       met: false
       evidence: ''
     - check: issue_closed
@@ -608,8 +608,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: write ADR 0135 and implement, carrying the four additions from the verdict
-    last_meaningful_progress_at: '2026-08-22T16:35:34+00:00'
+    next_action: await CI and Copilot on 941, then gate with an adversarial pass
+    last_meaningful_progress_at: '2026-08-22T16:58:50+00:00'
     observed:
       dispatched_plan_first:
         note: 'Dispatched PLAN FIRST rather than as an implementation, because #891''s own filer recorded
@@ -650,6 +650,26 @@ units:
           test asserts presence and never absence.'
         via: adversarial verify subagent, empirical on mongo:8
         at: '2026-08-22T16:35:34+00:00'
+      pr_941_and_adr_0135:
+        note: 'PR 941 on johan/891-reactor-handover-dedup, 9 files +324/-48. ADR 0135 written at 11367
+          bytes. THE ADR RULING WAS FOLLOWED EXACTLY, which I verified in the diff rather than trusting.
+          ADR 0038 is touched ONLY in its Status section, changing ''Accepted'' to name the superseded
+          section, point at ADR 135 and say the rest of the decision stands, which is precisely the ADR
+          111 pattern AGENTS.md cites. Its divergence section is untouched. ADR 0132 is amended in place
+          at 9 insertions and 7 deletions, permitted because it has not shipped. ALL FOUR REQUIRED ADDITIONS
+          PRESENT, checked by grep and by reading: the corrected empirical-support claim, the Atlas null-or-empty
+          checkpoint caveat, the contradicting PositionCatchupPipeline comment quoted and answered, and
+          a dedicated ''Limits of the evidence'' section. That section states the single-primary limit
+          and says ''This ADR claims the single-primary case and no more'', states that nothing in the
+          repository tests the exclusivity direction with the TCK detail, and then adds a THIRD limit
+          nobody asked for: the new regression tests reproduce the race by having the reader report a
+          head above the last committed position, which ADR 84 permits since currentPosition() is a high-watermark,
+          and neither drives a genuinely uncommitted write across a head read the store actually performed,
+          which would need a transaction held open across it. That is the worker documenting the limits
+          of its OWN new tests unprompted, which is the behaviour that stops a reviewer discovering it
+          six months later.'
+        via: git diff origin/main...pr941 and reading ADR 0135
+        at: '2026-08-22T16:58:50+00:00'
     assessment: '#891 ALONE now; #878 moved to U4. Sequenced behind U12 rather than run beside it: #891''s
       fix path runs through framework/spring-boot-autoconfigure/reactor ProjectionAnnotationRegistrar.java
       and ComposedCatchupModel.java, the two files U12 owns. Give it to the U12 worker when U12 merges,
