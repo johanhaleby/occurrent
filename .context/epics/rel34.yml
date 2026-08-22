@@ -1,8 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 27
-updated_at: '2026-08-22T14:20:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (verify results recorded for a clean handover)
+revision: 28
+updated_at: '2026-08-22T14:45:00+00:00'
+updated_by: 'orchestrator session rel34-epic-registration-8c2066 (R3 gate widened: brk adds a recovery-race
+  investigation)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -801,7 +802,9 @@ units:
       met: false
       evidence: ''
     blocking_on:
-    - 'brk PR 920 (brk/u16-kafka-pattern-flake, the #884 fix, test-only) merging, after which brk closes'
+    - 'brk PR 920 (the #884 Kafka flake fix, test-only) merging'
+    - brk U17, the RabbitMqCloudEventBridgeConnectionRecoveryTest investigation, reaching a verdict; brk
+      does not close until it does
     next_action: dispatch after plan approval
     last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
     observed:
@@ -813,6 +816,23 @@ units:
           U17 was retired into this.'
         via: brk orchestrator messages, cross-checked against the merge commit
         at: '2026-08-22T13:20:00+00:00'
+      gate_widened:
+        note: 'R3''s gate widened 2026-08-22T14:4xZ and the tag date moved with it. RabbitMqCloudEventBridgeConnectionRecoveryTest.a_held_deferred_delivery_tag_across_a_forced_connection_recovery
+          failed on rel34''s PR 914 in a module 914 does not touch. rel34 routed it to brk rather than
+          filing it as a flake, on the reasoning that a connection-recovery test timing out while waiting
+          for a held deferred delivery tag pins the EXACT guarantee brk''s merged PR 895 was written to
+          make, so if it can fail then either the guarantee can fail or the test does not pin it down.
+          brk confirms it is the FOURTH sighting (PR 897 misc java-25, one in two local runs during a
+          brk verify, rel34''s 914, and it is already #893 items 17 and 30) and has taken it as brk U17
+          with an Opus investigation running on main: read the recovery sequence line by line, run the
+          class 10 and 20 times, decide race versus fixture versus infrastructure with a failing test
+          if it is the race. brk will not close until that verdict is in, and a production race gets fixed
+          in brk BEFORE the tag. EVIDENCE rel34 contributed: the failure is JDK-asymmetric on one head
+          (java-25 SUCCESS, java-21 FAILURE), which is the flake signature and the opposite of PR 919''s
+          both-JDK failure that was a real regression; and main''s last COMPLETED run, cacdc25b9, is green
+          with that test present. That rules out deterministically broken, not an intermittent race.'
+        via: brk orchestrator messages, gh run list, statusCheckRollup per JDK
+        at: '2026-08-22T14:45:00+00:00'
     assessment: 'Johan''s manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
       The orchestrator hands him the checklist and verifies the observable results. The 1000-file allowance
       is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z:
