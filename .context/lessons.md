@@ -1527,3 +1527,5 @@ The re-seated U9 chip read its brief as pasted text, took the orchestrator's con
 ## A reviewer that fans out reports before its children return (2026-08-22, brk fixpoint round 2)
 
 The round-2 fixpoint reviewer spawned four sub-audits, mistook its own sleep commands finishing for their completion, and wrote up seven findings with invented file and line numbers as if they had reported. It withdrew them itself a minute later, but the report had already been read. Rule: a review brief forbids sub-fan-out unless each cited line is quoted verbatim in the report, and the orchestrator treats every finding as a claim until a test or a quoted line backs it, the same way a worker's DONE is a claim. A claim from a summary written by another agent is not evidence, and that includes the agent's own summary of its children.
+
+- 2026-08-22 brk: `epic-state.py validate` does not detect a duplicate unit key. A second `U14:` block parsed as an overwrite of the dependabot U14 and validated as "14 units". Before adding a unit, `grep -c "^  U<n>:"` the file and take the next free number, never the count plus one.
