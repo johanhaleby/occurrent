@@ -687,8 +687,11 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                     : Set.of();
             // retryStrategy wraps only this call, not the validation above: a failed validation throws the same
             // way on every attempt regardless of the broker's state, so retrying it would spend the whole backoff
-            // window on a failure a retry can never fix. Each attempt is a clean start, never a resume, since a
-            // failed one below always fully unwinds whatever it opened before rethrowing.
+            // window on a failure a retry can never fix. A failed attempt closes the local resources it opened,
+            // the channel, the failure action, the scheduler, before rethrowing, but not a durable queue
+            // declaration or binding it already completed on the broker. Redeclaring those on the next attempt
+            // is a safe no-op, since queueDeclare and queueBind succeed again, unchanged, against a queue or
+            // binding that already exists exactly as declared.
             return retryStrategy.execute(() -> buildOnce(destinations));
         }
 
@@ -729,9 +732,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0)
                     .maxAttempts(10)
                     .retryIf(RabbitMqBuildFailureClassifier::isTransient)
-                    .onBeforeRetry((info, throwable) -> log.warn(
+                    .onRetryableError((info, throwable) -> log.warn(
                             "Attempt {} of {} to build the RabbitMQ domain event bridge for queue \"{}\" failed. Retrying in {}.",
-                            info.getAttemptNumber(), info.getMaxAttempts(), queue, info.getBackoff(), throwable));
+                            info.getAttemptNumber(), info.getMaxAttempts(), queue, info.getBackoffBeforeNextRetryAttempt(), throwable));
         }
 
         private static Channel openChannel(Connection connection) {

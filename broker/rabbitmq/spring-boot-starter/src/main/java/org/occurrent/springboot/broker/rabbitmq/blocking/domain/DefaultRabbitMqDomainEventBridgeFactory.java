@@ -64,7 +64,7 @@ class DefaultRabbitMqDomainEventBridgeFactory implements RabbitMqDomainEventBrid
 
     /**
      * The same classification {@link RabbitMqBuildFailureClassifier} gives {@code RabbitMqDomainEventBridge.Builder}'s
-     * own default {@code build()} retry strategy, including its {@code onBeforeRetry} logging. Calling
+     * own default {@code build()} retry strategy, including its {@code onRetryableError} logging. Calling
      * {@code retryStrategy(...)} replaces that default entirely, so applying the property-driven timing without
      * either would retry an {@code IllegalStateException} from a missing resolver or parking destination forever
      * instead of failing on the first attempt, and leave a retrying startup logging nothing to tell it apart from
@@ -74,8 +74,8 @@ class DefaultRabbitMqDomainEventBridgeFactory implements RabbitMqDomainEventBrid
         return RetryStrategy.exponentialBackoff(retry.getInitial(), retry.getMax(), retry.getMultiplier())
                 .maxAttempts(retry.getMaxAttempts())
                 .retryIf(RabbitMqBuildFailureClassifier::isTransient)
-                .onBeforeRetry((info, throwable) -> log.warn(
+                .onRetryableError((info, throwable) -> log.warn(
                         "Attempt {} of {} to build the RabbitMQ domain event bridge for queue \"{}\" failed. Retrying in {}.",
-                        info.getAttemptNumber(), info.getMaxAttempts(), queue, info.getBackoff(), throwable));
+                        info.getAttemptNumber(), info.getMaxAttempts(), queue, info.getBackoffBeforeNextRetryAttempt(), throwable));
     }
 }

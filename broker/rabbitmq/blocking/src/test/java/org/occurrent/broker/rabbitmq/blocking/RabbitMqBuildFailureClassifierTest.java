@@ -95,6 +95,15 @@ class RabbitMqBuildFailureClassifierTest {
     }
 
     @Test
+    void a_not_allowed_channel_close_is_not_transient() {
+        AMQP.Channel.Close close = mock(AMQP.Channel.Close.class);
+        when(close.getReplyCode()).thenReturn(AMQP.NOT_ALLOWED);
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, true, close, "channel");
+
+        assertThat(RabbitMqBuildFailureClassifier.isTransient(shutdown)).isFalse();
+    }
+
+    @Test
     void a_publish_exception_wrapping_a_plain_ioexception_is_transient() {
         RabbitMqPublishException exception = new RabbitMqPublishException(
                 "Failed to create a confirm-mode RabbitMQ channel", new IOException("connection refused"));
