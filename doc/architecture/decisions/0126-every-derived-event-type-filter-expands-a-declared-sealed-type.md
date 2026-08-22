@@ -14,8 +14,10 @@ place rather than through a successor because this ADR has not shipped in any re
 this ADR decided about #753 was to leave the exemption in place and record it, on the reading that a uniform
 exemption needed no code change. That reading held while the loss stayed invisible, and it is what changed. A
 caller declaring a concrete class that is neither final nor sealed and publishing a subclass of it never
-receives that subclass and gets no warning, and no later release makes that visible without the same break,
-so the refusal arrives in 0.34.0 instead. Every passage below saying the exemption is uniform across the sites
+receives that subclass and gets no warning, under every `CloudEventTypeMapper` Occurrent ships, and no later
+release makes that visible without the same break, so the refusal arrives in 0.34.0 instead. A mapper of the
+caller's own that collapses the hierarchy onto one CloudEvent type string is the case that was working, and
+the refusal costs it an explicit filter, which is the escape this decision already gives the other shapes. Every passage below saying the exemption is uniform across the sites
 this ADR routes through is still true of the code, since they all share the one helper. The exemption itself
 is gone, and with it the `Outcome.EXEMPT_AND_MISSES_SUBCLASSES` outcome named below, since the property test
 now has only the two outcomes left. Everything else here is unchanged. See the changelog's breaking changes and section 3 of

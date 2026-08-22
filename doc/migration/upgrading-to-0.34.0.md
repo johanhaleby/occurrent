@@ -192,8 +192,9 @@ removes that exemption, so a saga and an annotation-based subscription now refus
 
 What the exemption did was accept the declaration and derive a filter naming that one class. A caller
 declaring `class OrderPlaced` and publishing a `class SpecialOrderPlaced extends OrderPlaced` got a filter
-asking for `OrderPlaced` and nothing else, so the subclass never reached the handler and nothing said why.
-Dispatch would have accepted it, since a handler declared on a supertype receives every concrete subtype.
+asking for `OrderPlaced` and nothing else. Under every `CloudEventTypeMapper` Occurrent ships the subclass is
+stored under its own name, so it never reached the handler and nothing said why. Dispatch would have accepted
+it, since a handler declared on a supertype receives every concrete subtype.
 
 ```java
 // Refused from 0.34.0. Accepted in 0.33.0, and SpecialOrderPlaced never arrived
@@ -212,9 +213,18 @@ When something does extend it, the three remedies below apply unchanged. Seal th
 concrete types, or set an explicit filter. In Kotlin, dropping `open` is the same smallest fix, since a
 Kotlin class is final unless it says otherwise.
 
-The reason the refusal is worth the break is that the alternative is silent. A caller on 0.33.0 who publishes
-a subclass loses those events with nothing in a log to explain it, and no later release makes that loss
-visible without the same break. Waiting only adds another release of loss in front of it.
+**If your own `CloudEventTypeMapper` maps the whole hierarchy onto one CloudEvent type string, you were not
+losing anything, and you are the one caller here with a real regression.** The subclass was stored under the
+declared class's type string, so the derived filter did ask for it and it did reach the handler. 0.34.0
+refuses the declaration anyway, because nothing in the type model tells the expansion that your mapper
+collapses the hierarchy. Set an explicit filter, which skips expansion entirely for that registration and is
+what the "Or set an explicit filter" section below is for. That is the same escape the four shapes above
+already point a collapsing mapper at.
+
+The reason the refusal is worth the break for everyone else is that the alternative is silent. A caller on
+0.33.0 using a mapper Occurrent ships who publishes a subclass loses those events with nothing in a log to
+explain it, and no later release makes that loss visible without the same break. Waiting only adds another
+release of loss in front of it.
 
 ### Seal the hierarchy
 

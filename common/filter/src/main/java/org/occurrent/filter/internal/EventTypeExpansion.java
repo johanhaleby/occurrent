@@ -40,10 +40,13 @@ import static java.util.Objects.requireNonNull;
  * some of them.
  * <p>
  * Nothing is exempt from that rule any more. Up to 0.33.0 a non-sealed concrete class declared directly was accepted
- * with only itself in the filter, so a caller declaring {@code class OrderPlaced} and publishing a subclass of it never
- * saw that subclass and got no warning. It is refused from 0.34.0, and the caller either makes the class final, seals
- * the hierarchy, declares the concrete types, or sets an explicit filter. Events written as records or Kotlin data
- * classes are final already, so an ordinary hierarchy of records needs nothing.
+ * with only itself in the filter. Under every {@code CloudEventTypeMapper} Occurrent ships, which store a subclass
+ * under its own name, a caller declaring {@code class OrderPlaced} and publishing a subclass of it never saw that
+ * subclass and got no warning. A mapper of the caller's own that maps the whole hierarchy onto one CloudEvent type
+ * string is the exception, and that caller was working. It is refused from 0.34.0 either way, and the caller makes the
+ * class final, seals the hierarchy, declares the concrete types, or sets an explicit filter, which is the one the
+ * collapsing mapper wants. Events written as records or Kotlin data classes are final already, so an ordinary
+ * hierarchy of records needs nothing.
  * <p>
  * Shared by every DSL that derives a type filter from declared event types, each of which used to walk the hierarchy on
  * its own. The caller formats and throws, because a saga, a projection, a subscription, a query and a snapshot view all
