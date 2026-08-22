@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Seven things are worth reading, two of them compile-time breaks. At compile time, if you use the flow saga's
+Eight things are worth reading, two of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, which most callers need to do nothing about. Read
@@ -23,7 +23,10 @@ a second compile-time break, and comparing either whole for equality fails silen
 [section 6](#6-writeresult-and-dcbappendresult-gain-a-fourth-component-the-append-id). And if
 `DurableSubscriptionModel` wraps a MongoDB subscription model on a shared Atlas cluster, a fresh subscription that
 used to start without a recorded position is now refused at `subscribe(..)`. Read
-[section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
+[section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded). Finally, if
+your application ever called `updateEvent` while running 0.33.0 or earlier, some of your stored events are damaged
+and a one-off repair puts them back. Read
+[section 8](#8-events-updateevent-damaged-before-0340-need-a-one-off-repair).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -508,3 +511,65 @@ property reaches the reactive starter too, where
 `ReactorDurableSubscriptionModelConfig.startWhenNoStartPositionCanBeRecorded(true)` now lets
 `ReactorDurableSubscriptionModel` start such a registration as well, so a reactive application on a shared Atlas
 cluster gets the same no-code-change path out of the refusal it has had since 0.33.0.
+
+## 8. Events `updateEvent` damaged before 0.34.0 need a one-off repair
+
+There is no recipe for this. It is not a code change, it is stored data that needs fixing, and only if your
+application called `EventStoreOperations.updateEvent` while running 0.33.0 or earlier.
+
+Up to and including 0.33.0, `updateEvent` rebuilt the stored document through the stream-only mapper, which writes
+`position` through the general CloudEvent extension writer. That writer has no `Long` overload, so `position` came
+back as a string instead of a number, and the indexed `dcbTags` array was dropped entirely. 0.34.0 fixes the write
+path on all three MongoDB stores. It does not repair events that are already stored.
+
+MongoDB compares values within a type, so a string `position` matches neither end of a numeric range. An event
+damaged this way is missing from DCB reads, from `exists` and `count`, from position-ordered stream reads in both
+directions, from position-based catch-up, and from the conflict query behind a conditional append, where it means
+an append that should have been refused is accepted. Nothing raises an error at any point.
+
+Note that the position half of this affects a store with stream position enabled even if it never used DCB.
+
+### How to tell whether this is you
+
+One query, which uses the `position` index and is cheap on a large collection:
+
+```javascript
+db.events.countDocuments({ position: { $type: "string" } })
+```
+
+Replace `events` with your event collection name. From 0.34.0 the store runs the same check when it starts and logs
+a warning naming the repair when it finds something, so an affected store tells you on its next deploy.
+
+An event whose position was dropped rather than turned into a string has no `position` field at all. Your store
+already warns about events without a position, but that warning names the position backfill, which is the wrong
+remedy here and will not fix it. If you see it and you have also called `updateEvent`, run the second query in the
+[repair runbook](../runbooks/update-event-repair.md) before assuming your history predates position.
+
+### What to do about it
+
+Run the `occurrent-eventstore-mongodb-update-event-repair` module. The
+[runbook](../runbooks/update-event-repair.md) has the full sequence, and the
+[module README](../../eventstore/migration/update-event-repair/README.md) covers the options.
+
+```java
+MongoDatabase database = mongoClient.getDatabase("my-database");
+UpdateEventRepair repair = new UpdateEventRepair(database, "events", UpdateEventRepairOptions.defaults());
+UpdateEventRepairReport report = repair.report();   // counts the damage, writes nothing
+UpdateEventRepairResult result = repair.run();      // repairs it
+```
+
+The repair only touches events that still look damaged, so running it twice is safe, and it resumes from a
+checkpoint if it is killed part way.
+
+### What it will not fix, and you should know before you run it
+
+The repair rebuilds an event from what its document still holds. Where the old write-back destroyed the only copy
+of a value, the tool reports the event by `_id` rather than inventing one. Three cases end up
+there, a position that was never stored, a position another event already holds, and a `position` string that is not a number. The
+runbook says what to do about each.
+
+One case is invisible even to the tool. If an update function returned a replacement event built from scratch,
+without the `dcbtags` extension, the document no longer looks like a DCB event and nothing distinguishes it from an
+ordinary stream event. If the extension was replaced rather than dropped, the repair rebuilds the tag array from
+the replacement tags, since that is all the document has left. If you know you ran an update function that built
+replacement events from scratch over DCB events, you need an external record of what those events should be.

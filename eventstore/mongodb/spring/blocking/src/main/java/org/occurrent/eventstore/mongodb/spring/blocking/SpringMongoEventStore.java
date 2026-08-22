@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.WriteCondition.StreamVersionWriteCondition;
 import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.internal.PositionBackfillValidator;
+import org.occurrent.eventstore.api.internal.UpdateEventRepairValidator;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
@@ -57,6 +58,7 @@ import org.springframework.data.mongodb.core.BulkOperations;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.schema.JsonSchemaObject;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.transaction.support.TransactionCallback;
@@ -138,6 +140,11 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.streamPositionEnabled = resolveStreamPositionEnabled(config, eventStoreCollectionName, mongoTemplate);
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, streamPositionEnabled, mongoTemplate);
         if (writesPosition()) {
+
+            // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
+            // position updateEvent dropped has no position field either, so that check would fail startup
+            // naming the position backfill, and backfilling such an event assigns a wrong position for good.
+            warnOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate);
             checkForUnpositionedEvents(eventStoreCollectionName, mongoTemplate, config.requireBackfilledPosition);
         }
     }
@@ -960,6 +967,23 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             throw PositionBackfillValidator.unpositionedEventsExist(eventStoreCollectionName);
         }
         log.warn(PositionBackfillValidator.unpositionedEventsMessage(eventStoreCollectionName));
+    }
+
+    /**
+     * Warns when the collection holds events that {@code updateEvent} damaged before 0.34.0, which stored position as
+     * a string. Those events are missing from every position query and from the conflict query behind a conditional
+     * append. A string position sits in its own type range in the position index, so this reads no keys at all on a
+     * store that was never damaged.
+     */
+    private static void warnOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, MongoTemplate mongoTemplate) {
+        if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
+            return;
+        }
+        Query damagedQuery = new Query(where(OccurrentCloudEventExtension.POSITION).type(JsonSchemaObject.Type.STRING));
+        if (!mongoTemplate.exists(damagedQuery, eventStoreCollectionName)) {
+            return;
+        }
+        log.warn(UpdateEventRepairValidator.damagedEventsMessage(eventStoreCollectionName));
     }
 
     private void requireStreamCapability() {

@@ -31,6 +31,15 @@ public final class PositionBackfillValidator {
 
     private static final String RUNBOOK = "doc/runbooks/position-backfill.md";
 
+    // An event whose position the pre-0.34.0 updateEvent dropped also has no position field, so it reaches both
+    // messages below looking like history that predates position. Backfilling it assigns a position it never had,
+    // which cannot be undone, so both messages have to point at the other runbook before anyone runs the backfill.
+    private static final String UPDATE_EVENT_CAVEAT =
+            " If this application ever called updateEvent while running Occurrent 0.33.0 or earlier, read"
+                    + " doc/runbooks/update-event-repair.md before running the backfill. That defect could drop an"
+                    + " event's position entirely, and backfilling such an event gives it a position it never had,"
+                    + " which cannot be undone.";
+
     /**
      * Create the {@link IllegalStateException} to throw when {@code requireBackfilledPosition(true)} is set but the
      * event collection contains events without a position, with a message consistent across all event stores.
@@ -41,7 +50,8 @@ public final class PositionBackfillValidator {
     public static IllegalStateException unpositionedEventsExist(String eventStoreCollectionName) {
         return new IllegalStateException(problem(eventStoreCollectionName)
                 + " This store is configured to require backfilled positions, so it will not start. Run the position"
-                + " backfill migration described in " + RUNBOOK + ", or turn off requireBackfilledPosition.");
+                + " backfill migration described in " + RUNBOOK + ", or turn off requireBackfilledPosition."
+                + UPDATE_EVENT_CAVEAT);
     }
 
     /**
@@ -60,7 +70,8 @@ public final class PositionBackfillValidator {
                 + " New events get a position, but position-ordered reads and position-based catch-up skip the events"
                 + " that do not have one, which can drop history from a projection without any error. Run the position"
                 + " backfill migration described in " + RUNBOOK + ", or set requireBackfilledPosition(true) to fail"
-                + " startup instead of warning.";
+                + " startup instead of warning."
+                + UPDATE_EVENT_CAVEAT;
     }
 
     private static String problem(String eventStoreCollectionName) {

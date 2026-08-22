@@ -21,6 +21,7 @@ import com.mongodb.client.*;
 import com.mongodb.client.model.*;
 import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
+import org.bson.BsonType;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
@@ -33,6 +34,7 @@ import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.internal.PositionBackfillValidator;
+import org.occurrent.eventstore.api.internal.UpdateEventRepairValidator;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
@@ -146,6 +148,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         this.requireBackfilledPosition = config.requireBackfilledPosition;
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
         if (writesPosition()) {
+            // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
+            // position updateEvent dropped has no position field either, so that check would fail startup
+            // naming the position backfill, and backfilling such an event assigns a wrong position for good.
+            warnOnEventsDamagedByUpdateEvent(eventCollection);
             warnOrFailOnUnpositionedEvents(eventCollection, requireBackfilledPosition);
         }
     }
@@ -911,6 +917,18 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             throw PositionBackfillValidator.unpositionedEventsExist(collectionName);
         }
         log.warn(PositionBackfillValidator.unpositionedEventsMessage(collectionName));
+    }
+
+    // Warns when the collection holds events that updateEvent damaged before 0.34.0, which stored position as a
+    // string. Those events are missing from every position query and from the conflict query behind a conditional
+    // append. A string position sits in its own type range in the position index, so this reads no keys at all on a
+    // store that was never damaged.
+    private static void warnOnEventsDamagedByUpdateEvent(MongoCollection<Document> eventCollection) {
+        Document firstDamagedEvent = eventCollection.find(Filters.type(OccurrentCloudEventExtension.POSITION, BsonType.STRING)).limit(1).first();
+        if (firstDamagedEvent == null) {
+            return;
+        }
+        log.warn(UpdateEventRepairValidator.damagedEventsMessage(eventCollection.getNamespace().getCollectionName()));
     }
 
     private static boolean collectionExists(MongoDatabase mongoDatabase, String collectionName) {
