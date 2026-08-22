@@ -46,6 +46,17 @@ public interface SagaInstance {
     /** Whether the instance has completed. A completed instance holds no timers and ignores further events. */
     boolean isCompleted();
 
+    /**
+     * The input this instance is failing on, or {@code null} when it is failing on nothing.
+     * <p>
+     * A non-null answer with a {@link SagaStatus#ACTIVE} status means an input has failed at least once and the
+     * quarantine budget is still running, so the instance is expected to recover on its own. A non-null answer with a
+     * {@link SagaStatus#QUARANTINED} status means the budget elapsed and the instance stopped, and the record says
+     * where and why. Those two read the same way here on purpose, because the operational question is the same one:
+     * what is this instance stuck on.
+     */
+    @Nullable SagaFailure failure();
+
     /** When the instance was created, or {@code null} if the store did not record it. */
     @Nullable Instant createdAt();
 

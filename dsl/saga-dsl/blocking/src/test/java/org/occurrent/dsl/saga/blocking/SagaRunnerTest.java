@@ -641,7 +641,11 @@ class SagaRunnerTest {
             assertAll(
                     () -> assertThat(shipAttempts.get()).isGreaterThanOrEqualTo(2),
                     () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
-                    () -> assertThat(envelope.version()).isEqualTo(2)
+                    // Still two saves. InMemorySubscriptionModel cannot be resumed at a chosen position, so this runner
+                    // has no quarantine budget and the failed attempt writes nothing at all, not even the record that
+                    // would start one.
+                    () -> assertThat(envelope.version()).isEqualTo(2),
+                    () -> assertThat(envelope.failure()).isNull()
             );
         }
     }

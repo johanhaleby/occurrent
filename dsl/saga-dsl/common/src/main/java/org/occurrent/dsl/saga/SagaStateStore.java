@@ -48,8 +48,12 @@ public interface SagaStateStore<S extends @Nullable Object> {
     boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion);
 
     /**
-     * Active instances that have at least one timer due at or before {@code now}, at most {@code limit} of them. The
-     * executor's timer poller uses this to fire timeouts. A returned instance may have several due timers.
+     * {@link SagaStatus#ACTIVE} instances that have at least one timer due at or before {@code now}, at most
+     * {@code limit} of them. The executor's timer poller uses this to fire timeouts. A returned instance may have
+     * several due timers.
+     * <p>
+     * Active, not merely unfinished. A {@link SagaStatus#QUARANTINED} instance must not be returned. Its timers stay
+     * armed so a release restores them, and firing one meanwhile would advance its state across the input it stopped on.
      */
     List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit);
 

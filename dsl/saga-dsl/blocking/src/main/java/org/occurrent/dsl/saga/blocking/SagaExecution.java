@@ -27,6 +27,7 @@ import org.occurrent.dsl.saga.*;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.EventMeta;
+import org.occurrent.dsl.saga.internal.SagaExecutionSupport.FailureRecord;
 import org.occurrent.dsl.saga.internal.SagaExecutionSupport.Outcome;
 import org.occurrent.retry.Backoff;
 import org.occurrent.retry.RetryInfo;
@@ -34,6 +35,7 @@ import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -43,6 +45,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Drives one saga against one subscription and its own timer poller: it loads the instance, runs the pure
  * {@link SagaExecutionSupport} step, dispatches commands before saving (at-least-once), and retries a lost compare-and-set
  * save. Timeouts re-enter the same path, fenced so a timer no longer present on the (reloaded) envelope is skipped.
+ * <p>
+ * An event that keeps failing for one instance is quarantined rather than retried forever. The first failure records
+ * when the failing started and rethrows, which is what every version up to 0.33.0 did. Once the failing has lasted
+ * longer than {@link SagaRunnerConfig#quarantineAfter()}, the instance is marked
+ * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} at that event's position and this class returns normally, so the
+ * subscription acknowledges the event and the saga's other instances stop waiting behind it.
  * <p>
  * Dispatch amplification: commands are dispatched before the save, and a lost compare-and-set retries the whole step, so a
  * single input can re-dispatch its entire command list up to {@code maxCasAttempts} times (see {@link SagaRunnerConfig}).
@@ -98,7 +106,57 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         EventMetadata metadata = EventMetadata.from(cloudEvent);
         EventMeta meta = extractMeta(cloudEvent);
         refuseOrWarnIfRedeliveryCannotBeDetected(meta);
-        process(sagaId, SagaInput.event(event, metadata), meta, null);
+        SagaInput<E> input = SagaInput.event(event, metadata);
+        Duration quarantineAfter = config.quarantineAfter();
+        if (quarantineAfter == null) {
+            process(sagaId, input, meta, null);
+            return;
+        }
+        try {
+            process(sagaId, input, meta, null);
+        } catch (RuntimeException e) {
+            if (!quarantine(sagaId, meta, e, quarantineAfter)) {
+                throw e;
+            }
+        }
+    }
+
+    /**
+     * Record that this event failed for this instance, and answer whether that ended the instance's time budget. A true
+     * answer means the caller returns normally, so the subscription acknowledges the event and every other instance on
+     * the shared channel keeps going. A false answer means the exception propagates exactly as it always has.
+     * <p>
+     * Only the event path calls this. A failing timeout is already isolated per instance by the poller and blocks
+     * nothing, and a timeout has no position to release from, so there would be nothing to quarantine it at.
+     */
+    private boolean quarantine(String sagaId, EventMeta meta, RuntimeException failure, Duration quarantineAfter) {
+        try {
+            Instant now = Instant.now();
+            SagaEnvelope<S> current = stateStore.find(sagaId).orElse(null);
+            FailureRecord<S> record = SagaExecutionSupport.onFailure(saga, sagaId, current, meta, failure, now, quarantineAfter);
+            if (record == null) {
+                return false;
+            }
+            if (!stateStore.compareAndSave(sagaId, record.envelope(), record.expectedVersion())) {
+                // Another input advanced the instance while the failing one was being retried, most likely a timer that fired
+                // successfully. The failing event now meets different state and may well succeed, so discard the record
+                // and let the budget start over rather than retry a write whose premise has gone.
+                return false;
+            }
+            if (!record.quarantined()) {
+                log.warn("Saga '{}' instance '{}' failed on the event at position {} and is being retried by the subscription. It is quarantined if it keeps failing for {}.",
+                        subscriptionId, sagaId, meta.position(), quarantineAfter, failure);
+                return false;
+            }
+            log.error("Saga '{}' instance '{}' kept failing on the event at position {} for {} and is now QUARANTINED. It skips every further event and fires no timers, so the saga's other instances are no longer blocked behind it. Find it with findByStatus(QUARANTINED, ..) and release it once the cause is fixed.",
+                    subscriptionId, sagaId, meta.position(), quarantineAfter, failure);
+            return true;
+        } catch (RuntimeException storeFailure) {
+            // The store itself is what is failing, so the first failure write fails too. Rethrowing the original is
+            // today's behaviour, and it is the right one, because a saga whose store is unreachable cannot make progress anyway.
+            failure.addSuppressed(storeFailure);
+            return false;
+        }
     }
 
     void pollTimers() {
@@ -173,7 +231,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // Fence a timeout on due-ness, not just presence: if a concurrent event rescheduled the same timer to a later time
     // (a reset-on-heartbeat pattern), the earlier poll must not fire it early.
     private boolean hasDueTimer(@Nullable SagaEnvelope<S> envelope, String timerName, Instant now) {
-        if (envelope == null || envelope.isCompleted()) {
+        // Quarantined is checked as well as completed, and it is a separate check rather than a widening of that one:
+        // a quarantined instance is not finished, it is suspended, and firing its timer would advance its state across
+        // the event it stopped on. The store's due-timer query already asks for ACTIVE instances only, so this is a
+        // second layer over an instance quarantined between the poll and the fire.
+        if (envelope == null || envelope.isCompleted() || envelope.isQuarantined()) {
             return false;
         }
         long nowMillis = now.toEpochMilli();
