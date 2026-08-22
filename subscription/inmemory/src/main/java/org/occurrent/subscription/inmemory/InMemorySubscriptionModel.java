@@ -34,7 +34,7 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 
@@ -143,7 +143,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
     }
 
     @Override
-    public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public synchronized SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         if (shutdown) {
             throw new IllegalStateException("Cannot subscribe when shutdown");
         } else if (subscriptionId == null) {
@@ -314,7 +314,7 @@ public class InMemorySubscriptionModel implements SubscriptionModel, Introspecta
     }
 
     @Override
-    public Subscription resumeSubscription(String subscriptionId) {
+    public SubscriptionHandle resumeSubscription(String subscriptionId) {
         requireKnown(subscriptionId);
         if (!isPaused(subscriptionId)) {
             throw new SubscriptionAlreadyRunningException(subscriptionId);

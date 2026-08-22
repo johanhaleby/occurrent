@@ -30,7 +30,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -130,7 +130,7 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         }
 
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
             calls.add("subscribe:" + subscriptionId);
             return new StartedSubscription(subscriptionId);
         }
@@ -163,7 +163,7 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             calls.add("resumeSubscription:" + subscriptionId);
             return new StartedSubscription(subscriptionId);
         }
@@ -179,7 +179,7 @@ class ReactorCatchupSubscriptionModelOwnershipTest {
         }
     }
 
-    private record StartedSubscription(String id) implements Subscription {
+    private record StartedSubscription(String id) implements SubscriptionHandle {
         @Override
         public Mono<Void> waitUntilStarted() {
             return Mono.empty();

@@ -28,7 +28,7 @@ import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -126,7 +126,7 @@ class SagaAnnotationTimerPollerCompetingConsumerTest {
         @Bean
         Subscribable subscribable() {
             Subscribable subscribable = mock(Subscribable.class);
-            when(subscribable.subscribe(any(), any(), any(), any())).thenReturn(mock(Subscription.class));
+            when(subscribable.subscribe(any(), any(), any(), any())).thenReturn(mock(SubscriptionHandle.class));
             return subscribable;
         }
 

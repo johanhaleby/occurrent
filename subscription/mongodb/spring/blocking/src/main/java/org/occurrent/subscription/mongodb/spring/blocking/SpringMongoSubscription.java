@@ -19,7 +19,7 @@ package org.occurrent.subscription.mongodb.spring.blocking;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.DurationToTimeoutConverter;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 @NullMarked
-public class SpringMongoSubscription implements Subscription {
+public class SpringMongoSubscription implements SubscriptionHandle {
 
     private final String subscriptionId;
     private final AtomicReference<org.springframework.data.mongodb.core.messaging.Subscription> subscriptionReference;

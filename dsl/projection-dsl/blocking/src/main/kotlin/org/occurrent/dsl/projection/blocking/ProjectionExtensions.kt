@@ -24,14 +24,14 @@ import org.occurrent.dsl.view.MaterializedView
 import org.occurrent.subscription.AgnosticSubscriptionFilter
 import org.occurrent.subscription.StartAt
 import org.occurrent.subscription.StreamSubscriptionFilter
-import org.occurrent.subscription.api.blocking.Subscription
+import org.occurrent.subscription.api.blocking.SubscriptionHandle
 
 /**
  * Runs [projection] as a capability-agnostic, subscription-fed read model: creates the subscription (its selector
  * derived from the projection) and updates [materializedView] from every matching event. On a store with both the
  * `STREAM` and `DCB` capabilities this delivers both stream-written and DCB-appended events.
  */
-fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, materializedView: MaterializedView<E>, startAt: StartAt? = null): Subscription {
+fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, materializedView: MaterializedView<E>, startAt: StartAt? = null): SubscriptionHandle {
     val explicitFilter = projection.filter()
     return if (explicitFilter != null) {
         subscribe(subscriptionId, AgnosticSubscriptionFilter.filter(explicitFilter), startAt) { metadata, e -> materializedView.update(metadata, e) }
@@ -47,14 +47,14 @@ fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Proje
  * same instance supply a [MaterializedView] that re-reads and reapplies on conflict, for example the view DSL's
  * `materialized(...)`.
  */
-fun <S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: org.occurrent.dsl.view.ViewStateRepository<S, ID>, startAt: StartAt? = null): Subscription =
+fun <S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: org.occurrent.dsl.view.ViewStateRepository<S, ID>, startAt: StartAt? = null): SubscriptionHandle =
     project(subscriptionId, projection, Projections.materializedView(projection, repository, subscriptionId), startAt)
 
 /**
  * Runs [projection] as a stream-scoped, subscription-fed read model, excluding DCB-appended events. See the
  * capability-agnostic [Subscriptions.project] for the cross-capability variant.
  */
-fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, materializedView: MaterializedView<E>, startAt: StartAt? = null): Subscription {
+fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, materializedView: MaterializedView<E>, startAt: StartAt? = null): SubscriptionHandle {
     val explicitFilter = projection.filter()
     return if (explicitFilter != null) {
         subscribe(subscriptionId, StreamSubscriptionFilter.filter(explicitFilter), startAt) { metadata, e -> materializedView.update(metadata, e) }
@@ -67,7 +67,7 @@ fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection:
  * Runs [projection] as a stream-scoped, subscription-fed read model materialized into [repository], skipping events
  * whose id resolves to `null`.
  */
-fun <S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: org.occurrent.dsl.view.ViewStateRepository<S, ID>, startAt: StartAt? = null): Subscription =
+fun <S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: org.occurrent.dsl.view.ViewStateRepository<S, ID>, startAt: StartAt? = null): SubscriptionHandle =
     project(subscriptionId, projection, Projections.materializedView(projection, repository, subscriptionId), startAt)
 
 /**

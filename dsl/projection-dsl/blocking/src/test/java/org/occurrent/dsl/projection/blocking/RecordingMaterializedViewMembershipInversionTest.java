@@ -38,7 +38,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -143,7 +143,7 @@ class RecordingMaterializedViewMembershipInversionTest {
             try {
                 CloudEventConverter<Ticked> converter = new JacksonCloudEventConverter<>(new ObjectMapper(), SOURCE);
                 List<EventMetadata> deliveryOrder = new CopyOnWriteArrayList<>();
-                Subscription observerSubscription = observerModel.subscribe("observer", StartAt.now(),
+                SubscriptionHandle observerSubscription = observerModel.subscribe("observer", StartAt.now(),
                         cloudEvent -> deliveryOrder.add(EventMetadata.from(cloudEvent)));
                 assertThat(observerSubscription.waitUntilStarted(Duration.ofSeconds(20))).as("the observer subscription never started").isTrue();
 
@@ -158,7 +158,7 @@ class RecordingMaterializedViewMembershipInversionTest {
                 MaterializedView<Ticked> view = Projections.materializedView(projection, repository, PROJECTION_ID);
                 MaterializedView<Ticked> recordingView = Projections.recordingAppliedAppends(view, PROJECTION_ID, observedStore);
                 ProjectionRunner<Ticked> runner = ProjectionRunner.stream(recorderModel, converter);
-                Subscription recordingSubscription = runner.project(PROJECTION_ID, projection, recordingView, StartAt.now());
+                SubscriptionHandle recordingSubscription = runner.project(PROJECTION_ID, projection, recordingView, StartAt.now());
                 assertThat(recordingSubscription.waitUntilStarted(Duration.ofSeconds(20))).as("the recording subscription never started").isTrue();
 
                 Thread appender = new Thread(() -> writerAStore.write("stream-a", List.of(converter.toCloudEvent(new Ticked("a")))), "writer-a");

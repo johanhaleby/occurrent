@@ -26,7 +26,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 import org.occurrent.subscription.synchronous.blocking.SynchronousSubscriptionModel;
@@ -348,7 +348,7 @@ class OccurrentSubscriptionsExtensionTest {
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             throw new AssertionError("resumeSubscription must not be reached when the model cannot be enumerated");
         }
 
@@ -468,10 +468,10 @@ class OccurrentSubscriptionsExtensionTest {
                 .hasMessageContaining("positive");
     }
 
-    // A subscription whose Subscription never reports started, so resumeAndWait's bounded wait is what has to save
+    // A subscription whose SubscriptionHandle never reports started, so resumeAndWait's bounded wait is what has to save
     // the test from hanging rather than the id lookup or the model's own resumeSubscription.
     private static SubscriptionModelLifeCycle neverStartingModel() {
-        Subscription neverStartingSubscription = new Subscription() {
+        SubscriptionHandle neverStartingSubscription = new SubscriptionHandle() {
             @Override
             public String id() {
                 return "orders";

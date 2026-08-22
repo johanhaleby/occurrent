@@ -39,7 +39,7 @@ final class StreamSubscriptionModelAdapter extends AbstractSubscriptionModelAdap
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, Filter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public SubscriptionHandle subscribe(String subscriptionId, Filter filter, StartAt startAt, Consumer<CloudEvent> action) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireNonNull(filter, Filter.class.getSimpleName() + " cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");

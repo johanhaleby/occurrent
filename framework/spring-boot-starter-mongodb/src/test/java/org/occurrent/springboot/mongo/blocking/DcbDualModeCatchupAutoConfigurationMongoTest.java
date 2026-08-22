@@ -38,7 +38,7 @@ import org.occurrent.eventstore.api.dcb.DcbEventStore;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.StartAtTime;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -381,7 +381,7 @@ class DcbDualModeCatchupAutoConfigurationMongoTest {
 
         CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
 
-        Subscription subscription = subscriptionModel.subscribe(
+        SubscriptionHandle subscription = subscriptionModel.subscribe(
                         "neutral-live-" + UUID.randomUUID(),
                         AgnosticSubscriptionFilter.filter(Filter.type(cloudEventConverter.getCloudEventType(TestEvent.class))),
                         StartAt.checkpoint(GlobalCheckpoint.of(0)),

@@ -22,7 +22,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -62,13 +62,13 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
+    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
                                   Function<CloudEvent, Mono<Void>> action) {
         subscribedIds.add(subscriptionId);
         // What the durable model hands a named model is the whole of what decides where the subscription begins on
         // this path, since this model resolves nothing further.
         startedAt.add(startAt);
-        return new Subscription() {
+        return new SubscriptionHandle() {
             @Override
             public String id() {
                 return subscriptionId;
@@ -109,7 +109,7 @@ final class NamedRecordingSubscriptionModel implements CheckpointAwareSubscripti
     }
 
     @Override
-    public Subscription resumeSubscription(String subscriptionId) {
+    public SubscriptionHandle resumeSubscription(String subscriptionId) {
         throw new UnsupportedOperationException();
     }
 

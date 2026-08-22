@@ -36,7 +36,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
@@ -198,7 +198,7 @@ class DcbCatchupSubscriptionModelMongoTest {
 
         // The catch-up runs asynchronously and blocks inside the bulk replay read, after it has read a snapshot that
         // excludes the removed event.
-        Subscription handle = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
+        SubscriptionHandle handle = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
 
         // While the replay is blocked (it has scanned past the hole without seeing it and has not captured any
         // post-replay token), commit the in-flight event by re-inserting its document, then let the replay finish.

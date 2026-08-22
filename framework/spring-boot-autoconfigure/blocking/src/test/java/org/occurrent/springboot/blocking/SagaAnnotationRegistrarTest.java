@@ -31,7 +31,7 @@ import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.common.StartupWorkaround;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationContext;
@@ -63,7 +63,7 @@ class SagaAnnotationRegistrarTest {
 
     @Test
     void registers_the_saga_and_populates_the_registry_but_skips_the_named_singleton() throws Exception {
-        Subscription subscription = mock(Subscription.class);
+        SubscriptionHandle subscription = mock(SubscriptionHandle.class);
         Subscribable subscribable = mock(Subscribable.class);
         when(subscribable.subscribe(any(), any(), any(), any())).thenReturn(subscription);
 

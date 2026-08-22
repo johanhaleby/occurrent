@@ -24,7 +24,7 @@ import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.subscription.DcbStartAt;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import static java.util.Objects.requireNonNull;
@@ -78,7 +78,7 @@ public final class DcbProjectionRunner<E> {
      * single-instance. An id function that returns {@code null} for one event means that event is skipped,
      * and the projection is still keyed.</p>
      */
-    public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository) {
+    public <S extends @Nullable Object, ID> SubscriptionHandle project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository) {
         return project(subscriptionId, dcbProjection, repository, null);
     }
 
@@ -95,7 +95,7 @@ public final class DcbProjectionRunner<E> {
      * single-instance. An id function that returns {@code null} for one event means that event is skipped,
      * and the projection is still keyed.</p>
      */
-    public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository, @Nullable DcbStartAt startAt) {
+    public <S extends @Nullable Object, ID> SubscriptionHandle project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository, @Nullable DcbStartAt startAt) {
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
         return project(subscriptionId, dcbProjection, Projections.materializedView(dcbProjection.projection(), repository, subscriptionId), startAt);
     }
@@ -104,7 +104,7 @@ public final class DcbProjectionRunner<E> {
      * Subscribes with the given id and calls {@code materializedView.update(event)} for every event matching the
      * projection's DCB criteria.
      */
-    public Subscription project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, MaterializedView<E> materializedView) {
+    public SubscriptionHandle project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, MaterializedView<E> materializedView) {
         return project(subscriptionId, dcbProjection, materializedView, null);
     }
 
@@ -112,11 +112,11 @@ public final class DcbProjectionRunner<E> {
      * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
      * and calls {@code materializedView.update(event)} for every event matching the projection's DCB criteria.
      */
-    public Subscription project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, MaterializedView<E> materializedView, @Nullable DcbStartAt startAt) {
+    public SubscriptionHandle project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, MaterializedView<E> materializedView, @Nullable DcbStartAt startAt) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
         requireNonNull(materializedView, "materializedView cannot be null");
-        Subscription subscription = dcbSubscriptions.subscribeWithMetadata(subscriptionId, dcbProjection.criteria(), startAt,
+        SubscriptionHandle subscription = dcbSubscriptions.subscribeWithMetadata(subscriptionId, dcbProjection.criteria(), startAt,
                 (dcbMetadata, event) -> materializedView.update(dcbMetadata.eventMetadata(), event));
         subscription.waitUntilStarted();
         return subscription;

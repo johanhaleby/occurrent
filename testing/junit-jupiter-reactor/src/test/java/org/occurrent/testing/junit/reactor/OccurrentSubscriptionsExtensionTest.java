@@ -23,7 +23,7 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.synchronous.reactor.SynchronousSubscriptionModel;
 import reactor.core.publisher.Mono;
@@ -392,10 +392,10 @@ class OccurrentSubscriptionsExtensionTest {
         model.shutdown();
     }
 
-    // A subscription whose Subscription never reports started, so resumeAndWait's bounded wait is what has to save
+    // A subscription whose SubscriptionHandle never reports started, so resumeAndWait's bounded wait is what has to save
     // the test from hanging rather than the id lookup or the model's own resumeSubscription.
     private static SubscriptionModelLifeCycle neverStartingModel() {
-        Subscription neverStartingSubscription = new Subscription() {
+        SubscriptionHandle neverStartingSubscription = new SubscriptionHandle() {
             @Override
             public String id() {
                 return "orders";
@@ -444,7 +444,7 @@ class OccurrentSubscriptionsExtensionTest {
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             throw new AssertionError("resumeSubscription must not be reached when the model cannot be enumerated");
         }
 

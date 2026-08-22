@@ -178,7 +178,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      *                               {@link DurableSubscriptionModelConfig#startWhenNoStartPositionCanBeRecorded(boolean)}.
      */
     @Override
-    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
+    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, StartAt.class.getSimpleName() + " supplier cannot be null");
 
         // Held for the whole method, not just the opt-out branch, so subscribe, resumeSubscription and
@@ -207,7 +207,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 }
             }
 
-            Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
+            SubscriptionHandle subscription = subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, cloudEvent -> {
                         action.accept(cloudEvent);
                         if (config.persistCloudEventPositionPredicate.test(cloudEvent)) {
                             Checkpoint checkpoint = getCheckpointOrThrowIAE(cloudEvent);
@@ -344,7 +344,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
      * present and would silently drop whatever was published while this subscription was paused.
      */
     @Override
-    public Subscription resumeSubscription(String subscriptionId) {
+    public SubscriptionHandle resumeSubscription(String subscriptionId) {
         // Held for the whole decision, reposition call included, so a concurrent subscribe or cancelSubscription
         // for this id cannot land between the marker check and acting on it.
         synchronized (lockFor(subscriptionId)) {

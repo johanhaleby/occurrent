@@ -35,7 +35,7 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
@@ -167,7 +167,7 @@ class StreamCatchupSubscriptionModelCheckpointWriteVersionSourceTest {
         }
 
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             StartAt resolved = startAt.get(new StartAt.SubscriptionModelContext(InMemorySubscriptionModel.class));
             StartAt startAtToUse = resolved != null && resolved.isDefault() ? StartAt.subscriptionModelDefault() : StartAt.now();
             return delegate.subscribe(subscriptionId, filter, startAtToUse, action);
@@ -204,7 +204,7 @@ class StreamCatchupSubscriptionModelCheckpointWriteVersionSourceTest {
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             return delegate.resumeSubscription(subscriptionId);
         }
 

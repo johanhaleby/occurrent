@@ -36,19 +36,19 @@ public interface StreamSubscriptionModel extends SubscriptionModelLifeCycle {
     /**
      * Subscribe to events matching {@code filter}, starting at {@code startAt}.
      */
-    Subscription subscribe(String subscriptionId, Filter filter, StartAt startAt, Consumer<CloudEvent> action);
+    SubscriptionHandle subscribe(String subscriptionId, Filter filter, StartAt startAt, Consumer<CloudEvent> action);
 
     /**
      * Subscribe to events matching {@code filter} at the subscription model default position.
      */
-    default Subscription subscribe(String subscriptionId, Filter filter, Consumer<CloudEvent> action) {
+    default SubscriptionHandle subscribe(String subscriptionId, Filter filter, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);
     }
 
     /**
      * Subscribe to every event at the subscription model default position.
      */
-    default Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action) {
+    default SubscriptionHandle subscribe(String subscriptionId, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, Filter.all(), action);
     }
 

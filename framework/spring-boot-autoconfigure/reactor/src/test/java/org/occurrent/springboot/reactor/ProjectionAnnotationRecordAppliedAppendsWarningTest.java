@@ -37,7 +37,7 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscribable;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -102,7 +102,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
-        Subscription subscription = mock(Subscription.class);
+        SubscriptionHandle subscription = mock(SubscriptionHandle.class);
         when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(subscription);
@@ -135,7 +135,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(true);
-        Subscription subscription = mock(Subscription.class);
+        SubscriptionHandle subscription = mock(SubscriptionHandle.class);
         when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(subscription);
@@ -201,7 +201,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
-        Subscription subscription = mock(Subscription.class);
+        SubscriptionHandle subscription = mock(SubscriptionHandle.class);
         when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(subscription);
@@ -270,7 +270,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     private static Subscribable unobservableModel() {
         Subscribable model = mock(Subscribable.class);
         doReturn(java.util.Optional.empty()).when(model).capability(ReplayAwareSubscriptions.class);
-        Subscription subscription = mock(Subscription.class);
+        SubscriptionHandle subscription = mock(SubscriptionHandle.class);
         when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(subscription);
@@ -283,7 +283,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         // told directly what it exposes.
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
-        Subscription subscription = mock(Subscription.class);
+        SubscriptionHandle subscription = mock(SubscriptionHandle.class);
         when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(subscription);

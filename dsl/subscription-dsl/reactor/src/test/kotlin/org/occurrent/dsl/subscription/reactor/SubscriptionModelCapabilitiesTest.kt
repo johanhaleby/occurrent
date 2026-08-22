@@ -25,7 +25,7 @@ import org.occurrent.subscription.StartAt
 import org.occurrent.subscription.SubscriptionFilter
 import org.occurrent.subscription.api.reactor.IntrospectableSubscriptions
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions
-import org.occurrent.subscription.api.reactor.Subscription
+import org.occurrent.subscription.api.reactor.SubscriptionHandle
 import org.occurrent.subscription.api.reactor.SubscriptionModel
 import reactor.core.publisher.Mono
 import java.util.function.Function
@@ -62,7 +62,7 @@ class SubscriptionModelCapabilitiesTest {
     }
 
     private open class PlainModel : SubscriptionModel {
-        override fun subscribe(subscriptionId: String, filter: SubscriptionFilter?, startAt: StartAt, action: Function<CloudEvent, Mono<Void>>): Subscription =
+        override fun subscribe(subscriptionId: String, filter: SubscriptionFilter?, startAt: StartAt, action: Function<CloudEvent, Mono<Void>>): SubscriptionHandle =
             throw UnsupportedOperationException()
 
         override fun cancelSubscription(subscriptionId: String) {}
@@ -71,7 +71,7 @@ class SubscriptionModelCapabilitiesTest {
         override fun isRunning(): Boolean = false
         override fun isRunning(subscriptionId: String): Boolean = false
         override fun isPaused(subscriptionId: String): Boolean = false
-        override fun resumeSubscription(subscriptionId: String): Subscription = throw UnsupportedOperationException()
+        override fun resumeSubscription(subscriptionId: String): SubscriptionHandle = throw UnsupportedOperationException()
         override fun pauseSubscription(subscriptionId: String) {}
     }
 

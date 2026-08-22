@@ -26,7 +26,7 @@ import org.occurrent.dsl.view.ViewStateRepository
 import org.occurrent.subscription.AgnosticSubscriptionFilter
 import org.occurrent.subscription.StartAt
 import org.occurrent.subscription.StreamSubscriptionFilter
-import org.occurrent.subscription.api.reactor.Subscription
+import org.occurrent.subscription.api.reactor.SubscriptionHandle
 import reactor.core.publisher.Mono
 
 /**
@@ -36,7 +36,7 @@ import reactor.core.publisher.Mono
  * (read-your-writes) dispatch. On a store with both the `STREAM` and `DCB` capabilities this delivers both
  * stream-written and DCB-appended events.
  */
-fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, update: (E) -> Mono<Void>, startAt: StartAt? = null): Subscription {
+fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, update: (E) -> Mono<Void>, startAt: StartAt? = null): SubscriptionHandle {
     val explicitFilter = projection.filter()
     return if (explicitFilter != null) {
         subscribe(subscriptionId, AgnosticSubscriptionFilter.filter(explicitFilter), startAt) { e -> update(e) }
@@ -49,14 +49,14 @@ fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Proje
  * As the [update] overload above, but [update] also sees the delivering event's [EventMetadata], for a caller that owns
  * the reactive load-evolve-save but still needs the stream id, stream version, or other metadata.
  */
-fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: StartAt? = null): Subscription =
+fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: StartAt? = null): SubscriptionHandle =
     projectWithMetadata(subscriptionId, projection, update, startAt)
 
 /**
  * Runs [projection] as a capability-agnostic, subscription-fed read model materialized into the blocking [repository]
  * (scheduled on `boundedElastic`), skipping events whose id resolves to `null`.
  */
-fun <S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: StartAt? = null): Subscription {
+fun <S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: StartAt? = null): SubscriptionHandle {
     val update = Projections.reactiveUpdateWithMetadata(projection, repository, subscriptionId)
     return projectWithMetadata(subscriptionId, projection, { metadata, e -> update.apply(metadata, e) }, startAt)
 }
@@ -65,7 +65,7 @@ fun <S, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, proj
  * Runs [projection] as a capability-agnostic, subscription-fed read model driving the blocking [materializedView]
  * (scheduled on `boundedElastic`).
  */
-fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, materializedView: MaterializedView<E>, startAt: StartAt? = null): Subscription {
+fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, materializedView: MaterializedView<E>, startAt: StartAt? = null): SubscriptionHandle {
     val update = Projections.reactiveUpdateWithMetadata(materializedView)
     return projectWithMetadata(subscriptionId, projection, { metadata, e -> update.apply(metadata, e) }, startAt)
 }
@@ -74,7 +74,7 @@ fun <E : Any> Subscriptions<E>.project(subscriptionId: String, projection: Proje
 // public (E) -> Mono<Void> primitive project stays event-only, since a caller-supplied reactive update composes at the
 // domain-event level; the repository and MaterializedView overloads route here so a metadata-keyed projection folds
 // with real metadata.
-private fun <E : Any> Subscriptions<E>.projectWithMetadata(subscriptionId: String, projection: Projection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: StartAt?): Subscription {
+private fun <E : Any> Subscriptions<E>.projectWithMetadata(subscriptionId: String, projection: Projection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: StartAt?): SubscriptionHandle {
     val explicitFilter = projection.filter()
     return if (explicitFilter != null) {
         subscribe(subscriptionId, AgnosticSubscriptionFilter.filter(explicitFilter), startAt) { metadata, e -> update(metadata, e) }
@@ -86,7 +86,7 @@ private fun <E : Any> Subscriptions<E>.projectWithMetadata(subscriptionId: Strin
 /**
  * Runs [projection] as a stream-scoped, subscription-fed read model, excluding DCB-appended events.
  */
-fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, update: (E) -> Mono<Void>, startAt: StartAt? = null): Subscription {
+fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, update: (E) -> Mono<Void>, startAt: StartAt? = null): SubscriptionHandle {
     val explicitFilter = projection.filter()
     return if (explicitFilter != null) {
         subscribe(subscriptionId, StreamSubscriptionFilter.filter(explicitFilter), startAt) { e -> update(e) }
@@ -99,14 +99,14 @@ fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection:
  * As the [update] overload above, but [update] also sees the delivering event's [EventMetadata], for a caller that owns
  * the reactive load-evolve-save but still needs the stream id, stream version, or other metadata.
  */
-fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: StartAt? = null): Subscription =
+fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: StartAt? = null): SubscriptionHandle =
     projectWithMetadata(subscriptionId, projection, update, startAt)
 
 /**
  * Runs [projection] as a stream-scoped, subscription-fed read model materialized into the blocking [repository]
  * (scheduled on `boundedElastic`), skipping events whose id resolves to `null`.
  */
-fun <S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: StartAt? = null): Subscription {
+fun <S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: StartAt? = null): SubscriptionHandle {
     val update = Projections.reactiveUpdateWithMetadata(projection, repository, subscriptionId)
     return projectWithMetadata(subscriptionId, projection, { metadata, e -> update.apply(metadata, e) }, startAt)
 }
@@ -115,13 +115,13 @@ fun <S, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String
  * Runs [projection] as a stream-scoped, subscription-fed read model driving the blocking [materializedView]
  * (scheduled on `boundedElastic`).
  */
-fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, materializedView: MaterializedView<E>, startAt: StartAt? = null): Subscription {
+fun <E : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<*, E, *>, materializedView: MaterializedView<E>, startAt: StartAt? = null): SubscriptionHandle {
     val update = Projections.reactiveUpdateWithMetadata(materializedView)
     return projectWithMetadata(subscriptionId, projection, { metadata, e -> update.apply(metadata, e) }, startAt)
 }
 
 // See the agnostic projectWithMetadata above: threads EventMetadata into the update, stream-scoped.
-private fun <E : Any> StreamSubscriptions<E>.projectWithMetadata(subscriptionId: String, projection: Projection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: StartAt?): Subscription {
+private fun <E : Any> StreamSubscriptions<E>.projectWithMetadata(subscriptionId: String, projection: Projection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: StartAt?): SubscriptionHandle {
     val explicitFilter = projection.filter()
     return if (explicitFilter != null) {
         subscribe(subscriptionId, StreamSubscriptionFilter.filter(explicitFilter), startAt) { metadata, e -> update(metadata, e) }

@@ -28,6 +28,10 @@ description: >-
   it wants. This recipe renames the annotations, in Java and Kotlin alike, and does not turn a void handler into
   a descriptor, which is a separate change with its own recipe. A renamed annotation on a void handler is still
   valid source, so only a use of the removed eventTypes, or of tags on @DcbSubscription, fails to compile after
-  this recipe has run. See doc/migration/upgrading-to-0.35.0.md for what the rename covers and what it leaves.
+  this recipe has run. It also renames org.occurrent.subscription.api.blocking.Subscription and its reactor twin
+  to SubscriptionHandle (ADR 127 decision 2), the type a caller holds after starting a subscription rather than
+  the subscription itself. See doc/migration/upgrading-to-0.35.0.md for what the rename covers and what it
+  leaves.
 recipeList:
   - org.occurrent.MigrateOccurrentAnnotationRenames_0_35
+  - org.occurrent.MigrateSubscriptionHandleRename_0_35

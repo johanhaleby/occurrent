@@ -21,7 +21,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Mono;
 
@@ -58,12 +58,12 @@ final class WorkingReactiveSubscriptionModel implements SubscriptionModel {
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         if (running.containsKey(subscriptionId) || paused.containsKey(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is already defined.");
         }
         running.put(subscriptionId, action);
-        return new Subscription() {
+        return new SubscriptionHandle() {
             @Override
             public String id() {
                 return subscriptionId;
@@ -88,7 +88,7 @@ final class WorkingReactiveSubscriptionModel implements SubscriptionModel {
     }
 
     @Override
-    public Subscription resumeSubscription(String subscriptionId) {
+    public SubscriptionHandle resumeSubscription(String subscriptionId) {
         Function<CloudEvent, Mono<Void>> action = paused.remove(subscriptionId);
         if (action == null) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " isn't paused.");

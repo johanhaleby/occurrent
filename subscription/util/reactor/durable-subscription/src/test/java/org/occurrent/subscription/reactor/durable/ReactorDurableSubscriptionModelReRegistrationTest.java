@@ -26,7 +26,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -79,13 +79,13 @@ class ReactorDurableSubscriptionModelReRegistrationTest {
         DelayableSubscriptionModel delegate = new DelayableSubscriptionModel(firstAttemptRead.asMono(), secondAttemptPosition);
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
 
-        Subscription first = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle first = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
         assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
 
         // Cancelling and registering again under the same id is the documented recovery from a registration that
         // has not settled, and the model allows it: nothing here waits for the first attempt to finish.
         model.cancelSubscription(SUBSCRIPTION_ID);
-        Subscription second = model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(secondAttemptPosition), __ -> Mono.empty());
+        SubscriptionHandle second = model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(secondAttemptPosition), __ -> Mono.empty());
         second.waitUntilStarted().block(TIMEOUT);
         assertThat(model.isRunning(SUBSCRIPTION_ID)).isTrue();
 

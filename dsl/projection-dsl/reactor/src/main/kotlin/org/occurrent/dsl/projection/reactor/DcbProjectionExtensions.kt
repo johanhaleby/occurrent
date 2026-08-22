@@ -25,7 +25,7 @@ import org.occurrent.dsl.projection.DcbProjection
 import org.occurrent.dsl.view.MaterializedView
 import org.occurrent.dsl.view.ViewStateRepository
 import org.occurrent.subscription.DcbStartAt
-import org.occurrent.subscription.api.reactor.Subscription
+import org.occurrent.subscription.api.reactor.SubscriptionHandle
 import reactor.core.publisher.Mono
 
 /**
@@ -38,21 +38,21 @@ import reactor.core.publisher.Mono
  * replays history and resumes across restarts, a plain live model does neither. For a strongly consistent read, fold on
  * demand with the pull [DcbDomainEventQueries.project]. For a declarative read model use the `@Projection` annotation.
  */
-fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, update: (E) -> Mono<Void>, startAt: DcbStartAt? = null): Subscription =
+fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, update: (E) -> Mono<Void>, startAt: DcbStartAt? = null): SubscriptionHandle =
     subscribeDcb(subscriptionId, dcbProjection.criteria(), startAt) { e -> update(e) }
 
 /**
  * As the [update] overload above, but [update] also sees the delivering event's [EventMetadata], for a caller that owns
  * the reactive load-evolve-save but still needs the stream id, stream version, or other metadata.
  */
-fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: DcbStartAt? = null): Subscription =
+fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, update: (EventMetadata, E) -> Mono<Void>, startAt: DcbStartAt? = null): SubscriptionHandle =
     subscribeDcbWithMetadata(subscriptionId, dcbProjection.criteria(), startAt) { dcbMetadata, e -> update(dcbMetadata.eventMetadata(), e) }
 
 /**
  * Runs [dcbProjection] as an asynchronous, subscription-fed DCB read model materialized into the blocking [repository]
  * (scheduled on `boundedElastic`), skipping events whose id resolves to `null`.
  */
-fun <S, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: DcbStartAt? = null): Subscription {
+fun <S, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: DcbStartAt? = null): SubscriptionHandle {
     val update = Projections.reactiveUpdateWithMetadata(dcbProjection.projection(), repository, subscriptionId)
     return subscribeDcbWithMetadata(subscriptionId, dcbProjection.criteria(), startAt) { dcbMetadata, e -> update.apply(dcbMetadata.eventMetadata(), e) }
 }
@@ -61,7 +61,7 @@ fun <S, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, d
  * Runs [dcbProjection] as an asynchronous, subscription-fed DCB read model driving the blocking [materializedView]
  * (scheduled on `boundedElastic`).
  */
-fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, materializedView: MaterializedView<E>, startAt: DcbStartAt? = null): Subscription {
+fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, materializedView: MaterializedView<E>, startAt: DcbStartAt? = null): SubscriptionHandle {
     val update = Projections.reactiveUpdateWithMetadata(materializedView)
     return subscribeDcbWithMetadata(subscriptionId, dcbProjection.criteria(), startAt) { dcbMetadata, e -> update.apply(dcbMetadata.eventMetadata(), e) }
 }

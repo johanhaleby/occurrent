@@ -23,7 +23,7 @@ import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.UnknownSubscriptionException;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Mono;
 
@@ -159,7 +159,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         // Simulates another node rewriting the checkpoint to a later position while this one waited to be started.
         storage.writeWithoutScripting(new OrderedCheckpoint(50));
 
-        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle resumed = model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThatThrownBy(() -> resumed.waitUntilStarted().block(TIMEOUT))
                 .as("the resolver's own failure reaches the caller instead of being read as the later checkpoint being safe")
@@ -183,7 +183,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         // the registration. Starting from that is the loss, which is why the read is not taken.
         delegate.failGlobalCheckpoint = false;
         delegate.globalCheckpoint = new StringBasedCheckpoint("much-later");
-        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle resumed = model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThatThrownBy(() -> resumed.waitUntilStarted().block(TIMEOUT))
                 .as("the read that failed is what reaches the caller, unwrapped")
@@ -210,7 +210,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         delegate.globalCheckpoint = new StringBasedCheckpoint("much-later");
-        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle resumed = model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThatThrownBy(() -> resumed.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(IllegalStateException.class)
@@ -232,7 +232,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
         model.stop();
 
-        Subscription registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> registration.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(IllegalStateException.class)
@@ -247,7 +247,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
         model.stop();
 
-        Subscription registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> registration.waitUntilStarted().block(Duration.ofMillis(200)))
                 .isInstanceOf(IllegalStateException.class)
@@ -266,7 +266,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
         model.stop();
 
-        Subscription registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(new StringBasedCheckpoint("replay-from-here")), __ -> Mono.empty());
+        SubscriptionHandle registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.checkpoint(new StringBasedCheckpoint("replay-from-here")), __ -> Mono.empty());
         model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(delegate.globalCheckpointReads).hasValue(0);
@@ -288,12 +288,12 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
         model.stop();
 
-        Subscription registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> registration.waitUntilStarted().block(Duration.ofMillis(200)))
                 .hasMessageContaining("Timeout on blocking read");
 
-        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle resumed = model.resumeSubscription(SUBSCRIPTION_ID);
 
         resumed.waitUntilStarted().block(TIMEOUT);
         assertThat(startedAtCheckpoint(delegate)).isEqualTo("from-a-previous-run");
@@ -320,12 +320,12 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
         model.stop();
 
-        Subscription registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> registration.waitUntilStarted().block(Duration.ofMillis(200)))
                 .hasMessageContaining("Timeout on blocking read");
 
-        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle resumed = model.resumeSubscription(SUBSCRIPTION_ID);
 
         resumed.waitUntilStarted().block(TIMEOUT);
         assertThat(startedAtCheckpoint(delegate)).isEqualTo("from-a-previous-run");
@@ -341,7 +341,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
 
         delegate.failGlobalCheckpoint = false;
         delegate.globalCheckpoint = new StringBasedCheckpoint("much-later");
-        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle resumed = model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThatThrownBy(() -> resumed.waitUntilStarted().block(TIMEOUT)).isInstanceOf(IllegalStateException.class);
         assertThat(delegate.globalCheckpointReads)
@@ -360,7 +360,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         model.stop();
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
-        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle resumed = model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThatThrownBy(() -> resumed.waitUntilStarted().block(TIMEOUT)).isInstanceOf(IllegalStateException.class);
         assertThat(delegate.globalCheckpointReads).hasValue(1);
@@ -375,7 +375,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
         model.stop();
         model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
-        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle resumed = model.resumeSubscription(SUBSCRIPTION_ID);
         assertThatThrownBy(() -> resumed.waitUntilStarted().block(TIMEOUT)).isInstanceOf(IllegalStateException.class);
 
         assertThatThrownBy(() -> model.resumeSubscription(SUBSCRIPTION_ID))
@@ -383,7 +383,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
 
         delegate.failGlobalCheckpoint = false;
         delegate.globalCheckpoint = new StringBasedCheckpoint("much-later");
-        Subscription fresh = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle fresh = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         fresh.waitUntilStarted().block(TIMEOUT);
         assertThat(startedAtCheckpoint(delegate))
@@ -401,7 +401,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
         model.stop();
-        Subscription refused = model.subscribe("refused", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle refused = model.subscribe("refused", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
         model.subscribe("healthy", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         model.start(true);
@@ -486,7 +486,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(IllegalStateException.class)
@@ -507,11 +507,11 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         model.stop();
         StartAt dynamic = StartAt.dynamic(StartAt::subscriptionModelDefault);
 
-        Subscription registration = model.subscribe(SUBSCRIPTION_ID, null, dynamic, __ -> Mono.empty());
+        SubscriptionHandle registration = model.subscribe(SUBSCRIPTION_ID, null, dynamic, __ -> Mono.empty());
         assertThatThrownBy(() -> registration.waitUntilStarted().block(Duration.ofMillis(200)))
                 .hasMessageContaining("Timeout on blocking read");
 
-        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle resumed = model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThatThrownBy(() -> resumed.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(IllegalStateException.class)
@@ -535,7 +535,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         StartAt dynamic = StartAt.dynamic(() -> StartAt.checkpoint(new StringBasedCheckpoint("replay-from-here")));
 
         model.subscribe(SUBSCRIPTION_ID, null, dynamic, __ -> Mono.empty());
-        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle resumed = model.resumeSubscription(SUBSCRIPTION_ID);
 
         resumed.waitUntilStarted().block(TIMEOUT);
         assertThat(startedAtCheckpoint(delegate)).isEqualTo("replay-from-here");
@@ -554,7 +554,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         SaveCountingCheckpointStorage storage = new SaveCountingCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(IllegalStateException.class)
@@ -630,7 +630,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         delegate.failGlobalCheckpoint = true;
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, new InMemoryCheckpointStorage());
         model.stop();
-        Subscription registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle registration = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
         assertThatThrownBy(() -> registration.waitUntilStarted().block(TIMEOUT)).isInstanceOf(IllegalStateException.class);
 
         assertThatThrownBy(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()))
@@ -639,7 +639,7 @@ class ReactorDurableSubscriptionModelStoppedRegistrationTest {
         model.cancelSubscription(SUBSCRIPTION_ID);
         delegate.failGlobalCheckpoint = false;
 
-        Subscription fresh = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle fresh = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
         assertThat(model.isPaused(SUBSCRIPTION_ID)).isTrue();
         assertThatThrownBy(() -> fresh.waitUntilStarted().block(Duration.ofMillis(200)))
                 .hasMessageContaining("Timeout on blocking read");

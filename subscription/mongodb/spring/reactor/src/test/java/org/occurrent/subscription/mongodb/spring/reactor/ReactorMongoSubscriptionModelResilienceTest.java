@@ -34,7 +34,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -298,7 +298,7 @@ public class ReactorMongoSubscriptionModelResilienceTest {
             ReactorMongoSubscriptionModel subscriptionModel = new ReactorMongoSubscriptionModel(throwingOperations, "events", TimeRepresentation.RFC_3339_STRING);
 
             // When
-            Subscription subscription = subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> Mono.empty());
+            SubscriptionHandle subscription = subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> Mono.empty());
 
             // Then
             StepVerifier.create(subscription.waitUntilStarted())

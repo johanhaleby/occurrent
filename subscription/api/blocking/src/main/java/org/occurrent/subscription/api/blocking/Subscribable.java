@@ -33,7 +33,7 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @throws UnsupportedSubscriptionFilterException If this model cannot apply a filter of that shape.
      * @throws UnsupportedStartAtException            If this model does not accept that start position.
      */
-    Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action);
+    SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action);
 
     /**
      * Start listening to cloud events persisted to the event store at the supplied start position.
@@ -44,7 +44,7 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @throws DuplicateSubscriptionIdException If {@code subscriptionId} is already in use on this subscription model instance.
      * @throws UnsupportedStartAtException      If this model does not accept that start position.
      */
-    default Subscription subscribe(String subscriptionId, StartAt startAt, Consumer<CloudEvent> action) {
+    default SubscriptionHandle subscribe(String subscriptionId, StartAt startAt, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, null, startAt, action);
     }
 
@@ -57,7 +57,7 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @throws DuplicateSubscriptionIdException       If {@code subscriptionId} is already in use on this subscription model instance.
      * @throws UnsupportedSubscriptionFilterException If this model cannot apply a filter of that shape.
      */
-    default Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, Consumer<CloudEvent> action) {
+    default SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), action);
     }
 
@@ -68,7 +68,7 @@ public interface Subscribable extends SubscriptionModelCapability {
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException If {@code subscriptionId} is already in use on this subscription model instance.
      */
-    default Subscription subscribe(String subscriptionId, Consumer<CloudEvent> action) {
+    default SubscriptionHandle subscribe(String subscriptionId, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, null, StartAt.subscriptionModelDefault(), action);
     }
 }

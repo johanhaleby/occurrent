@@ -27,7 +27,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.internal.BoundedIdCache;
 import reactor.core.Disposable;
@@ -54,7 +54,7 @@ import static java.util.Objects.requireNonNull;
  * unsupported filter. That is the point of the promotion (issues #547 and #550).
  * <p>
  * A failing action during the replay is deliberately not retried. The blocking catch-up models do not retry there
- * either, and the replay failure reaches whoever waits on {@link Subscription#waitUntilStarted()} rather than being
+ * either, and the replay failure reaches whoever waits on {@link SubscriptionHandle#waitUntilStarted()} rather than being
  * logged and swallowed. Live delivery, where retry matters, is the wrapped model's.
  * <p>
  * The wrapped model must itself manage named subscriptions (implement {@link SubscriptionModel}). A catch-up model
@@ -140,7 +140,7 @@ final class NamedCatchupSupport {
      * caller's {@code action} to each replayed event without retry, then hands the live half to the wrapped model's
      * named {@code subscribe(..)} resuming from a token captured before the replay, deduped against the replayed ids.
      */
-    Subscription subscribeWithCatchup(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
+    SubscriptionHandle subscribeWithCatchup(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
                                       CatchupReader reader, long windowSize, int handoverCacheSize, long startPosition,
                                       Function<CloudEvent, Mono<Void>> action) {
         SubscriptionModel delegate = requireNamed();
@@ -233,7 +233,7 @@ final class NamedCatchupSupport {
      * filtered in-process by {@code livePredicate} so a backend that does not honor the filter server-side still
      * only delivers matching events.
      */
-    Subscription subscribeStraightToLive(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
+    SubscriptionHandle subscribeStraightToLive(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
                                          StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         SubscriptionModel delegate = requireNamed();
         return delegate.subscribe(subscriptionId, liveSubscriptionFilter, startAt,
@@ -257,7 +257,7 @@ final class NamedCatchupSupport {
                 state.replaying.set(null);
                 return;
             }
-            Subscription delegated = delegate.subscribe(subscriptionId, liveSubscriptionFilter, liveStartAt, liveAction);
+            SubscriptionHandle delegated = delegate.subscribe(subscriptionId, liveSubscriptionFilter, liveStartAt, liveAction);
             state.handedOver.set(true);
             if (state.pendingPause.get() && delegate.isRunning(subscriptionId)) {
                 delegate.pauseSubscription(subscriptionId);
@@ -354,7 +354,7 @@ final class NamedCatchupSupport {
         named.pauseSubscription(subscriptionId);
     }
 
-    Subscription resumeSubscription(String subscriptionId) {
+    SubscriptionHandle resumeSubscription(String subscriptionId) {
         CatchupState state = catchingUp.get(subscriptionId);
         if (state != null) {
             synchronized (state) {
@@ -431,7 +431,7 @@ final class NamedCatchupSupport {
         };
     }
 
-    private record NamedCatchupSubscription(String id, Mono<Void> started) implements Subscription {
+    private record NamedCatchupSubscription(String id, Mono<Void> started) implements SubscriptionHandle {
         @Override
         public Mono<Void> waitUntilStarted() {
             return started;
