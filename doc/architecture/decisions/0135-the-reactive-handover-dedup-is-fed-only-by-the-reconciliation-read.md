@@ -47,8 +47,8 @@ What the code does now, verified rather than inferred:
 - The blocking position path and the blocking DCB path capture a global checkpoint before their bulk replay and
   resume live from it, exactly as the reactive one does, and both still pass a null cache for their history windows.
 - The blocking time path captures its checkpoint after the bulk replay instead, deliberately, so the token cannot
-  age out of the oplog during a long replay, and `StreamCatchupSubscriptionModel` says so where it does it. There no
-  history event can be in the live stream at all, so its null cache costs nothing, and the events written during its
+  age out of the oplog during a long replay, and `StreamCatchupSubscriptionModel` says so where it does it. On that
+  path no history event can be in the live stream at all, so its null cache costs nothing, and the events written during its
   replay come back through the count-based delta, which does fill the cache. Different mechanism, same outcome. A
   reader checking that path should not read its ordering as a counterexample to the two above.
 - All three shipped Mongo subscription models take that checkpoint as the server operation time with its increment
@@ -80,7 +80,7 @@ The invariant it establishes, stated over interleavings rather than as a descrip
 > The handover dedup cache only ever suppresses a live delivery of an event that a recordable read already
 > delivered.
 
-Equivalently, for a catch-up that captures its live resume checkpoint, then reads its bulk head, then reads history
+Equivalently, take a catch-up that captures its live resume checkpoint, then reads its bulk head, then reads history
 windows, then signals that the history has been read, then reconciles, then runs live. If an event was committed
 after the checkpoint was captured, at least one delivery of it reaches the projection in a phase where the recorder
 is recording. An event committed at or before the checkpoint is history by construction, and ADR 132 already states

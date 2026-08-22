@@ -138,7 +138,9 @@ final class NamedCatchupSupport {
     /**
      * Subscribes with a catch-up phase. It replays from {@code startPosition} through {@code reader}, applies the
      * caller's {@code action} to each replayed event without retry, then hands the live half to the wrapped model's
-     * named {@code subscribe(..)} resuming from a token captured before the replay, deduped against the replayed ids.
+     * named {@code subscribe(..)} resuming from a token captured before the replay, deduped against the ids the
+     * reconciliation read emitted. The history ids are deliberately not among them, so a write that was still in
+     * flight when the head was read is delivered again live and can be recorded there.
      */
     Subscription subscribeWithCatchup(String subscriptionId, @Nullable SubscriptionFilter liveSubscriptionFilter, Predicate<CloudEvent> livePredicate,
                                       CatchupReader reader, long windowSize, int handoverCacheSize, long startPosition,
