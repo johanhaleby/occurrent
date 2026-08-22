@@ -745,3 +745,15 @@ The projection is now bound to the memory checkpoint, so a stale page means a mi
 Separately, the session title ask that sdi had carried as an open pending action since registration is closed, and the reason it stayed open is worth recording. The skill asserted that rename tooling cannot retitle its own session and told every orchestrator to repeat the ask until the user acted. In this host that is false: `set_session_title` accepts the literal `self`, and the title was set in one call. The skill has been corrected (`706d2e13b`) to try the host affordance first. The report to Johan says renamed rather than verified, because both `ListAgents` and `list_sessions` exclude the calling session, so neither obvious check can see the thing being checked.
 
 U1 remains healthy at 13:24Z: 149 files, full-module compile passed, now running tests with the Colima environment exported per shell as the recorded lesson requires. No commit yet.
+
+### sdi checkpoint 2026-08-22T13:33:07Z: sdi's own timestamps were fabricated too, 13 of 14
+
+rel34 found forty-three invented `last_meaningful_progress_at` values in its epic state and asked the other fleets to check. sdi had the same defect at the same rate. Thirteen of fourteen values were written from a sense of elapsed time rather than read from the clock, drifting 39 to 90 minutes ahead of the moment they claimed to record. The one correct value was U1's, written immediately after running `date -u`.
+
+The two failures differ in severity and the difference is instructive. rel34's values crossed the present, so `derive` computed a negative age and STALLED was unreachable all day. sdi's stayed behind the present, so STALLED still worked and six units correctly derived it. sdi's only cost was that every age was understated, delaying any stall flag by 40 to 90 minutes. Nothing about the health column looked wrong, and nothing would have.
+
+Repaired by rel34's reconstruction method rather than clamped to now: each distinct value maps to the first commit whose version of the state file contained it, and that commit's author time is a recorded upper bound on when the observation was actually made. Every value mapped, so nothing had to be invented a second time.
+
+**The first repair was too narrow and that is the correction worth keeping.** It swept only `last_meaningful_progress_at`, on the reasoning that this is the field `derive` reads. A second pass over every timestamp in the file found five more fabricated values in `issued_at` and `since`, one of them a pending action recorded as issued two hours in the future. Fabrication is a property of how a value was produced, not of the field it landed in, so the audit has to be file wide. Deadlines are excluded deliberately: `recheck_after` and `stale_after` are future by design.
+
+sdi is at revision 35, `derive` reports zero drift, zero future observation timestamps remain, and the status projection was refreshed and read back at revision 35. Both findings sent to rel34, including a warning that its own repair may carry the same narrow scope.
