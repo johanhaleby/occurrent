@@ -147,7 +147,12 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // is wrapped as a Refusal, so routeReportingMatch reports NOT_DELIVERABLE for it and DELIVERED for a
         // handler's own exception, the same one-evaluation fix the blocking stack already has.
         RegisteringSubscribable.RoutingAction routingAction = cloudEvent -> handover.acceptReportingDelivery(cloudEvent)
-                .onErrorMap(ReactiveHandover.PreDispatchRefusalException.class, RegisteringSubscribable.RoutingAction.Refusal::new);
+                .onErrorMap(ReactiveHandover.PreDispatchRefusalException.class, e -> e.thrownBy(handover)
+                        ? new RegisteringSubscribable.RoutingAction.Refusal(e, handover.refusesPermanently())
+                        // A different handover refused, which this handler reached by calling into it. This
+                        // registration ran, so its own outcome is DELIVERED and the error propagates as any other
+                        // handler failure would.
+                        : e);
         liveFeed.subscribeCatchupThenPush(subscriptionId, filter, StartAt.subscriptionModelDefault(), routingAction);
 
         // Kept rather than launched once, so a replay a stop interrupts can be launched again over the same handover.

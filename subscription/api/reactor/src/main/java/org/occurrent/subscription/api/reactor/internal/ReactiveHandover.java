@@ -25,6 +25,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoSink;
 import reactor.core.publisher.Sinks;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.Objects;
@@ -160,12 +162,27 @@ public final class ReactiveHandover<T> {
      * {@code BlockingHandover.PreDispatchRefusalException}.
      */
     public static final class PreDispatchRefusalException extends IllegalStateException {
-        PreDispatchRefusalException(String message) {
+        private final ReactiveHandover<?> owner;
+
+        PreDispatchRefusalException(ReactiveHandover<?> owner, String message) {
             super(message);
+            this.owner = owner;
         }
 
-        PreDispatchRefusalException(String message, Throwable cause) {
+        PreDispatchRefusalException(ReactiveHandover<?> owner, String message, Throwable cause) {
             super(message, cause);
+            this.owner = owner;
+        }
+
+        /**
+         * Whether {@code handover} is the engine that raised this. A handler that reenters a second handover lets
+         * that one's refusal escape unwrapped through the first, so a caller that means "my own engine refused"
+         * has to compare identity rather than match the type.
+         *
+         * @param handover The engine to compare against.
+         */
+        public boolean thrownBy(ReactiveHandover<?> handover) {
+            return owner == handover;
         }
     }
 
@@ -188,6 +205,10 @@ public final class ReactiveHandover<T> {
     // delivered, not just whether the ack completed without error, see acceptReportingDelivery(..).
     private final Set<MonoSink<Boolean>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
+    private static final Logger log = LoggerFactory.getLogger(ReactiveHandover.class);
+    // Long enough that a producer holding the serialization claim finishes its own offer and releases it, short
+    // enough that a caller's accept does not sit here. An offer is a queue write, never a delivery.
+    private static final java.time.Duration CONCURRENT_EMISSION_RETRY_WINDOW = java.time.Duration.ofMillis(100);
     private volatile boolean stopped = false;
     // Set once, right before the buffered live payloads are drained on a successful catch-up, and never cleared
     // afterwards, mirroring BlockingHandover's live field. acceptIfLive(..) reads this to refuse a payload outright,
@@ -335,9 +356,39 @@ public final class ReactiveHandover<T> {
             return;
         }
         Item item = new Item(() -> deliver.apply(payload), key, ackSink);
-        Sinks.EmitResult result = liveSink.tryEmitNext(item);
-        if (result.isFailure()) {
-            ackSink.error(new PreDispatchRefusalException(HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
+        offerToLiveSink(item, ackSink);
+    }
+
+    // The unicast sink comes from the safe spec, so it rejects a second concurrent producer with
+    // FAIL_NON_SERIALIZED instead of corrupting its queue. That rejection clears as soon as the producer holding
+    // the claim finishes its own offer, so retrying briefly is the whole fix. No lock: tryEmitNext drains inline
+    // when it wins the race, so a lock here would be held across the caller's own delivery.
+    private void offerToLiveSink(Item item, MonoSink<Boolean> ackSink) {
+        long deadline = System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos();
+        while (true) {
+            Sinks.EmitResult result = liveSink.tryEmitNext(item);
+            if (!result.isFailure()) {
+                return;
+            }
+            switch (result) {
+                case FAIL_NON_SERIALIZED -> {
+                    if (System.nanoTime() >= deadline) {
+                        ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
+                        return;
+                    }
+                    Thread.onSpinWait();
+                }
+                // The pipeline is gone, so nothing is coming to deliver this payload. Dropped rather than refused,
+                // the same answer the stopped check above gives, which this is a race against.
+                case FAIL_TERMINATED, FAIL_CANCELLED -> {
+                    ackSink.success(false);
+                    return;
+                }
+                default -> {
+                    ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
+                    return;
+                }
+            }
         }
     }
 
@@ -347,6 +398,19 @@ public final class ReactiveHandover<T> {
      * how that relates to the buffered live payloads), emitting {@code true} when the catch-up finished and
      * {@code false} when {@link Source#keepReplaying()} stopped it partway. A failure errors it instead.
      */
+    /**
+     * Whether this engine refuses every live payload from now on and will go on refusing. True once a
+     * {@link #catchUp(Source)} attempt has errored, and never false again after that. False while replaying, while
+     * buffering, and once live.
+     * <p>
+     * Distinct from a replay that is still running, which also cannot deliver but is going to succeed. A caller
+     * deciding whether to stop for good needs to tell those two apart, and reading this after the fact is safe
+     * precisely because it only ever goes from false to true.
+     */
+    public boolean refusesPermanently() {
+        return terminalError.get() != null;
+    }
+
     public Mono<Boolean> catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
         // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying again
@@ -431,10 +495,12 @@ public final class ReactiveHandover<T> {
                     }
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.
                     // Fail their acks and reject later ones, so the caller sees the error instead of hanging.
-                    // Known gap: catchupDone has already emitted by the time the live phase runs, so a failure from
-                    // that phase cannot be reported through it and reaches no caller. This module has no logger to
-                    // fall back on either. Live folds are guarded by onErrorResume, so the reachable triggers are
-                    // narrow, and closing it means moving the completion signal off the marker phase.
+                    // Logged as well as signalled, because catchupDone has already emitted by the time the live
+                    // phase runs, so a failure from that phase reaches no caller through it. Every later payload
+                    // still gets the terminal refusal below, so the log is what tells an operator why.
+                    log.error("The catch-up-then-live handover for this {} failed and now refuses every live "
+                            + "event. Fix the cause, then replace it, a subscription by cancelling it and "
+                            + "subscribing again, a projection feed by building a new one.", noun, error);
                     abandonReplayWithoutMasking(source, replayOpen);
                     terminalError.set(error);
                     catchupDone.tryEmitError(error);
@@ -525,14 +591,14 @@ public final class ReactiveHandover<T> {
     // the same refusal read as a transient handler error on one stack and as a terminal one on the other. The recovery
     // differs (retry versus release and set up again), which is exactly what the message says, so both stacks say it.
     private PreDispatchRefusalException catchUpFailed(Throwable cause) {
-        return new PreDispatchRefusalException(HandoverMessages.catchUpFailed(noun), cause);
+        return new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), cause);
     }
 
     @SuppressWarnings("ConstantValue") // The function is declared non-null, but it is caller-supplied and unenforced.
     private String dedupKey(T payload) {
         String key = dedupId.apply(payload);
         if (key == null) {
-            throw new PreDispatchRefusalException(HandoverMessages.dedupKeyRequired());
+            throw new PreDispatchRefusalException(this, HandoverMessages.dedupKeyRequired());
         }
         return key;
     }

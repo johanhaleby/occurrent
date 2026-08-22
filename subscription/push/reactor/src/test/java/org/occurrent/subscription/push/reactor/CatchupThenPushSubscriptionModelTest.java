@@ -463,7 +463,7 @@ class CatchupThenPushSubscriptionModelTest {
      * failure policy instead of acknowledging a message nothing consumed.
      */
     @Test
-    void a_catch_up_failure_reports_not_deliverable_rather_than_delivered() {
+    void a_catch_up_failure_reports_refused_rather_than_delivered() {
         List<RoutingOutcome> observed = new CopyOnWriteArrayList<>();
         PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
                 (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
@@ -477,7 +477,7 @@ class CatchupThenPushSubscriptionModelTest {
         Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")).block());
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
-        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
     }
 
     /**

@@ -234,6 +234,13 @@ public final class CatchupProjectionFeed<E> {
         return handover.isReadyForLiveDelivery();
     }
 
+    // Package-private, beside isReadyForLiveDelivery() and for the same reason: the handover owns this state, so
+    // asking it beats tracking a second copy. False until this feed's own catch-up throws and true forever after,
+    // which is what makes it safe to read after catching the refusal rather than at the moment it was thrown.
+    boolean refusesPermanently() {
+        return handover.refusesPermanently();
+    }
+
     /**
      * Run the one-time catch-up: replay the projection's history from the store (decoding each event once), then drain
      * the buffered live events and go live. Skipped if the catch-up marker already records completion. Call this once,

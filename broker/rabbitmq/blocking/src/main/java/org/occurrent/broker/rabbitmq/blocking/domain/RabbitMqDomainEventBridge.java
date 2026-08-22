@@ -37,7 +37,6 @@ import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnreadableLiveFilterException;
-import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -427,18 +426,22 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                     "does not reference the field, or with a DataFieldReader that can read it.", queue, deliveryTag, e);
             stopPermanently();
             return;
-        } catch (BlockingHandover.PreDispatchRefusalException e) {
-            // The registered projection's own catch-up-then-live handover has permanently failed (see the class
-            // javadoc). Permanent, exactly like UnreadableLiveFilterException above: stop rather than park or
-            // redeliver into the same refusal forever.
-            log.error("The projection registered on queue \"{}\"'s feed has a permanently failed catch-up. " +
-                    "Stopping this bridge rather than parking or committing into the same refusal. Delivery tag " +
-                    "{}, and every other tag this bridge is still holding, is requeued by the channel this " +
-                    "permanent stop closes, so it stays visible on the queue until the registration's catch-up is " +
-                    "fixed and restarted.", queue, deliveryTag, e);
-            stopPermanently();
-            return;
         } catch (RuntimeException | AssertionError e) {
+            if (feed.refusesPermanently()) {
+                // The registered projection's own catch-up has permanently failed, so this refusal is never going
+                // to clear (see the class javadoc). Permanent, exactly like UnreadableLiveFilterException above,
+                // so stop rather than park or redeliver into the same refusal forever. Asked of the feed rather
+                // than read off the exception type, because a handler that reached into some other permanently
+                // failed engine throws the same type without this feed being broken at all.
+                log.error("The projection registered on queue \"{}\"'s feed has a permanently failed catch-up. "
+                        + "Stopping this bridge rather than parking or committing into the same refusal. Delivery "
+                        + "tag {}, and every other tag this bridge is still holding, is requeued by the channel "
+                        + "this permanent stop closes, so it stays visible on the queue until the registration's "
+                        + "catch-up is fixed and restarted.", queue, deliveryTag, e);
+                stopPermanently();
+                return;
+            }
+
             // Either the projection handler itself threw, or the narrow registeredProjection() race the class
             // javadoc describes (an IllegalStateException that is not an UnreadableLiveFilterException). Both are
             // ordinary failure-policy cases, unlike the permanent ones caught above. AssertionError is caught here

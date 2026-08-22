@@ -193,6 +193,27 @@ public final class DomainEventFeed<E> {
     }
 
     /**
+     * Whether the registered projection's catch-up has permanently failed, so every later
+     * {@link #acceptCloudEvent(CloudEvent)} on this registration refuses the event and will go on refusing.
+     * {@code false} until a {@link #catchUpAll()}, {@link #catchUp(String)} or {@link #goLive(String)} attempt has
+     * thrown, and never {@code false} again after that, since the failure it records is never cleared.
+     * <p>
+     * Distinct from {@link #isReadyForLiveDelivery()}, which is also {@code false} while a replay that is going to
+     * succeed is still running. A listener deciding whether to stop consuming for good needs to tell those two
+     * apart, and because this only ever goes from {@code false} to {@code true} it is safe to read after catching
+     * a refusal rather than at the moment the refusal was thrown.
+     * <p>
+     * A refusal that escaped a handler which reached into some other projection feed or subscription model leaves
+     * this {@code false}, which is what lets a listener tell its own feed's permanent refusal from one that is not
+     * its own. {@code false} for an unregistered feed, the same as {@link #isReadyForLiveDelivery()}, so a listener
+     * can ask both together before it has anything registered at all.
+     */
+    public boolean refusesPermanently() {
+        Registered<E> registered = feed.get();
+        return registered != null && registered.catchupFeed().refusesPermanently();
+    }
+
+    /**
      * Feed a live domain event to the registered projection, on the calling thread. Call this from the broker
      * listener, acknowledging the message only once it returns. An exception from the projection propagates.
      *

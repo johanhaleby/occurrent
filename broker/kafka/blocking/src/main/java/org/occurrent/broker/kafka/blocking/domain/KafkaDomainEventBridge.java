@@ -40,7 +40,6 @@ import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnreadableLiveFilterException;
-import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -484,16 +483,20 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                     "new DomainEventFeed with a Filter that does not reference the field, or with a " +
                     "DataFieldReader that can read it.", e);
             return HandleResult.PERMANENT_STOP;
-        } catch (BlockingHandover.PreDispatchRefusalException e) {
-            // The registered projection's own catch-up-then-live handover has permanently failed. Permanent,
-            // exactly like UnreadableLiveFilterException above: stop the whole loop rather than commit or
-            // redeliver into the same refusal forever.
-            log.error("The projection registered on this feed has a permanently failed catch-up. Stopping this " +
-                    "bridge and leaving its consumer group rather than redelivering into the same refusal. The " +
-                    "triggering record's offset is left uncommitted so it survives for the next consumer once the " +
-                    "registration's catch-up is fixed and restarted.", e);
-            return HandleResult.PERMANENT_STOP;
         } catch (RuntimeException | AssertionError e) {
+            if (feed.refusesPermanently()) {
+                // The registered projection's own catch-up has permanently failed, so this refusal is never going
+                // to clear. Permanent, exactly like UnreadableLiveFilterException above, so stop the whole loop
+                // rather than commit or redeliver into the same refusal forever. Asked of the feed rather than
+                // read off the exception type, because a handler that reached into some other permanently failed
+                // engine throws the same type without this feed being broken at all.
+                log.error("The projection registered on this feed has a permanently failed catch-up. Stopping this "
+                        + "bridge and leaving its consumer group rather than redelivering into the same refusal. "
+                        + "The triggering record's offset is left uncommitted so it survives for the next consumer "
+                        + "once the registration's catch-up is fixed and restarted.", e);
+                return HandleResult.PERMANENT_STOP;
+            }
+
             // Either the projection handler itself threw, or the narrow registeredProjection() race the class
             // javadoc describes (an IllegalStateException that is not an UnreadableLiveFilterException). Both are
             // ordinary failure-policy cases, unlike the permanent ones caught above.

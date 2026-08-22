@@ -56,6 +56,17 @@ public final class HandoverMessages {
     }
 
     /**
+     * Rejects a live payload that could not be handed to the reactive engine's sink because another thread held
+     * the sink's serialization claim for longer than the engine is willing to retry. Not an overflow, and not a
+     * catch-up failure, so it says so rather than telling an operator to rebuild a read model offline.
+     */
+    public static String concurrentEmission() {
+        return "Another thread held the live sink's serialization claim for longer than this engine retries, so "
+                + "this event was not handed over. Nothing is broken and nothing overflowed. Offer the event "
+                + "again.";
+    }
+
+    /**
      * The catch-up-failure message a caller shows once a prior catch-up has failed and it can no longer accept live
      * events, with the caller's own noun ("this projection feed" vs. "this subscription") substituted in.
      *

@@ -143,12 +143,27 @@ public final class BlockingHandover<T> {
      * instead of classifying every {@link IllegalStateException} alike.
      */
     public static final class PreDispatchRefusalException extends IllegalStateException {
-        PreDispatchRefusalException(String message) {
+        private final BlockingHandover<?> owner;
+
+        PreDispatchRefusalException(BlockingHandover<?> owner, String message) {
             super(message);
+            this.owner = owner;
         }
 
-        PreDispatchRefusalException(String message, Throwable cause) {
+        PreDispatchRefusalException(BlockingHandover<?> owner, String message, Throwable cause) {
             super(message, cause);
+            this.owner = owner;
+        }
+
+        /**
+         * Whether {@code handover} is the engine that threw this. A handler that reenters a second handover lets
+         * that one's refusal escape unwrapped through the first, so a caller that means "my own engine refused"
+         * has to compare identity rather than catch the type.
+         *
+         * @param handover The engine to compare against.
+         */
+        public boolean thrownBy(BlockingHandover<?> handover) {
+            return owner == handover;
         }
     }
 
@@ -230,7 +245,7 @@ public final class BlockingHandover<T> {
         boolean dropped = false;
         synchronized (lock) {
             if (catchUpFailure != null) {
-                throw new PreDispatchRefusalException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
+                throw new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), catchUpFailure);
             }
             if (live) {
                 String key = dedupKey(payload);
@@ -253,7 +268,7 @@ public final class BlockingHandover<T> {
                 // nothing is coming to fold it and buffering would just fill up and overflow.
                 dropped = true;
             } else if (buffer.size() >= maxBufferedEvents) {
-                throw new PreDispatchRefusalException(HandoverMessages.bufferOverflow(maxBufferedEvents));
+                throw new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents));
             } else {
                 buffer.add(payload);
             }
@@ -288,7 +303,7 @@ public final class BlockingHandover<T> {
         boolean landed;
         synchronized (lock) {
             if (catchUpFailure != null) {
-                throw new PreDispatchRefusalException(HandoverMessages.catchUpFailed(noun), catchUpFailure);
+                throw new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), catchUpFailure);
             }
             if (!live) {
                 // Refuse without buffering, unlike acceptReportingDelivery. Covers "never started", "still
@@ -333,6 +348,21 @@ public final class BlockingHandover<T> {
     public boolean isReadyForLiveDelivery() {
         synchronized (lock) {
             return live && catchUpFailure == null;
+        }
+    }
+
+    /**
+     * Whether this engine refuses every live payload from now on and will go on refusing. True once a
+     * {@link #catchUp(Source)} attempt has thrown, and never false again after that, since the failure it records
+     * is never cleared. False while replaying, while buffering, and once live.
+     * <p>
+     * Distinct from {@link #isReadyForLiveDelivery()}, which is also false during a replay that is going to
+     * succeed. A caller deciding whether to stop for good needs to tell those two apart, and reading this after
+     * the fact is safe precisely because it only ever goes from false to true.
+     */
+    public boolean refusesPermanently() {
+        synchronized (lock) {
+            return catchUpFailure != null;
         }
     }
 
@@ -467,7 +497,7 @@ public final class BlockingHandover<T> {
     private String dedupKey(T payload) {
         String key = dedupId.apply(payload);
         if (key == null) {
-            throw new PreDispatchRefusalException(HandoverMessages.dedupKeyRequired());
+            throw new PreDispatchRefusalException(this, HandoverMessages.dedupKeyRequired());
         }
         return key;
     }

@@ -198,17 +198,17 @@ class RegisteringSubscribableRouteReportingMatchTest {
      * exact path through {@code CatchupThenPushSubscriptionModel}'s registered action.
      */
     @Test
-    void a_routing_action_refusal_reports_not_deliverable_and_the_wrapped_cause_still_propagates() {
+    void a_permanent_routing_action_refusal_reports_refused_and_the_wrapped_cause_still_propagates() {
         RuntimeException refusalCause = new IllegalStateException("catch-up has failed");
         RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
         model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
-            throw new RegisteringSubscribable.RoutingAction.Refusal(refusalCause);
+            throw new RegisteringSubscribable.RoutingAction.Refusal(refusalCause, true);
         });
 
         List<RoutingOutcome> observed = new ArrayList<>();
         Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> observed.add(outcome)));
 
-        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
         assertThat(thrown).isSameAs(refusalCause);
     }
 
@@ -223,7 +223,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         Error observerFailure = new Error("matchObserver failed too");
         RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
         model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
-            throw new RegisteringSubscribable.RoutingAction.Refusal(refusalCause);
+            throw new RegisteringSubscribable.RoutingAction.Refusal(refusalCause, true);
         });
 
         Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> {
@@ -239,7 +239,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         RuntimeException shared = new IllegalStateException("catch-up has failed");
         RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
         model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
-            throw new RegisteringSubscribable.RoutingAction.Refusal(shared);
+            throw new RegisteringSubscribable.RoutingAction.Refusal(shared, true);
         });
 
         Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> {
@@ -261,6 +261,89 @@ class RegisteringSubscribableRouteReportingMatchTest {
 
         assertThat(received).extracting(CloudEvent::getId).containsExactly("1");
         assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    /**
+     * Nothing covered the three lifecycle states before this. They are the only outcomes a caller can see without
+     * an exception coming with them, which is what lets a broker bridge hold and pace them instead of sending them
+     * through a failure policy, so each one is asserted on its own rather than through a shared helper.
+     */
+    @Test
+    void nothing_registered_reports_unavailable_and_throws_nothing() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> observed.add(outcome));
+
+        assertThat(observed).containsExactly(RoutingOutcome.UNAVAILABLE);
+    }
+
+    @Test
+    void a_stopped_model_reports_unavailable_and_throws_nothing() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            throw new IllegalStateException("the handler must never run");
+        });
+        model.stop();
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> observed.add(outcome));
+
+        assertThat(observed).containsExactly(RoutingOutcome.UNAVAILABLE);
+    }
+
+    @Test
+    void a_paused_subscription_reports_unavailable_and_throws_nothing() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+            throw new IllegalStateException("the handler must never run");
+        });
+        model.pauseSubscription("sub");
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> observed.add(outcome));
+
+        assertThat(observed).containsExactly(RoutingOutcome.UNAVAILABLE);
+    }
+
+    /**
+     * The matcher throwing is the one case that reports NOT_DELIVERABLE, and it always comes with the matcher's own
+     * exception. A caller telling a lifecycle state from a broken filter reads exactly that difference.
+     */
+    @Test
+    void a_matcher_that_throws_reports_not_deliverable_and_its_exception_propagates() {
+        RuntimeException matcherFailure = new IllegalStateException("the filter cannot answer");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw matcherFailure;
+        };
+        RawConsumersOneModel model = new RawConsumersOneModel(throwingReader);
+        model.subscribeRaw("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), (cloudEvent, bufferIfNotLive) -> true);
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> observed.add(outcome)));
+
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(thrown).isSameAs(matcherFailure);
+    }
+
+    /**
+     * A refusal the action does not promise is permanent, a full live buffer while a replay is still running, say.
+     * It reports NOT_DELIVERABLE rather than REFUSED, so a caller sends it through its failure policy instead of
+     * stopping for good.
+     */
+    @Test
+    void a_transient_routing_action_refusal_reports_not_deliverable_and_the_wrapped_cause_still_propagates() {
+        RuntimeException refusalCause = new IllegalStateException("the live buffer is full");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, (cloudEvent, bufferIfNotLive) -> {
+            throw new RegisteringSubscribable.RoutingAction.Refusal(refusalCause, false);
+        });
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        Throwable thrown = catchThrowable(() -> model.acceptRaw(cloudEvent("1"), false, (cloudEvent, outcome) -> observed.add(outcome)));
+
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(thrown).isSameAs(refusalCause);
     }
 
     private static CloudEvent cloudEvent(String id) {

@@ -187,8 +187,8 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
     /**
      * Negatively acknowledges {@code deliveryTag} with requeue, on the delivery's own channel, unconditionally,
      * bypassing {@link DeliveryFailurePolicy} entirely, and logging nothing itself. Public, unlike
-     * {@link #apply(long, BasicProperties, byte[])}, for {@link RoutingOutcome#DEFERRED} and a lifecycle
-     * {@link RoutingOutcome#NOT_DELIVERABLE}: a message a catch-up-then-live engine cannot accept yet, or a
+     * {@link #apply(long, BasicProperties, byte[])}, for {@link RoutingOutcome#DEFERRED} and
+     * {@link RoutingOutcome#UNAVAILABLE}. A message a catch-up-then-live engine cannot accept yet, or a
      * subscription paused or not running, is never a candidate for {@link DeliveryFailurePolicy#PARK}, whatever
      * this bridge is configured with, since nothing here is broken or wrong, only not ready yet, and pacing a
      * bridge's own consumer this way happens far too often, by design, for a log line per occurrence to be useful.

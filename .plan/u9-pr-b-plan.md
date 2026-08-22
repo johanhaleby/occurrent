@@ -499,7 +499,7 @@ neither of which is a consumer.
   running at all, is held and redelivered paced the same way `DEFERRED` already is". Both are edited in place
   rather than given a new entry, since none of this has shipped.
 
-### G-OPEN. One decision the second review reopened, routed to the orchestrator
+### G-OPEN. RESOLVED by the orchestrator as dec-0016: option B, with `refusesPermanently()` as the accessor name on all four types and `hasFailedCatchUp` gone. Blocker 1 ratified as invariant F2. The record of the decision follows.
 
 **The defect.** `REFUSED`'s proposed javadoc says the refusal "is not going to resolve by redelivery, so a caller
 stops". That is true of every refusal a *bridge* can see, because a bridge reaches the handover only through
@@ -540,7 +540,7 @@ lie: no handler ran. Any honest treatment of a third kind of failure needs a thi
   inexact: a matcher throwing a `PreDispatchRefusalException` still stops a healthy bridge, and the `internal`
   import stays.
 
-**Recommendation: (B).** It is the option that makes the bridge decide from the outcome alone without a prose
+**Chosen: (B), ruled by the orchestrator as dec-0016.** It is the option that makes the bridge decide from the outcome alone without a prose
 invariant, which is the whole point of item G, and its cost is a boolean and one renamed accessor on an API that
 has not shipped. (A) is cheaper but re-creates the defect the item was raised to fix. (C) leaves a confirmed defect
 open.

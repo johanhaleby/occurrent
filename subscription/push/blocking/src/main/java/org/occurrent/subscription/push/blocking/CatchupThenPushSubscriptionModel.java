@@ -204,7 +204,13 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                     try {
                         return bufferIfNotLive ? handover.acceptReportingDelivery(cloudEvent) : handover.acceptIfLive(cloudEvent);
                     } catch (BlockingHandover.PreDispatchRefusalException e) {
-                        throw new RegisteringSubscribable.RoutingAction.Refusal(e);
+                        if (!e.thrownBy(handover)) {
+                            // A different handover refused, which this handler reached by calling into it. This
+                            // registration ran, so its own outcome is DELIVERED and the exception propagates as
+                            // any other handler failure would.
+                            throw e;
+                        }
+                        throw new RegisteringSubscribable.RoutingAction.Refusal(e, handover.refusesPermanently());
                     }
                 });
 
