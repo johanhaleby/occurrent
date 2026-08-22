@@ -30,5 +30,6 @@
 
     <modules>
         <module>position-backfill</module>
+        <module>update-event-repair</module>
     </modules>
 </project>
