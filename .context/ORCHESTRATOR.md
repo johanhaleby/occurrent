@@ -869,3 +869,19 @@ New head `d2a622f0e`. All four Copilot findings verified fixed by reading the pu
 **What empty `reviewDecision` means here was measured rather than assumed, and the answer changes how the gate reads.** `main` is not branch protected, and both sdi PRs that have already merged today, 924 and 923, merged with `reviewDecision` empty. So the second gate fact is "not `CHANGES_REQUESTED`", never "is `APPROVED`". Read as requiring an approval it would refuse every PR in this repository forever, including the two that already landed.
 
 One trap avoided that the lessons file already warned about. PR 934 now lists four `johanhaleby | COMMENTED | body 0` reviews. Those are the empty review shells a thread reply creates, not a human re-review and not an approval. Counting reviews, or filtering them by body length, would read them as human sign-off on a PR no human has looked at. They were identified by `.user.login` and by `reviewDecision` staying empty.
+
+### sdi checkpoint 2026-08-22T14:28:01Z: U7 is a release blocker, and its goal text understated the work
+
+Measured while PR 933 sat green, and it changes what U7 is.
+
+**#929 is live on `main` right now.** `UpgradeToOccurrent_0_35` already wires `MigrateOccurrentAnnotationRenames_0_35`, which rewrites all seven annotations onto their `@Occurrent*` names. Zero main sources under `framework/spring-boot-autoconfigure` reference any new name: `@Projection` is read by five main files and `@OccurrentProjection` by none, `@Saga` by two and `@OccurrentSaga` by none, `@Snapshot` by five and `@OccurrentSnapshot` by none, `@Subscription` by three and `@OccurrentSubscription` by none. A user who runs the 0.35.0 upgrade recipe today has every projection, saga, snapshot and subscription silently stop registering. U7 is therefore a release blocker rather than a normalization tidy-up, and the recipe must not ship ahead of the registrars that read what it writes.
+
+**U7's goal text said three new descriptor annotations. There are seven.** U5 added seven and seven deprecated ones remain. Corrected in the state file at revision 41. This is the same failure as the earlier "four registrars" error, a count carried from the ADR into a claim about the code, and it would have cost more here: a brief saying three normalizes three pairs and leaves four annotations silently unread, which is #929 again in a narrower form and inside the unit meant to fix it.
+
+The rest of U7's surface was measured and the goal was right about it. Seven registrars, PR 933 owns the two `SubscriptionAnnotationRegistrar` files, leaving five: `ProjectionAnnotationRegistrar` blocking and reactor, `SagaAnnotationRegistrar` blocking, `SnapshotAnnotationRegistrar` blocking and reactor. Both bean post processors confirmed present.
+
+**PR 933's `Java CI with Maven` is `completed/success`.** The fence clears on rel34 merging it, and U7 is READY at that moment since U5 and U12 are both DONE.
+
+### U1 CI failure, cause not yet established
+
+`test (subscription-mongodb-spring, java-25)` FAILED on `d2a622f0e`, at the `Run shard tests` step with every setup step green. Attributable to the PR rather than to a known-red shard: that shard was `success` on main's last three completed runs. The cause is NOT established, because `Java CI with Maven` is still `in_progress` and GitHub withholds job logs until the run completes. Recording it as unknown rather than guessing. The worker has been asked to reproduce locally with `-am`, which can beat the log, and pointed at the one shape a green compile cannot catch: a string literal, reflective lookup or resource file naming the old type, which `ChangeType` does not rewrite.
