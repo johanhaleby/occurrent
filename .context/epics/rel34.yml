@@ -1,9 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 56
-updated_at: '2026-08-22T15:24:12+00:00'
-updated_by: 'orchestrator rel34: held units'' progress timestamps now track their PR''s last push, not
-  my writes'
+revision: 57
+updated_at: '2026-08-22T15:28:18+00:00'
+updated_by: 'orchestrator rel34: U19 DONE, PR 937 merged as d989dbfe6'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -1828,23 +1827,26 @@ units:
     goal: RetryStrategy.retryIf and mapRetryPredicate document that the predicate may be invoked more
       than once per attempt, is consulted during the backoff wait as well as on failure, and must therefore
       be free of side effects. Documentation only, no behaviour change.
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: 'loving-spence-127dc6-e8, chip session for #931, delivered PR 937'
+    session: null
     deliverables:
     - check: pr_merged
       ref: 937
-      met: false
-      evidence: ''
+      met: true
+      evidence: PR 937 MERGED 2026-08-22T15:27:52Z as squash d989dbfe6, CAS-pinned to the verified head
+        de158dbe0, branch deleted. Documents on all four public executeWithRetry overloads that shutdownPredicate
+        is polled every SHUTDOWN_POLL_INTERVAL_MILLIS while a backoff is being waited out, and must therefore
+        be free of side effects.
     - check: issue_closed
       ref: 931
-      met: false
-      evidence: ''
+      met: true
+      evidence: '#931 CLOSED 2026-08-22T15:27:52Z by PR 937.'
     blocking_on: []
-    next_action: gate PR 937 once CI concludes
-    last_meaningful_progress_at: '2026-08-22T15:11:57+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T15:28:18+00:00'
     observed:
       origin:
         note: 'Found by U4 the expensive way. ReactiveMongoAppliedAppendStore counted attempts inside
@@ -1884,6 +1886,23 @@ units:
           My filing error, caught by the worker before it wrote anything.'
         via: my read of RetryExecution + MongoAppliedAppendStore
         at: '2026-08-22T15:01:48+00:00'
+      four_claims_verified_against_the_code:
+        note: 'Gate: Java CI with Maven completed/success on de158dbe0, Copilot ''Approval recommended''
+          at Balanced on the current head with 0 comments and NO suppressed block, zero unresolved threads.
+          Instead of a subagent pass, I verified all four documented claims against RetryExecution myself,
+          since the change is documentation and the only adversarial question is whether the prose matches
+          the code. (1) Polled every SHUTDOWN_POLL_INTERVAL_MILLIS during backoff: matches sleepObservingShutdown.
+          (2) ''Only for a failed attempt that still has attempts left'': TRUE, the sleep call sits after
+          the !shouldRetryAgain early return. (3) ''The final, exhausted attempt''s failure never invokes
+          the predicate'': TRUE, and non-obvious. shouldRetryAgain is !isExhausted(..) && retry.retryPredicate.test(e),
+          and && short-circuits, so on the exhausted attempt the combined predicate holding shutdownPredicate
+          is never reached. (4) ''Nor any failure under DontRetry'': TRUE, executeWithRetry returns the
+          function unwrapped for DontRetry so no loop runs. Worth recording as a counterexample to today''s
+          recurring pattern: this worker documented exactly what holds, including two claims that are
+          true only because of && short-circuiting and statement ordering, where 914 and 928 both shipped
+          absolutes that were false.'
+        via: my own read of RetryExecution at pr937
+        at: '2026-08-22T15:28:18+00:00'
     assessment: Small and documentation only, but it closes a behaviour change this release introduces.
       Registered rather than folded into U4 so PR 914 can merge on its own gate.
 cross_epic:
