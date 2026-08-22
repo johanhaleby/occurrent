@@ -24,6 +24,7 @@ import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
@@ -221,6 +222,28 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     public boolean isCatchingUp(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return innerModelCatchingUp(subscriptionId) != null;
+    }
+
+    /**
+     * Registered on every present inner model, since which one ends up running this id is not known until it
+     * subscribes. Answers true only when every one of them accepts, so a model that cannot report its boundaries
+     * makes the whole registration false and the caller falls back to polling.
+     */
+    @Override
+    public boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
+        boolean all = true;
+        if (streamCatchupSubscriptionModel != null) {
+            all = streamCatchupSubscriptionModel.listenForCatchup(subscriptionId, listener) && all;
+        }
+        if (dcbCatchupSubscriptionModel != null) {
+            all = dcbCatchupSubscriptionModel.listenForCatchup(subscriptionId, listener) && all;
+        }
+        if (agnosticCatchupSubscriptionModel != null) {
+            all = agnosticCatchupSubscriptionModel.listenForCatchup(subscriptionId, listener) && all;
+        }
+        return all;
     }
 
     private @Nullable SubscriptionModel innerModelCatchingUp(String subscriptionId) {

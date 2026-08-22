@@ -122,6 +122,32 @@ public final class ReactiveHandover<T> {
          */
         default void replayAbandoned() {
         }
+
+        /**
+         * The history this catch-up was going to read has been read, and the live payloads buffered while it ran are
+         * about to be delivered. Called immediately before every drain, including the one for a source that was
+         * already caught up and replayed nothing, which is what makes it different from {@link #replayCompleted()}.
+         * <p>
+         * A buffered payload is delivered exactly once and never again, since whoever fed it here has already been
+         * told it was handled, so a source that reports its own catch-up phase has to stop calling this part of the
+         * work a replay before the drain rather than after it
+         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
+         * decision 6). The default does nothing.
+         */
+        default void historyDone() {
+        }
+
+        /**
+         * Every payload buffered while the history was being read has now been delivered, so what follows is a live
+         * payload that arrived afterwards. Called once per catch-up, immediately after the last buffered payload, or
+         * immediately after {@link #historyDone()} when none were buffered.
+         * <p>
+         * The pair with {@link #historyDone()} is what lets a source report the drain as its own part of the
+         * catch-up rather than as live delivery, which matters because a buffered payload is delivered exactly once
+         * and never again. The default does nothing.
+         */
+        default void liveDrained() {
+        }
     }
 
     /**
@@ -149,6 +175,14 @@ public final class ReactiveHandover<T> {
     private final int maxBufferedEvents;
     private final BoundedIdCache deliveredIds;
     private final Sinks.Many<Item> liveSink;
+    // The sink's own queue, held so the drain has a boundary. Everything in it when the history read finishes is what
+    // was buffered while that read ran, and counting those down is the only way to know when the drain is over: the
+    // live feed never completes, so nothing else marks the end of it.
+    private final LinkedBlockingQueue<Item> liveBuffer;
+    // How many buffered payloads are still to be delivered, -1 before the count is taken.
+    private final java.util.concurrent.atomic.AtomicLong remainingInDrain = new java.util.concurrent.atomic.AtomicLong(-1);
+    // The source of the catch-up currently going live, so the drain can tell it when the buffered set is exhausted.
+    private final AtomicReference<Source<T>> drainedSource = new AtomicReference<>();
     // Acks of live payloads buffered but not yet folded, so a catch-up failure fails them rather than leaving the
     // caller's accept Monos hanging forever. The Boolean each carries is whether the payload was genuinely
     // delivered, not just whether the ack completed without error, see acceptReportingDelivery(..).
@@ -170,7 +204,8 @@ public final class ReactiveHandover<T> {
         // default) and reject past it the same way, but ArrayBlockingQueue pre-allocates its full backing array at
         // construction, roughly 800 KB held for the handover's whole lifetime whether or not the live feed ever
         // buffers anything. LinkedBlockingQueue allocates one node per buffered item, so memory tracks actual use.
-        this.liveSink = Sinks.many().unicast().onBackpressureBuffer(new LinkedBlockingQueue<>(maxBufferedEvents));
+        this.liveBuffer = new LinkedBlockingQueue<>(maxBufferedEvents);
+        this.liveSink = Sinks.many().unicast().onBackpressureBuffer(liveBuffer);
     }
 
     /**
@@ -352,12 +387,29 @@ public final class ReactiveHandover<T> {
         Mono<Void> recordMarker = alreadyDone.flatMap(done -> done ? Mono.<Void>empty() : source.markCaughtUp());
 
         replayFolded
+                // Before the marker, before the catch-up signal and before the drain, on every path into it,
+                // including the already-caught-up one that skipped the replay entirely. Ahead of the signal
+                // specifically because a source's own subscriber to it runs inline and may forget the id, and this
+                // running after that would leave state behind that nothing removes.
+                .then(Mono.fromRunnable(() -> {
+                    drainedSource.set(source);
+                    source.historyDone();
+                    // Taken after historyDone, so nothing that arrives from here on is counted as part of the drain.
+                    remainingInDrain.compareAndSet(-1L, liveBuffer.size());
+                }))
                 .then(recordMarker)
                 .doOnSuccess(ignored -> {
                     // Set before the live sink starts draining, the same point BlockingHandover.drainBufferAndGoLive
                     // flips its own live field. A payload acceptIfLive(..) sees after this point is treated as live
                     // even while whatever buffered ahead of it during the replay is still being delivered.
                     live = true;
+                    // An empty buffer has nothing to deliver, so its drain is over the moment the handover is.
+                    // Signalled here rather than beside historyDone, so a listener that frees the id on this cannot
+                    // do it while the marker is still unwritten. A buffer with anything in it reaches liveDrained
+                    // from the last delivery instead, which also runs after this point.
+                    if (remainingInDrain.get() == 0L) {
+                        source.liveDrained();
+                    }
                     catchupDone.tryEmitValue(true);
                 })
                 .thenMany(liveSink.asFlux().concatMap(this::deliver))
@@ -423,7 +475,26 @@ public final class ReactiveHandover<T> {
 
     // Serialized by concatMap within a phase, and the phases run sequentially, so the de-dup cache is touched by one
     // thread at a time. Those calls still land on different threads, so the cache does its own synchronization.
+    // Counts one delivered payload against the buffered set, and tells the source once that set is exhausted. Only
+    // ever counts down from a taken count, so a delivery before the history read finished, or after the drain is
+    // over, changes nothing.
+    private void countTowardsDrain() {
+        long remaining = remainingInDrain.get();
+        if (remaining <= 0L) {
+            return;
+        }
+        if (remainingInDrain.decrementAndGet() == 0L) {
+            drainedSource.get().liveDrained();
+        }
+    }
+
+    // Counted after the payload has been delivered rather than before it, so the last buffered one is still part of
+    // the drain while it is being handled.
     private Mono<Void> deliver(Item item) {
+        return deliverItem(item).doFinally(signal -> countTowardsDrain());
+    }
+
+    private Mono<Void> deliverItem(Item item) {
         MonoSink<Boolean> ack = item.ack();
         if (ack != null) {
             if (deliveredIds.contains(item.dedupKey())) {

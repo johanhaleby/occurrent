@@ -17,10 +17,12 @@
 package org.occurrent.dsl.projection.reactor;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
+
+import java.util.concurrent.atomic.AtomicReference;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedAppendRecorder;
 import org.occurrent.dsl.projection.AppliedAppendStore;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.projection.internal.AppliedAppendRecording;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -30,7 +32,7 @@ import java.util.function.BiFunction;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The reactive update {@link Projections#recordingAppliedAppends(BiFunction, String, AppliedAppendStore, ReplayPhase)}
+ * The reactive update {@link Projections#recordingAppliedAppends(BiFunction, String, AppliedAppendStore)}
  * builds
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>).
  * Applies the wrapped update and then, once it completes, records the delivered event's append id, so the recorded
@@ -56,10 +58,13 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
 
     private final BiFunction<EventMetadata, E, Mono<Void>> delegate;
     private final AppliedAppendRecording recording;
+    // The replay a pull feed is currently driving. Taken rather than read when that replay ends, so a second
+    // ending sends nothing and an ending that arrives with no replay in flight sends nothing either.
+    private final AtomicReference<@Nullable Object> feedEpisode = new AtomicReference<>();
 
-    RecordingReactiveUpdate(BiFunction<EventMetadata, E, Mono<Void>> delegate, String projectionId, AppliedAppendStore store, ReplayPhase phase) {
+    RecordingReactiveUpdate(BiFunction<EventMetadata, E, Mono<Void>> delegate, String projectionId, AppliedAppendStore store) {
         this.delegate = requireNonNull(delegate, "delegate cannot be null");
-        this.recording = new AppliedAppendRecording(projectionId, store, phase);
+        this.recording = new AppliedAppendRecording(projectionId, store);
     }
 
     @Override
@@ -82,8 +87,13 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
     }
 
     @Override
-    public void replayObserved() {
-        recording.replayObserved();
+    public void catchupStarted(Object episode) {
+        recording.catchupStarted(episode);
+    }
+
+    @Override
+    public void historyRead(Object episode) {
+        recording.historyRead(episode);
     }
 
     @Override
@@ -92,22 +102,35 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
     }
 
     @Override
-    public boolean pollReplayPhase() {
-        return recording.pollReplayPhase();
+    public boolean pollForClear() {
+        return recording.pollForClear();
     }
 
+    // The replay lifecycle a pull feed drives, mapped onto the two catch-up signals. The feed does not mint an
+    // episode, so one is minted here, which is the same thing once per replay it starts. Both signals are I/O-free,
+    // so neither needs a scheduler hop.
     @Override
     public void replayStarted() {
         if (delegate instanceof ReactiveReplayAware replayAware) {
             replayAware.replayStarted();
         }
-        recording.replayStarted();
+        Object started = new Object();
+        feedEpisode.set(started);
+        recording.catchupStarted(started);
     }
 
     @Override
     public Mono<Void> replayCompleted() {
         Mono<Void> delegateCompletion = delegate instanceof ReactiveReplayAware replayAware ? replayAware.replayCompleted() : Mono.empty();
-        return delegateCompletion.then(Mono.<Void>fromRunnable(recording::replayCompleted).subscribeOn(Schedulers.boundedElastic()));
+        return delegateCompletion.then(Mono.<Void>fromRunnable(() -> {
+            Object started = feedEpisode.getAndSet(null);
+            if (started != null) {
+                recording.historyRead(started);
+            }
+            // A feed is not polled, so nothing else would retry a clear its replay left owed. This one call does
+            // reach the store, which is why it keeps the hop the signals themselves no longer need.
+            recording.retryPendingClear();
+        }).subscribeOn(Schedulers.boundedElastic()));
     }
 
     @Override
@@ -115,6 +138,13 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
         if (delegate instanceof ReactiveReplayAware replayAware) {
             replayAware.replayAbandoned();
         }
-        recording.replayAbandoned();
+        // The history read is over even though it was cut short, and a pull feed goes on delivering live events to
+        // this same fold afterwards, which are applied and are recorded. The clear the replay owed stays owed.
+        // A subscription model sends nothing here instead, since a stopped catch-up delivers nothing more until a
+        // new one announces itself.
+        Object started = feedEpisode.getAndSet(null);
+        if (started != null) {
+            recording.historyRead(started);
+        }
     }
 }

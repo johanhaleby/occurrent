@@ -89,6 +89,89 @@ class StreamCatchupSubscriptionModelTest {
         inMemorySubscriptionModel.shutdown();
     }
 
+    // The contract a recording projection is told, rather than one it reads per delivery. The start arrives before
+    // anything this catch-up delivers, the boundary arrives after the history that was already there and before the
+    // events written since the catch-up started, and both name the same catch-up.
+    @Test
+    void tells_a_listener_when_a_catch_up_starts_and_when_its_history_has_been_read() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel);
+        write(eventStore, nameDefined("history"));
+
+        CopyOnWriteArrayList<String> signals = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<Object> episodes = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+
+        boolean sendsThem = subscription.listenForCatchup("subscription", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                signals.add("started");
+                episodes.add(episode);
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+                signals.add("historyRead");
+                episodes.add(episode);
+            }
+        });
+        assertThat(sendsThem).isTrue();
+
+        subscription.subscribe("subscription", StartAtTime.beginningOfTime(), cloudEvent -> {
+            signals.add("delivered");
+            // Written from inside the history read, so it cannot be part of it and what delivers it is the rest of
+            // the catch-up.
+            if (signals.stream().filter("delivered"::equals).count() == 1) {
+                write(eventStore, nameDefined("writtenDuringTheHistoryRead"));
+            }
+        }).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(signals).containsExactly("started", "delivered", "historyRead", "delivered"));
+        assertThat(episodes).hasSize(2);
+        assertThat(episodes.get(0)).isSameAs(episodes.get(1));
+    }
+
+    // The same two signals on the time path, which is a different method with its own send. A store that writes no
+    // position replays by time for every start, and a store that writes one still replays by time for a specific
+    // wall-clock start, so this send is live in production and the position-path test above never reaches it.
+    @Test
+    void tells_a_listener_when_a_catch_up_starts_and_when_its_history_has_been_read_on_the_time_path() {
+        InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();
+        assertThat(eventStore.writesPosition()).isFalse();
+        write(eventStore, nameDefined("history"));
+
+        CopyOnWriteArrayList<String> signals = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<Object> episodes = new CopyOnWriteArrayList<>();
+        StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
+
+        boolean sendsThem = subscription.listenForCatchup("subscription", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                signals.add("started");
+                episodes.add(episode);
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+                signals.add("historyRead");
+                episodes.add(episode);
+            }
+        });
+        assertThat(sendsThem).isTrue();
+
+        subscription.subscribe("subscription", StartAtTime.beginningOfTime(), cloudEvent -> {
+            signals.add("delivered");
+            // Written from inside the history read, so it cannot be part of it and what delivers it is the rest of
+            // the catch-up.
+            if (signals.stream().filter("delivered"::equals).count() == 1) {
+                write(eventStore, nameDefined("writtenDuringTheHistoryRead"));
+            }
+        }).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(signals).containsExactly("started", "delivered", "historyRead", "delivered"));
+        assertThat(episodes).hasSize(2);
+        assertThat(episodes.get(0)).isSameAs(episodes.get(1));
+    }
+
     @Test
     void replays_historic_events_by_time_when_the_store_does_not_write_position() {
         InMemoryEventStore eventStore = new InMemoryEventStore(inMemorySubscriptionModel).withoutStreamPosition();

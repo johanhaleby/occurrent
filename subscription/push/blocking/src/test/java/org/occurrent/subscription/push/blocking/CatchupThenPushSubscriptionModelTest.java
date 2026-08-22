@@ -30,6 +30,7 @@ import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
@@ -41,6 +42,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -50,6 +52,91 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupThenPushSubscriptionModelTest {
+
+    // The overlap a sequential cancel and re-subscribe never creates. The first catch-up is still folding its last
+    // event when the replacement registers, so its history-read signal arrives after the replacement has already
+    // announced itself. It names the catch-up that sent it, and the replacement's recorder ignores it, which is
+    // what lets the replacement read its own history as history.
+    @Test
+    void an_overlapping_cancel_and_resubscribe_lets_the_replacement_read_its_own_history_as_history() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("s1", List.of(cloudEvent("1", "Created"), cloudEvent("2", "Updated"), cloudEvent("3", "Updated")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+
+        EpisodeLog log = new EpisodeLog();
+        assertThat(model.listenForCatchup("sub", log)).isTrue();
+
+        CountDownLatch oldReplayParkedOnLastEvent = new CountDownLatch(1);
+        CountDownLatch releaseOldReplay = new CountDownLatch(1);
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            if (ce.getId().equals("3")) {
+                oldReplayParkedOnLastEvent.countDown();
+                awaitLatch(releaseOldReplay);
+            }
+        });
+        assertThat(oldReplayParkedOnLastEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // The old replay is left running, blocked, entirely unaware it has been cancelled.
+        model.cancelSubscription("sub");
+
+        CountDownLatch newReplayParkedOnFirstEvent = new CountDownLatch(1);
+        CountDownLatch releaseNewReplay = new CountDownLatch(1);
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            newReplayParkedOnFirstEvent.countDown();
+            awaitLatch(releaseNewReplay);
+        });
+        assertThat(newReplayParkedOnFirstEvent.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // The old replay finishes now, while the replacement is parked on the first event of its own history.
+        releaseOldReplay.countDown();
+        Thread.sleep(200);
+
+        // The property: nothing has told the replacement its history has been read. Two things hold it up. The old
+        // replay's completion is stopped before it speaks, and a signal it did send would name its own catch-up,
+        // which the recorder receiving it ignores (AppliedAppendRecordingTest covers that half, where a stale
+        // signal is reachable).
+        assertThat(log.signals()).doesNotContain("historyRead:1");
+        assertThat(log.signals()).containsExactly("started:0", "started:1");
+
+        releaseNewReplay.countDown();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (!log.signals().contains("historyRead:1") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(log.signals()).containsExactly("started:0", "started:1", "historyRead:1");
+    }
+
+    // Names each catch-up by the order it was announced in, so an assertion can say which one a signal belongs to
+    // without depending on what the model uses to identify it.
+    private static final class EpisodeLog implements CatchupListener {
+        private final List<String> signals = new CopyOnWriteArrayList<>();
+        private final List<Object> episodes = new ArrayList<>();
+
+        @Override
+        public void catchupStarted(Object episode) {
+            signals.add("started:" + indexOf(episode));
+        }
+
+        @Override
+        public void historyRead(Object episode) {
+            signals.add("historyRead:" + indexOf(episode));
+        }
+
+        List<String> signals() {
+            return signals;
+        }
+
+        private synchronized int indexOf(Object episode) {
+            for (int i = 0; i < episodes.size(); i++) {
+                if (episodes.get(i) == episode) {
+                    return i;
+                }
+            }
+            episodes.add(episode);
+            return episodes.size() - 1;
+        }
+    }
 
     @Test
     void catches_up_from_the_store_then_delivers_the_live_feed() {
@@ -129,10 +216,17 @@ class CatchupThenPushSubscriptionModelTest {
         PushSubscriptionModel feed2 = new PushSubscriptionModel();
         sink.set(feed2);
         List<String> secondRun = new ArrayList<>();
-        new CatchupThenPushSubscriptionModel(store, feed2, marker)
-                .subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> secondRun.add(ce.getId()))
+        CatchupThenPushSubscriptionModel restarted = new CatchupThenPushSubscriptionModel(store, feed2, marker);
+        EpisodeLog log = new EpisodeLog();
+        restarted.listenForCatchup("proj", log);
+        restarted.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> secondRun.add(ce.getId()))
                 .waitUntilStarted();
         assertThat(secondRun).isEmpty();
+
+        // Both signals, even though no replay ran. This restart is the case that decides where the boundary goes:
+        // it skips the replay entirely and never reaches replayCompleted(), so a boundary placed there would leave
+        // the projection reading history for the rest of the model's life.
+        assertThat(log.signals()).containsExactly("started:0", "historyRead:0");
 
         // Only live events flow after the restart, resumed by the broker (here, the forwarding store).
         store.write("s1", List.of(cloudEvent("3", "Updated")));

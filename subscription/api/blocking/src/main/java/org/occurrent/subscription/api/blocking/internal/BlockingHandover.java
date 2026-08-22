@@ -118,6 +118,20 @@ public final class BlockingHandover<T> {
          */
         default void replayAbandoned() {
         }
+
+        /**
+         * The history this catch-up was going to read has been read, and the live payloads buffered while it ran are
+         * about to be delivered. Called immediately before every drain, including the one for a source that was
+         * already caught up and replayed nothing, which is what makes it different from {@link #replayCompleted()}.
+         * <p>
+         * A buffered payload is delivered exactly once and never again, since whoever fed it here has already been
+         * told it was handled, so a source that reports its own catch-up phase has to stop calling this part of the
+         * work a replay before the drain rather than after it
+         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
+         * decision 6). The default does nothing.
+         */
+        default void historyDone() {
+        }
     }
 
     /**
@@ -342,7 +356,7 @@ public final class BlockingHandover<T> {
         boolean replayOpen = false;
         try {
             if (source.isAlreadyCaughtUp()) {
-                drainBufferAndGoLive();
+                drainBufferAndGoLive(source);
                 return true;
             }
             boolean stoppedMidReplay = false;
@@ -389,7 +403,7 @@ public final class BlockingHandover<T> {
             // buffered is durable before either runs (ADR 110).
             source.replayCompleted();
             replayOpen = false;
-            drainBufferAndGoLive();
+            drainBufferAndGoLive(source);
             source.markCaughtUp();
             return true;
         } catch (RuntimeException | Error e) {
@@ -421,7 +435,10 @@ public final class BlockingHandover<T> {
         }
     }
 
-    private void drainBufferAndGoLive() {
+    private void drainBufferAndGoLive(Source<T> source) {
+        // Every drain runs through here, including the one for a source that was already caught up and ran no replay
+        // at all, which is why the signal sits here rather than beside replayCompleted().
+        source.historyDone();
         List<T> toDeliver;
         List<String> keysToDeliver;
         synchronized (lock) {

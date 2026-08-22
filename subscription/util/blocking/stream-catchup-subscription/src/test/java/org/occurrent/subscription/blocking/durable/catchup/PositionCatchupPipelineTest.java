@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.TreeMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 import java.util.stream.LongStream;
@@ -55,10 +56,28 @@ class PositionCatchupPipelineTest {
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000);
 
         long cursor = assertTimeoutPreemptively(Duration.ofSeconds(5), () ->
-                pipeline.replay(0, () -> true, (events, ignoredCache) -> events.forEach(e -> delivered.add(e.getId())), cache));
+                pipeline.replay(0, () -> true, (events, ignoredCache) -> events.forEach(e -> delivered.add(e.getId())), cache, () -> {
+                    }));
 
         assertThat(cursor).isEqualTo(20L);
         assertThat(delivered).isEqualTo(idsInRange(1, 20));
+    }
+
+    // A history that stopped part way through is not a history that was read, so nothing may announce that it was.
+    // A recording projection told otherwise would record the rest of a rebuild it never finished as though it were
+    // live.
+    @Test
+    void a_truncated_history_never_announces_that_it_was_read() {
+        FakeReader reader = FakeReader.withEventsInRange(1, 10).headSupplier(() -> 10L);
+        BoundedIdCache cache = new BoundedIdCache(1000);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000);
+        AtomicBoolean keepRunning = new AtomicBoolean(true);
+        AtomicBoolean announced = new AtomicBoolean(false);
+
+        pipeline.replay(0, keepRunning::get, (events, ignoredCache) -> events.forEach(event -> keepRunning.set(false)),
+                cache, () -> announced.set(true));
+
+        assertThat(announced).isFalse();
     }
 
     @Test
@@ -74,7 +93,8 @@ class PositionCatchupPipelineTest {
         BoundedIdCache cache = new BoundedIdCache(1000);
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000);
 
-        long cursor = pipeline.replay(0, () -> true, (events, ignoredCache) -> events.forEach(CloudEvent::getId), cache);
+        long cursor = pipeline.replay(0, () -> true, (events, ignoredCache) -> events.forEach(CloudEvent::getId), cache, () -> {
+        });
 
         assertThat(cursor).isEqualTo(30L);
         assertThat(headReads).hasValue(2);

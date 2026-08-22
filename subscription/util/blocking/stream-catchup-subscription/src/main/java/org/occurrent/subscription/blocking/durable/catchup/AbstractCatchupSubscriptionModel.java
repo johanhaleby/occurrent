@@ -18,6 +18,7 @@ package org.occurrent.subscription.blocking.durable.catchup;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
@@ -66,6 +67,11 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     // own dedicated virtual thread, never reused, and clears the value in a finally block.
     private final ConcurrentMap<String, CatchupAttempt> currentAttempt;
     private static final ThreadLocal<@Nullable CatchupAttempt> CURRENT_ATTEMPT = new ThreadLocal<>();
+    // Who to tell about each id's catch-up boundaries, registered before the subscription that produces them.
+    // Kept until this model shuts down, since the registration outlives any one catch-up: a stop and start, a
+    // resume, or a cancel and re-subscribe all run another catch-up for the same id, and a recorder that stopped
+    // being told would record that catch-up's history as though it were live.
+    private final ConcurrentMap<String, CatchupListener> catchupListeners = new ConcurrentHashMap<>();
     // One lock per subscriptionId, guarding a fresh attempt's registration (startCatchupAsync), a finishing
     // attempt's checkpoint cleanup and delegate subscribe (or its cancelled-cleanup branch), and
     // cancelRunningCatchup. The identity check above only made the ownership decision itself atomic, not what
@@ -145,6 +151,29 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     public boolean isCatchingUp(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return runningCatchupSubscriptions.containsKey(subscriptionId);
+    }
+
+    @Override
+    public boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
+        catchupListeners.put(subscriptionId, listener);
+        return true;
+    }
+
+    /**
+     * Tells a listener that this attempt has read the history it set out to read, so what follows was written since
+     * it started. Called by a subclass once its history read has delivered everything, and not at all when a stop
+     * truncated it. The attempt itself is the episode, so a listener that has since been started by a later attempt
+     * for the same id ignores this, and no lock is needed to keep a stale attempt from speaking. Only meaningful on
+     * the virtual thread {@link #startCatchupAsync} started for this attempt.
+     */
+    protected void historyRead(String subscriptionId) {
+        CatchupAttempt attempt = CURRENT_ATTEMPT.get();
+        CatchupListener listener = catchupListeners.get(subscriptionId);
+        if (listener != null) {
+            listener.historyRead(attempt);
+        }
     }
 
     @Override
@@ -362,6 +391,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     public void markShuttingDown() {
         shuttingDown = true;
         runningCatchupSubscriptions.clear();
+        catchupListeners.clear();
         currentAttempt.clear();
         pauseRequestedDuringCatchup.clear();
     }
@@ -441,6 +471,12 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         try (HandoverLock ignored = lockHandover(subscriptionId)) {
             runningCatchupSubscriptions.put(subscriptionId, true);
             currentAttempt.put(subscriptionId, attempt);
+            // Sent here, inside the same lock that takes ownership of the id and before the thread below starts, so
+            // it always precedes anything this attempt delivers.
+            CatchupListener listener = catchupListeners.get(subscriptionId);
+            if (listener != null) {
+                listener.catchupStarted(attempt);
+            }
         }
         // catchup itself ends its attempt's ownership on normal completion (via endReplayIfStillCurrent), and
         // deliberately leaves it in place when shouldKeepReplaying already turned false so a cancellation can

@@ -19,6 +19,7 @@ package org.occurrent.subscription.reactor.durable.catchup;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.DuplicateSubscriptionIdException;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
@@ -89,6 +90,10 @@ final class NamedCatchupSupport {
     // handOver park instead of subscribing the delegate on a stopped model. Same role as the blocking
     // AbstractCatchupSubscriptionModel's stopped flag.
     private volatile boolean stopped = false;
+    // Who to tell about each id's catch-up boundaries. Kept until this model shuts down, since the registration
+    // outlives any one catch-up and a recorder that stopped being told would record the next one's history as
+    // though it were live.
+    private final ConcurrentMap<String, CatchupListener> catchupListeners = new ConcurrentHashMap<>();
 
     NamedCatchupSupport(CheckpointAwareSubscriptionModel wrapped, Class<?> modelClass) {
         this.wrapped = requireNonNull(wrapped);
@@ -107,6 +112,21 @@ final class NamedCatchupSupport {
     boolean isCatchingUp(String subscriptionId) {
         return catchingUp.containsKey(subscriptionId);
     }
+
+    // Who to tell about an id's catch-up boundaries, registered before the subscription that produces them.
+    boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
+        catchupListeners.put(subscriptionId, listener);
+        return true;
+    }
+
+    /**
+     * Whether the replay for {@code subscriptionId} is still reading the history that was there when it started,
+     * rather than the events written since. False for an id with no replay in flight, so a handed-over subscription
+     * and one this model never saw read the same, matching {@link #isCatchingUp(String)}.
+     */
+    // One map read, so the part and the catch-up it belongs to can never come from two different moments. The two
+    // fields inside the state are separate volatiles, but only the launcher writes them and it writes the generation
+    // last, so a reader that saw this generation saw at least this launch's history flag.
 
     private SubscriptionModel requireNamed() {
         if (named == null) {
@@ -140,12 +160,39 @@ final class NamedCatchupSupport {
         // The replay is relaunchable: stop() aborts and parks it, start(..) runs this again from the same start
         // position (re-adding ids to the cache is a no-op; re-delivering replayed events is at-least-once).
         state.launcher = () -> {
+            // A relaunch reads the history again from the same start position, so it is a different catch-up and
+            // announces itself as one. Sent before the subscribe below, so it precedes anything this launch
+            // delivers.
+            Object launched = new Object();
+            state.episode.set(launched);
+            // Announced inside the map operation that holds this id, which cancelSubscription's own remove also
+            // takes, so a cancel and a fresh subscribe cannot slip between the ownership check and the send. A
+            // launch that no longer owns the id announces nothing, or its start would arrive after its
+            // replacement's and the recorder would adopt a catch-up that is already over. The listener only writes
+            // its own state here, so running it inside the map operation reenters nothing.
+            catchingUp.computeIfPresent(subscriptionId, (id, owner) -> {
+                if (owner == state) {
+                    CatchupListener startListener = catchupListeners.get(subscriptionId);
+                    if (startListener != null) {
+                        startListener.catchupStarted(launched);
+                    }
+                }
+                return owner;
+            });
             // Token before replay, replay through the caller's action (no retry, failure is loud), then delegate live.
             Disposable replaying = pipeline.captureLiveToken(wrapped)
-                    .flatMapMany(liveToken -> pipeline.replay(startPosition, cache)
-                            // A stop between dispose landing and this event truncates here, before the action runs.
-                            .takeWhile(cloudEvent -> !stopped && !state.cancelled.get())
-                            .concatMap(action)
+                    .flatMapMany(liveToken -> pipeline.replayApplying(startPosition, cache,
+                                    // A stop between dispose landing and this event truncates here, before the action runs.
+                                    () -> !stopped && !state.cancelled.get(), action,
+                                    () -> {
+                                        CatchupListener boundaryListener = catchupListeners.get(subscriptionId);
+                                        if (boundaryListener != null) {
+                                            // The launch this callback belongs to, not whatever the field holds
+                                            // by the time it runs, so a relaunch cannot end its predecessor's
+                                            // history read for it.
+                                            boundaryListener.historyRead(launched);
+                                        }
+                                    })
                             .thenMany(Flux.defer(() -> {
                                 handOver(subscriptionId, state, delegate, liveSubscriptionFilter, StartAt.checkpoint(liveToken), liveAction);
                                 return Flux.empty();
@@ -351,6 +398,7 @@ final class NamedCatchupSupport {
     }
 
     void shutdown() {
+        catchupListeners.clear();
         new ArrayList<>(catchingUp.keySet()).forEach(subscriptionId -> {
             CatchupState state = catchingUp.remove(subscriptionId);
             if (state != null) {
@@ -374,6 +422,9 @@ final class NamedCatchupSupport {
         final AtomicBoolean cancelled = new AtomicBoolean(false);
         final AtomicBoolean handedOver = new AtomicBoolean(false);
         final Sinks.Empty<Void> started = Sinks.empty();
+        // The episode each launch announces. A stop parks this state and a start runs its launcher again, reading
+        // the history from the beginning, which is a different catch-up and gets a value of its own.
+        final AtomicReference<Object> episode = new AtomicReference<>(new Object());
         // The replay, relaunchable: assigned once in subscribeWithCatchup before the state is published, run under
         // the state monitor by the initial subscribe and by start(..) for parked subscriptions.
         volatile Runnable launcher = () -> {

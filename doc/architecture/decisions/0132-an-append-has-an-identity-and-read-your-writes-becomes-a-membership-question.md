@@ -256,20 +256,75 @@ defect and fixed it in [#730](https://github.com/johanhaleby/occurrent/issues/73
 the wait's remaining time. Both stacks apply that limit here, so the timeout the caller asked for is the one they
 get.
 
-### 6. Nothing is recorded while a projection is replaying
+### 6. Nothing is recorded while a projection is reading history
 
-A recorder records an identifier only when its projection is delivering live events. During a replay it records
-nothing at all.
+A recorder records an identifier only when its projection is past the history its replay set out to read. While that
+history is being read it records nothing at all.
 
 One rule closes all three problems from the context above. A full replay inserts nothing, so the volume problem
 disappears. An identifier is never recorded for an update that a coalescing view buffered rather than wrote,
 because the recorder does not run during the replay when buffering happens. And an abandoned replay has nothing
 recorded to become untrue when the buffer is discarded.
 
-The check is asked per delivery. On subscription-fed paths it is the same question the saga timer already asks, so
-the recorder takes a `BooleanSupplier` built from `isCatchingUp(subscriptionId)`. On the pull paths, where
-`DomainEventFeed` and `CatchupProjectionFeed` drive the replay, the `ReplayAware` lifecycle the handover engines
-already forward answers it instead.
+A catch-up is two parts, not one, and this rule is about the first of them. Every catch-up in this library reads the
+history that already existed when it started, and then delivers the events written while it was doing that. The
+blocking stream model reads a delta by insertion order after its bulk read, the position models reconcile up to a
+freshly read head, and the push model drains the live events it buffered during the replay. All three deliver those
+events through the same action the history went through, and for some of them that is the only delivery there will
+ever be, because the live subscription resumes past them or the broker was already told they were handled.
+
+So a recorder that treated the whole catch-up as a replay would record nothing for an append the projection did
+apply, and a wait for that append would never finish. That is what
+[#890](https://github.com/johanhaleby/occurrent/issues/890) reports. The three reasons above are reasons about
+history and none of them reaches the second part. Its volume is what the application wrote during the replay, which
+is the volume the same projection would record if it were already live. A coalescing view buffers only after
+`ReplayAware.replayStarted()`, which no subscription-fed composition ever calls, so on the path this matters for
+nothing is buffered at all. And decision 7's clear is a precondition there exactly as it is everywhere else.
+
+The recorder is therefore told where it is, rather than asking. `ReplayAwareSubscriptions` gains
+`listenForCatchup(subscriptionId, listener)` on both stacks, and a model that has catch-ups sends that listener two
+signals per catch-up. One when the catch-up begins, before it has delivered anything, and one when the history it
+set out to read has been read. Between them the projection records nothing, and after the second, as when no
+catch-up is running at all, it records.
+
+Told rather than asked, because asking only ever produces samples. A recorder that read the model once per delivery
+has to work out what happened between two of its own readings, and a catch-up that started and finished in between
+looks like no catch-up at all, which is exactly what a poll misses whenever a history read matches nothing. Every
+guard tried against that turned out to be one more thing to sample. The signals remove the question rather than
+answering it.
+
+Each signal names the catch-up that sent it, and that name is the catch-up itself, compared by identity and never
+interpreted. A catch-up that has lost its subscription can still be running when its replacement starts, and its
+boundary signal arriving late names the catch-up it belongs to, so a recorder the replacement has since started
+ignores it and goes on reading the replacement's history as history.
+
+Where each model sends the start matters as much as that it does. It goes where the model takes ownership of the
+subscription id, inside the same lock the registration uses and before the thread or subscriber that produces the
+deliveries exists, so nothing this catch-up delivers can precede it. Neither signal touches a store, since both run
+on a thread the subscription needs back.
+
+The boundary has to fall after the last history event has been applied and before the first of the others is, which
+is not the same as when the source of history runs out. The reactor models send it from inside the replay pipeline
+for that reason, since `concatMap` prefetches and a signal placed between the two halves upstream of it would fire
+while a prefetch worth of history was still waiting to be applied. The push models send it at the buffer drain
+rather than beside `replayCompleted()`, since a projection that was already caught up skips the replay entirely and
+never reaches that call.
+
+A model that cannot tell its catch-ups apart answers `false` from the default `listenForCatchup` and registers
+nothing. A caller then falls back to polling `isCatchingUp(subscriptionId)` and driving the same two signals from
+the edges of that reading, which is what the Spring registrars do through `PolledCatchupSignals`. That fallback is
+worse in two ways worth stating rather than leaving to be rediscovered. The whole catch-up counts as history,
+because the reading says nothing about where inside it the history ends, so an append written while one runs is
+answered from the event store instead of from what the projection recorded. And a catch-up that starts and finishes
+between two readings is not seen at all, so the projection records the history that catch-up replayed as though it
+were live. Both are reasons for a model that can send the signals to send them.
+
+On the pull paths, where `DomainEventFeed` and `CatchupProjectionFeed` drive the replay, the `ReplayAware` lifecycle
+the handover engines already forward supplies both signals instead. `replayStarted()` is the start and
+`replayCompleted()` is the boundary. So is `replayAbandoned()`, because a pull feed goes on delivering live events
+to the same projection after a replay it cut short, and those events are applied and are recorded. A subscription
+model sends nothing for a catch-up a stop truncated, because it delivers nothing more until a new one announces
+itself.
 
 An event the recorder cannot record is skipped with a debug log rather than throwing. Every event written before
 this feature exists has no `appendid` extension, and neither does an event from a push feed unless whatever
@@ -287,26 +342,42 @@ the two that can be decided at wiring time, no store bean and `mode = SYNCHRONOU
 
 ### 7. A completed clear is a precondition for recording again
 
-A projection clears its membership records before recording resumes after any observation that it is replaying.
+A projection clears its membership records before recording resumes after every catch-up it is told about.
 `clear(projectionId)` deletes them, and until that delete has come back successfully the recorder records nothing.
+
+That holds in the second part of a catch-up too, and there it needs one addition, because that part records. An
+append applied while the clear is still owed cannot be written yet, since the delete that is owed would remove it
+again, and it cannot be skipped either, since that part of the catch-up is the only delivery it gets. So it
+waits, and is written once the clear lands. The wait is bounded at a thousand appends, and past that the oldest are
+dropped with a warning. That bound reads like the delivery caches elsewhere in this library and behaves in the
+opposite direction. An id evicted from a `BoundedIdCache` costs a second delivery, which the at-least-once contract
+already allows, while an append dropped here is never recorded and a wait for it times out. The bound is high enough
+that reaching it means a clear has been failing for a long time, which decision 7 already logs loudly.
+
+Everything waiting is dropped whenever the next catch-up starts, rather than only when one ends. A stop parks a
+catch-up and a start reads that history from the beginning, with nothing live in between, so a rule keyed on the end
+of a catch-up would let a parked one's appends be written into a read model that is being rebuilt. That is the
+untruth this decision exists to prevent, arriving by a different route.
 
 The precondition is what makes the rule safe rather than best effort. A clear that exhausts its retries stops the
 recorder and logs loudly, and never lets recording continue as though the clear had happened, because a transient
 delete failure must not reinstate the exact untruth the rule exists to remove.
 
-Two observers trigger it. The per-delivery check does, whenever it sees the projection replaying. A scheduled poll
-does too, and it exists for the replay whose deliveries are all filtered out server-side, where no delivery ever
-reaches the recorder to be checked.
+The catch-up's start signal is what marks the clear as owed, and it deliberately runs no store call itself. Two
+things run it. A delivery does, and a scheduled poll does too, which is what a catch-up whose deliveries are all
+filtered out server-side needs, since no delivery ever reaches the recorder there.
 
-The poll asks `isCatchingUp` for each registered recording projection on an exponential schedule, starting at
-200 ms and settling at 5 seconds, and a projection goes back to the fast end whenever a replay is seen. So a
-projection that has just registered, or has just been seen replaying, is asked several times a second, and one that
-has been live for hours is asked every 5 seconds.
+The poll ticks each registered recording projection on an exponential schedule, starting at 200 ms and settling at
+5 seconds, and a projection goes back to the fast end whenever a tick has something to react to. For a projection
+whose model sends the signals, a tick retries a clear that is still owed and reports whether one is, which is the
+whole of what a poll can do there. For one behind a model that has to be polled instead, a tick also reads whether
+a catch-up is running, drives the two signals from the edges of that reading, and reports either condition, so the
+interval stays at 200 ms for the whole catch-up rather than seeing its end up to 5 seconds late.
 
-That schedule has a residual and the documentation states it rather than implying the rule is complete. A replay
-that both starts and finishes inside one interval and delivers no event the projection handles is not observed, so
-its membership records survive it. At the settled interval that is a replay shorter than 5 seconds delivering
-nothing matching.
+That second case has a residual and the documentation states it rather than implying the rule is complete. A
+catch-up that both starts and finishes inside one interval is not seen at all, so the records it should have
+cleared survive it. At the settled interval that is a catch-up shorter than 5 seconds. A projection whose model
+sends the signals has no such residual, because nothing about the catch-up is inferred from a reading.
 
 There is a second window, on the read side, and it is worth stating separately because the clear is what removes
 the records rather than what stops them being read. Recording stops as soon as an observation shows the projection
@@ -323,15 +394,19 @@ retains what `close()` has to stop (`ProjectionAnnotationRegistrar.java:314-316`
 application context stops it, on both stacks.
 
 The poll is deliberately a registrar-level service rather than part of the recorder. `dsl/projection-dsl` has no
-place to hook a `close()` and this design does not add one, so the recording wrapper exposes the hook that marks a
-projection as needing a clear, and nothing more. An application that composes its projections itself, outside
-Spring, either runs the poll against that hook or accepts a wider version of the same residual, where a filtered
-rebuild goes unnoticed between deliveries. That is the non-Spring line, and the documentation states it.
+place to hook a `close()` and this design does not add one, so the recording wrapper exposes the two signals and
+the clear retry, and nothing more.
+
+An application that composes its projections itself, outside Spring, is the one caller that has to wire this by
+hand, and the factory's javadoc says so. It calls `listenForCatchup(projectionId, view)` on the model its
+subscription runs on before subscribing, and it schedules `pollForClear()` so a clear that failed while a catch-up
+ran is retried. A caller that does neither still records, and gets a projection that records the history of every
+catch-up as though it were live, which is the defect this decision exists to prevent.
 
 There is no clear at startup. An application that restarts with its checkpoint intact replays nothing and keeps its
 records, which is correct because the read model is intact too, and both catch-up models classify a checkpoint that
-is neither global nor time-based as live. An application that restarts with a wiped checkpoint replays, and either
-the per-delivery check or the poll observes it, but only for a projection that declared a replaying start position
+is neither global nor time-based as live. An application that restarts with a wiped checkpoint replays, and the model
+says so, but only for a projection that declared a replaying start position
 (`startAt = BEGINNING`, or a global position of at least zero). On Occurrent's own shipped composition, the default
 start position with no global start position set bypasses the catch-up layer. Setting `startAtGlobalPosition` to
 zero or above takes precedence over it and replays from that position. The checkpoint is never consulted there, so wiping it
@@ -346,29 +421,36 @@ dismissing. It was rejected because nothing observable supplies the rebuild sign
 managed by an operator, and the machinery is not repaid by avoiding timeouts that already fail in the safe
 direction.
 
-### 8. The owner of a composition supplies the replay check
+### 8. The owner of a composition says which model to listen to
 
-A recorder is told how to answer whether its projection is replaying. It never works it out by asking the
-subscription model alone, for the reason in the context above, that the reactive lookup cannot see a catch-up model
-behind the durable wrapper and would call the default reactive Mongo wiring replay-free.
+Whoever composed a projection's subscription says which model the recorder registers with. It is never found by
+asking the subscription bean alone, for the reason in the context above, that the reactive lookup cannot see a
+catch-up model behind the durable wrapper and would leave the default reactive Mongo wiring listening to nothing.
 
-On the blocking annotation path the registrar builds the check with `ReplayAwareSubscriptions.findIn(...)`, whose
-wrapper walk is sound there and is what `SagaAnnotationRegistrar` already relies on.
+On the blocking annotation path the registrar finds it with `ReplayAwareSubscriptions.findIn(...)`, whose wrapper
+walk is sound there and is what `SagaAnnotationRegistrar` already relies on.
 
-On the reactive annotation path the check comes from whoever composed the model. The registrar builds it directly
-where it composed the model itself, which is what it already does for push projections at
-`ProjectionAnnotationRegistrar.java:276`. For the default asynchronous path the composition is built by
-`OccurrentReactiveMongoAutoConfiguration`, not by the registrar, so the catch-up layer that
-`composeCatchupLayer(...)` returns is what supplies the answer.
+On the reactive annotation path it comes from whoever composed the model. The registrar has it directly where it
+composed the model itself, which is what it already does for push projections. For the default asynchronous path
+the composition is built by `OccurrentReactiveMongoAutoConfiguration`, not by the registrar, so the catch-up layer
+that `composeCatchupLayer(...)` returns is handed to a `ComposedCatchupModel` bean the registrar reads.
 
-The programmatic factories take the check as a required argument, with an explicit value meaning "this composition
-never replays" for feeds that genuinely only deliver live events. Required rather than optional, so an application
-composing its own projection has to say which case it is in instead of silently receiving a check that always
-answers live.
+The programmatic factories take no such argument. A recording view is built from a projection id and a store, and
+whoever composed it registers it with the model afterwards, since only they know which model that is. A composition
+with no catch-ups at all registers with nothing, which is the same thing as never being told about one.
 
-For a blocking model that does replay, reaching the lookup is treated as part of the contract of being a
-subscription model that replays. A third-party model that replays without implementing `ReplayAwareSubscriptions`
-breaks that contract, and a subscription-TCK assertion for it is a candidate this ADR notes and does not build.
+That registration is a plain call rather than something the caller has to adapt, because `AppliedAppendRecorder`
+extends `CatchupListener`, so a recording view is one and `listenForCatchup(projectionId, view)` takes it directly.
+It costs `dsl/projection-dsl/common` a dependency on `occurrent-subscription-core`, which is the direction that was
+already allowed, a projection knowing about subscriptions rather than the subscription API knowing about the
+projection DSL. The alternative was a forwarding adapter, and it has no home. It needs both types, and the only
+modules holding both are the two Spring registrars, which is exactly the wrong place for a caller that is not using
+Spring.
+
+For a blocking model that does have catch-ups, sending the signals is treated as part of the contract of being a
+subscription model that replays. A third-party model that replays and answers `false` from `listenForCatchup`
+puts its projections on the polled fallback, with the two costs decision 6 names. A subscription-TCK assertion
+for it is a candidate this ADR notes and does not build.
 
 ### 9. A composition that never replays records, with no automatic clear
 
@@ -495,8 +577,21 @@ separately.
 - Two cases fall outside that, both from decision 9, and both expire with the retention time. A read model wiped by
   hand on a composition that never replays, and a read model wiped while the application keeps running with no
   restart and no replay anywhere.
-- The scheduled poll has a residual that decision 7 states. A replay shorter than the poll interval that
-  delivers no event the projection handles is not observed, so its records survive.
+- A projection behind a model that has to be polled rather than one that sends its catch-up signals keeps a residual
+  that decision 7 states. A catch-up shorter than the poll interval is not seen at all, so the records it should
+  have cleared survive it, and everything that catch-up delivered counts as history. Both stacks' shipped models
+  send the signals.
+- An append the projection applied during the second part of a catch-up is recorded, which closes the window
+  [#890](https://github.com/johanhaleby/occurrent/issues/890) reported, where such an append could never be recorded
+  by any path and a wait for it never finished. Two losses remain and are worth naming rather than leaving to be
+  rediscovered. On the reactor stack a write whose position was reserved before the replay read the head, and that
+  committed after it, can still be read by a history window, and the reactor replay puts every id it reads into the
+  same cache its live delivery filters on, so no second delivery follows and that append is not recorded.
+  [#891](https://github.com/johanhaleby/occurrent/issues/891) tracks it. The blocking stacks do not have it, because
+  their history reads do not populate that cache and a second delivery follows. The other loss is the bound in
+  decision 7, an append dropped from the wait while a clear keeps failing.
+- Closing it needed no ordering rule and no position comparison, which is what made it closable at all. A delivery is
+  classified by which read produced it, and every closure that classified by position ran into what ADR 122 refuted.
 - Widening the two result records breaks external code two ways, and only one of them announces itself. An
   equality assertion against a whole record starts failing with no compile error, while a record deconstruction
   pattern stops compiling. The changelog entry and the migration-guide section are what tell the reader about the

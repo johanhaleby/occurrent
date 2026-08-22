@@ -34,6 +34,7 @@ import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.internal.HandoverMessages;
 import org.occurrent.subscription.internal.ReplayFilters;
 import org.slf4j.Logger;
@@ -99,6 +100,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // fails. The live feed cannot answer for them: it knows the id (this model registers there first) but it is
     // buffering rather than delivering, so it would report a subscription that is not yet folding anything as running.
     private final ConcurrentMap<String, Sinks.One<Boolean>> replayingSubscriptions = new ConcurrentHashMap<>();
+    // Who to tell about each id's catch-up boundaries, registered before the subscription that produces them. Kept
+    // until this model shuts down, since the registration outlives any one catch-up: a stop and start, a resume, or
+    // a cancel and re-subscribe all run another catch-up for the same id, and a recorder that stopped being told
+    // would record that catch-up's history as though it were live.
+    private final ConcurrentMap<String, CatchupListener> catchupListeners = new ConcurrentHashMap<>();
     // A pause asked for while a replay is in flight. The replay itself keeps running, since resuming it would mean
     // persisting the exact replay cursor, which this model does not do. Applied at the handover instead.
     private final ConcurrentMap<String, Boolean> pauseRequestedDuringReplay = new ConcurrentHashMap<>();
@@ -163,7 +169,22 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // isRunning(id) and keepReplaying() therefore answer for this subscription from the moment subscribe returns,
         // rather than from whenever that pipeline happens to get scheduled.
         Sinks.One<Boolean> replayDone = Sinks.one();
+        // Cleared here rather than only on the exit paths, so this attempt starts in the history part of its
+        // catch-up whatever the previous attempt for the same id left behind.
         replayingSubscriptions.put(subscriptionId, replayDone);
+        // Sent inside the map operation that holds this id, which cancelSubscription's own remove also takes, so a
+        // cancel and a fresh subscribe cannot slip between taking the id and sending. An attempt that no longer
+        // owns the id sends nothing, or its start would arrive after its replacement's and the recorder would adopt
+        // a catch-up that is already over. The replay itself is the episode, so a later attempt starts its own.
+        replayingSubscriptions.computeIfPresent(subscriptionId, (id, owner) -> {
+            if (owner == replayDone) {
+                CatchupListener startListener = catchupListeners.get(subscriptionId);
+                if (startListener != null) {
+                    startListener.catchupStarted(replayDone);
+                }
+            }
+            return owner;
+        });
 
         Mono<Boolean> catchupDone = handover.catchUp(new ReactiveHandover.Source<>() {
             @Override
@@ -185,6 +206,24 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             public Mono<Void> markCaughtUp() {
                 return CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId);
             }
+
+            @Override
+            public void liveDrained() {
+                // Kept registered until here rather than dropped when the catch-up reports done, because the payloads
+                // buffered while the history was read are delivered after that and each of them exactly once. A
+                // recording projection has to see them as part of this catch-up, not as live delivery.
+                forget(subscriptionId, replayDone);
+            }
+
+            @Override
+            public void historyDone() {
+                // The replay itself is the episode, so a listener a later attempt for this id has since started
+                // ignores this and no lock is needed to keep this attempt from speaking for that one.
+                CatchupListener listener = catchupListeners.get(subscriptionId);
+                if (listener != null) {
+                    listener.historyRead(replayDone);
+                }
+            }
         });
 
         // Subscribed here rather than only handed back, so a caller that never waits still gets the bookkeeping below.
@@ -193,14 +232,15 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 caughtUp -> {
                     if (caughtUp) {
                         interruptibleReplays.remove(subscriptionId);
-                        forget(subscriptionId);
+                        // Not forgotten here: liveDrained does it, once the payloads buffered during the history read
+                        // have been delivered.
                         applyPendingPauseIfAny(subscriptionId);
                     } else {
                         // Stopped rather than failed, so the handover is intact, nothing is marked, and both the
                         // registration and the launcher are kept: start(true) replays the whole history again, the
                         // answer CatchupProjectionFeed.stopCatchUp() already records (ADR 104). Forgetting the replay
                         // entry last is what makes "launcher present, nothing replaying" mean stopped.
-                        forget(subscriptionId);
+                        forget(subscriptionId, replayDone);
                     }
                     replayDone.tryEmitValue(caughtUp);
                 },
@@ -214,7 +254,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                             + "refuses every event, so the source redelivers rather than losing them. Cancel the "
                             + "subscription and subscribe again once the cause is fixed.", subscriptionId, error);
                     interruptibleReplays.remove(subscriptionId);
-                    forget(subscriptionId);
+                    forget(subscriptionId, replayDone);
                     replayDone.tryEmitError(error);
                 });
 
@@ -243,8 +283,8 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         return launch.get();
     }
 
-    private void forget(String subscriptionId) {
-        replayingSubscriptions.remove(subscriptionId);
+    private void forget(String subscriptionId, Sinks.One<Boolean> replay) {
+        replayingSubscriptions.remove(subscriptionId, replay);
     }
 
     /**
@@ -316,11 +356,23 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * reports, which is why the handover needs an answer of its own.
      */
     @Override
+    public boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
+        catchupListeners.put(subscriptionId, listener);
+        return true;
+    }
+
+    @Override
     public boolean isCatchingUp(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return replayingSubscriptions.containsKey(subscriptionId);
     }
 
+    /**
+     * Whether {@code subscriptionId} is paused, counting a pause asked for while its replay was still running and
+     * not yet applied to the live feed.
+     */
     @Override
     public boolean isPaused(String subscriptionId) {
         return pauseRequestedDuringReplay.containsKey(subscriptionId) || liveFeed.isPaused(subscriptionId);
@@ -399,6 +451,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         shuttingDown = true;
         awaitReplays(SHUTDOWN_REPLAY_TIMEOUT);
         replayingSubscriptions.clear();
+        catchupListeners.clear();
         pauseRequestedDuringReplay.clear();
         // Unlike stop(), a shutdown keeps nothing to launch again: it drops the registrations too.
         interruptibleReplays.clear();

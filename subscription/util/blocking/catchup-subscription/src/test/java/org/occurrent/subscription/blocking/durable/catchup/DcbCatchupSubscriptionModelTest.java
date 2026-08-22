@@ -91,6 +91,47 @@ class DcbCatchupSubscriptionModelTest {
         inMemorySubscriptionModel.shutdown();
     }
 
+    // The same two signals the stream model sends, through the dispatcher a DCB projection actually subscribes on.
+    // The start arrives before anything this catch-up delivers, the boundary arrives after the history that was
+    // already there and before the events appended since the catch-up started.
+    @Test
+    void tells_a_listener_when_a_catch_up_starts_and_when_its_history_has_been_read() {
+        appendTagged("name:1", nameDefined("history"));
+
+        CopyOnWriteArrayList<String> signals = new CopyOnWriteArrayList<>();
+        CopyOnWriteArrayList<Object> episodes = new CopyOnWriteArrayList<>();
+        CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
+
+        boolean sendsThem = subscription.listenForCatchup("subscription", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                signals.add("started");
+                episodes.add(episode);
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+                signals.add("historyRead");
+                episodes.add(episode);
+            }
+        });
+        assertThat(sendsThem).isTrue();
+
+        subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+            signals.add("delivered");
+            // Appended from inside the history read, so it cannot be part of it and what delivers it is the rest of
+            // the catch-up.
+            if (signals.stream().filter("delivered"::equals).count() == 1) {
+                appendTagged("name:1", nameDefined("appendedDuringTheHistoryRead"));
+            }
+        }).waitUntilStarted();
+
+        await().untilAsserted(() -> assertThat(signals).containsExactly("started", "delivered", "historyRead", "delivered"));
+        assertThat(episodes).hasSize(2);
+        assertThat(episodes.get(0)).isSameAs(episodes.get(1));
+        assertThat(subscription.isCatchingUp("subscription")).isFalse();
+    }
+
     @Test
     void replays_matching_dcb_events_from_the_beginning_of_the_sequence_in_position_order() {
         NameDefined name1 = nameDefined("name1");

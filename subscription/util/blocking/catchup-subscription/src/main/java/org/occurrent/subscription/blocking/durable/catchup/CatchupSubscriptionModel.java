@@ -27,6 +27,7 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -312,6 +313,20 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     public boolean isCatchingUp(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         return presentCatchupModels().anyMatch(model -> model.isCatchingUp(subscriptionId));
+    }
+
+    /**
+     * Registered on every mode-specific model, since which one ends up running this id is not known until it
+     * subscribes. Answers true only when every present one accepts, so a model that cannot report its boundaries
+     * makes the whole registration false and the caller falls back to polling, rather than leaving the id able to
+     * land on a model that says nothing.
+     */
+    @Override
+    public boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
+        return presentCatchupModels().map(model -> model.listenForCatchup(subscriptionId, listener))
+                .reduce(Boolean.TRUE, (a1, b1) -> a1 && b1);
     }
 
     @Override

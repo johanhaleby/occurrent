@@ -17,6 +17,7 @@
 package org.occurrent.dsl.projection;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.CatchupListener;
 
 /**
  * The hooks a recording wrapper exposes to whoever drives its replay observation from outside
@@ -24,46 +25,53 @@ import org.jspecify.annotations.NullMarked;
  * decision 7). Implemented by both {@code RecordingMaterializedView} (blocking) and {@code RecordingReactiveUpdate}
  * (reactor).
  * <p>
- * A recording wrapper already reacts to a replay it can see for itself, through the {@link ReplayPhase} it was built
- * with or the view-DSL replay lifecycle it forwards. These hooks cover what neither of those catches. A replay whose
- * deliveries are all filtered out server-side never delivers anything for the wrapper to check, and a clear can fail
- * while that replay is going on. The Spring Boot registrars' poll calls {@link #pollReplayPhase()} on a schedule,
- * which re-checks the phase itself before reacting, so a clear owed from a replay the phase no longer reports (it
- * ended, possibly before a live delivery ever reached the wrapper to retry it there) still gets retried until it
- * succeeds, and a poll whose earlier reading of the phase is already stale by the time it acts cannot wipe a live
- * append the wrapper recorded in the meantime.
+ * A recording wrapper is told when a catch-up begins and when its history has been read, by whoever owns that
+ * catch-up. That is the subscription model for a projection fed by one, and the view-DSL replay lifecycle for a
+ * projection fed by a pull feed.
+ * <p>
+ * {@link #pollForClear()} covers the one thing those two signals leave open. The clear a catch-up start owes runs
+ * against a store that can be momentarily unavailable, and the catch-up it belongs to can end without ever
+ * delivering anything the wrapper could retry it on, since a replay filtered out server-side delivers nothing. The
+ * Spring Boot registrars call it on a schedule until the clear succeeds.
  */
 @NullMarked
-public interface AppliedAppendRecorder {
+public interface AppliedAppendRecorder extends CatchupListener {
 
     /**
-     * This projection was seen replaying. Marks it as needing a clear and attempts the clear on the calling thread.
-     * Recording stays off until a clear succeeds, retried on every later call to this method, to
-     * {@link #retryPendingClear()}, to {@link #pollReplayPhase()}, or to the wrapper's normal update path, until one
-     * does.
+     * {@inheritDoc}
+     * <p>
+     * The projection clears what it recorded before, and records nothing until {@link #historyRead(Object)} for the
+     * same {@code episode}.
      */
-    void replayObserved();
+    @Override
+    void catchupStarted(Object episode);
 
     /**
-     * Retries a clear already marked as owed by an earlier {@link #replayObserved()}, doing nothing if none is
-     * owed. Never marks a new clear itself, so calling this on a projection that has not replayed is a no-op
-     * rather than a spurious clear. The default no-op is for a caller (a test double, typically) that never needs
-     * the retry. The recording wrappers override it to reach the same state a normal update would retry through.
+     * {@inheritDoc}
+     * <p>
+     * The projection records from here on, because for some of those events this catch-up is the only delivery they
+     * get. Ignored for any episode other than the one currently held, which is what stops a catch-up that has lost
+     * its subscription from moving its replacement past a history the replacement has not read.
+     */
+    @Override
+    void historyRead(Object episode);
+
+    /**
+     * Retries a clear already marked as owed by an earlier {@link #catchupStarted(Object)}, doing
+     * nothing if none is owed. Never marks a new clear itself, so calling this on a projection that has not caught up
+     * is a no-op rather than a spurious clear. The default no-op is for a caller (a test double, typically) that
+     * never needs the retry.
      */
     default void retryPendingClear() {
     }
 
     /**
-     * Re-checks whether this projection is currently replaying and reacts atomically with that check, marking a
-     * clear as owed and attempting it if so, or retrying one already owed if not, returning what the check found.
-     * This is what a poller should call on a schedule, rather than reading the phase itself first and dispatching to
-     * {@link #replayObserved()} or {@link #retryPendingClear()} from that separate reading: between the two, a live
-     * delivery can land and record a genuinely live append, which a {@link #replayObserved()} call made from the
-     * stale earlier reading would then wipe. The default no-op, returning {@code false}, is for a caller (a test
-     * double, typically) that never polls. The recording wrappers override it to check the phase they were built
-     * with, under the same lock the clear itself runs under.
+     * Retries an owed clear, writes whatever was waiting for it, and reports whether one is still owed. What a poller
+     * calls on a schedule, and what keeps a clear moving for a projection that has gone quiet: without it, a clear
+     * that failed while a catch-up ran would only be retried by the next delivery, and a projection that receives
+     * none would never record again. The default no-op, returning {@code false}, is for a caller that never polls.
      */
-    default boolean pollReplayPhase() {
+    default boolean pollForClear() {
         return false;
     }
 }

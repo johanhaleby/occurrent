@@ -20,11 +20,13 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedAppendStore;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.eventstore.api.AppendId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
@@ -49,7 +51,6 @@ public final class AppliedAppendRecording {
 
     private final String projectionId;
     private final AppliedAppendStore store;
-    private final ReplayPhase phase;
 
     // Guards every check-and-write against a concurrent clear attempt, from whichever of readiness check, record,
     // or clear runs first: without one lock spanning both halves, a live delivery that read "ready" just before a
@@ -58,62 +59,152 @@ public final class AppliedAppendRecording {
     // that also declares it, on the same thread.
     private final Object clearLock = new Object();
     private volatile boolean pendingClear = false;
-    // True once a clear has already succeeded for the replay episode currently in progress. Decision 7 mandates a
-    // clear attempt on every delivery seen while replaying, not a repeat store.clear() call on every one of them.
-    // Without this, a replay of N events that all hit the per-delivery check runs N deleteMany round trips against
-    // an already-empty result instead of one. Reset whenever a live observation ends the episode, or an explicit
-    // replay-start signal begins one, so the next episode still gets its own clear.
-    private volatile boolean episodeCleared = false;
-    // Set by the view-DSL replay lifecycle (CatchupProjectionFeed/DomainEventFeed), independent of what phase says.
-    // A composition fed that way has no ReplayPhase to ask (it is neverReplays()), so this is its only replay signal.
-    private volatile boolean lifecycleReplaying = false;
     // Tracks whether the current run of clear failures has already logged once at ERROR, so a clear stuck failing
     // for a while logs loudly exactly once and DEBUG on every retry after that, per ADR 132 decision 7.
     private volatile boolean clearFailureLogged = false;
     // One-slot dedup: a single append usually delivers several events and only the first needs a write. Reset
     // whenever a clear succeeds, since the store no longer has anything recorded to deduplicate against.
     private volatile @Nullable AppendId lastRecorded = null;
+    // The catch-up this recorder currently belongs to and whether its history is still being read, as one value so
+    // a reader can never see one without the other. The episode is compared by identity, so a signal from a catch-up
+    // that has since lost its subscription is told apart from one from the catch-up that took it over.
+    //
+    // Both signals write only this, never the store and never clearLock, because they run on the thread that drives
+    // the catch-up. Taking clearLock there would block a replay behind a store call, since clearLock is held across
+    // store.clear and store.recordApplied.
+    private record Catchup(Object episode, boolean readingHistory) {
+    }
 
-    public AppliedAppendRecording(String projectionId, AppliedAppendStore store, ReplayPhase phase) {
+    private final AtomicReference<@Nullable Catchup> catchup = new AtomicReference<>();
+    // The catch-up whose clear and buffer drop have already been done. Read and written only under clearLock, which
+    // is what lets the signals stay off that lock: they announce, and the next locked call reacts.
+    private @Nullable Object reactedTo = null;
+    // Appends handled during a reconciliation while a clear was owed. Recording them then would be pointless, since
+    // the pending clear deletes every record for this projection, so they wait here and are written once it lands.
+    // Bounded because a reconciliation under a clear that keeps failing has no other limit, and an append evicted
+    // from here is never recorded, unlike an id evicted from a delivery dedup cache.
+    private final LinkedHashSet<AppendId> awaitingClear = new LinkedHashSet<>();
+    private boolean awaitingClearOverflowLogged = false;
+
+    // Holds one append id per append, so a reconciliation of a hundred thousand events costs far fewer entries than
+    // that. Chosen to be large enough that reaching it means a clear has been failing for a long time.
+    private static final int MAX_AWAITING_CLEAR = 1000;
+
+    public AppliedAppendRecording(String projectionId, AppliedAppendStore store) {
         this.projectionId = requireNonNull(projectionId, "projectionId cannot be null");
         this.store = requireNonNull(store, "store cannot be null");
-        this.phase = requireNonNull(phase, "phase cannot be null");
     }
 
     /**
      * Records {@code metadata}'s append id if the projection is ready to record right now, atomically with a
-     * concurrent clear: a write already about to happen when a clear runs can never land after it and reinstate
-     * what the clear just removed. Not recording is never an error. It means the projection is currently replaying
-     * (lifecycle or phase, whichever says so), which also attempts the clear that implies once per replay episode
-     * (a later delivery seen while still replaying, after that clear already succeeded, costs nothing further), or a
-     * previously owed clear has not yet succeeded, which this also retries on every delivery until it does. An
-     * append with no identifier (predates this feature, or arrived through a push feed whose producer supplied
-     * none), a malformed one, or a repeat of the one just recorded for this instance, is skipped quietly either way.
+     * concurrent clear, so a write already about to happen when a clear runs can never land after it and reinstate
+     * what the clear just removed. Not recording is never an error.
+     * <p>
+     * What happens depends on what the model last said. Between {@link #catchupStarted(Object)} and
+     * {@link #historyRead(Object)} nothing is recorded, and the clear a catch-up implies is attempted once rather
+     * than once per delivery. After that boundary, and when no catch-up is running at all, the append is recorded,
+     * because a catch-up delivering events written since it started is the only delivery some of them get.
+     * <p>
+     * An append handled during a reconciliation while a clear is still owed waits until that clear lands, since
+     * recording it any earlier would only give the pending clear something more to delete. Up to a thousand such
+     * appends wait, and past that the oldest are dropped with a warning. An append with no identifier (it predates
+     * this feature, or arrived through a push feed whose producer supplied none), a malformed one, or a repeat of the
+     * one just recorded for this instance, is skipped quietly in every phase.
+     * <p>
      * May block on {@link AppliedAppendStore#clear(String)} or {@link AppliedAppendStore#recordApplied}, so a
      * reactive caller must already be off the event loop.
      */
     public void recordIfReady(EventMetadata metadata) {
         requireNonNull(metadata, "metadata cannot be null");
         synchronized (clearLock) {
-            if (lifecycleReplaying || phase.isReplaying()) {
-                if (!episodeCleared) {
-                    pendingClear = true;
+            if (reactToAnyNewCatchup()) {
+                // The clear this catch-up owes, and nothing else. A history of N events clears once rather than
+                // running N deleteMany calls, because a clear that succeeds is no longer owed.
+                if (pendingClear) {
                     attemptClear();
-                    if (!pendingClear) {
-                        episodeCleared = true;
-                    }
                 }
                 return;
             }
-            episodeCleared = false;
             if (pendingClear) {
                 attemptClear();
-                if (pendingClear) {
-                    return;
-                }
+            }
+            flushAwaitingClear();
+            if (pendingClear) {
+                bufferUntilClear(metadata);
+                return;
             }
             doRecord(metadata);
         }
+    }
+
+    /**
+     * Writes what the pending clear held back, gated on the buffer rather than on whichever call happened to run the
+     * clear that succeeded. A clear can succeed inside the history branch of a poll tick, which flushes nothing, and
+     * a flush placed inside a {@code pendingClear} guard would then never run again because no clear is owed any
+     * more. Runs under the same lock acquisition as the delivery it precedes, so nothing interleaves between the
+     * clear and these writes.
+     */
+    private void flushAwaitingClear() {
+        if (pendingClear || awaitingClear.isEmpty()) {
+            return;
+        }
+        for (AppendId appendId : awaitingClear) {
+            store.recordApplied(projectionId, appendId);
+            lastRecorded = appendId;
+        }
+        dropAwaitingClear();
+    }
+
+    /**
+     * Picks up whatever the signals announced since the last locked call, and answers whether the history is still
+     * being read. A catch-up not yet reacted to owes a clear and invalidates what a previous one was holding, which
+     * is done here rather than in {@link #catchupStarted(Object)} so that call never waits for this lock.
+     * <p>
+     * Assumes clearLock is already held by the caller.
+     */
+    private boolean reactToAnyNewCatchup() {
+        Catchup current = catchup.get();
+        if (current == null) {
+            return false;
+        }
+        if (current.episode() != reactedTo) {
+            reactedTo = current.episode();
+            pendingClear = true;
+            // What a previous catch-up was holding describes a read model this one is rebuilding.
+            dropAwaitingClear();
+        }
+        return current.readingHistory();
+    }
+
+    // Assumes clearLock is already held by the caller.
+    private void dropAwaitingClear() {
+        awaitingClear.clear();
+        awaitingClearOverflowLogged = false;
+    }
+
+    // Assumes clearLock is already held by the caller. Only reached when a clear is owed and the history is not
+    // being read, so what is held here is always an append this projection applied and would otherwise lose: the
+    // pending clear would delete it if it were written now, and nothing would write it again afterwards.
+    private void bufferUntilClear(EventMetadata metadata) {
+        AppendId appendId;
+        try {
+            appendId = AppendId.from(metadata).orElse(null);
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+        if (appendId == null || awaitingClear.contains(appendId)) {
+            return;
+        }
+        if (awaitingClear.size() >= MAX_AWAITING_CLEAR) {
+            if (!awaitingClearOverflowLogged) {
+                log.warn("Projection '{}' has {} appends waiting for a clear that keeps failing, so the oldest are being dropped. A wait for a dropped append answers false until it times out.", projectionId, MAX_AWAITING_CLEAR);
+                awaitingClearOverflowLogged = true;
+            }
+            Iterator<AppendId> oldest = awaitingClear.iterator();
+            oldest.next();
+            oldest.remove();
+        }
+        awaitingClear.add(appendId);
     }
 
     private void doRecord(EventMetadata metadata) {
@@ -139,60 +230,47 @@ public final class AppliedAppendRecording {
     }
 
     /**
-     * The one hook {@code AppliedAppendRecorder.replayObserved()} forwards to: mark a clear as needed and attempt it
-     * on the calling thread now. Used by the Spring Boot registrars' poll, which always calls this from a thread
-     * that tolerates blocking.
+     * A catch-up has begun. Marks the clear it implies as owed, drops what a previous catch-up was still holding, and
+     * suppresses recording until {@link #historyRead(Object)} for this same {@code episode}.
+     * <p>
+     * Deliberately performs no store call. It is sent from the thread that registers the catch-up, before whatever
+     * produces the deliveries exists, and blocking that thread on a store round trip would hold up the subscription
+     * itself. The clear happens on the next call that can afford it, a delivery or a poll tick.
      */
-    public void replayObserved() {
-        synchronized (clearLock) {
-            if (!episodeCleared) {
-                pendingClear = true;
-                attemptClear();
-                if (!pendingClear) {
-                    episodeCleared = true;
-                }
-            }
+    public void catchupStarted(Object episode) {
+        requireNonNull(episode, "episode cannot be null");
+        catchup.set(new Catchup(episode, true));
+    }
+
+    /**
+     * The history {@code episode} set out to read has been read, so what follows was written since it started and is
+     * recorded. Ignored for any other catch-up, which is what stops one that has lost its subscription from moving
+     * its replacement past a history the replacement has not read.
+     * <p>
+     * Performs no store call, for the same reason {@link #catchupStarted(Object)} does not.
+     */
+    public void historyRead(Object episode) {
+        requireNonNull(episode, "episode cannot be null");
+        Catchup current = catchup.get();
+        if (current != null && current.episode() == episode && current.readingHistory()) {
+            // Compared and swapped rather than written, so a catch-up that started while this call was in flight is
+            // not moved past a history it has not read.
+            catchup.compareAndSet(current, new Catchup(episode, false));
         }
     }
 
     /**
-     * The one hook {@code AppliedAppendRecorder.pollReplayPhase()} forwards to: re-checks {@code phase} and reacts,
-     * both inside the same {@code clearLock} acquisition, and returns what the check found. A caller that read
-     * {@code phase} itself first and dispatched to {@link #replayObserved()} or {@link #retryPendingClear()} based
-     * on that earlier read races a live delivery landing between the read and the call: this projection recording a
-     * genuinely live append in between, only to have it wiped by a clear this method then runs for a replay that
-     * ended before the call arrived. Re-checking here, under the same lock the clear itself runs under, closes that
-     * window instead of narrowing it.
-     */
-    public boolean pollReplayPhase() {
-        synchronized (clearLock) {
-            boolean replaying = lifecycleReplaying || phase.isReplaying();
-            if (replaying) {
-                if (!episodeCleared) {
-                    pendingClear = true;
-                    attemptClear();
-                    if (!pendingClear) {
-                        episodeCleared = true;
-                    }
-                }
-            } else {
-                episodeCleared = false;
-                if (pendingClear) {
-                    attemptClear();
-                }
-            }
-            return replaying;
-        }
-    }
-
-    /**
-     * The one hook {@code AppliedAppendRecorder.retryPendingClear()} forwards to: retry a clear already marked as
-     * owed, doing nothing if none is. Lets a poll tick that finds the phase back to live still retry a clear a
-     * replay observed earlier and left failing, since the phase no longer reporting a replay is not the same as the
-     * clear it caused having succeeded.
+     * The one hook {@code AppliedAppendRecorder.retryPendingClear()} forwards to. Retries a clear already marked as
+     * owed, and does nothing if none is. Lets a poll tick retry a clear a catch-up left failing, since a catch-up
+     * having moved on is not the same as the clear it owed having succeeded.
+     * <p>
+     * Writes nothing that is waiting for that clear even when it succeeds here. This hook is not told which catch-up
+     * the projection is in, so it cannot tell a wait that belongs to the current one from a wait a lost signal left
+     * behind. {@link #recordIfReady(EventMetadata)} and {@link #pollForClear()} both know, and write them.
      */
     public void retryPendingClear() {
         synchronized (clearLock) {
+            reactToAnyNewCatchup();
             if (pendingClear) {
                 attemptClear();
             }
@@ -200,45 +278,24 @@ public final class AppliedAppendRecording {
     }
 
     /**
-     * A catch-up replay has started delivering to this projection (the view-DSL replay lifecycle). Marks a clear as
-     * needed but, deliberately, does not attempt it here: {@code ReplayAware.replayStarted()} and
-     * {@code ReactiveReplayAware.replayStarted()} are void signals the driving engine calls inline and never waits
-     * on, so attempting a blocking clear from here could stall that engine's own thread. The attempt happens lazily,
-     * the next time {@link #recordIfReady(EventMetadata)}, {@link #replayCompleted()}, {@link #replayObserved()}, or
-     * {@link #retryPendingClear()} runs on a thread that can afford to block.
+     * The one hook {@code AppliedAppendRecorder.pollForClear()} forwards to: retry an owed clear, write whatever was
+     * waiting for it, and report whether one is still owed so the poll can pace on that.
+     * <p>
+     * This is what keeps a clear moving for a projection that has gone quiet. Without it, a clear that failed while
+     * a catch-up ran would only be retried by the next delivery, and a projection that receives none would never
+     * record again.
      */
-    public void replayStarted() {
-        lifecycleReplaying = true;
-        pendingClear = true;
-        episodeCleared = false;
-    }
-
-    /**
-     * The replay lifecycle finished delivering everything it had. Unlike {@link #replayStarted()} this is safe to
-     * attempt the clear from directly: {@code ReplayAware.replayCompleted()} is a plain synchronous call already
-     * tolerant of blocking work, and {@code ReactiveReplayAware.replayCompleted()} returns the one lifecycle
-     * {@code Mono} its driving engine actually awaits, so the reactor wrapper hops this call to a blocking-safe
-     * scheduler rather than needing to defer it further. Closes the window a replay that delivers nothing matching
-     * would otherwise leave open until a live event, or the poll (for a composition that has one), got to it.
-     */
-    public void replayCompleted() {
-        lifecycleReplaying = false;
+    public boolean pollForClear() {
         synchronized (clearLock) {
-            attemptClear();
-            episodeCleared = false;
+            reactToAnyNewCatchup();
+            if (pendingClear) {
+                attemptClear();
+            }
+            // Nothing is ever waiting while the history is being read, since a catch-up start drops what the
+            // previous one held and a delivery during the history read buffers nothing.
+            flushAwaitingClear();
+            return pendingClear;
         }
-    }
-
-    /**
-     * The replay lifecycle was abandoned before it finished. Deliberately does not attempt the clear here, for the
-     * same reason {@link #replayStarted()} does not: {@code replayAbandoned()} is a void signal on both stacks that
-     * its driving engine never awaits, so blocking here could stall it. {@link #replayStarted()} already marked the
-     * clear as owed, and a later delivery, {@link #replayCompleted()} on the replay that follows, or the poll,
-     * retries it.
-     */
-    public void replayAbandoned() {
-        lifecycleReplaying = false;
-        episodeCleared = false;
     }
 
     // Assumes clearLock is already held by the caller.

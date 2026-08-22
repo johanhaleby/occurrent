@@ -27,9 +27,11 @@ import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.eventstore.api.AppendId;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -42,6 +44,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -68,6 +71,80 @@ class DomainEventFeedProjectionPushStartupModeTest {
         return new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
                 .withUserConfiguration(DomainFeedConfiguration.class, projectionConfiguration);
+    }
+
+    // A pull feed drives its own replay, so nothing registers it for catch-up boundaries, and before this it was
+    // left out of the poll along with them. The clear its replay owes can still fail, and a feed that then goes
+    // quiet has nothing else to retry it, so a membership the rebuild discarded would survive.
+    @Test
+    void a_recording_domain_feed_projection_that_catches_up_is_registered_with_the_clear_poll() {
+        FailingOnceClearStore store = new FailingOnceClearStore();
+        AppendId beforeTheRebuild = AppendId.mint();
+        store.recordApplied("domain-feed-push-recording", beforeTheRebuild);
+
+        runnerWith(RecordingProjectionConfiguration.class)
+                .withBean(AppliedAppendStore.class, () -> store)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(REPLAY_REACHED[0].await(5, TimeUnit.SECONDS)).isTrue();
+                    RELEASE_REPLAY[0].countDown();
+
+                    // Every clear the replay itself runs fails, both the one a history delivery attempts and the one
+                    // replayCompleted retries, so by the time the store is allowed to succeed the replay is over and
+                    // this feed has nothing left to deliver. Only a poll tick can clear it from here.
+                    long replayDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                    while (store.clearAttempts() < 2 && System.nanoTime() < replayDeadline) {
+                        Thread.sleep(20);
+                    }
+                    assertThat(store.clearAttempts())
+                            .as("the replay ran its own clear attempts and they failed")
+                            .isGreaterThanOrEqualTo(2);
+                    store.allowClear();
+
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                    while (store.hasApplied("domain-feed-push-recording", beforeTheRebuild) && System.nanoTime() < deadline) {
+                        Thread.sleep(20);
+                    }
+
+                    assertThat(store.hasApplied("domain-feed-push-recording", beforeTheRebuild))
+                            .as("a poll tick retried the clear the feed replay left failing")
+                            .isFalse();
+                });
+    }
+
+    // Fails every clear until the test allows one, the way a store that is unavailable for a while does, so what
+    // eventually clears is whatever the projection was registered with rather than the replay itself.
+    static final class FailingOnceClearStore implements AppliedAppendStore {
+        private final AppliedAppendStore delegate = AppliedAppendStore.inMemory();
+        private final AtomicInteger clearAttempts = new AtomicInteger();
+        private final AtomicBoolean clearAllowed = new AtomicBoolean(false);
+
+        int clearAttempts() {
+            return clearAttempts.get();
+        }
+
+        void allowClear() {
+            clearAllowed.set(true);
+        }
+
+        @Override
+        public void recordApplied(String projectionId, AppendId appendId) {
+            delegate.recordApplied(projectionId, appendId);
+        }
+
+        @Override
+        public boolean hasApplied(String projectionId, AppendId appendId) {
+            return delegate.hasApplied(projectionId, appendId);
+        }
+
+        @Override
+        public void clear(String projectionId) {
+            clearAttempts.incrementAndGet();
+            if (!clearAllowed.get()) {
+                throw new RuntimeException("the store is unavailable");
+            }
+            delegate.clear(projectionId);
+        }
     }
 
     @Test
@@ -192,6 +269,22 @@ class DomainEventFeedProjectionPushStartupModeTest {
 
     static class BackgroundProjection {
         @Projection(id = "domain-feed-push-background", source = Source.PUSH, startupMode = StartupMode.BACKGROUND)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return countProjection();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class RecordingProjectionConfiguration {
+        @Bean
+        RecordingProjection recordingProjection() {
+            return new RecordingProjection();
+        }
+    }
+
+    static class RecordingProjection {
+        @Projection(id = "domain-feed-push-recording", source = Source.PUSH, startupMode = StartupMode.BACKGROUND,
+                recordAppliedAppends = true)
         org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
             return countProjection();
         }

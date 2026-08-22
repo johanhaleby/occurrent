@@ -27,6 +27,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.Objects;
+import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
@@ -113,6 +115,39 @@ final class PositionCatchupPipeline {
             Flux<CloudEvent> reconcile = reconcile(bulkHead, cache);
             return Flux.concat(bulk, reconcile);
         });
+    }
+
+    /**
+     * The same replay, with {@code action} applied here instead of by the caller, so {@code reconcileStarting} can
+     * run between the last history event being handled and the first reconciliation read.
+     * <p>
+     * A caller applying the action itself cannot get that ordering. {@code concatMap} prefetches, so the history
+     * {@code Flux} completes once its events are queued rather than once they are handled, and anything placed
+     * between the two halves upstream of the action would run while up to a prefetch worth of history is still
+     * waiting to be handled. Those events would then be treated as if they came from the reconciliation.
+     * <p>
+     * {@code keepReplaying} truncates each half, and the tail is skipped entirely once it answers {@code false}, so
+     * a stop that lands after the history has drained costs no head read and no window read.
+     */
+    Flux<Void> replayApplying(long startPosition, BoundedIdCache cache, BooleanSupplier keepReplaying,
+                              Function<CloudEvent, Mono<Void>> action, Runnable reconcileStarting) {
+        if (startPosition < 0) {
+            throw new IllegalArgumentException("startPosition cannot be negative, was " + startPosition);
+        }
+        return reader.currentHead().flatMapMany(bulkHead -> Flux.concat(
+                windows(startPosition, bulkHead, cache).takeWhile(ignored -> keepReplaying.getAsBoolean()).concatMap(action),
+                Mono.defer(() -> {
+                    if (!keepReplaying.getAsBoolean()) {
+                        return Mono.empty();
+                    }
+                    reconcileStarting.run();
+                    return Mono.empty();
+                }),
+                // Called inside the defer rather than passed into it, since building the reconciliation Flux reads
+                // the head.
+                Flux.defer(() -> keepReplaying.getAsBoolean()
+                        ? reconcile(bulkHead, cache).takeWhile(ignored -> keepReplaying.getAsBoolean()).concatMap(action)
+                        : Flux.empty())));
     }
 
     // Emits events in (fromExclusive, toInclusive], paging in position windows. Records every emitted id in the cache
