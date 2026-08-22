@@ -52,7 +52,7 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * {@code limit} of them. The executor's timer poller uses this to fire timeouts. A returned instance may have
      * several due timers.
      * <p>
-     * Active, not merely unfinished. A {@link SagaStatus#QUARANTINED} instance must not be returned: its timers stay
+     * Active, not merely unfinished. A {@link SagaStatus#QUARANTINED} instance must not be returned. Its timers stay
      * armed so a release restores them, and firing one meanwhile would advance its state across the input it stopped on.
      */
     List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit);

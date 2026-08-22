@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Seven things are worth reading, two of them compile-time breaks. At compile time, if you use the flow saga's
+Eight things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, which most callers need to do nothing about. Read
@@ -24,6 +24,10 @@ a second compile-time break, and comparing either whole for equality fails silen
 `DurableSubscriptionModel` wraps a MongoDB subscription model on a shared Atlas cluster, a fresh subscription that
 used to start without a recorded position is now refused at `subscribe(..)`. Read
 [section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
+Finally, a saga instance whose event keeps failing is now suspended instead of retried forever, which changes four
+things about the saga API at once. `SagaEnvelope` and `SagaRunnerConfig` each gain a record component, `SagaInstance`
+gains a method, and `SagaStatus` gains a constant that `findByStatus(ACTIVE, ..)` no longer returns. Read
+[section 8](#8-a-saga-instance-that-keeps-failing-is-quarantined-and-four-saga-types-change-with-it).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -642,3 +646,95 @@ property reaches the reactive starter too, where
 `ReactorDurableSubscriptionModelConfig.startWhenNoStartPositionCanBeRecorded(true)` now lets
 `ReactorDurableSubscriptionModel` start such a registration as well, so a reactive application on a shared Atlas
 cluster gets the same no-code-change path out of the refusal it has had since 0.33.0.
+
+
+## 8. A saga instance that keeps failing is quarantined, and four saga types change with it
+
+A saga has one subscription, and every instance of that saga is fed by it. Up to 0.33.0, an event that a saga's
+`evolve`, its `react` or its command dispatcher could not handle propagated to the subscription model, which
+redelivered it and tried again, without limit. One correlation id that could never make progress therefore stopped
+every other correlation id behind it, for as long as nobody noticed.
+
+From 0.34.0 the executor times the failing rather than counting the attempts. The first failure of an event records
+the instant it started failing and rethrows, exactly as before. Once that event has kept failing for the same
+instance for longer than `SagaRunnerConfig.quarantineAfter`, five minutes by default, the instance moves to the new
+`SagaStatus.QUARANTINED` and the executor stops rethrowing, so the subscription acknowledges the event and delivers
+the rest to everybody else.
+
+A quarantined instance receives no further events and fires no timers, and its redelivery watermarks stop moving, so
+nothing it skipped is recorded as handled. That is what makes it recoverable. Call
+`SagaSubscription.release(sagaId)` once the cause is fixed and the saga's subscription is replayed from the position
+the instance stopped at, which pauses delivery to every instance of that saga until the replay finishes. The other
+instances recognise the replayed events as redeliveries through their own watermarks, so no command is dispatched a
+second time.
+
+There are two limits to know before you rely on it.
+
+An event with no global position is never quarantined, because there would be no position to replay from and
+returning normally would acknowledge an event that nothing could ask for again. Occurrent's own stored events always
+have one. A feed that drops the CloudEvent extensions on the way in does not, and a saga behind such a feed keeps the
+0.33.0 behaviour.
+
+The same goes for a transport that never offers a failing event again. A budget measured across repeated failures
+never elapses when the second failure never arrives, so a `PushSubscriptionModel` fed by a bare in-process
+`accept(..)` with nothing retrying behind it keeps the 0.33.0 behaviour too. A push feed behind a bridge that
+redelivers, the Kafka bridge under its default `REDELIVER` policy for example, does reach the budget.
+
+### The four breaks
+
+**`SagaStatus.QUARANTINED` is a new constant.** An exhaustive Java `switch` or Kotlin `when` over `SagaStatus` stops
+compiling until you add a branch for it. What that branch should do is a question about your code, so decide it
+rather than copying the `COMPLETED` branch. A quarantined instance is not finished, it is stopped and waiting for
+somebody to look at it.
+
+**`findByStatus(ACTIVE, ..)` no longer returns a quarantined instance,** and it breaks nothing at compile time.
+If you use that call to sweep for instances that have gone quiet, which is what it was built for, it now misses the
+instances most worth finding. Enumerate `QUARANTINED` as well.
+
+```java
+List<SagaInstance> stuck = new ArrayList<>();
+stuck.addAll(instances.findByStatus(SagaStatus.ACTIVE, Instant.now().minus(threshold), 100));
+stuck.addAll(instances.findByStatus(SagaStatus.QUARANTINED, Instant.now(), 100));
+```
+
+`SagaInstance.failure()` then tells you what a quarantined instance stopped on, which is the failing event's position,
+the exception's class name and message, and when the failing started. It answers `null` for an instance that is
+failing on nothing.
+
+**`SagaEnvelope` gains two record components, `started` and `failure`,** which changes its canonical constructor and
+the arity of any record pattern over it. Only a `SagaStateStore` implemented outside this repository constructs one.
+The old eleven-argument form is kept as a deprecated constructor that fills in `started = true` and `failure = null`,
+so an existing call site compiles unchanged, but a store built that way can never report a quarantined instance.
+Persist both components and read them back to support quarantine, and read a missing `started` field as `true`, since
+every instance written before 0.34.0 had started. A record pattern has no such fallback and has to name the two new
+components.
+
+```java
+// 0.33.0
+case SagaEnvelope(String sagaId, var state, var status, long version, var timers,
+                  var streamWatermarks, var positionWatermark, var createdAt,
+                  var updatedAt, var completedAt, var currentStep) -> ...
+
+// 0.34.0
+case SagaEnvelope(String sagaId, var state, var status, long version, var timers,
+                  var streamWatermarks, var positionWatermark, var createdAt,
+                  var updatedAt, var completedAt, var currentStep,
+                  boolean started, var failure) -> ...
+```
+
+**`SagaRunnerConfig` gains a fifth record component, `quarantineAfter`.** The four-argument form stays as a
+constructor that defaults it to five minutes, so a call site written against 0.33.0 compiles unchanged and gets the
+new behaviour. A record pattern over `SagaRunnerConfig` has to name the fifth component. Pass `null` to keep the
+0.33.0 behaviour of retrying forever.
+
+```java
+SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(null);
+```
+
+### Why there is no recipe for this one
+
+None of the four can be rewritten mechanically. What your new `case QUARANTINED` branch should do depends on what the
+`switch` is for, and whether a given `findByStatus(ACTIVE, ..)` call site wants quarantined instances included is a
+question about that caller's intent rather than about the API. The two record-component additions could in principle
+be rewritten, but a recipe that fixed those two and left the two that matter would read as a migration that had been
+handled. This section is the migration.

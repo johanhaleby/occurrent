@@ -93,7 +93,7 @@ public final class SagaExecutionSupport {
                                                                            SagaInput<E> input,
                                                                            EventMeta meta,
                                                                            Instant now) {
-        // Whether onStart has ever run, which is not the same question as whether a document exists: an instance whose
+        // Whether onStart has ever run, which is not the same question as whether a document exists. An instance whose
         // very first event failed has an envelope holding nothing but that failure. Keying on the document would leave
         // such an instance permanently "already started", so its start event would be skipped after a release and
         // onStart would never run, with nothing anywhere saying so.
@@ -107,7 +107,7 @@ public final class SagaExecutionSupport {
             return Outcome.skip();
         }
         if (current != null && current.isQuarantined() && !hasReachedReleasePosition(current, meta)) {
-            // Inert: a quarantined instance skips every input addressed to it, and its watermarks stay where they are.
+            // A quarantined instance is inert. It skips every input addressed to it and its watermarks stay where they are.
             // Advancing one here would make the replay after a release treat the input as already handled and skip it a
             // second time, which is the loss the quarantine exists to avoid. A released instance stays inert too until
             // the replay reaches the position it stopped at, so a live event cannot be applied across the gap first.
@@ -190,7 +190,7 @@ public final class SagaExecutionSupport {
     }
 
     /**
-     * What to write when an input has failed. {@link #envelope()} carries the failure record to save with
+     * What to write when an input has failed. {@link #envelope()} holds the failure record to save with
      * {@code compareAndSave(..., expectedVersion())}, and {@link #quarantined()} says whether the budget has now
      * elapsed, meaning the executor stops rethrowing and lets the subscription move past the input.
      */
@@ -247,7 +247,7 @@ public final class SagaExecutionSupport {
         if (Duration.between(existing.firstFailedAt(), now).compareTo(quarantineAfter) < 0) {
             return null;
         }
-        // Keep the instant the failing started, refresh what it is failing with: an input that fails one way and then
+        // Keep the instant the failing started, refresh what it is failing with, because an input that fails one way and then
         // another is still the same input failing, and the later exception is the more useful one to read.
         SagaFailure record = new SagaFailure(input, position, existing.firstFailedAt(), failure.getClass().getName(), failure.getMessage(), null);
         return failureRecord(saga, sagaId, current, record, SagaStatus.QUARANTINED, now, true);
@@ -294,7 +294,7 @@ public final class SagaExecutionSupport {
                                                                                      Instant now, boolean quarantined) {
         if (current == null) {
             // An instance whose very first event failed has nothing to attach the record to, so the record inserts one.
-            // It carries the initial state and started = false, which is honestly what it is: an instance that failed
+            // It holds the initial state and started = false, which is honestly what it is, an instance that failed
             // before it began. Start detection reads that flag, so a release replays the start event and onStart runs.
             SagaEnvelope<S> inserted = new SagaEnvelope<>(sagaId, saga.initialState(), status, 1, List.of(), Map.of(),
                     null, now, now, null, null, false, record);
@@ -303,7 +303,7 @@ public final class SagaExecutionSupport {
         return new FailureRecord<>(withFailure(current, record, status, now), current.version(), quarantined);
     }
 
-    // Deliberately carries the watermarks and timers over untouched. A failure advances neither: the input was not
+    // Deliberately copies the watermarks and timers over untouched. A failure advances neither, because the input was not
     // handled, and a quarantined instance's timers stop because the store's due-timer query asks for ACTIVE ones.
     private static <S extends @Nullable Object> SagaEnvelope<S> withFailure(SagaEnvelope<S> current, SagaFailure record,
                                                                            SagaStatus status, Instant now) {
@@ -313,7 +313,7 @@ public final class SagaExecutionSupport {
     }
 
     // Whether a released instance's replay has come back round to the input it stopped on. Until it has, the instance is
-    // as inert as it was before the release: clearing the record first would let a newer event land on state with the gap
+    // as inert as it was before the release. Clearing the record first would let a newer event be applied to state with the gap
     // still in it, and that gap is undetectable afterwards.
     private static <S extends @Nullable Object> boolean hasReachedReleasePosition(SagaEnvelope<S> current, EventMeta meta) {
         SagaFailure failure = current.failure();

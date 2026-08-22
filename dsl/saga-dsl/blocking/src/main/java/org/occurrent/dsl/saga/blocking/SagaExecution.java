@@ -126,7 +126,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * the shared channel keeps going. A false answer means the exception propagates exactly as it always has.
      * <p>
      * Only the event path calls this. A failing timeout is already isolated per instance by the poller and blocks
-     * nothing, and a timeout carries no position to release from, so there would be nothing to quarantine it at.
+     * nothing, and a timeout has no position to release from, so there would be nothing to quarantine it at.
      */
     private boolean quarantine(String sagaId, EventMeta meta, RuntimeException failure, Duration quarantineAfter) {
         try {
@@ -137,7 +137,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return false;
             }
             if (!stateStore.compareAndSave(sagaId, record.envelope(), record.expectedVersion())) {
-                // Another input advanced the instance while this one was failing, most likely a timer that fired
+                // Another input advanced the instance while the failing one was being retried, most likely a timer that fired
                 // successfully. The failing event now meets different state and may well succeed, so discard the record
                 // and let the budget start over rather than retry a write whose premise has gone.
                 return false;
@@ -152,7 +152,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             return true;
         } catch (RuntimeException storeFailure) {
             // The store itself is what is failing, so the first failure write fails too. Rethrowing the original is
-            // today's behaviour and is the right one: a saga whose store is unreachable cannot make progress anyway.
+            // today's behaviour, and it is the right one, because a saga whose store is unreachable cannot make progress anyway.
             failure.addSuppressed(storeFailure);
             return false;
         }

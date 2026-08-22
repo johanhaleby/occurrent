@@ -78,7 +78,7 @@ public final class SagaSubscription implements AutoCloseable {
      * Both halves are needed and neither is enough on its own. Clear the record alone and the instance handles new
      * events against state with a gap in it. Replay alone and the instance is still quarantined when the events arrive,
      * so it skips them and quarantines again. So the instance is marked released first and stays inert until the
-     * replay reaches its recorded position, at which point it folds that event and becomes {@link SagaStatus#ACTIVE}
+     * replay reaches its recorded position, at which point it handles that event and becomes {@link SagaStatus#ACTIVE}
      * again.
      * <p>
      * <strong>This pauses the saga's whole subscription while the replay catches up.</strong> Every other instance of
@@ -89,7 +89,7 @@ public final class SagaSubscription implements AutoCloseable {
      * <p>
      * <strong>It acts on this node only.</strong> The subscription it repositions is the one this JVM runs. On a
      * competing-consumer deployment call it on the node currently delivering the saga's events, which is the one
-     * holding the subscription's lock; it refuses on any other node rather than repositioning a subscription that is
+     * holding the subscription's lock. It refuses on any other node rather than repositioning a subscription that is
      * delivering nothing.
      *
      * @param sagaId the instance to release
@@ -105,7 +105,7 @@ public final class SagaSubscription implements AutoCloseable {
         RepositionableSubscriptions repositionable = RepositionableSubscriptions.findIn(subscriptionModel)
                 .orElseThrow(() -> new UnsupportedOperationException("Cannot release saga instance '" + sagaId + "': the subscription model behind saga subscription '" + subscription.id() + "' does not implement RepositionableSubscriptions, so it cannot be resumed at the position the instance stopped at. The instance stays quarantined. Use SagaStateStore.delete(sagaId) to abandon it instead."));
         // Paused and resumed on the model that owns the position, not through whatever wraps it. A wrapper's own
-        // bookkeeping is then untouched: it believes the subscription is running throughout, which it is either side of
+        // bookkeeping is then untouched, because it believes the subscription is running throughout, which it is either side of
         // the reposition. Going through an outer wrapper instead would leave it believing the subscription is paused
         // while the model underneath it runs.
         SubscriptionModelLifeCycle lifeCycle = repositionable.capability(SubscriptionModelLifeCycle.class)
