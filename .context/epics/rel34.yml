@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 39
-updated_at: '2026-08-22T18:40:00+00:00'
-updated_by: 'orchestrator rel34: sdi accepted the registrar fence, ADR 0135 confirmed free'
+revision: 40
+updated_at: '2026-08-22T19:05:00+00:00'
+updated_by: 'orchestrator rel34: R2 merge order verified by a full trial merge, keep-all-lines rule falsified'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -903,7 +903,7 @@ units:
       news date replacing the 2026-08-25 placeholder, the _config.yml occurrentversion bump, deletion
       of the superseded docs/saga-step-conditions-added-tag branch, and preview/0.34.0 rebuilt and verified
       per branch tip.'
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on:
@@ -916,9 +916,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: hold until brk closes and the PR 69 versus PR 74 docs.md conflict is ruled, then rebuild
-      preview and produce the verified merge checklist
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    next_action: present the verified checklist to Johan for manual_approval, then rebuild preview/0.34.0
+    last_meaningful_progress_at: '2026-08-22T19:05:00+00:00'
     observed:
       preview_state:
         note: 'Checked 2026-08-22T10:3xZ. preview/0.34.0 is behind TWO held branches by one commit each:
@@ -939,6 +938,58 @@ units:
           must be rebuilt to include 76 as well as the PR 69 and PR 74 heads it is already behind.'
         via: orchestrator
         at: '2026-08-22T17:30:00+00:00'
+      trial_merge_all_eight:
+        note: 'Ran a REAL trial merge of all eight held branches in a throwaway worktree rather than reasoning
+          about the conflict map. Verified tips: 802-push-observation-hook 7b4d224, 421-broker-modules
+          0ba67fd, append-identity 4510fe5, 439-store-neutral-mongodb-config-keys b00ade3, 773-764-flow-saga-stepwindow-declared-events
+          436b76c, remove-saga-join e535a2c, 0.34.0-declared-event-types 0b9a7f7, 0.34.0-release-notes
+          3b8b561. ALL EIGHT merge with exactly ONE conflicting file, js/_partials/main.js, every time.
+          Nothing else conflicts anywhere.'
+        via: git worktree + sequential git merge
+        at: '2026-08-22T19:05:00+00:00'
+      keep_all_lines_is_wrong:
+        note: 'CORRECTION to this unit''s own recorded conflict map and to U15''s report. Both say the
+          main.js resolution is ''keep all lines'' or ''keep all three''. That is NOT sufficient and produces
+          a BROKEN SITE. Each branch''s addedTags entry is the LAST entry in its own version, so none
+          of them carries a trailing comma. Keeping all the lines yields three consecutive entries with
+          no commas between them, and node --check exits 1 with SyntaxError: Unexpected string at the
+          projection-annotation-applied-appends line. Since main.js is what renders the ''Added in vX''
+          badges, the failure is silent in review and visible only as the site''s JavaScript dying. The
+          correct rule is KEEP ALL LINES AND ADD THE MISSING COMMAS, every entry except the last needs
+          a trailing comma. Verified: after adding them node --check exits 0. Entries that must all be
+          present are push-subscription-blocking-observer, broker-subscriptions-blocking, projection-annotation-applied-appends
+          and deriving-the-event-filter, all 0.34.0.'
+        via: node --check on the merged tree, before and after
+        at: '2026-08-22T19:05:00+00:00'
+      conflict_69_vs_74_is_gone:
+        note: 'The PR 69 versus PR 74 conflict that gated the preview rebuild NO LONGER EXISTS as a conflict
+          and needs NO ruling from Johan. Both branches moved on 2026-08-22 and now merge cleanly, verified
+          by git merge-tree --write-tree and by a real merge. They turn out to be COMPLEMENTARY rather
+          than competing: REFUSED appears zero times on 69''s tip and four times in the merged file, so
+          74 contributes content 69 never had. The merged section has ONE heading and all six shipped
+          RoutingOutcome values (DELIVERED, FILTERED, NOT_DELIVERABLE, DEFERRED, UNAVAILABLE, REFUSED),
+          checked against the enum in the code. What the clean merge DOES leave is duplication git cannot
+          see: inside ''Observing pushed events'' two paragraphs are byte-identical duplicates (the observer-throws
+          paragraph and the other-Error paragraph, one copy from each branch), and the filter-throws paragraph
+          appears in two variants. The two variants AGREE in substance, both say NOT_DELIVERABLE and both
+          say the exception still propagates after the observer is told, so this is deletion rather than
+          a decision. Keep PR 74''s variant, which additionally names the contrast with FILTERED, and
+          delete PR 69''s plus one copy of each duplicated paragraph.'
+        via: trial merge + grep against RoutingOutcome.java
+        at: '2026-08-22T19:05:00+00:00'
+      news_post_addadd_is_moot:
+        note: 'The recorded rule ''the news-post add/add resolved in 73''s favour'' is OBSOLETE. PR 73
+          (append-identity) and PR 72 (0.34.0-release-notes) both add _posts/news/2026-08-25-0_34_0.md
+          and the two files are BYTE-IDENTICAL, same blob 3a9efc21300b0579a32c2f6444b9d1d0294187ff, so
+          git merges them silently and there is nothing to resolve. Fragile though: if either branch''s
+          news post changes before release day the add/add becomes a real conflict again, so re-check
+          the blob hashes on the day. Johan''s definition-of-done item ''take append-identity''s news
+          post and fix its stale PushObserver highlight first'' is ALREADY SATISFIED on both branches.
+          The highlight now names all six values, says RoutingOutcome rather than boolean, and gives the
+          correct rule that you may acknowledge on DELIVERED and FILTERED and never on the other four.
+          The 2026-08-25 date in the filename and front matter is still the placeholder to replace.'
+        via: git hash-object on both blobs + reading the post
+        at: '2026-08-22T19:05:00+00:00'
     assessment: 'Seven PRs, not eight branches: docs/saga-step-conditions-added-tag adds a line docs main
       already carries. preview/0.34.0 was behind docs/421-broker-modules by one commit at registration,
       so preview is verified per branch rather than assumed current.'
