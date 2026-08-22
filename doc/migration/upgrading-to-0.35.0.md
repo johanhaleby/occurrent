@@ -28,8 +28,8 @@ compiles and still runs its projections, sagas, snapshots and subscriptions. A l
 Four of the old names collide with a type of the same simple name. `@Projection` goes on a method returning a
 `Projection`, `@Saga` on one returning a `Saga`, and `@Subscription` names both the annotation and the running
 handle the subscription API gives back. Two single-type imports cannot share a simple name in Java
-(JLS 7.5.1), so one of the two always has to be written out in full, which is why this repository alone writes
-`org.occurrent.dsl.projection.Projection` out 93 times. `@DcbSubscription` gets the same collision in this release,
+(JLS 7.5.1), so wherever a file needs both, one of the two has to be written out in full, which is what every
+file in this repository that uses both already does. `@DcbSubscription` gets the same collision in this release,
 when the `DcbSubscription` descriptor arrives. The remaining three, `@Snapshot`, `@StreamSubscription` and
 `@SynchronousSubscription`, collide with nothing and are renamed anyway, so that the whole set is named one way.
 [ADR 127](../architecture/decisions/0127-a-subscription-is-a-descriptor-and-the-annotation-stops-naming-the-concept.md)
@@ -100,7 +100,7 @@ mvn rewrite:run
 ```
 
 It changes the import and the annotation name at every use, in Java and Kotlin alike, and it moves a
-`StreamSubscription.StartPosition` reference to `OccurrentStreamSubscription.StartPosition` with it. On a
+`StreamSubscription.StartPosition` reference to the new annotation's nested enum with it. On a
 `@Projection`, `@Saga` or `@Snapshot` that is the whole upgrade, and the module compiles and behaves as before.
 
 ### By hand, for a subscription
