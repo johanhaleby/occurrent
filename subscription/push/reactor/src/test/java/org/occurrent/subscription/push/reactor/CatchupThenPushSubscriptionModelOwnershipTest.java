@@ -28,6 +28,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
@@ -634,12 +635,14 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
 
         List<String> handled = new CopyOnWriteArrayList<>();
-        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
-            handled.add(ce.getId());
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
             if (ce.getId().equals("2")) {
                 lastEventReached.countDown();
                 awaitLatch(cancelled);
             }
+            // Recorded after the wait rather than before it, so the list only names events whose handler has
+            // actually returned and the assertion below cannot read "2" while its handler is still parked.
+            handled.add(ce.getId());
         }));
 
         assertThat(lastEventReached.await(5, TimeUnit.SECONDS))
@@ -648,16 +651,17 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
         model.cancelSubscription("sub");
         cancelled.countDown();
 
-        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
-                assertThat(handled)
-                        .as("the attempt read its whole history before it lost the id")
-                        .containsExactly("1", "2"));
-        // Held for a while rather than sampled once, since the marker step runs after the handler returns and an
-        // assertion taken immediately would pass before the write it is meant to catch could even be attempted.
-        await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(5)).untilAsserted(() ->
-                assertThat(marker.read("sub").hasElement().block())
-                        .as("the id was gone by the marker step, so nothing was written for it")
-                        .isFalse());
+        // Waited on rather than sampled after a quiet period. This completes once the attempt has run its marker
+        // step and finished, so the assertion below reads storage at a point where a write, if the ownership check
+        // allowed one, has already been made.
+        subscription.waitUntilStarted().block(Duration.ofSeconds(10));
+
+        assertThat(handled)
+                .as("the attempt read its whole history before it lost the id")
+                .containsExactly("1", "2");
+        assertThat(marker.read("sub").hasElement().block())
+                .as("the id was gone by the marker step, so nothing was written for it")
+                .isFalse();
     }
 
     private static CloudEvent cloudEvent(String id) {
