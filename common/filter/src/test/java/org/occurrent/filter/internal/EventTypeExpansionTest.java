@@ -125,6 +125,15 @@ class EventTypeExpansionTest {
     static final class SubclassOfExtensibleEvent extends ExtensibleEvent {
     }
 
+    // A plain class with a subclass and no sealed type anywhere above it, which is the shape a caller reaches by
+    // writing an event as a class instead of a record. Dispatch accepts SubclassOfPlainOpenEvent for a handler on
+    // PlainOpenEvent, and no walk of permitted subclasses can reach it.
+    static class PlainOpenEvent {
+    }
+
+    static final class SubclassOfPlainOpenEvent extends PlainOpenEvent {
+    }
+
     sealed static class PartlyOpenInstantiableBase permits ReopenedSubclassHolder, ReopenedAbstractSubclass {
     }
 
@@ -148,15 +157,14 @@ class EventTypeExpansionTest {
             InstantiableBase.class, SealedSubclass.class,
             PartlyOpenInstantiableBase.class, ReopenedSubclassHolder.class, ConcreteBelowReopenedAbstractSubclass.class,
             ExtensibleEvent.class, SubclassOfExtensibleEvent.class,
+            PlainOpenEvent.class, SubclassOfPlainOpenEvent.class,
             DiamondShared.class, DeepConcrete.class, ConcreteBelowDeepReopened.class);
 
     enum Outcome {
         /** The filter names every type dispatch would accept. */
         NAMES_EVERY_DISPATCHED_TYPE,
         /** The hierarchy cannot be enumerated, so it is refused rather than turned into a filter that misses events. */
-        REFUSED,
-        /** The one exemption. Accepted, and dispatch accepts subclasses the filter does not name. */
-        EXEMPT_AND_MISSES_SUBCLASSES
+        REFUSED
     }
 
     static List<Arguments> hierarchyShapes() {
@@ -173,7 +181,9 @@ class EventTypeExpansionTest {
                 Arguments.of("an instantiable sealed root reopened below it", PartlyOpenInstantiableBase.class, Outcome.REFUSED),
                 Arguments.of("a sealed hierarchy reopened two levels down", DeepTop.class, Outcome.REFUSED),
                 Arguments.of("an array", OrderPlaced[].class, Outcome.REFUSED),
-                Arguments.of("a concrete class that is not final", ExtensibleEvent.class, Outcome.EXEMPT_AND_MISSES_SUBCLASSES));
+                Arguments.of("a concrete class that is not final, below a sealed root", ExtensibleEvent.class, Outcome.REFUSED),
+                Arguments.of("a concrete class that is not final, declared on its own", PlainOpenEvent.class, Outcome.REFUSED),
+                Arguments.of("a final concrete class below a class that is not final", SubclassOfPlainOpenEvent.class, Outcome.NAMES_EVERY_DISPATCHED_TYPE));
     }
 
     @ParameterizedTest(name = "{0}")
@@ -191,15 +201,8 @@ class EventTypeExpansionTest {
             return;
         }
 
-        assertThat(expected).as("%s was accepted", shape).isNotEqualTo(Outcome.REFUSED);
-        if (expected == Outcome.NAMES_EVERY_DISPATCHED_TYPE) {
-            assertThat(named).as("%s names every type dispatch accepts", shape).containsAll(dispatchAccepts);
-        } else {
-            assertThat(named).as("%s names itself", shape).contains(declaredType);
-            assertThat(dispatchAccepts).as("%s is the known hole, dispatch accepts more than the filter names", shape)
-                    .isNotEmpty()
-                    .anySatisfy(accepted -> assertThat(named).doesNotContain(accepted));
-        }
+        assertThat(expected).as("%s was accepted", shape).isEqualTo(Outcome.NAMES_EVERY_DISPATCHED_TYPE);
+        assertThat(named).as("%s names every type dispatch accepts", shape).containsAll(dispatchAccepts);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -412,6 +415,30 @@ class EventTypeExpansionTest {
     }
 
     @Test
+    void a_concrete_class_that_is_not_final_is_refused_when_it_is_declared_on_its_own() {
+        // The one case 0.33.0 exempted. It was accepted with only PlainOpenEvent in the filter, so a caller publishing
+        // SubclassOfPlainOpenEvent never saw it and got no warning.
+        assertThatThrownBy(() -> EventTypeExpansion.expand(Set.of(PlainOpenEvent.class), REFUSAL))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(PlainOpenEvent.class.getName());
+        assertThatThrownBy(() -> EventTypeExpansion.concreteTypesOf(PlainOpenEvent.class, REFUSAL))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(PlainOpenEvent.class.getName());
+    }
+
+    @Test
+    void a_concrete_class_that_is_not_final_still_names_itself_on_the_lenient_path() {
+        // A caller with an explicit filter derives none, so there is no filter for the rule to be true of.
+        assertThat(expandOneLeniently(PlainOpenEvent.class)).containsExactly(PlainOpenEvent.class);
+    }
+
+    @Test
+    void a_final_class_extending_one_that_is_not_final_is_accepted_on_its_own() {
+        assertThat(EventTypeExpansion.concreteTypesOf(SubclassOfPlainOpenEvent.class, REFUSAL))
+                .containsExactly(SubclassOfPlainOpenEvent.class);
+    }
+
+    @Test
     void a_concrete_subclass_of_a_refused_base_is_accepted_on_its_own() {
         Set<Class<? extends OpenEvent>> expanded = EventTypeExpansion.expand(Set.of(ConcreteOpenEvent.class), REFUSAL);
 
@@ -460,10 +487,11 @@ class EventTypeExpansionTest {
     }
 
     @Test
-    void derive_filter_names_only_the_exempt_type_itself_missing_the_subclasses_expand_cannot_find() {
-        // A non-sealed concrete type is accepted and named, its own subclasses are not, the same exemption expand makes.
-        Filter filter = EventTypeExpansion.deriveFilter(Set.of(ExtensibleEvent.class), SIMPLE_NAME, REFUSAL);
-
-        assertThat(filter).isEqualTo(Filter.type(Condition.eq("ExtensibleEvent")));
+    void derive_filter_refuses_a_concrete_declared_type_that_is_not_final() {
+        // Up to 0.33.0 this derived Filter.type(eq("PlainOpenEvent")), which dispatch would have accepted
+        // SubclassOfPlainOpenEvent for and the filter never asked for.
+        assertThatThrownBy(() -> EventTypeExpansion.deriveFilter(Set.of(PlainOpenEvent.class), SIMPLE_NAME, REFUSAL))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(PlainOpenEvent.class.getName());
     }
 }
