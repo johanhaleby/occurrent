@@ -25,7 +25,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.time.Duration;
@@ -81,7 +81,7 @@ class CompetingConsumerSubscriptionModelDelegatePauseRefusalTest {
         }
 
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             return new FakeSubscription(subscriptionId);
         }
 
@@ -113,7 +113,7 @@ class CompetingConsumerSubscriptionModelDelegatePauseRefusalTest {
         }
 
         @Override
-        public SubscriptionHandle resumeSubscription(String subscriptionId) {
+        public Subscription resumeSubscription(String subscriptionId) {
             return new FakeSubscription(subscriptionId);
         }
 
@@ -125,7 +125,7 @@ class CompetingConsumerSubscriptionModelDelegatePauseRefusalTest {
         }
     }
 
-    private record FakeSubscription(String id) implements SubscriptionHandle {
+    private record FakeSubscription(String id) implements Subscription {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
             return true;

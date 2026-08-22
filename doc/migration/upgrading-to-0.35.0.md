@@ -7,10 +7,6 @@ All seven framework annotations are renamed to an `Occurrent`-prefixed name. Not
 you upgrade, because the old annotations are deprecated rather than deleted and keep behaving exactly as they did
 in 0.34.0. Read [section 1](#1-the-seven-framework-annotations-get-an-occurrent-prefix).
 
-`org.occurrent.subscription.api.blocking.Subscription` and its reactor twin are renamed to `SubscriptionHandle`.
-This one breaks compilation, since the old name is gone rather than deprecated. Read
-[section 2](#2-subscription-becomes-subscriptionhandle).
-
 ## 1. The seven framework annotations get an `Occurrent` prefix
 
 Every annotation in `org.occurrent.annotation` that marks a method has a new name:
@@ -119,28 +115,3 @@ not declare them. Delete those two and the handler compiles again.
 A handler that compiles again is still not what the new annotation is for. It has the new name on a method
 returning `void`, where the annotation expects a factory method returning a descriptor, so the conversion is
 still owed. Finish it rather than reading a green compile as a finished migration.
-
-## 2. `Subscription` becomes `SubscriptionHandle`
-
-`org.occurrent.subscription.api.blocking.Subscription` is renamed to `SubscriptionHandle`, and so is its reactor
-twin, `org.occurrent.subscription.api.reactor.Subscription`. The interface itself is unchanged: `id()`,
-`waitUntilStarted(Duration)` and the no-argument `waitUntilStarted()` default mean exactly what they meant
-before. Only the name moves.
-
-```java
-// Before
-Subscription handle = subscriptions.subscribe("mySubscription", OrderShipped.class, e -> mailer.shipped(e));
-
-// After
-SubscriptionHandle handle = subscriptions.subscribe("mySubscription", OrderShipped.class, e -> mailer.shipped(e));
-```
-
-The type is what a caller holds after starting a subscription, not the subscription itself, and the old name said
-the opposite. [ADR 127](../architecture/decisions/0127-a-subscription-is-a-descriptor-and-the-annotation-stops-naming-the-concept.md)
-decision 2 has the reasoning.
-
-This is a plain rename with no deprecation period. The old name is gone, not kept around as a forwarding type, so
-a reference to `Subscription` in this package fails to compile until you run the recipe or rename it by hand.
-`UpgradeToOccurrent_0_35` covers it, in Java and Kotlin alike, alongside the annotation prefix rename in
-[section 1](#1-the-seven-framework-annotations-get-an-occurrent-prefix). See [Run the recipe](#run-the-recipe) for
-how to invoke it.

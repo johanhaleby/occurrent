@@ -21,7 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilterMatcher;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.time.Duration;
@@ -70,7 +70,7 @@ final class WorkingRestartableSubscriptionModel implements SubscriptionModel {
     }
 
     @Override
-    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter);
         // Registering and recording where this subscription starts happen under one lock. Split apart, an append
         // landing between them would see the id registered with no starting position recorded yet, default it to the
@@ -167,7 +167,7 @@ final class WorkingRestartableSubscriptionModel implements SubscriptionModel {
     }
 
     @Override
-    public SubscriptionHandle resumeSubscription(String subscriptionId) {
+    public Subscription resumeSubscription(String subscriptionId) {
         if (!isPaused(subscriptionId)) {
             throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
         }
@@ -195,7 +195,7 @@ final class WorkingRestartableSubscriptionModel implements SubscriptionModel {
     private record Registration(Predicate<CloudEvent> matcher, Consumer<CloudEvent> action) {
     }
 
-    private record StartedSubscription(String id) implements SubscriptionHandle {
+    private record StartedSubscription(String id) implements Subscription {
 
         @Override
         public boolean waitUntilStarted(Duration timeout) {

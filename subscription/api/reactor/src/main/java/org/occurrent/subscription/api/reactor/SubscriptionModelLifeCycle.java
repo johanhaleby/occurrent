@@ -119,7 +119,7 @@ public interface SubscriptionModelLifeCycle extends CancellableSubscriptions {
      *                                             not the caller's doing, which on a competing consumer model means
      *                                             another node currently holds the subscription.
      */
-    SubscriptionHandle resumeSubscription(String subscriptionId);
+    Subscription resumeSubscription(String subscriptionId);
 
     /**
      * Pause an individual subscription. It'll be paused <i>temporarily</i>, which means that it can be

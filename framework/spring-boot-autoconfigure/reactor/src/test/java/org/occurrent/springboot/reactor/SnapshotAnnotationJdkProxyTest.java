@@ -157,13 +157,13 @@ class SnapshotAnnotationJdkProxyTest {
         }
 
         // Default (non-synchronous, non-stream) registration resolves this by type to subscribe, then calls
-        // waitUntilStarted() on whatever it returns, so the mock needs a real (mocked) SubscriptionHandle back rather
+        // waitUntilStarted() on whatever it returns, so the mock needs a real (mocked) Subscription back rather
         // than Mockito's default null.
         @SuppressWarnings("unchecked")
         @Bean
         Subscriptions<TestEvent> subscriptions() {
             Subscriptions<TestEvent> subscriptions = mock(Subscriptions.class);
-            org.occurrent.subscription.api.reactor.SubscriptionHandle subscription = mock(org.occurrent.subscription.api.reactor.SubscriptionHandle.class);
+            org.occurrent.subscription.api.reactor.Subscription subscription = mock(org.occurrent.subscription.api.reactor.Subscription.class);
             when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
             // Every argument typed to pick the (String, AgnosticSubscriptionFilter, StartAt, Function2) overload
             // out of the several Subscriptions declares (sealed-type array selector, Function1 event-only handler).

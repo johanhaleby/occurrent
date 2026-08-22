@@ -29,7 +29,7 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.net.URI;
@@ -276,7 +276,7 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
         }
 
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             StartAt resolved = startAt.isDynamic() ? startAt.get(new SubscriptionModelContext(InMemoryFeed.class)) : startAt;
             int position = resolved instanceof StartAt.StartAtCheckpoint startAtCheckpoint
                     ? Integer.parseInt(startAtCheckpoint.checkpoint.asString())
@@ -322,7 +322,7 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
         }
 
         @Override
-        public SubscriptionHandle resumeSubscription(String subscriptionId) {
+        public Subscription resumeSubscription(String subscriptionId) {
             return dummySubscription(subscriptionId);
         }
 
@@ -335,8 +335,8 @@ class DurableSubscriptionModelFirstPositionRefusalTest {
             subscriptions.remove(subscriptionId);
         }
 
-        private static SubscriptionHandle dummySubscription(String subscriptionId) {
-            return new SubscriptionHandle() {
+        private static Subscription dummySubscription(String subscriptionId) {
+            return new Subscription() {
                 @Override
                 public String id() {
                     return subscriptionId;

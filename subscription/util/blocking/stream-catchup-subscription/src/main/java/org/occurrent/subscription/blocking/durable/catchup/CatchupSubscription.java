@@ -20,7 +20,7 @@ package org.occurrent.subscription.blocking.durable.catchup;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.time.Duration;
 import java.util.concurrent.CancellationException;
@@ -29,17 +29,17 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
 
 /**
- * A {@link SubscriptionHandle} whose start is running asynchronously (the catch-up replay). Public so both the stream and
+ * A {@link Subscription} whose start is running asynchronously (the catch-up replay). Public so both the stream and
  * DCB catch-up models can hand back the same kind of handle while the replay runs on a background thread.
  */
 @NullMarked
-record CatchupSubscription(String id, Future<SubscriptionHandle> delegatedSubscription) implements SubscriptionHandle {
+record CatchupSubscription(String id, Future<Subscription> delegatedSubscription) implements Subscription {
 
     @Override
     public boolean waitUntilStarted(Duration timeout) {
         final long timeStarted = System.currentTimeMillis();
         Timeout safeTimeout = DurationToTimeoutConverter.convertDurationToTimeout(timeout);
-        final SubscriptionHandle subscription;
+        final Subscription subscription;
         try {
             subscription = delegatedSubscription.get(safeTimeout.timeout(), safeTimeout.timeUnit());
         } catch (TimeoutException e) {

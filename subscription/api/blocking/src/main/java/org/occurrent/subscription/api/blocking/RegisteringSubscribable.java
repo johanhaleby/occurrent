@@ -202,7 +202,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     }
 
     @Override
-    public final SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public final Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(action, "action cannot be null");
         return doSubscribe(subscriptionId, filter, startAt, (cloudEvent, bufferIfNotLive) -> {
             action.accept(cloudEvent);
@@ -217,11 +217,11 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * delivery ahead of it. {@link Consumers#ONE} only, the same restriction
      * {@link #routeReportingMatch(CloudEvent, boolean, BiConsumer)} itself already enforces at routing time.
      */
-    protected final SubscriptionHandle subscribeReportingDelivery(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RoutingAction action) {
+    protected final Subscription subscribeReportingDelivery(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RoutingAction action) {
         return doSubscribe(subscriptionId, filter, startAt, action);
     }
 
-    private SubscriptionHandle doSubscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RoutingAction action) {
+    private Subscription doSubscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RoutingAction action) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Objects.requireNonNull(startAt, "startAt cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
@@ -303,7 +303,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     }
 
     @Override
-    public final SubscriptionHandle resumeSubscription(String subscriptionId) {
+    public final Subscription resumeSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireKnown(subscriptionId);
         if (!isPaused(subscriptionId)) {
@@ -572,7 +572,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
     // Answers for the one registration it was created for. There is no background thread to wait for, so registering
     // on a running model starts the subscription there and then, and registering on a stopped model does not.
     // A subscription started later takes its handle from resumeSubscription.
-    private record RegisteredSubscription(String id, boolean started) implements SubscriptionHandle {
+    private record RegisteredSubscription(String id, boolean started) implements Subscription {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
             return started;

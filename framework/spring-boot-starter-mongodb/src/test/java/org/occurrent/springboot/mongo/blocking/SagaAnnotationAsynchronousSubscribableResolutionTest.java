@@ -23,7 +23,7 @@ import org.occurrent.annotation.Saga;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -64,7 +64,7 @@ class SagaAnnotationAsynchronousSubscribableResolutionTest {
 
     @Test
     void an_application_supplied_asynchronous_subscription_model_without_primary_still_starts_and_a_non_push_saga_binds_to_it() {
-        SubscriptionHandle subscription = mock(SubscriptionHandle.class);
+        Subscription subscription = mock(Subscription.class);
         SubscriptionModel own = mock(SubscriptionModel.class);
         when(own.subscribe(any(), any(), any(), any())).thenReturn(subscription);
 

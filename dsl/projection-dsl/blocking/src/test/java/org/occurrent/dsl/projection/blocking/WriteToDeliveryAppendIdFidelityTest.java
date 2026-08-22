@@ -31,7 +31,7 @@ import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -97,7 +97,7 @@ class WriteToDeliveryAppendIdFidelityTest {
 
         try {
             BlockingQueue<EventMetadata> delivered = new ArrayBlockingQueue<>(1);
-            SubscriptionHandle subscription = subscriptionModel.subscribe("fidelity", StartAt.now(),
+            Subscription subscription = subscriptionModel.subscribe("fidelity", StartAt.now(),
                     cloudEvent -> delivered.add(EventMetadata.from(cloudEvent)));
             assertThat(subscription.waitUntilStarted(Duration.ofSeconds(20))).as("the subscription never started").isTrue();
 

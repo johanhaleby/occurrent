@@ -30,7 +30,7 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.PersistCheckpointDuringCatchupPhase;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
@@ -127,14 +127,14 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     /**
      * Shortcut to start subscribing to events matching the supplied filter from beginning of time.
      */
-    public SubscriptionHandle subscribeFromBeginningOfTime(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
+    public Subscription subscribeFromBeginningOfTime(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, filter, StartAtTime.beginningOfTime(), action);
     }
 
     /**
      * Shortcut to start subscribing to <i>all</i> events from beginning of time.
      */
-    public SubscriptionHandle subscribeFromBeginningOfTime(String subscriptionId, Consumer<CloudEvent> action) {
+    public Subscription subscribeFromBeginningOfTime(String subscriptionId, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, StartAtTime.beginningOfTime(), action);
     }
 
@@ -147,7 +147,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     }
 
     @Override
-    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
         // Position/time catch-up converts the filter into an Occurrent Filter for the historical query, so only the
         // filter types that wrap a plain Filter are supported here: StreamSubscriptionFilter (stream) and
@@ -210,7 +210,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
      * claimed. Distinct from the delegate subscribe call inside a finishing attempt's own handover, which has
      * already gone through that lock and that decision and must not cancel itself.
      */
-    private SubscriptionHandle subscribeLiveWithoutCatchup(String subscriptionId, StreamSubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, StreamSubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         cancelRunningCatchup(subscriptionId);
         return getWrappedSubscriptionModel().subscribe(subscriptionId, filter, startAt, action);
     }
@@ -250,17 +250,17 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
                 && GlobalCheckpoint.isGlobalCheckpoint(position.checkpoint);
     }
 
-    private SubscriptionHandle streamPositionCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt positionStartAt) {
-        Future<SubscriptionHandle> future = startCatchupAsync(subscriptionId, () -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, positionStartAt));
+    private Subscription streamPositionCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt positionStartAt) {
+        Future<Subscription> future = startCatchupAsync(subscriptionId, () -> startPositionCatchupSubscriptionForStream(subscriptionId, filter, startAt, action, positionStartAt));
         return new CatchupSubscription(subscriptionId, future);
     }
 
-    private SubscriptionHandle streamTimeCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
-        Future<SubscriptionHandle> future = startCatchupAsync(subscriptionId, () -> startCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
+    private Subscription streamTimeCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
+        Future<Subscription> future = startCatchupAsync(subscriptionId, () -> startCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
         return new CatchupSubscription(subscriptionId, future);
     }
 
-    private SubscriptionHandle startCatchupSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
+    private Subscription startCatchupSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
         StartAt nextStartAt = firstStartAt.get(generateSubscriptionModelContext());
         Checkpoint checkpoint = ((StartAtCheckpoint) Objects.requireNonNull(nextStartAt)).checkpoint;
 
@@ -388,8 +388,8 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         }
     }
 
-    private SubscriptionHandle startDelegatedSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, boolean subscriptionsWasCancelledOrShutdown, StartAt startAtToUse, Consumer<CloudEvent> liveConsumer) {
-        final SubscriptionHandle subscription;
+    private Subscription startDelegatedSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, boolean subscriptionsWasCancelledOrShutdown, StartAt startAtToUse, Consumer<CloudEvent> liveConsumer) {
+        final Subscription subscription;
         if (subscriptionsWasCancelledOrShutdown) {
             // Priming startAtToUse is skipped for an explicit cancellation of this exact id, since its get() call
             // saves globalCheckpoint as a side effect, which would recreate the position cancelSubscription's own
@@ -417,7 +417,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
     // PositionOrderedReader instead of the legacy time-ordered path above.
     // ---------------------------------------------------------------------------------------------------------------
 
-    private SubscriptionHandle startPositionCatchupSubscriptionForStream(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
+    private Subscription startPositionCatchupSubscriptionForStream(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
         PositionOrderedReader positionOrderedReader = (PositionOrderedReader) eventStoreQueries;
         Filter streamFilter = withCapabilityScope(plainFilterOf(filter));
         long windowSize = config.dcbCatchupPositionWindowSize;

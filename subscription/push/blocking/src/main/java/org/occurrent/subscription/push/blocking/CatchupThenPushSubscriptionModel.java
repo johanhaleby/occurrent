@@ -29,7 +29,7 @@ import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.CatchupListener;
@@ -203,7 +203,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     @Override
-    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Objects.requireNonNull(startAt, "startAt cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
@@ -695,7 +695,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     @Override
-    public synchronized SubscriptionHandle resumeSubscription(String subscriptionId) {
+    public synchronized Subscription resumeSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Future<Boolean> relaunched = relaunchInterruptedReplay(subscriptionId);
         if (relaunched != null) {
@@ -794,7 +794,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * cannot see it. Ask {@link #isCatchingUp(String)} or {@link #isRunning(String)} about a restarted replay, or take
      * the handle {@link #resumeSubscription(String)} hands back.
      */
-    private record CatchingUpSubscription(String id, Future<Boolean> replay) implements SubscriptionHandle {
+    private record CatchingUpSubscription(String id, Future<Boolean> replay) implements Subscription {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
             Timeout safeTimeout = DurationToTimeoutConverter.convertDurationToTimeout(timeout);

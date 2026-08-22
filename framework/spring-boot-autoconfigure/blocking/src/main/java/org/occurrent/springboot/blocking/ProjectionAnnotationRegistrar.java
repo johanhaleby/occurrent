@@ -55,7 +55,7 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
@@ -588,7 +588,7 @@ class ProjectionAnnotationRegistrar {
         if (SubscriptionAnnotations.subscriptionsStartOnTheirOwn(applicationContext)) {
             // With waitUntilStarted the catch-up replay finishes here before handing over to the live push feed;
             // without it the replay runs on its own thread and this returns straight away.
-            SubscriptionHandle subscription = runner.project(id, projection, materializedView, null, waitUntilStarted);
+            Subscription subscription = runner.project(id, projection, materializedView, null, waitUntilStarted);
             if (!waitUntilStarted) {
                 // Nobody is left to see this replay fail, so join it on a thread of this registrar's own purely to
                 // record the failure. Stopping it is close()'s job through the model, so this needs no stop of its own.
@@ -602,7 +602,7 @@ class ProjectionAnnotationRegistrar {
         // same work: ManualStartPushSources.start returns void, so the application never sees the handle and could
         // not watch a background replay for itself.
         applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
-            SubscriptionHandle deferred = runner.project(id, projection, materializedView, null, waitUntilStarted);
+            Subscription deferred = runner.project(id, projection, materializedView, null, waitUntilStarted);
             if (!waitUntilStarted) {
                 runInBackground("occurrent-push-catchup-watch", id, deferred::waitUntilStarted, () -> {
                 });

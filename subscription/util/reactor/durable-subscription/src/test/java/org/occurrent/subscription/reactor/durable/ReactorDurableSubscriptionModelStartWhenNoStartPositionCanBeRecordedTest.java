@@ -20,7 +20,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Mono;
 
@@ -48,7 +48,7 @@ class ReactorDurableSubscriptionModelStartWhenNoStartPositionCanBeRecordedTest {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage, overrideOn());
 
-        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
         subscription.waitUntilStarted().block(TIMEOUT);
 
         assertThat(delegate.startedAt).hasSize(1);
@@ -92,7 +92,7 @@ class ReactorDurableSubscriptionModelStartWhenNoStartPositionCanBeRecordedTest {
         InMemoryCheckpointStorage storage = new InMemoryCheckpointStorage();
         ReactorDurableSubscriptionModel model = new ReactorDurableSubscriptionModel(delegate, storage, overrideOn());
 
-        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
         subscription.waitUntilStarted().block(TIMEOUT);
 
         assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT).asString()).isEqualTo("at-registration");

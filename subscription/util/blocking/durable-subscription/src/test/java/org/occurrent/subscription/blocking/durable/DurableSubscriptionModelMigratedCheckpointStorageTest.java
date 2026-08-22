@@ -30,7 +30,7 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.net.URI;
 import java.time.Duration;
@@ -87,9 +87,9 @@ class DurableSubscriptionModelMigratedCheckpointStorageTest {
     private static CheckpointAwareSubscriptionModel oneEventSubscriptionModel() {
         return new CheckpointAwareSubscriptionModel() {
             @Override
-            public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
                 action.accept(checkpointAwareCloudEvent());
-                return new SubscriptionHandle() {
+                return new Subscription() {
                     @Override
                     public String id() {
                         return subscriptionId;
@@ -131,7 +131,7 @@ class DurableSubscriptionModelMigratedCheckpointStorageTest {
             }
 
             @Override
-            public SubscriptionHandle resumeSubscription(String subscriptionId) {
+            public Subscription resumeSubscription(String subscriptionId) {
                 throw new UnsupportedOperationException();
             }
 

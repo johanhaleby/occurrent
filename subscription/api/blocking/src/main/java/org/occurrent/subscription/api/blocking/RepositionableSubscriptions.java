@@ -43,7 +43,7 @@ public interface RepositionableSubscriptions extends SubscriptionModelCapability
      * @throws UnknownSubscriptionException        If this subscription model has no subscription with that id.
      * @throws SubscriptionAlreadyRunningException If the subscription is already running.
      */
-    SubscriptionHandle resumeSubscription(String subscriptionId, StartAt startAt);
+    Subscription resumeSubscription(String subscriptionId, StartAt startAt);
 
     /**
      * The repositionable model behind {@code subscriptionModel}, unwrapping a {@link SubscriptionModelWrapper}

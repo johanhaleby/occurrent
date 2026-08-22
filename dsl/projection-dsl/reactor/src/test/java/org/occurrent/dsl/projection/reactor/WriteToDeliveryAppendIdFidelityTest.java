@@ -31,7 +31,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -95,7 +95,7 @@ class WriteToDeliveryAppendIdFidelityTest {
 
         try {
             LinkedBlockingQueue<EventMetadata> delivered = new LinkedBlockingQueue<>();
-            SubscriptionHandle subscription = subscriptionModel.subscribe("fidelity-reactor", StartAt.now(),
+            Subscription subscription = subscriptionModel.subscribe("fidelity-reactor", StartAt.now(),
                     cloudEvent -> Mono.fromRunnable(() -> delivered.add(EventMetadata.from(cloudEvent))));
             subscription.waitUntilStarted().block(Duration.ofSeconds(20));
 

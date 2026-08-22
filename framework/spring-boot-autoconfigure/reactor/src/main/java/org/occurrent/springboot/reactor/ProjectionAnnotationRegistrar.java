@@ -728,7 +728,7 @@ class ProjectionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E, S, ID> org.occurrent.subscription.api.reactor.SubscriptionHandle projectAgnosticOrStream(ReactiveProjectionRunner<E> runner, String id, org.occurrent.annotation.Projection annotation, Projection<S, E, ID> projection, Object store, @Nullable StartAt startAt, @Nullable CatchupResolution recordingResolution) {
+    private <E, S, ID> org.occurrent.subscription.api.reactor.Subscription projectAgnosticOrStream(ReactiveProjectionRunner<E> runner, String id, org.occurrent.annotation.Projection annotation, Projection<S, E, ID> projection, Object store, @Nullable StartAt startAt, @Nullable CatchupResolution recordingResolution) {
         if (recordingResolution == null) {
             if (store instanceof MaterializedView) {
                 return runner.project(id, projection, (MaterializedView<E>) store, startAt);
@@ -745,7 +745,7 @@ class ProjectionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E, S, ID> org.occurrent.subscription.api.reactor.SubscriptionHandle projectDcb(ReactiveDcbProjectionRunner<E> runner, String id, org.occurrent.annotation.Projection annotation, DcbProjection<S, E, ID> dcbProjection, Object store, @Nullable DcbStartAt startAt, @Nullable CatchupResolution recordingResolution) {
+    private <E, S, ID> org.occurrent.subscription.api.reactor.Subscription projectDcb(ReactiveDcbProjectionRunner<E> runner, String id, org.occurrent.annotation.Projection annotation, DcbProjection<S, E, ID> dcbProjection, Object store, @Nullable DcbStartAt startAt, @Nullable CatchupResolution recordingResolution) {
         if (recordingResolution == null) {
             if (store instanceof MaterializedView) {
                 return runner.project(id, dcbProjection, (MaterializedView<E>) store, startAt);

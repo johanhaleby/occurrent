@@ -29,7 +29,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.net.URI;
 import java.time.Duration;
@@ -61,7 +61,7 @@ class CatchupSubscriptionModelStopPropagationTest {
         catchupSubscriptionModel.stop();
 
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        SubscriptionHandle subscription = catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), received::add);
+        Subscription subscription = catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), received::add);
         // The replay never ran a single iteration (stopped was already true), so this hands back a
         // CancelledSubscription rather than a live one, and that answers false, since nothing here is going to start it.
         assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isFalse();
@@ -78,7 +78,7 @@ class CatchupSubscriptionModelStopPropagationTest {
         catchupSubscriptionModel.start(false);
 
         CopyOnWriteArrayList<CloudEvent> received = new CopyOnWriteArrayList<>();
-        SubscriptionHandle subscription = catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), received::add);
+        Subscription subscription = catchupSubscriptionModel.subscribe("someId", StartAtTime.beginningOfTime(), received::add);
         assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
 
         assertThat(received).extracting(CloudEvent::getId).containsExactly("1", "2", "3");
@@ -93,7 +93,7 @@ class CatchupSubscriptionModelStopPropagationTest {
         CountDownLatch firstEventReached = new CountDownLatch(1);
         CountDownLatch releaseReplay = new CountDownLatch(1);
 
-        SubscriptionHandle subscription = catchupSubscriptionModel.subscribe(subscriptionId, StartAtTime.beginningOfTime(), event -> {
+        Subscription subscription = catchupSubscriptionModel.subscribe(subscriptionId, StartAtTime.beginningOfTime(), event -> {
             firstEventReached.countDown();
             awaitLatch(releaseReplay);
         });
@@ -124,7 +124,7 @@ class CatchupSubscriptionModelStopPropagationTest {
         CountDownLatch firstEventReached = new CountDownLatch(1);
         CountDownLatch releaseReplay = new CountDownLatch(1);
 
-        SubscriptionHandle subscription = catchupSubscriptionModel.subscribe(subscriptionId, StartAtTime.beginningOfTime(), event -> {
+        Subscription subscription = catchupSubscriptionModel.subscribe(subscriptionId, StartAtTime.beginningOfTime(), event -> {
             firstEventReached.countDown();
             awaitLatch(releaseReplay);
         });
@@ -211,7 +211,7 @@ class CatchupSubscriptionModelStopPropagationTest {
         }
 
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             return new NoOpSubscription(subscriptionId);
         }
 
@@ -239,7 +239,7 @@ class CatchupSubscriptionModelStopPropagationTest {
         }
 
         @Override
-        public SubscriptionHandle resumeSubscription(String subscriptionId) {
+        public Subscription resumeSubscription(String subscriptionId) {
             return new NoOpSubscription(subscriptionId);
         }
 
@@ -256,7 +256,7 @@ class CatchupSubscriptionModelStopPropagationTest {
         }
     }
 
-    private record NoOpSubscription(String id) implements SubscriptionHandle {
+    private record NoOpSubscription(String id) implements Subscription {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
             return true;

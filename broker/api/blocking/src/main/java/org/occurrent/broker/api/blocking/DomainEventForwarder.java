@@ -22,7 +22,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 
 import java.util.function.Consumer;
@@ -68,7 +68,7 @@ public class DomainEventForwarder<E> {
     /**
      * Start forwarding at the subscription model's default start position, with no filter.
      */
-    public SubscriptionHandle forward(String subscriptionId) {
+    public Subscription forward(String subscriptionId) {
         return subscriptionModel.subscribe(subscriptionId, decodeAndPublish());
     }
 
@@ -76,14 +76,14 @@ public class DomainEventForwarder<E> {
      * Start forwarding at {@code startAt}, with no filter. See the class javadoc for what an explicit
      * {@code startAt} costs on a restart.
      */
-    public SubscriptionHandle forward(String subscriptionId, StartAt startAt) {
+    public Subscription forward(String subscriptionId, StartAt startAt) {
         return subscriptionModel.subscribe(subscriptionId, startAt, decodeAndPublish());
     }
 
     /**
      * Start forwarding only events matching {@code filter}, at the subscription model's default start position.
      */
-    public SubscriptionHandle forward(String subscriptionId, @Nullable SubscriptionFilter filter) {
+    public Subscription forward(String subscriptionId, @Nullable SubscriptionFilter filter) {
         return subscriptionModel.subscribe(subscriptionId, filter, decodeAndPublish());
     }
 
@@ -91,7 +91,7 @@ public class DomainEventForwarder<E> {
      * Start forwarding only events matching {@code filter}, at {@code startAt}. See the class javadoc for what an
      * explicit {@code startAt} costs on a restart.
      */
-    public SubscriptionHandle forward(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
+    public Subscription forward(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
         return subscriptionModel.subscribe(subscriptionId, filter, startAt, decodeAndPublish());
     }
 
