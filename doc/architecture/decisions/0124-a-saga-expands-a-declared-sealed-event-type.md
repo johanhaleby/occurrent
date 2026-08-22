@@ -7,10 +7,12 @@ Date: 2026-08-11
 Accepted. Fixes #743. Ships in 0.33.0, which is held for it.
 
 Superseded on the exemption only by [ADR 126](0126-every-derived-event-type-filter-expands-a-declared-sealed-type.md),
-which is where the reversal is recorded and which carries its reasoning. The paragraph below titled "The one
+which is where the reversal is recorded, together with why. The paragraph below titled "The one
 deliberate exemption" describes 0.33.0 and no later release. A non-sealed concrete class declared directly is
 refused from 0.34.0, resolving [#753](https://github.com/johanhaleby/occurrent/issues/753), so the rule this ADR
-states now holds with nothing exempt from it. Everything else here is unchanged. See the changelog's breaking
+states now holds with nothing exempt from it. Two counts below went with the exemption. The property test runs
+fifteen declared-type shapes rather than thirteen, and its outcome for the exempted case is gone, so it has two
+outcomes rather than three. The decision itself is otherwise unchanged. See the changelog's breaking
 changes and section 3 of
 [the 0.34.0 upgrade guide](../../migration/upgrading-to-0.34.0.md#3-declaring-an-event-type-whose-concrete-subtypes-cannot-be-found-is-refused).
 
