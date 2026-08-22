@@ -454,17 +454,21 @@ goal spread across two.
 ### `waitUntilStarted` is forwarded, never moved
 
 The blocking `subscribe` overloads on `StreamSubscriptions` and `Subscriptions` already have `waitUntilStarted` as a
-released argument, with a default of `true`. `DcbSubscriptions.subscribeWithMetadata` computes the same boolean but
-applies it differently today, since its convenience overload always passes `false` in, and the three blocking DCB call
-sites call `waitUntilStarted()` on the returned handle afterward instead, when `subscriptionsStartOnTheirOwn` says to.
-Either way, every one of the 21 sites computes that boolean itself, through
-`SubscriptionAnnotations.subscriptionsStartOnTheirOwn` reading the Spring `ApplicationContext`, and none of them get
-it from the DSL. A descriptor cannot compute that value itself: Decision 1 keeps `Subscription<E>` free of Spring, and
-reading the application context is exactly the coupling that freedom rules out. So the caller keeps computing it and
-hands it to the runner, whether as an argument or as a call on the handle the runner returns, the same way it already
-passes a start position, and the runner is what honours it. The reactor stack has no such parameter today, for the
-reason Decision 1 already gives, that a reactive handle returns its own `Mono<Void>` from `waitUntilStarted()` rather
-than blocking the caller to produce one, and this amendment does not add one there.
+released argument, with a default of `true`. Only the fifteen asynchronous sites, stream, agnostic and DCB on both
+stacks, compute a `waitUntilStarted` boolean at all, and all fifteen compute the same one, through
+`SubscriptionAnnotations.subscriptionsStartOnTheirOwn` reading the Spring `ApplicationContext`. They apply it two
+ways. One is a `subscribe` argument, wherever the DSL method being called has one, which today is the blocking stream
+and agnostic sites. The other is a call to `waitUntilStarted()` on the handle `subscribe` already returned, which is
+every reactor site (no reactor `subscribe` overload takes the argument) and the three blocking DCB sites
+(`DcbSubscriptions.subscribeWithMetadata`'s convenience overload always passes `false` in, so the registrar corrects
+it afterward on the handle). The six synchronous sites never compute the boolean at all. A synchronous subscription
+dispatches on the writer's thread with no background startup to wait for, so every synchronous call site is
+unconditionally not waiting, whether by passing `false` on the blocking side or by having no wait to apply on the
+reactor side. A descriptor cannot compute `waitUntilStarted` itself: Decision 1 keeps `Subscription<E>` free of
+Spring, and reading the application context is exactly the coupling that freedom rules out. So an asynchronous caller
+keeps computing the value and hands it to the runner, as an argument or as a call on the handle the runner returns,
+the same way it already passes a start position, and the runner is what honours it. A synchronous caller passes
+`false` the same way it always has.
 
 ### The Kotlin DSL classes stay real classes, and real Spring beans
 
