@@ -44,8 +44,3 @@ nbdist/
 .context/epics/*
 !.context/epics/*.yml
 !.context/orchestrator-policy.yml
-!.context/orchestrator/
-.context/orchestrator/*
-!.context/orchestrator/*/
-.context/orchestrator/*/*
-!.context/orchestrator/*/decisions.jsonl

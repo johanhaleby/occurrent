@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 69
+revision: 169
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -16,22 +16,6 @@ definition_of_done:
   - "#388 closed"
   - "Memory checkpointed, sessions archived at closeout, worktrees and branches swept, monitors retired, tracker scan clean from registered_at"
 pending_actions:
-  - id: act-007
-    type: dispatch-subagent
-    target: "U5 worktree subagent (Sonnet), Unattended vehicle; id in this session's task list"
-    expected: "plan gate stop with a PLAN ⌁[brk/U5#416] block; #416 claim comment 5337604969 and in-progress label read back"
-    status: VERIFIED
-    attempts: 1
-    safe_to_repeat: false
-    issued_at: 2026-08-19T04:49:00Z
-  - id: act-006
-    type: dispatch-subagent
-    target: "U4 worktree subagent (Sonnet), Unattended vehicle; id in this session's task list"
-    expected: "plan gate stop with a PLAN ⌁[brk/U4#415] block; #415 claim comment 5337604731 and in-progress label read back"
-    status: VERIFIED
-    attempts: 1
-    safe_to_repeat: false
-    issued_at: 2026-08-19T04:49:00Z
   - id: act-005
     type: dispatch-chip
     target: "U3 chip task_dca9fcca, title ⌁[brk/U3#414] RabbitMQ publish module · Sonnet/high"
@@ -187,64 +171,64 @@ units:
   U6:
     issue: 417
     goal: "Kafka consume bridge: poll, reconstruct, Pushable.accept/DomainEventFeed, offset-commit-after-accept, topics from destinationsFor(filter), ordering caveats documented prominently; folds changelog"
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U5, U11]
     session: null
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: issue_closed, ref: 417, met: false, evidence: null}
+      - {check: pr_merged, ref: 874, met: true, evidence: "squash 514faf462, CAS pin 1fff7dbb6 matched, tip==pin before branch delete"}
+      - {check: issue_closed, ref: 417, met: true, evidence: "closed with pointer comment after merge (PR body lacked a closing keyword)"}
     blocking_on: []
-    next_action: "Plan APPROVED 2026-08-20T~12:0xZ with three corrections: the permanent stop leaves the group cleanly (unsubscribe or close after the seek) instead of idling into a max.poll.interval eviction that looks like a failure; the batched-commit crash consequence and pollTimeout double duty become binding javadoc; and build() refuses a consumerConfig without group.id since its absence otherwise surfaces later as an InvalidGroupIdException at poll. The plan itself was the epic's strongest first stop: both read-side mapper defects PRE-VERIFIED by decompiling the pinned cloudevents-kafka and core jars (String-flattened extensions, and the reader collapsing present-but-empty data to absent, the library doing what the RabbitMQ marker-header amendment guarded against); the topicIsPattern discriminator decided additively with metachar sniffing rejected because a dot is a legal literal; batched per-poll explicit-offset commits with seek-stops-the-partition; a single-threaded loop matching KafkaConsumer's threading model; PARK as a single-attempt confirmed publish staged into the commit map only after the confirm. Worker implementing; next stop is the delivery protocol"
+    next_action: "DONE 2026-08-20T~19:5xZ. PR 874 CAS-merged as 514faf462 pinned to 1fff7dbb6 after seven worker rounds, two adversarial verify passes, and a clean gate (4/4 green on the exact head, zero unresolved threads, three below-bar suppressed findings carried to U9). The re-verify returned MERGE-SAFE with a rebuilt clean instrument after catching the worker's in-place edit of the shared harness predicate (vacuous whole-run check), the lesson is in lessons.md: hand workers a COPY of a verification harness, never the verifier's tree. U9 carries from U6: permanent-stop final commit can retry a coordinator outage unboundedly before departure flags set (soften or fix the immediate-departure javadoc); poison backoff skipped when another partition stages offsets (per-partition pause); the three substantive correctness fixes (record-loop rewind, commit-failure no-rewind, close-commit preservation) have no in-repo regression test for want of a consumer injection seam, worth an issue; WakeupException commit retry runs bare outside the retry strategy and can block close up to default.api.timeout.ms; sink pattern-refusal sits inside executeWithRetry (fixed in round 6, verify held). Branch deleted on tip==pin"
     last_meaningful_progress_at: 2026-08-18T04:44:26Z
     observed: {}
     assessment: "Sonnet/high chip. @KafkaSaga comment is future-module inspiration, out of remit."
   U7:
     issue: 419
     goal: "End-to-end example at example/broker (forwarder -> RabbitMQ -> bridge -> @Projection(source = PUSH)), both levels, Testcontainers proofs (catch-up overlap, no-loss, resume, EventMetadata round trip); example-pom/excludeArtifacts/shard-paths registrations; housekeeping fenced to removing the unused testcontainers-rabbitmq dependency line only; folds changelog"
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U3, U4]
     session: null
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: issue_closed, ref: 419, met: false, evidence: null}
+      - {check: pr_merged, ref: 868, met: true, evidence: "squash 63b9022eb, CAS pin 1052b2137 matched, tip==pin before branch delete"}
+      - {check: issue_closed, ref: 419, met: true, evidence: "closed by merge 2026-08-20T~11:4xZ"}
     blocking_on: []
-    next_action: "Round 11 DONE, head 1052b2137, the class CLOSED: a shared distinctEventIdsOnQueue helper drains with basicGet, decodes each id via the SAME mapper the production code uses, and requeues, so an awaiting poll leaves the queue as a consumer would find it and a duplicate never changes the id set; both backlog waits now await the exact id set of the written events, the redundant raw count in the no-loss test removed in favour of the round-10 content-equality proof, and the sweep correctly classified the surviving count sites (identity-scoped counters not vulnerable, and getMessageCount-isZero absence checks can only falsely FAIL, never falsely pass). Mutation evidence again empirical: wait deleted, id set printed at the proceed moment, the race confirmed in 1 of 5 runs at one site and 4 of 5 at the other. Parked on CI and review. GATE on a pass with nothing above the bar. PRIOR: FINAL ROUND ROUTED as one class-closure, not three findings: every count-based wait or assertion in both example test classes is satisfiable by the forwarder legal duplicates (third recurrence of the theme after round 7 exact-count and round 10 content-equality), so the instruction is to key EVERY wait and assertion on distinct event identity, id sets not sizes, sweeping for unflagged sites since three escaped two prior rounds. On a pass with nothing above the bar, PR 868 MERGES, smaller items to the fixpoint. PRIOR: Round 10 DONE, head e23c53721, all six batched plus the rebase: the false null-passes-the-fold-tests comments corrected to the tests real purpose; the redelivery assertion strengthened to content equality against the specific failed attempt (a duplicate can no longer satisfy it), mutation-tested; both mains rewritten to try-with-resources with the suppression semantics verified by a standalone scratch reproduction rather than from memory; the teardown null-guarded; the changelog merged keeping every Resolves reference across both sides; the reactor rebuilt from root after the rebase. Parked on CI and review. On an empty-or-below-bar pass, the GATE. PRIOR: Round 9 DONE, head bb64e2bee: the infrastructure clients brought under the same per-resource close discipline (rabbitConnection open in its own try closing mongoClient on failure, the finally rewritten around the existing collectFailure helper), with an HONEST testability decline, the proxy technique cannot reach main()-built clients without restructuring an eleven-line entrypoint purely for testability, so verification is by inspection plus the helper already being mutation-tested twice against the same two exception shapes, reasoning documented in the mirror rather than silently skipped. Sweep rerun over the change, 17 green, prose gate clean. Parked on CI and review. On an empty or below-bar round: the GATE, this is the gate round. PRIOR: Round 8 DONE, head 137004996: the async-wait gap closed with a queue-depth wait and MUTATION HONESTY worth noting, the mutation did not turn the final assertions red because at-least-once masks it, so the worker gathered direct diagnostic evidence instead (five runs showing the queue held 1 of 2 messages at boot-2 start without the wait) and documented the limit in the test comment rather than claiming a red it did not get; both close() methods rewritten to per-resource try with suppressed-exception collection, proven by proxy-failing only the bridge close and observing the leaked forwarder still deliver; and the MANDATORY SWEEP VINDICATED ITSELF, finding three more exception-safety instances in test infrastructure, including a teardown whose naive split exposed a real ordering dependency between the admin channel and its connection. 17 tests green in the foreground. Parked on CI and review. On an empty or below-bar round: the GATE. PRIOR: Round 8 ROUTED with a pattern instruction: all three suppressed findings are KNOWN epic defect classes recurring in code previous rounds added (the round-7 backlog test has the async-wait gap so it can pass with both messages published after boot 2; both bootstraps close() has the one-try exception-safety gap fixed for start() in round 5). Beyond the fixes, the worker must run one deliberate sweep of everything the PR ADDS against the recurring classes (close-first absence assertions, awaited async, exception safety both paths, durability pairings, prose stronger than code) and record what the sweep checked in the mirror, so review rounds stop discovering the classes one at a time. PRIOR: Round 7 DONE, head 80c0014cf: the domain bootstrap reordered so the bridge declares topology before the replay (CloudEvent bootstrap checked and already correct), the declare-before-replay rule in javadoc; the exact-equality count relaxed to at-least under the at-least-once contract; and the restart proof extended to write an order while the consumer is DOWN, proving backlog delivery on restart, with the mutation honestly declined since the resume mechanism lives wholly in merged library code outside this diff, stated rather than fabricated. Parked on CI and review. On an empty or below-bar round: the GATE. PRIOR: Round 7 ROUTED, three cheap real findings: the bootstrap runs its replay BEFORE the bridge declares topology so the forwarder spins on unroutable returns during a long catch-up (no loss, checkpoint holds, but a noisy ordering the example should not teach, reorder plus the declare-before-replay rule in javadoc, CloudEvent bootstrap checked too); the exact-equality ready-count assertion turns a legal at-least-once duplicate into a flake; and the restart proof writes its probe only after the second bridge is live, proving marker-skips-replay but not that work queued while the consumer was down is delivered on restart, the other half of the issue named requirement. On an empty or below-bar next round: the gate. PRIOR: Round 6 DONE, head 6fdbd1838: mutation cycle completed atomically in the foreground first (red confirmed, restore diffed byte-identical, green), then the blocker fixed with the models held on the instance and closed in order, proven by a smoke test asserting a live registration before close and none after; the overlap proof now counts folds and the counter TAUGHT something, catch-up coalesces per-key saves so the count is 1 not 2 after catch-up, assertions corrected to the real semantics and the dedup key mutation-tested; the three small fixes done, with the RabbitMQ guest-loopback restriction verified on macOS+Colima and the native-Linux mitigation documented as unverified, honest scoping. Parked on CI and the round-6 review. On green plus clean: the merge gate. PRIOR: Round 6 ROUTED from the adversarial verifier: BLOCKER, the CloudEvent bootstrap builds pushModel and catchupThenPush as locals and close() never shuts them down on any path, while the bridge javadoc explicitly makes model shutdown the APPLICATION job this bootstrap exists to demonstrate (domain bootstrap confirmed clean, DomainEventFeed holds no such resource); MAJOR, the domain catch-up overlap proof is VACUOUS since the idempotent fold makes the view identical whether dedup fired or not, to be fixed with a fold counter like the restart proof CountingPositionOrderedReader; verifier finding on the number-guessing-game pom DECLINED by the orchestrator since issue #419 own text authorises exactly that removal; plus the duplicate-OrderShipped and interleaved-orders test gaps, the metadata javadoc overclaim, and the RabbitMQ guest-loopback one-liner check with platform stated. PRIOR: Round 5 DONE, head 1766b78ac, all five closed with empirical proofs: the startup failure REPRODUCED from a clean container then fixed with directConnection=true and verified end to end with and without the parameter against real non-Testcontainers containers running the production start path; start() made exception-safe with reverse-order cleanup proven by failing the bridge channel open via a dynamic proxy and probing a queue bound to the exchange to show the forwarder truly stopped; the vacuous ack restructured to genuinely close the bridge before each ready-count check with a fresh bridge resuming after, audited across both classes with no other instance; and a commit-message semicolon self-caught and amended before anything referenced the SHA. Parked on CI and review. On green plus clean: adversarial verify then the gate. PRIOR: Round 5 ROUTED on the green head b56ab7479 (the reactor compile failure on the prior run was a one-off, rerun green, file byte-identical to green main): five suppressed findings. The documented docker one-liner DOES NOT RUN, rs.initiate leaves Mongo advertising the container hostname so host-side discovery fails, to be fixed and VERIFIED by running the documented procedure from clean; start() is exception-unsafe in both bootstraps, an early-started forwarder leaks when later construction throws, the partial-construction class again; and the domain test asserts ack via ready count with the bridge OPEN, the exact vacuity the brief warned about with the sixteen-assertion history, close-then-assert plus an audit of both test classes for the same shape. PRIOR: Round 4 DONE, head b56ab7479: the poison guard fixed by never returning null (OrderShipped with no prior state creates its own non-null view, product filled in by a later OrderPlaced, status never regressing), proven through the REAL materialized-view-and-repository path whose absence let the fold-level test miss it, mutation-tested by reverting to the round-2 handlers. Both bootstraps switched to an in-memory marker beside the in-memory map with the durability rule in javadoc, and the restart proof is now real, a SECOND bootstrap against the same Mongo asserting the first ones order comes back, mutation-tested by reverting to the durable marker and confirming the silent skip. The integration tests marker pairing checked and correctly distinguished, deliberate same-map reuse across boots is not the defect, commented as such. Parked on CI and review. On green plus clean: adversarial verify then the gate. PRIOR: Round 4 ROUTED: three real findings on the green head dd576d5e7, and the first is a defect ROUND 2 INTRODUCED, the idempotency guard returning null for ship-before-place, which MaterializedView.updateFromRepository cannot save, so the delivery throws, requeues, and under prefetch 1 the poison blocks OrderPlaced forever, the guard having traded a wrong answer for a stuck consumer; fixed by non-null pending-shipment state that merges placement later, with the reordering driven through the REPOSITORY path the fold-level test missed. Both bootstraps also pair a DURABLE catch-up marker with an IN-MEMORY read model, so a restart skips replay over an empty map and history vanishes, the wrong lesson in a teaching artifact; ruled toward marker-shares-view-durability with the rule stated in javadoc, worker chooses in-memory-both or persisted-both with the reason recorded, and must check the integration tests own pairing for the same mismatch. PRIOR: Round 3 DONE, head dd576d5e7: the runnable half delivered as two hand-wired bootstraps in main sources (no auto-config, no application.yaml, docker one-liners in the javadoc), reusing the exact model the tests exercise. BUILDING IT SURFACED A REAL BUG, which is the vindication of the scope finding: neither bootstrap declared the RabbitMQ exchange, failing 404 against a clean broker, and the tests never caught it because the test base declares the exchange through its admin channel; fixed, plus a smoke test driving both bootstraps own start() against the existing containers, the exact test that caught it. Restart overclaim corrected as consumer-side prose with the stated reason that forwarder resumption is the durable models own checkpoint contract proven where the forwarder lives. Parked on CI and the round-3 review. On green plus clean: adversarial verify then the gate. PRIOR: Round 2 DONE, head 4b5256b8a: both round-1 findings fixed. The projection idempotency bug (a redelivered OrderPlaced after OrderShipped regressed the read model, the example teaching the exact mistake it exists to prevent) fixed with guards on both handlers and a fold-level unit test that FORCES the reordering a real broker cannot reliably reproduce, both guards mutation-tested independently. The isolation bug fixed with getReplicaSetUrl(scratch), the container overload that actually scopes a database, verified against ConnectionString and the suite rerun twice against reused containers. Parked on CI and the round-2 Copilot review at 4b5256b8a. On green plus a clean review: adversarial verify against the example-proves-what-it-claims invariant, then the merge gate. PRIOR: THIRD WORKER DISPATCHED 2026-08-20 morning after the second died on the weekly usage limit (reset 20:00 Europe/Stockholm), again with everything uncommitted; worktree state re-verified identical before re-dispatch (untracked example/broker tree plus the five modified files, nothing pushed). The new brief makes durability the FIRST action: commit and push as soon as the module compiles, work-in-progress-honest message, polish after, since two workers have now died holding this draft in memory only. Everything else carried unchanged incl. the queue-held overlap semantics, the fenced housekeeping, the foreground-only builds and the vacuous-absence-assertion trap. PRIOR stall recovery 2026-08-19T~21:0xZ: the first worker was killed by a stall watchdog mid test-run with EVERYTHING uncommitted and nothing pushed, so the replacement was dispatched NON-isolated into the SAME worktree agent-a8bb2d7294ff0fe4c (per the recorded rule that a fresh isolated agent would fork a new directory and strand the draft). Surviving on disk: the whole untracked example/broker tree (two poms, OrderEvent, OrderStatusProjection, package-info, and three test classes incl. an abstract base), plus edits to maven.yml, changelog.md, example/pom.xml and the root pom, and one suspicious edit to the number-guessing-game pom the new brief tells it to justify or revert since housekeeping here is fenced to the unused testcontainers-rabbitmq line. Brief also adds two hard-won rules the first dispatch lacked: run builds in the FOREGROUND rather than backgrounding and expecting to resume, and commit-and-push early once one test passes so a stall cannot cost the work twice. PRIOR dispatch 2026-08-19T~20:2xZ as a worktree subagent (Sonnet) once U4 merged; #419 claimed with routing comment 5342352765 and the in-progress label, read back. Brief branches from origin/main with an explicit ancestor check on bf72e48d0 and carries the behaviour settled during U4's thirteen rounds rather than the issue's original assumptions, above all that the bridge consumes NOTHING during a catch-up replay so the overlap this example proves is held on the BROKER QUEUE rather than an in-memory buffer, which changes how the catch-up overlap test has to be written; also the ack matrix, the goLive versus catchUp distinction, the numeric extension restoration, the RabbitMQ ready-count trap for absence assertions, and the fence that housekeeping is only the unused testcontainers-rabbitmq line"
+    next_action: "DONE 2026-08-20T~11:4xZ. PR 868 CAS-merged as 63b9022eb pinned to 1052b2137 after a clean round-11 pass: Copilot reviewed all 17 files with no new comments, zero unresolved threads, all four runs green on the exact head. The one suppressed comment (the redelivery counter cannot distinguish bridge redelivery from a forwarder legal duplicate after a lost confirm) is a theoretical vacuity in an example-module test, below the silent-hazard bar, carried to U9. Eleven rounds total; the recurring class the PR kept teaching was count-based waits satisfiable by legal duplicates, closed at round 11 with identity-keyed distinctEventIdsOnQueue. Branch deleted on tip==pin"
     last_meaningful_progress_at: 2026-08-18T04:44:26Z
     observed: {}
     assessment: "Sonnet/medium chip. May add a shard paths entry for its subtree to an EXISTING shard; no 11th shard; no touching other shards. application.yaml rabbitmq config and native module basicPublish are out of remit."
   U8:
     issue: 421
     goal: "Held docs branch in occurrent-org.github.io: six mandated sub-topics incl. Kafka ordering; addedTags per new heading; merge-order registration; AGENTS.md:91 late-joiner check; news-post coordination with r34's docs/0.34.0-release-notes"
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U3, U4, U5, U6, U7]
     session: null
     deliverables:
-      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: "held docs branch, base and name fixed at dispatch", met: false, evidence: null}
-      - {check: manual_approval, ref: "review-clean, registered in the release merge order, rebased, addedTags present, late-joiner check done", met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: "docs/421-broker-modules, PR 74 stacked on docs/802-push-observation-hook", met: true, evidence: "head bd7db688c, delivery 2026-08-20T~20:4xZ"}
+      - {check: manual_approval, ref: "review-clean, registered in the release merge order, rebased, addedTags present, late-joiner check done", met: true, evidence: "round-5 review fully clean at af0bba2, merge order registered as docs issue 75, addedTags verified in delivery, late-joiner check run with the PR 72 finding routed as dec-0004, branch current on its base; DONE per the r34 held-branch precedent with Johan veto queued as dec-0005, the merge itself stays his release-day act"}
     blocking_on: []
-    next_action: "BASE IDENTIFIED AHEAD OF DISPATCH 2026-08-19T~08:0xZ by enumerating the docs repo: docs/802-push-observation-hook (held PR 69, 'Document the PushObserver hook on PushSubscriptionModel'), the only held branch documenting the push surface; the other four held branches are release notes, saga join removal, mongodb config keys and flow saga stepWindow, none of them push. U8 bases there, never docs main. MANDATORY EXTRA SCOPE, brk's own regression to repair: that branch documents PushObserver with the pre-U11 BOOLEAN contract, a lambda (cloudEvent, matched) -> { if (!matched) ... } plus prose about the match check and 'whether a subscription matched it', while the shipped interface after PR 850 is void observe(CloudEvent, RoutingOutcome) with DELIVERED, FILTERED and NOT_DELIVERABLE. The example does not compile against 0.34.0's own API and the branch is held for that very release, so U8 corrects it in the same branch it bases on, including the two reactor-side and feed-side paragraphs that lean on the boolean reading. r34 authored that branch but its epic is complete and its held PRs are Johan's release-day acts, so ownership sits with brk, which caused the break"
+    next_action: "none; DONE confirmed by Johan 2026-08-21 (dec-0005 ruled), docs PR 74 merges on release day in the issue 75 order. PR 72 news-post PushObserver sentence fixed at docs commit 6b08f00 (dec-0004 ruled and executed)"
     last_meaningful_progress_at: 2026-08-18T04:44:26Z
     observed: {}
     assessment: "Sonnet/medium chip. Depends on both transport tracks because the mandated scope includes Kafka partitioning/ordering, wider than the issue's explicit #414/#415/#419 line, deliberate. Docs-repo merges are Johan's. Maintainer declined community offers pending modules; that hold dissolves once U7 lands."
   U10:
     issue: 846
     goal: "Spring Boot auto-configuration for the broker modules: property-driven sinks and bridges for both transports, conditional-on-classpath split, starter conventions per #409/ADR 0072; extends the held docs branch with the starter wiring section, coordinated with U8"
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U4, U6]
     session: null
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
-      - {check: issue_closed, ref: 846, met: false, evidence: null}
+      - {check: pr_merged, ref: 882, met: true, evidence: "squash 3439e406d, CAS pin 5c22f4088 matched, tip==pin before branch delete"}
+      - {check: issue_closed, ref: 846, met: true, evidence: "auto-closed by the merge 2026-08-21"}
     blocking_on: []
-    next_action: "Dispatch after U4 and U6 merge"
+    next_action: "DONE 2026-08-21T~01:0xZ. PR 882 CAS-merged as 3439e406d pinned to 5c22f4088 after ten commits, eight review rounds and one adversarial verify whose finding (the domain sink silently shadowing a user-supplied CloudEventSink through a bean-name qualifier) was fixed, narrowed when the fix over-caught, and mutation-proven at the delegate level. The gating pass had zero unresolved threads and only the stale-.context repeat, declined under the recorded closeout disposition. Branch deleted on tip==pin"
     last_meaningful_progress_at: 2026-08-18T05:18:00Z
     observed: {}
     assessment: "Adopted on Johan's ruling at the U1 design gate 2026-08-18 (own issue, in the 0.34.0 milestone, adopted by an orchestrator). Sonnet/high chip. @RabbitSaga/@KafkaSaga stay out of scope, a later layer."
@@ -301,18 +285,59 @@ units:
     observed:
       main_red: {runs: "32169494047 (edd61341c) and 32170703373 (bf99724) both failure, misc shard both JDKs; 43af19f9f green before", via: "gh run list + run view, peer report from ayi verified", at: 2026-08-18T18:40:26Z}
     assessment: "Adopted under the epic's own authority: restoring green main is inside brk's definition of done, no scope widening. ayi merged its 851 under sibling-green leniency and holds an interest in this landing."
+  U15:
+    issue: null
+    goal: "Durable fence on the catch-up marker write on both stacks (dec-0018): a checkpoint save from a replay attempt that lost its subscription id must not be trusted after a process restart, closing the window PR 896 narrowed from always to across-a-restart. Plan gate first (CheckpointWriteCondition keyed by the attempt token, or a durable delete of a marker written after ownership was lost), then implement, ships in 0.34.0."
+    phase: DONE
+    health: UNKNOWN
+    swept: false
+    depends_on: []
+    session: "sharp-mirzakhani-1aa911-14 (local_d141f048)"
+    deliverables:
+      - {check: manual_approval, ref: "plan approved at the orchestrator plan gate before implementation", met: true, evidence: "dec-0020 approve with amendments: contract (a), D2 split, D3 second PR in unit, D4 bundled"}
+      - {check: pr_merged, ref: 897, met: true, evidence: "squash 74755df44, CAS pin e45d6b0 matched, branch deleted on tip match; 27/27 green, Copilot approval on the head after three rounds, Opus adversarial verify MERGE-SAFE with three mutations killed"}
+      - {check: pr_merged, ref: 910, met: true, evidence: "squash cacdc25b9, CAS pin e9be2b0 matched, branch deleted on tip match; Maven workflow concluded success on the exact head with 27 contexts, Copilot body read on the head (restates #893 item 32, non-loss), zero unresolved threads; Opus verify MERGE-SAFE on the code head after the lazy-lock loss fix was confirmed structurally and mutation (c) re-run; seven Copilot rounds bounded at the sixth, remainders #893 items 31 to 33", note: "second PR, blocking per-id ReentrantLock replacing the monitor held across the marker save"}
+    blocking_on: []
+    next_action: "DONE 2026-08-22T13:0xZ. Session sharp-mirzakhani-1aa911-14 to archive at epic closeout"
+    last_meaningful_progress_at: 2026-08-22T13:05:00Z
+  U16:
+    issue: 884
+    goal: "Fix #893 item 21: KafkaCloudEventBridgeTest.resolver_alone_falls_back_to_catchAllDestination_subscribing_by_pattern_for_the_per_type_resolver times out on one of two events under load (three CI sightings, latest main run 32565000813). Make the test wait on a signal from the bridge or consumer assignment rather than a fixed window, or fix the pattern-subscription readiness it exposes if the wait is not the cause. Test-only unless the investigation proves a production gap."
+    phase: DONE
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: 920, met: true, evidence: "squash cfee1477b, CAS pin ef65c4d matched, branch deleted on tip match, #884 closed; Maven workflow success on the head, Copilot approval, Sonnet verify MERGE-SAFE (wait is the AdminClient assignment signal on the bridge's own group, 10/10 both ways locally since the race needs CI load, reported honestly)"}
+    blocking_on: []
+    next_action: "DONE 2026-08-22T14:1xZ. Adjacent pre-existing cold-start gap (auto.offset.reset latest on a new group) filed as #893 item 34 for Johan's decision"
+    last_meaningful_progress_at: 2026-08-22T14:10:00Z
+  U17:
+    issue: 922
+    goal: "Decide whether RabbitMqCloudEventBridgeConnectionRecoveryTest.a_held_deferred_delivery_tag_across_a_forced_connection_recovery (four sightings, #893 items 17 and 30, latest rel34 PR 914 misc java-21) is a real race in PR 895's recovery path (loss-class, fix in brk), a test racing its own fixture (fix the test), or infrastructure. The test pins the held-tag-survives-recovery guarantee, so a flake note is not an acceptable end state."
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: manual_approval, ref: "verdict with evidence chain and pass counts, and the fix merged if the verdict is race or fixture", met: false}
+    blocking_on: []
+    next_action: "Opus worktree subagent investigating on origin/main since 2026-08-22T13:4xZ, adopted under the epic's own authority (brk wrote the code), rel34 informed. Tracking issue #922 (filed by a rel34 worker, milestone 0.34.0 set by brk), #893 items 17 and 30 point at it"
+    last_meaningful_progress_at: 2026-08-22T13:45:00Z
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
-    phase: PLANNED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U7, U8, U10, U12]
-    session: null
+    session: "ecstatic-dubinsky-bf9908-4e (local_621ec131), round 3 review; earlier friendly-meninsky-bcc054-06 for PR 889"
     deliverables:
-      - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
+      - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: true, evidence: "cap reached after round 3 (one loss-class finding fixed in PR 898 as 56c215729), remainders routed as the structured ask Johan ruled on as dec-0021 (#893 items 25 to 30 stay open); mechanical checklist run by a Sonnet subagent on main 2c7079739 with pasted output, all five PASS: release install emits jar, sources, javadoc and pom for all seven modules, required-test-images.sh warning-free listing rabbitmq:4.1 and apache/kafka:4.1.0, main run 32562338512 24/24 success with misc shards 9m35s and 9m12s as the only ones over 1.5x median, every cross-transport builder and starter asymmetry inherent (declareTopology, prefetchCount vs closeTimeout, commitRetryStrategy, bootstrapServers), #414 delivered in full"}
     blocking_on: []
-    next_action: "Run as orchestrator-integrated subagent rounds after U7 and U8"
-    last_meaningful_progress_at: 2026-08-18T04:44:26Z
+    next_action: "DONE 2026-08-22T11:0xZ. Sessions to archive at epic closeout: friendly-meninsky-bcc054-06 (PR 889 chip), ecstatic-dubinsky-bf9908-4e (round 3 review). Synthetic 999.999.999-brk-closeout artifacts purged from ~/.m2"
+    last_meaningful_progress_at: 2026-08-22T11:05:00Z
     observed: {}
     assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."

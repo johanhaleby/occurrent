@@ -708,12 +708,12 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                         "auto-commit advances the offset on a timer regardless of what this bridge decided, and a " +
                         "seek back after a delivery failure would still be committed past by it");
             }
+            Set<KafkaDestination> destinations = KafkaTopology.topicsToSubscribe(resolver, bindingFilter, bindings);
             Map<String, Object> config = new HashMap<>(consumerConfig);
             KafkaConsumer<String, byte[]> consumer = new KafkaConsumer<>(config, new StringDeserializer(), new ByteArrayDeserializer());
             KafkaDeliveryFailureAction failureAction = null;
             try {
                 failureAction = KafkaDeliveryFailureAction.create(consumerConfig, deliveryFailurePolicy, parkingDestination, log);
-                Set<KafkaDestination> destinations = KafkaTopology.topicsToSubscribe(resolver, bindingFilter, bindings);
                 KafkaTopology.subscribe(consumer, destinations);
                 KafkaDomainEventBridge<E> bridge = new KafkaDomainEventBridge<>(consumer, feed, pollTimeout, closeTimeout, commitRetryStrategy, failureAction, groupId.toString());
                 bridge.loopThread.start();

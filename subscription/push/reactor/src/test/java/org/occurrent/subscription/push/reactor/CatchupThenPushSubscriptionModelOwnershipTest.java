@@ -28,6 +28,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
@@ -323,15 +324,22 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
     }
 
     /**
-     * A cancel that lands while an attempt is already writing the catch-up-complete marker leaves a marker on
-     * disk that describes a history the id's next owner never read. The write cannot be called off, so the model
-     * records that it happened and the replacement reads its history rather than trusting what it finds.
+     * A marker is only ever written by an attempt that read the id's whole history and owned the id when the write
+     * began, so a replacement finds a marker that describes history somebody read, and skips reading it again. The
+     * same answer a restart gets, and that is the point. The model no longer says one thing to a replacement in
+     * this process and another to the first subscription after a restart, for the same durable state.
      * <p>
-     * Run with no in-memory shortcut, the marker really is written and really is read back, so nothing here
-     * depends on the model noticing the cancel in time.
+     * The cancel here arrives while the write is already running, and the write finishes anyway. That ordering is
+     * allowed rather than prevented, since what the marker claims was already true when the write began.
+     * <p>
+     * What this no longer proves, said plainly because it used to. An earlier version of this test asserted the
+     * opposite, that the replacement replays. That behaviour was process-local, since the record it rested on was a
+     * map this model loses on restart, so the marker was distrusted in process and trusted after a restart. This
+     * test is what would fail if that split came back. A caller that wants an id to read its history again deletes
+     * the checkpoint, which is the recovery ADR 116 already documents.
      */
     @Test
-    void a_marker_written_by_an_attempt_that_lost_the_id_does_not_make_the_replacement_skip_its_history() throws Exception {
+    void a_marker_written_by_an_attempt_that_owned_the_id_is_trusted_by_the_replacement() throws Exception {
         CountDownLatch saveEntered = new CountDownLatch(1);
         CountDownLatch releaseSave = new CountDownLatch(1);
         InMemoryCheckpointStorage backing = new InMemoryCheckpointStorage();
@@ -383,11 +391,14 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
         model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
                 ce -> Mono.fromRunnable(() -> replacementHandled.add(ce.getId())));
 
+        // Asserted through a live event rather than by waiting on an empty list, so a replacement that never got
+        // anywhere fails here instead of passing for the wrong reason.
+        feed.accept(cloudEvent("live")).block(Duration.ofSeconds(5));
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
                 assertThat(replacementHandled)
-                        .as("the marker on disk was written for a history this subscription never received, so it "
-                                + "reads that history rather than skipping it")
-                        .containsExactly("1", "2"));
+                        .as("the marker says this id's history has been read, so the replacement goes straight live "
+                                + "rather than reading it again")
+                        .containsExactly("live"));
     }
 
     /**
@@ -603,6 +614,92 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
                 return true;
             }
         };
+    }
+
+    /**
+     * The invariant every later attempt's trust rests on. An attempt that lost the id writes no marker at all.
+     * <p>
+     * The window is narrow and nothing outside the model reaches it, so the cancel is parked inside the handler for
+     * the last replayed event. By the time that handler returns there is no event left for {@code keepReplaying()}
+     * to be asked about, so the attempt runs on to its marker step having lost the id, which is the only ordering
+     * that puts a cancel between the end of the history and the write.
+     */
+    @Test
+    void an_attempt_that_lost_the_id_between_its_last_event_and_its_marker_step_writes_no_marker() throws Exception {
+        CountDownLatch lastEventReached = new CountDownLatch(1);
+        CountDownLatch cancelled = new CountDownLatch(1);
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1"), cloudEvent("2")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
+
+        List<String> handled = new CopyOnWriteArrayList<>();
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
+            if (ce.getId().equals("2")) {
+                lastEventReached.countDown();
+                awaitLatch(cancelled);
+            }
+            // Recorded after the wait rather than before it, so the list only names events whose handler has
+            // actually returned and the assertion below cannot read "2" while its handler is still parked.
+            handled.add(ce.getId());
+        }));
+
+        assertThat(lastEventReached.await(5, TimeUnit.SECONDS))
+                .as("the attempt is inside the handler for the last event of its history")
+                .isTrue();
+        model.cancelSubscription("sub");
+        cancelled.countDown();
+
+        // Waited on rather than sampled after a quiet period. This completes once the attempt has run its marker
+        // step and finished, so the assertion below reads storage at a point where a write, if the ownership check
+        // allowed one, has already been made.
+        subscription.waitUntilStarted().block(Duration.ofSeconds(10));
+
+        assertThat(handled)
+                .as("the attempt read its whole history before it lost the id")
+                .containsExactly("1", "2");
+        assertThat(marker.read("sub").hasElement().block())
+                .as("the id was gone by the marker step, so nothing was written for it")
+                .isFalse();
+    }
+
+    /**
+     * The reactor twin of the blocking model's own
+     * {@code a_stop_arriving_after_the_last_replayed_event_leaves_nothing_marked}, and the reason the marker step
+     * asks about the stop at all rather than only about ownership.
+     * <p>
+     * The replay is asked whether to keep going before every event and never after the last one. The blocking
+     * handover re-asks right before the write for exactly that reason. The reactor pipeline has no such re-ask, so
+     * without the question being asked at the marker step a stop arriving in that gap reached the write, and this
+     * stack alone marked a subscription that {@code stop()} documents as having marked nothing.
+     */
+    @Test
+    void a_stop_arriving_after_the_last_replayed_event_leaves_nothing_marked() throws Exception {
+        CountDownLatch lastEventReached = new CountDownLatch(1);
+        CountDownLatch stopped = new CountDownLatch(1);
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(() -> Flux.just(cloudEvent("1"))), feed, marker);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
+            lastEventReached.countDown();
+            awaitLatch(stopped);
+        }));
+
+        assertThat(lastEventReached.await(10, TimeUnit.SECONDS))
+                .as("the attempt is inside the handler for the last event of its history")
+                .isTrue();
+        model.stop();
+        stopped.countDown();
+
+        subscription.waitUntilStarted().block(Duration.ofSeconds(10));
+
+        assertThat(marker.read("sub").hasElement().block())
+                .as("a stop means nothing was marked, whether it arrives during the history or in the gap after "
+                        + "the last event of it, the same answer the blocking stack gives")
+                .isFalse();
     }
 
     private static CloudEvent cloudEvent(String id) {

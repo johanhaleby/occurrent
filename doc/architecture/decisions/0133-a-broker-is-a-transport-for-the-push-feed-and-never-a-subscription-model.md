@@ -147,8 +147,8 @@ The bridge knows which id to ask about because ADR 90 gives it exactly one.
 What remains is that a stopped model drops live events, which ADR 85 decided and ADR 104 deliberately kept, on the
 grounds that a stop is an operator act with a `start()` on the other side. A bridge stops consuming when its
 subscription stops, checked on a coarse poll rather than before every message, so it mostly does not feed a stopped
-model, not never: a `stop()` or `pauseSubscription(...)` called from inside a handler can still hand a bridge a
-`NOT_DELIVERABLE` for a message already in flight before the next poll notices. The 2026-08-21 amendment's
+model, not never: a `stop()` or `pauseSubscription(...)` called from inside a handler can still hand a bridge an
+`UNAVAILABLE` for a message already in flight before the next poll notices. The 2026-08-21 amendment's
 follow-up note below covers what a bridge does with that message. This ADR inherits ADR 85 and ADR 104's decision
 rather than accepting a new loss of its own.
 
@@ -736,8 +736,8 @@ Shipping topic-per-type as the default and correcting it later is a breaking beh
 that has already created per-type topics and pointed consumers at them, since undoing it is a topology migration,
 not a code change on top of the same data.
 
-Johan delegated the choice with "do what's best long-term according to the principles of `AGENTS.md`," and the
-derivation above is that ruling. `KafkaSharedTopicDestinationResolver` is the new shipped default.
+I asked for whatever is best long-term according to the principles of `AGENTS.md`, and the derivation above is that
+answer. `KafkaSharedTopicDestinationResolver` is the new shipped default.
 `KafkaCloudEventSink` and `KafkaDomainEventSink`'s own documentation leads with it. It publishes every event to
 one topic given to its constructor, no default name invented, the same reasoning this decision already gives for
 refusing a parking bridge with no `parkingDestination` of its own, that a default destination name is precisely
@@ -1032,3 +1032,94 @@ spec, so a second thread offering at the same time is rejected rather than corru
 reported as an overflow, with the advice to rebuild the read model offline. It is retried briefly instead, since
 the claim clears as soon as the thread holding it finishes its own offer. A failure in the live phase also logs at
 error now, because the catch-up signal has already completed by then and nothing else tells anyone.
+
+## Amendment (2026-08-22): a catch-up marker means the id's history has been read, and every later attempt trusts it
+
+The marker `CatchupThenPushSubscriptionModel` writes when a catch-up finishes had two meanings at once, and they
+disagreed.
+
+Across a restart it meant what its constructor documentation says, that this subscription id has read its history
+and the next process can skip it. In one process it meant something narrower. A replacement attempt taking an id
+whose previous attempt was still writing its marker distrusted that marker and read the whole history again. That
+distrust rested on a map this model keeps in memory, so it did not survive a restart. Same durable state, two
+different answers, decided by whether the process happened to stay up.
+
+Closing that by making the distrust durable is not available. A checkpoint write can only be refused against
+something already stored, and the losing case starts with nothing stored at all. An attempt reads the whole
+history, loses the id to a cancel, and its write reaches an empty storage, which `notOlderThan` and `ifAbsent`
+both accept by design (ADR 116). For a condition to refuse it, the replacement would have to record a
+version first, and the replacement does not exist yet when that write is already in flight. Recording one at the
+start of every attempt needs a way to store a version without storing a checkpoint, which no `CheckpointStorage`
+offers, and `delete` clears the version along with the checkpoint rather than raising it. So the fence would be a
+new durable claim operation on both `CheckpointStorage` interfaces, in every implementation, with
+`cancelSubscription` making a store call it can fail. That is a lot of public surface for one window, and it buys
+an answer the marker was never asked for.
+
+**So the per-id meaning is the only meaning.** A marker is written only by an attempt that read the whole history
+and still owned the id when the write began, and a marker that is there is trusted by every later attempt, in this
+process and after a restart.
+
+Two things already made the first half true and stay as they are. The replay stops at its next event once the id
+moves, so an attempt that loses the id part way through never reaches the marker step. And the marker step asks
+whether it still owns the id before it writes, so an attempt that lost the id between its last event and that step
+writes nothing. The blocking model asks and writes under one monitor, which is why a cancel there waits for the
+write rather than racing it. The reactor model asks the same question and then writes outside the monitor, because
+a checkpoint store can take as long as it likes and every lifecycle call on that model takes the same monitor. A
+cancel landing during that write no longer needs to stop it, since what the write claims is true whatever happens
+next.
+
+What goes is the reactor model's record of which attempt was writing a marker, and the distrust that read it.
+
+A caller that wants an id to read its history again deletes its checkpoint, which is the recovery ADR 116 already
+documents for a subscription that must start over. That is now the only way to ask for it, in process as well as
+after a restart, rather than a cancel and a fresh subscribe sometimes meaning the same thing.
+
+Two things about that write turned out to need saying, both found while implementing the amendment above.
+
+**The write no longer holds the model monitor.** The blocking model asked its ownership question and wrote the
+marker inside one `synchronized` step on the model itself, which is what made the answer and the write one step.
+It also meant a checkpoint store that took seconds to answer held every other lifecycle call on that model for as
+long as the write ran, and the replay runs on a virtual thread, so blocking inside `synchronized` held the platform
+thread underneath it too. ADR 131 decided that same tradeoff the other way for the catch-up models, and the same
+reasoning applies here. The ownership question and the write now happen under a lock for that subscription id.
+`cancelSubscription` and `subscribe` take the same lock, since those are the two calls that move an id out from
+under a write, so the atomicity is unchanged. `stop`, `start`, `pause` and `resume` do not, so they no longer wait
+for a store, with one exception. A `cancelSubscription` for the same id waits for the write by design, and it is
+holding the model monitor while it does, so a lifecycle call arriving behind such a cancel waits for that store
+call after all. Removing that too means taking the per-id lock before the monitored section rather than inside it,
+in both `cancelSubscription` and `subscribe`, which is recorded on
+[#893](https://github.com/johanhaleby/occurrent/issues/893) rather than done here. The model monitor is always taken before that lock and never after it, which is what keeps the two
+from deadlocking.
+
+A registration is the only thing that creates a lock. `launchReplay` makes it under the same monitor that
+publishes the id and before it publishes it, so a cancel for a registered id always finds one, and the write takes
+only that lock and never the monitor. Creating it at the first write instead does not work, and it is worth writing down
+why, because it looks like it should. A lifecycle call that finds no lock runs its work without one, and a
+`ConcurrentHashMap` get can return null while a `computeIfAbsent` for that key is still in flight, so a cancel can
+read no lock, run its removal unlocked, and return while the write it should have waited for is starting. That one
+is a loss rather than an untidiness, through the recovery this model documents. The cancel returns, the caller
+deletes the checkpoint to force a replay, and the write nobody waited for puts a marker back, so the next
+subscription skips its history. Creating the lock at registration is what makes a missing lock proof that the id
+was never registered, which is the reading the unlocked branch depends on, and it is what ADR 131 does. A
+lifecycle call still takes a lock only if it finds one, so an id this model never registered, an arbitrary one
+passed to `cancelSubscription` for instance, adds nothing to the registry.
+
+**A stop refuses a marker write that has not started, and cannot refuse one that has.** The replay is asked
+whether to keep going before every event and never after the last one, so a stop arriving after that reaches the
+marker step with the replay already finished. `BlockingHandover` asks once more right before it hands over, which
+covers the gap after the last event, and the ownership question the amendment above introduced asks only who owns
+the id. Both marker steps now ask whether the model is stopped as well.
+
+That is as far as a stop can reach, and `stop()` says so on both stacks rather than promising more. A write that
+has already begun is not called off, because calling it off would mean either waiting for a checkpoint store
+inside `stop()`, which is what taking the write off the monitor exists to avoid, or abandoning a store call whose
+outcome nobody can then know. Such a marker stands, and it is entitled to, since the attempt that made it had
+read the whole history and held the id when it began, which is all a marker claims.
+
+Each stack ends up somewhere different, because the two order the write differently against the drain of the
+events buffered during the replay. The blocking handover drains and then writes, so a stop arriving during the drain is
+refused. The reactive one writes and then drains, so by the time a buffered event is being delivered its marker is
+already written and there is nothing left to refuse. Neither is wrong under the contract above, but they are not
+the same answer, and the reactive ordering is recorded on [#893](https://github.com/johanhaleby/occurrent/issues/893)
+rather than changed here, since moving that write past the drain rearranges the pipeline rather than
+changing this one step.
