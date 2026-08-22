@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 25
-updated_at: '2026-08-22T13:20:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (all ten dispatched units have PRs, brk
-  down to PR 920)
+revision: 26
+updated_at: '2026-08-22T13:50:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U9 merged, the release's breaking change
+  is in)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -545,7 +545,7 @@ units:
     goal: 'A non-final concrete declared event class is refused at registration rather than silently missing
       its subclasses. Breaking change: changelog breaking-change entry, an upgrading-to-0.34.0 section
       it links, and a recipe decision.'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -553,15 +553,23 @@ units:
     deliverables:
     - check: pr_merged
       ref: 913
-      met: false
-      evidence: ''
+      met: true
+      evidence: 'CAS-MERGED pinned to 8e33688de, squash a86909f5d. Adversarial pass HELD against that
+        exact head: enums with constant bodies (implicitly sealed per JLS 8.9), Kotlin object, sealed
+        class with companion, sealed-with-zero-subtypes, arrays, primitives, and crucially NO previously-working
+        final, record, enum or data-class declaration is now refused, which was the false-positive risk
+        that would have been worse than the bug. It also verified the migration guide names the one genuinely
+        regressed caller. MERGED with Copilot''s reviews on OLDER heads, deliberately: the delta since
+        the last review is prose and comments only, no executable code, and the adversarial pass ran against
+        the CURRENT head and verified precisely the corrected claim. That is the distinction from PR 900,
+        where re-review WAS required because nothing independent had checked the correction.'
     - check: issue_closed
       ref: 753
-      met: false
-      evidence: ''
+      met: true
+      evidence: '#753 CLOSED by the merge, verified.'
     blocking_on: []
-    next_action: 22 checks pending; then the four-fact gate plus an adversarial pass
-    last_meaningful_progress_at: '2026-08-22T10:25:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T13:50:00+00:00'
     observed:
       adr_immutability:
         note: 'COMPLIANT, verified against the tag rather than assumed. ADR 0124 IS in the occurrent-0.33.0
@@ -573,6 +581,15 @@ units:
           stayed invisible, and that this is what changed.'
         via: git ls-tree occurrent-0.33.0 plus diff inspection
         at: '2026-08-22T10:25:00+00:00'
+      surface_timing:
+        note: 'The pass established that refusal TIMING is not uniform across the six registration surfaces:
+          a saga throws at build(), the Spring registrars at bean processing, ProjectionRunner and DomainEventFeed
+          at the call that starts the subscription, DomainEventQueries per query, the DSL when the subscription
+          filter is built. None defers to actual delivery. The changelog and migration guide DISCLOSE
+          this explicitly rather than claiming uniform registration-time refusal, which is why it is not
+          a finding.'
+        via: adversarial verify subagent
+        at: '2026-08-22T13:50:00+00:00'
     assessment: 'Decided IN 0.34.0 by the orchestrator on Johan''s conditional delegation at the triage
       sweep, derivation recorded in ORCHESTRATOR.md. Do not re-ask. Reachability is low (records and Kotlin
       data classes are implicitly final) but the failure is silent event loss with no log or exception,
