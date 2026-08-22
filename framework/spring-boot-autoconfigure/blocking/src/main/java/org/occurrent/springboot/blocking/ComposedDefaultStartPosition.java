@@ -19,6 +19,7 @@ package org.occurrent.springboot.blocking;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
+import org.springframework.aop.framework.AopProxyUtils;
 
 import static java.util.Objects.requireNonNull;
 
@@ -30,9 +31,9 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * The fact is bound to the composed model's identity, not just recorded as a context-wide flag. The starter also
  * lets {@code Subscriptions}, {@code StreamSubscriptions} and {@code DcbSubscriptions} be replaced independently of
- * the model {@link #suppliedBy(Object)} was given, so a projection running on a replacement composition of its own,
+ * the model {@link #suppliedBy(SubscriptionModelCapability)} was given, so a projection running on a replacement composition of its own,
  * one whose {@code DEFAULT} genuinely replays, must not inherit this fact. {@link #isDefaultKnownLiveOnlyFor(SubscriptionModelCapability)}
- * only answers true for the exact model {@link #suppliedBy(Object)} was given.
+ * only answers true for the exact model {@link #suppliedBy(SubscriptionModelCapability)} was given.
  * <p>
  * The blocking stack's equivalent of the reactor stack's {@code ComposedCatchupModel}, mirroring its
  * {@code suppliedBy}/{@code defaultBypassesCatchup} split rather than its full replay-phase machinery. This stack's
@@ -46,17 +47,24 @@ import static java.util.Objects.requireNonNull;
 public final class ComposedDefaultStartPosition {
 
     private volatile boolean defaultBypassesCatchup = false;
-    private volatile @Nullable Object composedModel;
+    private volatile @Nullable SubscriptionModelCapability composedModel;
 
     /**
      * Supplies the composed subscription model {@link #isDefaultKnownLiveOnlyFor(SubscriptionModelCapability)}
      * later compares a projection's own model against, by reference rather than by type or capability, since two
-     * different compositions can both expose {@code ReplayAwareSubscriptions}. Called at most once, by the same
-     * auto-configuration bean method that calls {@link #defaultBypassesCatchup()}, since only it knows both facts
-     * about the model it just composed.
+     * different compositions can both expose {@code ReplayAwareSubscriptions}. Unwrapped to its ultimate AOP target
+     * first (a fixed-singleton proxy only), since a projection's own capability lookup can see either the raw bean
+     * this method was given or a proxy Spring wraps around it afterwards ({@code @Transactional}, a metrics or retry
+     * aspect, any {@code BeanPostProcessor}), and the two would otherwise never compare equal. Called at most once,
+     * by the same auto-configuration bean method that calls {@link #defaultBypassesCatchup()}, since only it knows
+     * both facts about the model it just composed.
      */
-    public void suppliedBy(Object composedModel) {
-        this.composedModel = requireNonNull(composedModel, "composedModel cannot be null");
+    public void suppliedBy(SubscriptionModelCapability composedModel) {
+        requireNonNull(composedModel, "composedModel cannot be null");
+        if (this.composedModel != null) {
+            throw new IllegalStateException("suppliedBy was already called once for this holder, it must not be called a second time.");
+        }
+        this.composedModel = ultimateTarget(composedModel);
     }
 
     /**
@@ -72,13 +80,29 @@ public final class ComposedDefaultStartPosition {
 
     /**
      * Whether {@code candidate}, the model a particular projection actually runs on, is the exact composition
-     * {@link #suppliedBy(Object)} was given and {@link #defaultBypassesCatchup()} was recorded for. {@code false}
-     * until both were called, and {@code false} for any composition that is not that same instance, including one
-     * an application supplied itself by replacing {@code Subscriptions}, {@code StreamSubscriptions} or
-     * {@code DcbSubscriptions} independently of the model this holder was told about. A warning keyed on this
-     * answers honestly rather than by inferring composition-specific behavior it cannot verify.
+     * {@link #suppliedBy(SubscriptionModelCapability)} was given and {@link #defaultBypassesCatchup()} was recorded
+     * for. {@code false} until both were called, and {@code false} for any composition that is not that same
+     * instance, including one an application supplied itself by replacing {@code Subscriptions},
+     * {@code StreamSubscriptions} or {@code DcbSubscriptions} independently of the model this holder was told about.
+     * {@code candidate} is unwrapped to its ultimate AOP target first, the same way {@link #suppliedBy} already
+     * unwraps what it is given, so a proxy around either side still compares equal to the raw target the other side
+     * holds. A warning keyed on this answers honestly rather than by inferring composition-specific behavior it
+     * cannot verify.
      */
     public boolean isDefaultKnownLiveOnlyFor(@Nullable SubscriptionModelCapability candidate) {
-        return defaultBypassesCatchup && candidate != null && candidate == composedModel;
+        return defaultBypassesCatchup && candidate != null && ultimateTarget(candidate) == composedModel;
+    }
+
+    // Unwraps through any number of nested AOP proxies to the innermost fixed target (AopProxyUtils.getSingletonTarget
+    // stops at one layer, hence the loop), mirroring SubscriptionAnnotations.ultimateTarget. Returns model itself when
+    // it is not a proxy, or when a proxy's TargetSource is not a fixed singleton, so a prototype- or pool-scoped
+    // source is compared as the proxy it is rather than risking a side-effecting getTarget() call.
+    private static SubscriptionModelCapability ultimateTarget(SubscriptionModelCapability model) {
+        Object current = model;
+        Object next;
+        while ((next = AopProxyUtils.getSingletonTarget(current)) != null) {
+            current = next;
+        }
+        return (SubscriptionModelCapability) current;
     }
 }
