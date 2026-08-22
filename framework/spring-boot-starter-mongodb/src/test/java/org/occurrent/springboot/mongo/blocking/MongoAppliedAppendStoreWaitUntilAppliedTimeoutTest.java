@@ -44,10 +44,10 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@link MongoAppliedAppendStore#waitUntilApplied(String, AppendId, Duration)} promises to return {@code false} once
- * {@code timeout} elapses. The store's read is wrapped in a {@link RetryStrategy} that, left to its own default,
- * retries forever, so a wait against a store that never stops failing must stop that retry at its own deadline
- * itself rather than let it keep going on the store's own schedule. No Testcontainers needed, a mocked
- * {@link MongoOperations} whose read always throws is enough to force the sustained-outage path.
+ * {@code timeout} elapses. The store's read is wrapped in a {@link RetryStrategy} whose own attempts take about half
+ * a minute by default and can be configured to take far longer, so a wait against a store that never stops failing
+ * must stop that retry at its own deadline rather than let it run its attempts out. No Testcontainers needed, a
+ * mocked {@link MongoOperations} whose read always throws is enough to force the sustained-outage path.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 @Timeout(10)
@@ -164,5 +164,32 @@ class MongoAppliedAppendStoreWaitUntilAppliedTimeoutTest {
         assertThat(applied).isFalse();
         assertThat(elapsed).isGreaterThanOrEqualTo(timeout.minusMillis(50));
         assertThat(elapsed).isLessThan(timeout.plusSeconds(2));
+    }
+
+    /**
+     * The bound this store documents, written down as a test rather than only as prose. The deadline is checked
+     * between reads, so a read already in flight when it passes runs to completion and the wait returns after it.
+     * A MongoDB client with no timeout of its own never completes that read while a connection it has accepted
+     * stops responding, which is why the javadoc tells an application to configure one.
+     */
+    @Test
+    void a_read_that_stops_responding_holds_the_wait_past_its_deadline_which_is_why_the_client_needs_a_timeout_of_its_own() {
+        Duration stall = Duration.ofSeconds(2);
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
+        when(mongoOperations.exists(any(Query.class), anyString())).thenAnswer(invocation -> {
+            Thread.sleep(stall.toMillis());
+            return false;
+        });
+        RetryStrategy oneAttempt = RetryStrategy.retry().backoff(Backoff.fixed(5)).maxAttempts(1);
+        AppliedAppendStore store = new MongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7), oneAttempt, Backoff.fixed(20));
+        Duration timeout = Duration.ofMillis(50);
+
+        Instant start = Instant.now();
+        boolean applied = store.waitUntilApplied("orders", AppendId.mint(), timeout);
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(applied).isFalse();
+        assertThat(elapsed).isGreaterThanOrEqualTo(stall);
     }
 }

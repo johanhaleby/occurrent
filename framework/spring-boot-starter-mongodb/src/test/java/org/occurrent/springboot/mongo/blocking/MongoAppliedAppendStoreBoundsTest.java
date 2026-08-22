@@ -150,6 +150,27 @@ class MongoAppliedAppendStoreBoundsTest {
                 .hasMessageContaining("collection cannot be blank");
     }
 
+    /**
+     * Runs the retry this store ships with, only with its backoff swapped for a fast one, so the number of calls it
+     * makes to an unreachable store is the shipped number rather than one the test chose. Left with no limit, as
+     * this default once was, the call never returns and the class timeout is what ends it.
+     */
+    @Test
+    void the_shipped_default_stops_calling_an_unreachable_store_after_the_number_of_attempts_it_documents() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
+        when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
+                .thenThrow(new RuntimeException("store outage"));
+        RetryStrategy shippedLimit = MongoAppliedAppendStore.defaultRetryStrategy().backoff(Backoff.fixed(1));
+        AppliedAppendStore store = storeWith(mongoOperations, shippedLimit);
+
+        assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
+                .isInstanceOf(RuntimeException.class);
+
+        verify(mongoOperations, times(MongoAppliedAppendStore.DEFAULT_MAX_ATTEMPTS))
+                .upsert(any(Query.class), any(UpdateDefinition.class), anyString());
+    }
+
     @Test
     void the_attempt_limit_an_application_configures_defaults_to_the_one_this_store_documents() {
         OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =

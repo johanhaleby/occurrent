@@ -276,7 +276,11 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
         shutdown = true;
     }
 
-    private static RetryStrategy defaultRetryStrategy() {
+    /**
+     * Package-private and returning {@link RetryStrategy.Retry} so a test can swap the backoff for a fast one and
+     * still exercise the attempt limit this store actually ships with.
+     */
+    static RetryStrategy.Retry defaultRetryStrategy() {
         return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).maxAttempts(DEFAULT_MAX_ATTEMPTS);
     }
 
