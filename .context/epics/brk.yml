@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 159
+revision: 160
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -295,11 +295,11 @@ units:
     session: "sharp-mirzakhani-1aa911-14 (local_d141f048)"
     deliverables:
       - {check: manual_approval, ref: "plan approved at the orchestrator plan gate before implementation", met: true, evidence: "dec-0020 approve with amendments: contract (a), D2 split, D3 second PR in unit, D4 bundled"}
-      - {check: pr_merged, ref: null, met: false}
+      - {check: pr_merged, ref: 897, met: true, evidence: "squash 74755df44, CAS pin e45d6b0 matched, branch deleted on tip match; 27/27 green, Copilot approval on the head after three rounds, Opus adversarial verify MERGE-SAFE with three mutations killed"}
       - {check: pr_merged, ref: null, met: false, note: "second PR, blocking per-id ReentrantLock replacing the monitor held across the marker save"}
     blocking_on: []
-    next_action: "dispatch as a chip (Attended), plan-first brief, base origin/main at 65041b387 or later"
-    last_meaningful_progress_at: 2026-08-22T06:30:00Z
+    next_action: "PR 897 merged 2026-08-22T08:3xZ. PR 2 (blocking per-id ReentrantLock replacing the monitor held across the marker save, plus the reactor stop() javadoc window) plan requested from the U15 session, plan gate at the orchestrator"
+    last_meaningful_progress_at: 2026-08-22T08:35:00Z
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
