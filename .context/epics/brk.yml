@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 163
+revision: 164
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -300,6 +300,19 @@ units:
     blocking_on: []
     next_action: "PR 910 (U15 PR 2, blocking per-id lock for the marker save, reactive stop-gap refusal per dec-0023) open at 61c5aa1, CI running, Copilot requested, Opus adversarial verify running. Merge on MERGE-SAFE plus gate facts"
     last_meaningful_progress_at: 2026-08-22T08:35:00Z
+  U16:
+    issue: 893
+    goal: "Fix #893 item 21: KafkaCloudEventBridgeTest.resolver_alone_falls_back_to_catchAllDestination_subscribing_by_pattern_for_the_per_type_resolver times out on one of two events under load (three CI sightings, latest main run 32565000813). Make the test wait on a signal from the bridge or consumer assignment rather than a fixed window, or fix the pattern-subscription readiness it exposes if the wait is not the cause. Test-only unless the investigation proves a production gap."
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false}
+    blocking_on: []
+    next_action: "dispatched 2026-08-22T12:0xZ as a Sonnet worktree subagent off origin/main, dec-0024"
+    last_meaningful_progress_at: 2026-08-22T12:00:00Z
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
