@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 162
+revision: 163
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -303,15 +303,15 @@ units:
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U7, U8, U10, U12]
     session: "ecstatic-dubinsky-bf9908-4e (local_621ec131), round 3 review; earlier friendly-meninsky-bcc054-06 for PR 889"
     deliverables:
-      - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
+      - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: true, evidence: "cap reached after round 3 (one loss-class finding fixed in PR 898 as 56c215729), remainders routed as the structured ask Johan ruled on as dec-0021 (#893 items 25 to 30 stay open); mechanical checklist run by a Sonnet subagent on main 2c7079739 with pasted output, all five PASS: release install emits jar, sources, javadoc and pom for all seven modules, required-test-images.sh warning-free listing rabbitmq:4.1 and apache/kafka:4.1.0, main run 32562338512 24/24 success with misc shards 9m35s and 9m12s as the only ones over 1.5x median, every cross-transport builder and starter asymmetry inherent (declareTopology, prefetchCount vs closeTimeout, commitRetryStrategy, bootstrapServers), #414 delivered in full"}
     blocking_on: []
-    next_action: "CARRY PR 898 MERGED 2026-08-22T10:3xZ as 56c215729 (CAS pin 7fe1284, branch deleted): empty-bindings loss fix on all four bridges with validation before any channel or consumer opens, #893 items 16 and 24, stale 896 prose, stray .plan file; Copilot approval on the head after five rounds, Sonnet verify MERGE-SAFE on 8a90f30 plus orchestrator read of the later delta. Per dec-0021 U9 closes when the mechanical checklist in the goal runs green on main at or after 56c215729. NEXT: dispatch the checklist as a Sonnet worktree subagent, then set U9 DONE with evidence"
-    last_meaningful_progress_at: 2026-08-22T10:35:00Z
+    next_action: "DONE 2026-08-22T11:0xZ. Sessions to archive at epic closeout: friendly-meninsky-bcc054-06 (PR 889 chip), ecstatic-dubinsky-bf9908-4e (round 3 review). Synthetic 999.999.999-brk-closeout artifacts purged from ~/.m2"
+    last_meaningful_progress_at: 2026-08-22T11:05:00Z
     observed: {}
     assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."
