@@ -387,49 +387,69 @@ public final class ReactiveHandover<T> {
     }
 
     private void drainPendingOffers() {
-        // One drain at a time. A caller that finds one already running has left its own offer on the queue, and
-        // that drain picks it up, so this returns rather than waiting.
-        if (!offerDrainRunning.compareAndSet(false, true)) {
-            return;
+        while (true) {
+            // One drain at a time. A caller that finds one already running has left its own offer on the queue,
+            // and the drain that is running re-checks the queue after it releases, below, so that offer is never
+            // left with nobody to take it.
+            if (!offerDrainRunning.compareAndSet(false, true)) {
+                return;
+            }
+            boolean headWaitingOnSink;
+            try {
+                headWaitingOnSink = takeQueuedOffersToTheSink();
+            } finally {
+                offerDrainRunning.set(false);
+            }
+            if (headWaitingOnSink) {
+                // Scheduled after releasing, never before. Scheduling first leaves a window where the retry runs,
+                // finds this drain still holding, and returns, with this drain about to release and go home.
+                Schedulers.parallel().schedule(this::drainPendingOffers,
+                        CONCURRENT_EMISSION_RETRY_DELAY.toNanos(), TimeUnit.NANOSECONDS);
+                return;
+            }
+            // An offer that arrived while this drain held the flag saw it set and returned, so look again before
+            // leaving rather than letting its acknowledgement wait for a caller that never comes.
+            if (pendingOffers.isEmpty()) {
+                return;
+            }
         }
-        try {
-            while (true) {
-                PendingOffer pending = pendingOffers.peek();
-                if (pending == null) {
-                    return;
+    }
+
+    // Takes the queue to the sink in order, oldest first. Returns true when it stopped because the head could not
+    // be handed over yet and is waiting for another attempt, false when it emptied the queue.
+    private boolean takeQueuedOffersToTheSink() {
+        while (true) {
+            PendingOffer pending = pendingOffers.peek();
+            if (pending == null) {
+                return false;
+            }
+            Sinks.EmitResult result = liveSink.tryEmitNext(pending.item());
+            if (!result.isFailure()) {
+                pendingOffers.poll();
+                continue;
+            }
+            switch (result) {
+                case FAIL_NON_SERIALIZED -> {
+                    if (System.nanoTime() >= pending.deadline()) {
+                        pendingOffers.poll();
+                        pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
+                        continue;
+                    }
+                    // Left at the head, so whatever runs next starts with it and the order holds.
+                    return true;
                 }
-                Sinks.EmitResult result = liveSink.tryEmitNext(pending.item());
-                if (!result.isFailure()) {
+                // The pipeline is gone, so nothing is coming to deliver this payload. Dropped rather than
+                // refused, the same answer the stopped check above gives. Also defence rather than a reachable
+                // path, since that check runs first and catches every way the pipeline ends today.
+                case FAIL_TERMINATED, FAIL_CANCELLED -> {
                     pendingOffers.poll();
-                    continue;
+                    pending.ack().success(false);
                 }
-                switch (result) {
-                    case FAIL_NON_SERIALIZED -> {
-                        if (System.nanoTime() >= pending.deadline()) {
-                            pendingOffers.poll();
-                            pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
-                            continue;
-                        }
-                        // Left at the head, so whatever runs next starts with it and the order holds.
-                        Schedulers.parallel().schedule(this::drainPendingOffers,
-                                CONCURRENT_EMISSION_RETRY_DELAY.toNanos(), TimeUnit.NANOSECONDS);
-                        return;
-                    }
-                    // The pipeline is gone, so nothing is coming to deliver this payload. Dropped rather than
-                    // refused, the same answer the stopped check above gives. Also defence rather than a reachable
-                    // path, since that check runs first and catches every way the pipeline ends today.
-                    case FAIL_TERMINATED, FAIL_CANCELLED -> {
-                        pendingOffers.poll();
-                        pending.ack().success(false);
-                    }
-                    default -> {
-                        pendingOffers.poll();
-                        pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
-                    }
+                default -> {
+                    pendingOffers.poll();
+                    pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
                 }
             }
-        } finally {
-            offerDrainRunning.set(false);
         }
     }
 

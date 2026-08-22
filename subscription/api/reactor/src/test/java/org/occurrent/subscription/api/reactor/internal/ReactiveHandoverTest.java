@@ -382,6 +382,58 @@ class ReactiveHandoverTest {
                         .hasMessageContaining("Catch-up failed"));
     }
 
+    /**
+     * Every acknowledgement completes even when offers keep arriving while a drain is running. An offer that
+     * arrives then sees a drain already in progress and returns without doing anything itself, so the drain has to
+     * look at the queue again after it releases. If it does not, that offer's acknowledgement waits for a caller
+     * that is never coming.
+     * <p>
+     * This covers acknowledgement under contention, not that re-check on its own. Removing the re-check leaves
+     * this green, because the window it closes is the few instructions between the drain's last look at an empty
+     * queue and it letting go, which no amount of offers reaches reliably.
+     */
+    @Test
+    void an_offer_that_arrives_while_a_drain_is_running_still_gets_its_acknowledgement() throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String> handover = ReactiveHandover.create(
+                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> payload,
+                CatchupThenLiveOptions.defaults(), "test payload");
+        StepVerifier.create(handover.catchUp(source(List.of(), false))).expectNext(true).verifyComplete();
+
+        // Many producers offering at once is what puts offers in the queue while somebody else is draining it,
+        // which is the window the acknowledgement can be lost in.
+        int producers = 6;
+        int perProducer = 200;
+        CountDownLatch acknowledged = new CountDownLatch(producers * perProducer);
+        List<Throwable> failures = new CopyOnWriteArrayList<>();
+        CountDownLatch start = new CountDownLatch(1);
+        for (int producer = 0; producer < producers; producer++) {
+            int id = producer;
+            Thread.ofVirtual().start(() -> {
+                try {
+                    start.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                for (int i = 0; i < perProducer; i++) {
+                    handover.accept(id + ":" + i).subscribe(ignored -> {
+                    }, error -> {
+                        failures.add(error);
+                        acknowledged.countDown();
+                    }, acknowledged::countDown);
+                }
+            });
+        }
+        start.countDown();
+
+        assertThat(acknowledged.await(30, TimeUnit.SECONDS))
+                .as("every offer was acknowledged, so none was left on the queue with nobody to take it")
+                .isTrue();
+        assertThat(failures).isEmpty();
+        assertThat(delivered).hasSize(producers * perProducer);
+    }
+
     private static void awaitLatchQuietly(CountDownLatch latch) {
         try {
             if (!latch.await(10, TimeUnit.SECONDS)) {
