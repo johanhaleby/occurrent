@@ -33,6 +33,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -207,8 +208,12 @@ public final class ReactiveHandover<T> {
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
     private static final Logger log = LoggerFactory.getLogger(ReactiveHandover.class);
     // Long enough that a producer holding the serialization claim finishes its own offer and releases it, short
-    // enough that a caller's accept does not sit here. An offer is a queue write, never a delivery.
+    // enough that a caller's accept does not wait on it for long. Waiting happens on a scheduler, not on the
+    // offering thread, so the window costs a timer rather than a thread.
     private static final java.time.Duration CONCURRENT_EMISSION_RETRY_WINDOW = java.time.Duration.ofMillis(100);
+    // How long to wait before offering again. The claim is released by one queue write, so this only has to be
+    // long enough not to retry into the same instant.
+    private static final java.time.Duration CONCURRENT_EMISSION_RETRY_DELAY = java.time.Duration.ofMillis(1);
     private volatile boolean stopped = false;
     // Set once, right before the buffered live payloads are drained on a successful catch-up, and never cleared
     // afterwards, mirroring BlockingHandover's live field. acceptIfLive(..) reads this to refuse a payload outright,
@@ -361,43 +366,36 @@ public final class ReactiveHandover<T> {
 
     // The unicast sink comes from the safe spec, so it rejects a second concurrent producer with
     // FAIL_NON_SERIALIZED instead of corrupting its queue. That rejection clears as soon as the producer holding
-    // the claim finishes its own offer, so retrying briefly is the whole fix. No lock: tryEmitNext drains inline
-    // when it wins the race, so a lock here would be held across the caller's own delivery.
+    // the claim finishes its own offer, so retrying is the whole fix.
+    //
+    // The retry is scheduled rather than spun, and no lock is taken. tryEmitNext drains inline when it wins the
+    // race, so both a lock and a spin would tie up the offering thread for as long as somebody else's handler
+    // takes to run, on a carrier or event-loop thread that has other work.
     private void offerToLiveSink(Item item, MonoSink<Boolean> ackSink) {
-        long deadline = System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos();
-        while (true) {
-            Sinks.EmitResult result = liveSink.tryEmitNext(item);
-            if (!result.isFailure()) {
-                return;
-            }
-            switch (result) {
-                case FAIL_NON_SERIALIZED -> {
-                    if (System.nanoTime() >= deadline) {
-                        ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
-                        return;
-                    }
-                    Thread.onSpinWait();
-                }
-                // The pipeline is gone, so nothing is coming to deliver this payload. Dropped rather than refused,
-                // the same answer the stopped check above gives, which this is a race against.
-                case FAIL_TERMINATED, FAIL_CANCELLED -> {
-                    ackSink.success(false);
+        offerToLiveSink(item, ackSink, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos());
+    }
+
+    private void offerToLiveSink(Item item, MonoSink<Boolean> ackSink, long deadline) {
+        Sinks.EmitResult result = liveSink.tryEmitNext(item);
+        if (!result.isFailure()) {
+            return;
+        }
+        switch (result) {
+            case FAIL_NON_SERIALIZED -> {
+                if (System.nanoTime() >= deadline) {
+                    ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
                     return;
                 }
-                default -> {
-                    ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
-                    return;
-                }
+                Schedulers.parallel().schedule(() -> offerToLiveSink(item, ackSink, deadline),
+                        CONCURRENT_EMISSION_RETRY_DELAY.toNanos(), TimeUnit.NANOSECONDS);
             }
+            // The pipeline is gone, so nothing is coming to deliver this payload. Dropped rather than refused,
+            // the same answer the stopped check above gives, which this is a race against.
+            case FAIL_TERMINATED, FAIL_CANCELLED -> ackSink.success(false);
+            default -> ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
         }
     }
 
-    /**
-     * Run the one-time catch-up: replay the source's history, record the completion marker, then start delivering the
-     * live feed. The returned {@link Mono} completes when the replay and marker are done (see the class javadoc for
-     * how that relates to the buffered live payloads), emitting {@code true} when the catch-up finished and
-     * {@code false} when {@link Source#keepReplaying()} stopped it partway. A failure errors it instead.
-     */
     /**
      * Whether this engine refuses every live payload from now on and will go on refusing. True once a
      * {@link #catchUp(Source)} attempt has errored, and never false again after that. False while replaying, while
@@ -411,6 +409,12 @@ public final class ReactiveHandover<T> {
         return terminalError.get() != null;
     }
 
+    /**
+     * Run the one-time catch-up: replay the source's history, record the completion marker, then start delivering the
+     * live feed. The returned {@link Mono} completes when the replay and marker are done (see the class javadoc for
+     * how that relates to the buffered live payloads), emitting {@code true} when the catch-up finished and
+     * {@code false} when {@link Source#keepReplaying()} stopped it partway. A failure errors it instead.
+     */
     public Mono<Boolean> catchUp(Source<T> source) {
         Objects.requireNonNull(source, "source cannot be null");
         // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying again
@@ -495,15 +499,17 @@ public final class ReactiveHandover<T> {
                     }
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.
                     // Fail their acks and reject later ones, so the caller sees the error instead of hanging.
-                    // Logged as well as signalled, because catchupDone has already emitted by the time the live
-                    // phase runs, so a failure from that phase reaches no caller through it. Every later payload
-                    // still gets the terminal refusal below, so the log is what tells an operator why.
-                    log.error("The catch-up-then-live handover for this {} failed and now refuses every live "
-                            + "event. Fix the cause, then replace it, a subscription by cancelling it and "
-                            + "subscribing again, a projection feed by building a new one.", noun, error);
                     abandonReplayWithoutMasking(source, replayOpen);
                     terminalError.set(error);
-                    catchupDone.tryEmitError(error);
+                    // Logged only when the signal cannot carry the failure, which is the live phase, where
+                    // catchupDone has already emitted and nothing else tells anyone. Logging unconditionally would
+                    // repeat what the caller this signal reaches already logs for itself.
+                    if (catchupDone.tryEmitError(error).isFailure()) {
+                        log.error("The catch-up-then-live handover for this {} failed after it had already reported "
+                                + "its catch-up done, so nothing was waiting to be told. It now refuses every live "
+                                + "event. Fix the cause, then replace it, a subscription by cancelling it and "
+                                + "subscribing again, a projection feed by building a new one.", noun, error);
+                    }
                     // Wrapped like the later refusals in accept(..): the caller sees the same "this is terminal, and
                     // here is what to do" message whichever side of the failure its payload arrived on. The catch-up
                     // signal above still carries the raw cause, since that caller asked about the catch-up itself.

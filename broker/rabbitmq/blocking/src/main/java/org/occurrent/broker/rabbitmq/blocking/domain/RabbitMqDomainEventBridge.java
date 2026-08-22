@@ -120,20 +120,22 @@ import static java.util.Objects.requireNonNull;
  * how long a replay can run, or leave the queue unbounded, before pointing this bridge at it.
  * <p>
  * <strong>A permanently failed catch-up stops this bridge, the same as {@link UnreadableLiveFilterException}.</strong>
- * {@link DomainEventFeed#acceptCloudEvent(CloudEvent)} throws {@code BlockingHandover.PreDispatchRefusalException}
- * unwrapped, rather than reporting {@link RoutingOutcome#NOT_DELIVERABLE}, once the projection's catch-up-then-live
- * handover has permanently failed, since that failure never clears. This bridge catches that exception by type ahead
- * of the generic failure branch, logs at error once, and calls {@link #stopPermanently()}, which cancels the
+ * Once the registered projection's own catch-up-then-live handover has failed, that failure never clears, so
+ * {@link DomainEventFeed#acceptCloudEvent(CloudEvent)} refuses every later event. This bridge asks the feed rather
+ * than reading the exception's type. {@link DomainEventFeed#refusesPermanently()} is false until this feed's own
+ * catch-up throws and true for good afterwards, so reading it inside the failure branch answers about this feed
+ * and nothing else. A handler that reached into some other projection or subscription model whose catch-up has
+ * failed throws the same type without this feed being broken at all, and that goes through
+ * {@link DeliveryFailurePolicy} like any other handler failure.
+ * <p>
+ * On a permanent refusal this bridge logs at error once and calls {@link #stopPermanently()}, which cancels the
  * consumer, releases every tag this bridge is still holding (generation-safely, negatively acknowledged with
  * requeue) and closes the consume channel, all under one lock, in that order. Closing the channel also requeues the
  * triggering delivery itself, along with anything else still unacknowledged on it, so this bridge never has to
  * acknowledge that delivery tag by hand once a permanent stop has decided to close the channel out from under it.
  * Bypasses {@link DeliveryFailurePolicy} entirely the same way {@link RoutingOutcome#DEFERRED} already does, so
  * every message this permanent stop touches stays visibly on the source queue rather than being parked or committed
- * into the same permanent refusal. {@code BlockingHandover} is an internal type. This bridge imports it anyway,
- * narrowly, for this one {@code catch}, since matching on the exception's message, or treating every
- * {@code NOT_DELIVERABLE}-shaped failure as potentially permanent, is both more fragile and slower to notice than
- * catching the type the engine itself already throws for exactly this.
+ * into the same permanent refusal.
  * <p>
  * <strong>A REDELIVER-policy failure is paced, the same as a {@code DEFERRED} delivery.</strong> Held and released
  * once per {@link Builder#pollInterval(Duration)}, through a second deque, rather than negatively acknowledged on
@@ -518,8 +520,8 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
      * an already-held tag stuck: the poll this method also shuts down was the only thing that would otherwise ever
      * release it. Closing an already-closing or already-closed channel is tolerated the same as {@link #close()}
      * already tolerates it, since an application may still call {@link #close()} afterward. The triggering delivery
-     * for {@link UnreadableLiveFilterException} or {@code BlockingHandover.PreDispatchRefusalException} is never
-     * acknowledged or negatively acknowledged by hand. Closing the channel here requeues it anyway, RabbitMQ's own
+     * for {@link UnreadableLiveFilterException} or a permanently refusing feed is never acknowledged or negatively
+     * acknowledged by hand. Closing the channel here requeues it anyway, RabbitMQ's own
      * guarantee for a closed channel with an unacked delivery on it, which is what {@link UnreadableLiveFilterException}'s
      * own javadoc already expects once this bridge's channel eventually closes.
      */

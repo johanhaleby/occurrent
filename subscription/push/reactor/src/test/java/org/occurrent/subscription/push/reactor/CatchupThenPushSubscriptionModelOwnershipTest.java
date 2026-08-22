@@ -25,6 +25,9 @@ import org.junit.jupiter.api.Timeout;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
@@ -315,6 +318,74 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
         await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5)).untilAsserted(() ->
                 assertThat(handled)
                         .as("the catch-up already succeeded, so no resume may replay its history a second time")
+                        .containsExactly("1", "2"));
+    }
+
+    /**
+     * A cancel that lands while an attempt is already writing the catch-up-complete marker leaves a marker on
+     * disk that describes a history the id's next owner never read. The write cannot be called off, so the model
+     * records that it happened and the replacement reads its history rather than trusting what it finds.
+     * <p>
+     * Run with no in-memory shortcut, the marker really is written and really is read back, so nothing here
+     * depends on the model noticing the cancel in time.
+     */
+    @Test
+    void a_marker_written_by_an_attempt_that_lost_the_id_does_not_make_the_replacement_skip_its_history() throws Exception {
+        CountDownLatch saveEntered = new CountDownLatch(1);
+        CountDownLatch releaseSave = new CountDownLatch(1);
+        InMemoryCheckpointStorage backing = new InMemoryCheckpointStorage();
+        CheckpointStorage marker = new CheckpointStorage() {
+            @Override
+            public Mono<Checkpoint> read(String subscriptionId) {
+                return backing.read(subscriptionId);
+            }
+
+            @Override
+            public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                return Mono.<Checkpoint>fromRunnable(() -> {
+                    saveEntered.countDown();
+                    awaitLatch(releaseSave);
+                }).then(backing.save(subscriptionId, checkpoint, condition));
+            }
+
+            @Override
+            public Mono<Long> writeVersion(String subscriptionId) {
+                return backing.writeVersion(subscriptionId);
+            }
+
+            @Override
+            public Mono<Void> delete(String subscriptionId) {
+                return backing.delete(subscriptionId);
+            }
+        };
+
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1"), cloudEvent("2")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
+
+        List<String> firstHandled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> firstHandled.add(ce.getId())));
+        assertThat(saveEntered.await(5, TimeUnit.SECONDS))
+                .as("the first attempt read its history and is writing the marker")
+                .isTrue();
+        assertThat(firstHandled).containsExactly("1", "2");
+
+        // Ownership moves while that write is still in flight.
+        model.cancelSubscription("sub");
+        releaseSave.countDown();
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(backing.read("sub").hasElement().block())
+                        .as("the write the cancelled attempt had already started still lands")
+                        .isTrue());
+
+        List<String> replacementHandled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+                ce -> Mono.fromRunnable(() -> replacementHandled.add(ce.getId())));
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(replacementHandled)
+                        .as("the marker on disk was written for a history this subscription never received, so it "
+                                + "reads that history rather than skipping it")
                         .containsExactly("1", "2"));
     }
 

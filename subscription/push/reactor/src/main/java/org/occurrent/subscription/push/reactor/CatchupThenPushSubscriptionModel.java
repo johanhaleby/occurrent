@@ -374,8 +374,13 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         return true;
     }
 
+    // Cleared only when this attempt still owns the id. A cancel that lands while the write is in flight leaves
+    // the record in place on purpose, because the position that write recorded describes a history the id's next
+    // owner never read. That owner reads the record, replays its whole history, and clears it with its own write.
     private synchronized void releaseMarkerWrite(String subscriptionId, Sinks.One<Boolean> replay) {
-        markerWritesInFlight.remove(subscriptionId, replay);
+        if (catchupOwners.get(subscriptionId) == replay) {
+            markerWritesInFlight.remove(subscriptionId, replay);
+        }
     }
 
     // Checked against the live feed rather than applied blindly. A stop landing between the last replayed event and

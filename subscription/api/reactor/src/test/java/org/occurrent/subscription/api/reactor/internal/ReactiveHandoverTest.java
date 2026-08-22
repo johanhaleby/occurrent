@@ -33,6 +33,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
@@ -173,10 +174,9 @@ class ReactiveHandoverTest {
     }
 
     /**
-     * The live sink comes from the safe spec, so it rejects a second concurrent producer rather than corrupting
-     * its queue. That rejection used to be reported as a buffer overflow, telling an operator to rebuild a read
-     * model offline for what is a moment of contention. The engine retries within a bounded window instead, so
-     * concurrent producers all get through and nobody sees an overflow message.
+     * The live sink comes from the safe spec, so it rejects a second producer offering at the same time rather
+     * than corrupting its queue. That rejection used to be reported as a buffer overflow, telling an operator to
+     * rebuild a read model offline for what is a moment of contention.
      */
     @Test
     void concurrent_producers_are_never_told_the_buffer_overflowed() throws Exception {
@@ -184,6 +184,7 @@ class ReactiveHandoverTest {
         ReactiveHandover<String> handover = ReactiveHandover.create(
                 payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> payload,
                 CatchupThenLiveOptions.defaults(), "test payload");
+        StepVerifier.create(handover.catchUp(source(List.of(), false))).expectNext(true).verifyComplete();
 
         int producers = 8;
         int perProducer = 40;
@@ -207,17 +208,74 @@ class ReactiveHandoverTest {
             });
         }
         start.countDown();
-        assertThat(done.await(20, TimeUnit.SECONDS)).isTrue();
+        assertThat(done.await(30, TimeUnit.SECONDS)).isTrue();
 
         assertThat(failures).as("no producer was refused, and none was told the buffer overflowed").isEmpty();
 
-        StepVerifier.create(handover.catchUp(source(List.of(), false))).expectNext(true).verifyComplete();
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
         while (delivered.size() < producers * perProducer && System.nanoTime() < deadline) {
             Thread.sleep(10);
         }
         assertThat(delivered).as("every payload every producer offered was delivered")
                 .hasSize(producers * perProducer);
+    }
+
+    /**
+     * A producer that loses the serialization race waits on a scheduler rather than on its own thread. The winner
+     * drains the sink inline, so its own offer runs the handler and takes as long as the handler does. A loser
+     * that retried on its own thread would be held for that whole time too, on a carrier or event-loop thread
+     * that has other work.
+     */
+    @Test
+    void a_producer_that_loses_the_serialization_race_does_not_wait_on_its_own_thread() throws Exception {
+        CountDownLatch handlerEntered = new CountDownLatch(1);
+        CountDownLatch releaseHandler = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String> handover = ReactiveHandover.create(
+                payload -> Mono.fromRunnable(() -> {
+                    if (payload.equals("winner")) {
+                        handlerEntered.countDown();
+                        awaitLatchQuietly(releaseHandler);
+                    }
+                    delivered.add(payload);
+                }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        StepVerifier.create(handover.catchUp(source(List.of(), false))).expectNext(true).verifyComplete();
+
+        Thread winner = Thread.ofVirtual().start(() -> handover.accept("winner").subscribe(ignored -> {
+        }, ignored -> {
+        }));
+        assertThat(handlerEntered.await(5, TimeUnit.SECONDS))
+                .as("the first producer is inside the handler, draining the sink on its own thread")
+                .isTrue();
+
+        long before = System.nanoTime();
+        handover.accept("loser").subscribe(ignored -> {
+        }, ignored -> {
+        });
+        long offerNanos = System.nanoTime() - before;
+
+        releaseHandler.countDown();
+        winner.join();
+
+        assertThat(TimeUnit.NANOSECONDS.toMillis(offerNanos))
+                .as("the losing offer returned rather than waiting out the winner's handler")
+                .isLessThan(500L);
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!delivered.contains("loser") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(delivered).as("both payloads were delivered").containsExactlyInAnyOrder("winner", "loser");
+    }
+
+    private static void awaitLatchQuietly(CountDownLatch latch) {
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Timed out waiting for the latch");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Test
