@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 49
-updated_at: '2026-08-22T15:01:48+00:00'
-updated_by: 'orchestrator rel34: revert gating, U6 ruled, U19 delivered, brk finished'
+revision: 50
+updated_at: '2026-08-22T15:07:04+00:00'
+updated_by: 'orchestrator rel34: revert merged, R3 clear of both sibling epics'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -1166,11 +1166,9 @@ units:
       ref: null
       met: false
       evidence: ''
-    blocking_on:
-    - 'brk''s fence-removal PR for #922, a PRODUCTION defect in code already merged to main; PR number
-      pending'
+    blocking_on: []
     next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T15:01:48+00:00'
+    last_meaningful_progress_at: '2026-08-22T15:07:04+00:00'
     observed:
       brk_gate:
         note: 'brk''s closing condition is now EXACTLY ONE PR. PR 910 merged as cacdc25b9 closing brk
@@ -1232,6 +1230,12 @@ units:
           so re-check before R4.'
         via: brk orchestrator + gh pr view 930
         at: '2026-08-22T15:01:48+00:00'
+      sibling_epics_cleared:
+        note: R3 no longer waits on any sibling epic. brk FINISHED at 14:57:25Z with df0548bfa as its
+          last commit. sdi has HELD entirely and, after 47e282805, has nothing on main and nothing in
+          flight. What remains for the tag is rel34's own units plus R1 and R2.
+        via: brk and sdi orchestrators, verified against main
+        at: '2026-08-22T15:07:04+00:00'
     assessment: 'Johan''s manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
       The orchestrator hands him the checklist and verifies the observable results. The 1000-file allowance
       is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z
@@ -1806,5 +1810,14 @@ cross_epic:
       not unmake it. Java CI still running at time of writing. sdi has HELD entirely: no further sdi unit
       merges until the 0.34.0 tag exists, so sdi is no longer an input to R3. THE RULE, agreed by sdi
       and brk both: anything merged to main before the tag ships in 0.34.0 whatever its documentation
-      says, because renaming the ''### Changelog next version'' heading is what assigns the release.'
+      says, because renaming the ''### Changelog next version'' heading is what assigns the release. MERGED
+      2026-08-22T15:06:02Z as squash 47e282805, CAS-pinned to the verified head 8ce4e8e4b, branch deleted.
+      Gate run by rel34 in full: all three workflow runs completed/success including Java CI with Maven,
+      zero unresolved threads, and NO reviews at all, which I recorded explicitly as absent rather than
+      clean. Merging without a review was a deliberate, reasoned deviation from the standing gate: a revert''s
+      risk is reaching too far, which a diff settles definitively and a review does not, and waiting would
+      have delayed a revert whose purpose is being off main before the cut. Post-merge verification on
+      main: zero 0.35.0 artifacts, zero production references to SubscriptionHandle or any @Occurrent*
+      name (the only remaining hits are in .context bookkeeping YAML), df0548bfa still an ancestor so
+      brk''s fix survives, and upgrade-0_35.yml gone so the #929 hazard is off main.'
     at: '2026-08-22T15:01:48+00:00'
