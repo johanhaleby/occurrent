@@ -1871,3 +1871,173 @@ round trips must be bounded whatever policy is supplied") invites a worker to ei
 wrong thing or spend a round pushing back. State the outcome and let the unit find the mechanism,
 and when a worker says an instruction is unimplementable, check its evidence rather than restating
 the instruction.
+
+## An adversarial pass can overstate the trigger while being right about the bug (rel34, 2026-08-22)
+
+A pass falsified PR 902 by wrapping the registered model in a Mockito `delegatesTo` proxy and
+showing the warning went silent. It described the trigger as "any `BeanPostProcessor` or Spring AOP
+auto-proxying", and the orchestrator relayed that wording to the worker, who built against it.
+
+The re-verify established that genuine Spring AOP proxies, which is what `@Transactional`, `@Async`
+and custom advisors actually produce, unwrap correctly through `AopProxyUtils.getSingletonTarget`
+and match. What does not unwrap is anything not implementing `Advised`: a Mockito mock, a
+hand-rolled `java.lang.reflect.Proxy`. So the defect was real and the fix closes the real-world
+case, while the characterisation of what triggers it was broader than the evidence supported.
+
+Two things follow. A falsification's REPRODUCTION is evidence; its description of the general case
+is a claim like any other and inherits no authority from the repro. Relay the repro and let the
+worker generalise from the code, or check the generalisation before relaying it.
+
+And the same discipline the passes apply to workers applies to the passes: state what was
+constructed, and do not let "I made this fail with X" become "anything of X's kind fails".
+
+## Three units, one epic, all overclaimed in prose rather than code (rel34, 2026-08-22)
+
+A 50 ms polling cadence described as an upper bound. A predicate "invoked exactly once per attempt"
+that is invoked zero times when a short-circuit fires. An unwrap covering "any BeanPostProcessor"
+that covers Spring's own framework only. Three separate units, three separate reviewers finding
+them, all in javadoc and changelog rather than in behaviour.
+
+The code was right in all three. What was wrong was the sentence next to it, and in two of the
+three the sentence shipped in a changelog, which is where an overclaim gets quoted back.
+
+So a correctness-bearing unit's invariant needs checking against the PROSE as well as the tests,
+and the check is the same question in both places: is there a reachable input for which this
+sentence is false? A test suite will not ask that of a javadoc.
+
+And when the fix is a rewording, check the REPLACEMENT against the same question. Two of these three
+rewordings were themselves the second attempt.
+
+## A reachability argument from this repo's own wiring is subject to the call-sites rule (rel34, 2026-08-22)
+
+Two adopted units, #903 and #909, were withdrawn after a third Copilot round questioned not the
+fix but whether the bug could occur. The argument was that
+`OccurrentReactiveMongoAutoConfiguration.occurrentDurableSubscriptionModel` carries ONE shared
+`@ConditionalOnMissingBean(value = {FluxSubscriptionModel.class, Subscribable.class})`, so the
+method that fills the holder runs only when no replacement exists, and the divergence both issues
+describe cannot happen.
+
+That argument is correct here and would be worthless in the general case, and the difference is
+what matters. AGENTS.md says this repository's own call sites are not the population of users, so
+"the starter cannot produce this state" says nothing about a consumer wiring the beans by hand. The
+argument holds ONLY because `ComposedCatchupModel` is absent from the `occurrent-0.33.0` tag: it
+was added during this release cycle and has never shipped, so the starter genuinely is the whole
+population. Had it shipped, both issues would be reachable and closing them would have been wrong.
+
+So an unreachability claim needs two legs, and the second is the one that gets forgotten: the
+wiring cannot produce the state, AND no released surface lets a consumer produce it either. Check
+the tag, not just the auto-configuration.
+
+The maintainer caught this. The orchestrator argued only the first leg and presented the conclusion
+as settled, and AGENTS.md line 78 already carried the principle under a different heading, blast
+radius of an API change, which is why it did not get applied to a reachability question.
+
+The contrast that proves the shape: the blocking twin #871 IS reachable, because there the durable
+model is gated on `SubscriptionModel.class` while the `Subscriptions` DSL bean is gated separately
+on `Subscriptions.class`. Two independent conditions instead of one shared one, so an application
+replaces the DSL bean alone and the starter still fills the holder. Same feature, same fleet, one
+reachable and one not, decided by which types share a condition.
+
+## Before rerunning a known flake, check whether its fix landed on main (rel34, 2026-08-22)
+
+PR 902 failed `test (misc, java-21)` on a test its diff does not touch. The orchestrator read the
+shard and the JDK, matched the pattern to a different broker flake under investigation, and flagged
+it as a possible fifth sighting of that one. Another fleet read the actual job log: it was #884's
+test, not the other, and #884's fix had merged to main about an hour earlier. The PR's head predated
+it.
+
+So the correct action was a REBASE, which fixes it deterministically, not a rerun, which is a coin
+toss on a test that is already fixed upstream.
+
+Two things worth keeping. A rerun is the reflex for a red shard on an untouched module, and it is
+the wrong one whenever the flake has a landed fix the branch has not picked up; check the merge
+history for the test's issue before spending a rerun. And pattern-matching a failure by shard and
+JDK is a hypothesis, not an identification: the orchestrator had two candidate flakes in the same
+shard and picked the wrong one. Flagging it as unconfirmed is what kept it cheap, and reading the
+log is what settled it.
+
+## A conflict flag generates no event, so an event-driven loop never sees it (rel34, 2026-08-22)
+
+PR 901 sat `CONFLICTING` and untouched for over six hours. Its CI was green, its worker was alive
+and idle, and the orchestrator had told it not to push again. Nothing in that state emits anything:
+the work-item monitor fires on head, mergeable, review and check transitions, and the transition
+into CONFLICTING had already happened and been reported once, hours earlier, while the orchestrator
+was mid-exchange on something else.
+
+What made it invisible was running the loop on events alone. Every tick had something to react to,
+so the unit table was never walked, and a PR that is green and idle looks identical to a PR that is
+green and finished.
+
+So the periodic sweep is not optional even when the event stream is busy, and it must iterate the
+UNIT TABLE rather than the open-PR set: for each unit with an unmet deliverable, when did its PR
+last change, is it mergeable, and is anyone acting on it. Six hours of a live worker idling is the
+cost of skipping it, and the user noticing before the orchestrator would have been the same
+detection defect one step worse.
+
+The related habit that caused it: telling a worker "do not push again unless I ask" is correct for
+getting a settled head to verify against, and it transfers responsibility for the next move to the
+orchestrator. Any such instruction needs a matching entry on the sweep list, because the worker will
+now correctly do nothing forever.
+
+## A test that asserts a guarantee cannot be dismissed as flaky without answering the guarantee (rel34, 2026-08-22)
+
+`RabbitMqCloudEventBridgeConnectionRecoveryTest` failed on a pull request in a module that pull
+request does not touch. It was JDK-asymmetric, main's last completed run was green, and there was
+no known-flake issue. Every available signal said flake, and filing it as one would have taken
+thirty seconds.
+
+The verdict, after a deliberate investigation, was a PRODUCTION SILENT STALL in code already merged
+to main. amqp-client re-issues `basic.consume` before running its recovery listeners, so the first
+redelivery after a connection recovery arrives under the previous channel generation, the fence
+drops it unacked, and at prefetch 1 the bridge stops consuming until closed. Reproduced
+deterministically once someone looked.
+
+The argument that kept it open was one sentence, and it is reusable: this test asserts the exact
+property the change it was written for exists to guarantee, so if it can fail then either the
+guarantee can fail or the test does not pin it down, and both of those need an owner. Neither is
+"flaky".
+
+Three supporting habits mattered. The orchestrator routed it to the fleet that owned the code rather
+than diagnosing it, because a wrong owner would have concluded "flake" faster. It sent the evidence
+that narrowed it (JDK asymmetry, main green) as evidence rather than as a conclusion. And it said
+plainly which reading it could not rule out, so the receiving fleet knew what it was being asked to
+settle rather than to confirm.
+
+## A known production defect becomes a fleet-wide CI tax until its fix lands (rel34, 2026-08-22)
+
+Once #922 was confirmed as a real silent stall rather than a flake, its test kept failing
+intermittently on every pull request in the fleet, because the defective fence is on main and every
+branch that merges main inherits it. Four units hit it across two JDKs within a few hours, none of
+them touching the module.
+
+Two consequences worth separating, because they pull in opposite directions.
+
+Rerunning IS legitimate here, and it was not legitimate for #884. The distinction is whether a fix
+exists that the branch has not picked up. For #884 the fix had already merged, so the correct action
+was to merge main and the rerun would have been a coin toss on an already-solved problem. For #922
+no fix exists yet, so a rerun is the only way to get a green shard and there is nothing to rebase
+onto. Same red shard, opposite correct action, decided entirely by whether a landed fix exists.
+
+And the tax is worth naming to the fleet rather than letting each unit rediscover it. A worker that
+hits a known-defective test spends a triage round establishing what the orchestrator already knows.
+Tell them the test, the issue, and the instruction (rerun, do not investigate, it is owned
+elsewhere) as soon as the verdict is in.
+## `git show <remote-branch>:<path>` can return zero bytes and your grep will call it a finding (sdi, 2026-08-22)
+
+Verifying U5's PR I ran `git show origin/<branch>:<file> | grep '@Deprecated'` across seven files and
+got seven clean misses. The ref resolved, so nothing looked wrong, and I was one sentence from
+reporting that a worker had skipped a required deprecation. The files were 0 bytes: the ref
+resolves after a targeted fetch while the path lookup does not, and a grep over empty input is a
+confident silence.
+
+The tell was the SHAPE of the result. Seven for seven, all negative, on a requirement the worker had
+been given explicitly. A worker skipping one is plausible; skipping all seven while doing everything
+else correctly is not, and that improbability is what should trigger the re-check.
+
+Use `git diff origin/main..<branch> -- <paths>` instead, which reads the actual change, and prove
+the pattern can match at all before trusting a zero: I confirmed the same grep found two hits on
+`origin/main`, which is what turned a suspicious zero into a known-broken read.
+
+The general rule was already written down here from a Haiku sweep that missed a Kotlin file, and it
+held again unchanged: **a read returning nothing is "not found by this method", never "not there".**
+The addition is that an improbable pattern of absence is itself the signal to distrust the method.
