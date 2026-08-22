@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.internal.PositionBackfillValidator;
+import org.occurrent.eventstore.api.internal.UpdateEventRepairValidator;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
@@ -61,6 +62,7 @@ import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.ReactiveBulkOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.schema.JsonSchemaObject;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.transaction.reactive.TransactionalOperator;
@@ -782,7 +784,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
 
         if (writesPosition) {
-            chain = chain.then(warnIfUnpositionedEventsExist(eventStoreCollectionName, mongoTemplate));
+            chain = chain.then(warnIfUnpositionedEventsExist(eventStoreCollectionName, mongoTemplate))
+                    .then(warnOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate));
         }
 
         // SessionSynchronization must be ALWAYS for TransactionTemplate to work with MongoTemplate. See
@@ -811,6 +814,20 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 LOGGER.warn(PositionBackfillValidator.unpositionedEventsMessage(eventStoreCollectionName));
                 return Mono.empty();
             });
+        });
+    }
+
+    // Warns when the collection holds events that updateEvent damaged before 0.34.0, which stored position as a
+    // string. Those events are missing from every position query and from the conflict query behind a conditional
+    // append. A string position sits in its own type range in the position index, so this reads no keys at all on a
+    // store that was never damaged.
+    private static Mono<Void> warnOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
+        Query damagedQuery = new Query(where(OccurrentCloudEventExtension.POSITION).type(JsonSchemaObject.Type.STRING));
+        return mongoTemplate.exists(damagedQuery, eventStoreCollectionName).flatMap(hasDamagedEvents -> {
+            if (hasDamagedEvents) {
+                LOGGER.warn(UpdateEventRepairValidator.damagedEventsMessage(eventStoreCollectionName));
+            }
+            return Mono.<Void>empty();
         });
     }
 
