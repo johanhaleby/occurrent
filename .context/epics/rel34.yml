@@ -1,9 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 53
-updated_at: '2026-08-22T15:14:59+00:00'
-updated_by: 'orchestrator rel34: U11 implementation dispatched after stall detection caught it, R2 hold
-  made machine-readable'
+revision: 54
+updated_at: '2026-08-22T15:20:02+00:00'
+updated_by: 'orchestrator rel34: cancelled units removed from depends_on, they made R1 and C1 unreachable'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -554,8 +553,7 @@ units:
     phase: PLANNED
     health: PROGRESSING
     swept: false
-    depends_on:
-    - U12
+    depends_on: []
     session: null
     deliverables:
     - check: pr_merged
@@ -567,8 +565,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch to the U12 worker once PR for U12 merges, it will own those reactor files
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    next_action: dispatch now, the U12 sequencing reason is void
+    last_meaningful_progress_at: '2026-08-22T15:20:02+00:00'
     observed: {}
     assessment: '#891 ALONE now; #878 moved to U4. Sequenced behind U12 rather than run beside it: #891''s
       fix path runs through framework/spring-boot-autoconfigure/reactor ProjectionAnnotationRegistrar.java
@@ -1017,13 +1015,10 @@ units:
     - U1
     - U10
     - U11
-    - U12
     - U13
     - U14
     - U15
     - U16
-    - U17
-    - U18
     - U2
     - U3
     - U4
@@ -1072,6 +1067,20 @@ units:
           is the 0.33.0 precedent.'
         via: orchestrator decision under AGENTS.md
         at: '2026-08-22T10:38:17+00:00'
+      cancelled_deps_made_the_cut_unreachable:
+        note: 'STRUCTURAL DEFECT, found by auditing why units stayed PLANNED. R1 and C1 listed U12, U17
+          and U18 among their depends_on, and all three are CANCELLED. epic-state.py derives READY only
+          when EVERY dependency is DONE, and a cancelled unit never becomes DONE, so R1 (the changelog
+          cut) and C1 (the final adversarial review) could NEVER have derived READY no matter how much
+          real work finished. The release cut was unreachable by the graph. Removed the cancelled units
+          from every depends_on list: {''U5'': [''U12''], ''R1'': [''U12'', ''U17'', ''U18''], ''C1'':
+          [''U12'', ''U17'', ''U18''], ''U18'': [''U12'']}. U5''s case was the same defect with a real
+          consequence attached: it was sequenced behind U12 because U12 owned the two reactor files its
+          fix path runs through, and U12''s cancellation left that sequencing reason void while the dependency
+          kept it PLANNED. U5 is now dispatchable. Note this was invisible while the fabricated timestamps
+          disabled health derivation, since a unit that can never derive READY also never derives STALLED.'
+        via: self-audit of depends_on against phase
+        at: '2026-08-22T15:20:02+00:00'
     assessment: 'AGENTS.md:71-73: cutting a release renames the heading, it does not restructure the section.
       Runs after the last gating merge and after C1 reaches fixpoint.'
   R2:
@@ -1323,13 +1332,10 @@ units:
     - U1
     - U10
     - U11
-    - U12
     - U13
     - U14
     - U15
     - U16
-    - U17
-    - U18
     - U2
     - U3
     - U4
@@ -1749,8 +1755,7 @@ units:
     phase: CANCELLED
     health: UNKNOWN
     swept: true
-    depends_on:
-    - U12
+    depends_on: []
     session: null
     deliverables:
     - check: pr_merged
