@@ -64,8 +64,8 @@ public class RetryExecution {
      * Same as {@link #executeWithRetry(Function, Predicate, RetryStrategy)}, for a {@code Supplier} that ignores
      * {@link RetryInfo}.
      *
-     * @param shutdownPredicate Tested repeatedly while a backoff is in progress, and again on each failed attempt.
-     *                          See {@link #executeWithRetry(Function, Predicate, RetryStrategy)} for the full contract.
+     * @param shutdownPredicate Tested repeatedly while a backoff is in progress. See
+     *                          {@link #executeWithRetry(Function, Predicate, RetryStrategy)} for the full contract.
      */
     public static <T1 extends @Nullable Object> Supplier<T1> executeWithRetry(@NonNull Supplier<T1> supplier, @NonNull Predicate<Throwable> shutdownPredicate, @NonNull RetryStrategy retryStrategy) {
         return () -> executeWithRetry((Function<RetryInfo, T1>) __ -> supplier.get(), shutdownPredicate, retryStrategy).apply(firstAttemptRetryInfo());
@@ -77,13 +77,17 @@ public class RetryExecution {
      * {@code shutdownPredicate} is not only tested once an attempt fails. While a failed attempt's backoff is
      * being waited out, the predicate is polled again every {@value #SHUTDOWN_POLL_INTERVAL_MILLIS}ms, so a
      * shutdown signaled partway through a long backoff is caught at the next poll rather than only once the
-     * full backoff has elapsed. A single attempt can therefore invoke the predicate many times rather than once,
-     * so it must be a pure read with no side effects.
+     * full backoff has elapsed. This polling only happens for a failed attempt that still has attempts left
+     * to retry. The final, exhausted attempt's failure never invokes the predicate, and neither does any
+     * failure when {@code retryStrategy} is {@link RetryStrategy.DontRetry}, since no retry loop runs at all.
+     * Wherever it does run, a single attempt can invoke the predicate many times rather than once, so it must
+     * be a pure read with no side effects.
      *
      * @param function          The function to execute, given retry information about the current attempt
-     * @param shutdownPredicate Tested repeatedly while a backoff is in progress, and again on each failed attempt,
-     *                          to decide whether the retry loop should stop instead of retrying further. Must be
-     *                          free of side effects, since it can be invoked several times for a single attempt.
+     * @param shutdownPredicate Tested repeatedly while a backoff is in progress, for a failed attempt that has
+     *                          not exhausted the configured retries, to decide whether the retry loop should
+     *                          stop instead of retrying further. Must be free of side effects, since it can be
+     *                          invoked several times for a single attempt.
      * @param retryStrategy     The retry strategy controlling attempts, backoff, and the retry-on-error predicate
      * @return A function that runs {@code function} with the configured retry behaviour applied
      */
@@ -98,8 +102,8 @@ public class RetryExecution {
     /**
      * Same as {@link #executeWithRetry(Function, Predicate, RetryStrategy)}, for a {@code Runnable}.
      *
-     * @param shutdownPredicate Tested repeatedly while a backoff is in progress, and again on each failed attempt.
-     *                          See {@link #executeWithRetry(Function, Predicate, RetryStrategy)} for the full contract.
+     * @param shutdownPredicate Tested repeatedly while a backoff is in progress. See
+     *                          {@link #executeWithRetry(Function, Predicate, RetryStrategy)} for the full contract.
      */
     public static Runnable executeWithRetry(Runnable runnable, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
         if (retryStrategy instanceof DontRetry) {
@@ -112,8 +116,8 @@ public class RetryExecution {
     /**
      * Same as {@link #executeWithRetry(Function, Predicate, RetryStrategy)}, for a {@code Consumer}.
      *
-     * @param shutdownPredicate Tested repeatedly while a backoff is in progress, and again on each failed attempt.
-     *                          See {@link #executeWithRetry(Function, Predicate, RetryStrategy)} for the full contract.
+     * @param shutdownPredicate Tested repeatedly while a backoff is in progress. See
+     *                          {@link #executeWithRetry(Function, Predicate, RetryStrategy)} for the full contract.
      */
     public static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
         if (retryStrategy instanceof DontRetry) {
