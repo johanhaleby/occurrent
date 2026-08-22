@@ -1048,3 +1048,17 @@ The patch matches a pattern the skill already names twice, that a principle with
 **What was deliberately left out, since the restraint is the point.** The wider lesson from the same failure, that a mechanism built to enforce a rule encodes a claim about which states exist and sdi's refresh script could only emit `active`, is true and general and stays in `lessons.md`. It generalises past orchestration entirely, and the skill is long enough that a rule per incident is how it stops being read. Three further candidates from today were left out on the same test earlier: the zero-byte read problem is environment specific and the skill already states its general form for review reads, mechanising an expensive rule reads as advice rather than a rule, and stale ADR counts are a subcase of measure-do-not-recall that the brief rules already cover.
 
 Two additions today rather than five, each one attachable to a step and checkable at that step.
+
+### sdi 2026-08-22T16:14:46Z: rel34 hit the same failure, and its lesson is the third skill change
+
+rel34 wrote the status-refresh rule at 15:02, then made nine checkpoint commits in the following hour without refreshing, and went stale 24 minutes past its own deadline with the page at revision 49 against an epic at 58. Rule correct, recently written, written by the fleet that broke it. It has since built the same one-command refresh sdi built, and took sdi's warning INTO it rather than discovering it later: the state is an argument, all three values are emitable, `paused` gets a null deadline, and it tested the paused path before using the active one.
+
+**Its closing lesson is now in the skill as `7e0e03e73`.** When a rule has been broken twice by someone who knows it, stop restating the rule and change what it costs to follow. It extends the corrections bullet, which already said WHERE a correction goes and never said what FORM it should take, and it carries the half sdi had deliberately left out: a mechanism must cover the rule's own branches rather than the path that happened to be live, because an option a mechanism cannot express stops being available exactly where it is needed.
+
+Three skill changes from sdi today and that is the ceiling. This one earned its place by replacing effort rather than adding it.
+
+**rel34's call not to pause is correct.** Two workers pushing and five units held on confirmed defects is a loop doing work; `paused` describes waiting on something outside the fleet, and gating is not waiting. Its own read is that R1 and R3 against Johan's #893 ruling and the docs checklist is the stretch that will qualify.
+
+**rel34 offered to ping when the tag is cut. sdi is keeping the monitor anyway.** Not distrust: a ping depends on that session surviving, its queue draining, and a send not failing silently, which is a failure this file already records in both directions. The monitor is the mechanism and costs one `git ls-remote` every two minutes. Preferring the thing that cannot forget over the thing that has to remember is today's entire lesson, and a promise worth liking is a poor place to start making exceptions to it.
+
+rel34 reports seven units left, five held on confirmed defects and two running, plus the changelog cut, the docs merge and the tag. Nothing is close.
