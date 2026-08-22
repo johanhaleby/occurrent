@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 7
-updated_at: '2026-08-22T08:40:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U8 adversarial verify HELD, merge held
-  on the misc shard)
+revision: 10
+updated_at: '2026-08-22T08:55:00+00:00'
+updated_by: 'orchestrator session rel34-epic-registration-8c2066 (U2 adversarial verify HELD, edge routed
+  as #904)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -93,7 +93,7 @@ units:
       Sonnet/high
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 901
       met: false
       evidence: ''
     - check: issue_closed
@@ -101,7 +101,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker running, orchestrator waits for its PR or DELIVERY_RESULT
+    next_action: worker is rebasing off the changelog.md conflict; adversarial pass already HELD, so the
+      merge gate needs only checks, Copilot and threads on the rebased head
     last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
     observed:
       dispatch:
@@ -109,6 +110,30 @@ units:
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
+      adversarial_verify:
+        note: 'HELD. Fresh-context pass under dec-0006, given only the diff and the round-trip claim.
+          It RAN real Mongo tests through Colima across all three stores rather than reading them. Seven
+          attack rounds: the PR''s own tests, three repeated updates of the same event on each store,
+          many tags with unicode and multi-colon values inserted out of order, an empty tag set, every
+          OTHER field the write-back touches (streamid, streamversion, time, datacontenttype, data, a
+          custom extension, the encoded dcbtags string), position forced to Long.MAX_VALUE, and an update
+          function that tampers with the tags. No falsifying input, and specifically NO third field found
+          corrupted, which was the failure mode being hunted (a fix that narrows corruption rather than
+          removing it). It also established statically why position <= 0 is not exploitable: withPosition
+          throws for it and every writer assigns via a long primitive, so the position > 0 guard distinguishes
+          absent from present rather than truncating. One Colima replica-set flake was correctly diagnosed
+          as the known 2GB VM infra issue and retried, not reported as a failure.'
+        via: orchestrator adversarial verify subagent
+        at: '2026-08-22T08:55:00+00:00'
+      routed_edge:
+        note: 'The pass flagged one edge OUTSIDE the claim''s scope, which I verified against the diff
+          before routing: preservePositionAndDcbTags reapplies the ORIGINAL event''s tags to the dcbTags
+          index field after convertToDocument already wrote the document from the UPDATED event, so an
+          update that changes tags leaves the index array and the dcbtags extension string disagreeing,
+          silently. Filed as #904, milestone 0.35.0, marker carried. Deferred rather than folded into
+          U2 because #876 is a silent-corruption fix on the critical path and this edge regresses nothing.'
+        via: gh pr diff 901 read directly
+        at: '2026-08-22T08:55:00+00:00'
     assessment: Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
@@ -153,8 +178,9 @@ units:
   U4:
     issue: 857
     goal: AppliedAppendStore refuses blank collection names, bounds inMemory() growth, bounds the applied-append
-      write paths' retry so a store outage cannot block delivery forever, and gives the compound applied-append
-      index the same conflict recovery the TTL index has.
+      write paths' retry so a store outage cannot block delivery forever, gives the compound applied-append
+      index the same conflict recovery the TTL index has, and honours the blocking wait's deadline on
+      a stalled connection.
     phase: PLANNED
     health: PROGRESSING
     swept: false
@@ -174,6 +200,10 @@ units:
       met: false
       evidence: ''
     - check: issue_closed
+      ref: 878
+      met: false
+      evidence: ''
+    - check: issue_closed
       ref: 879
       met: false
       evidence: ''
@@ -181,17 +211,21 @@ units:
     next_action: dispatch after plan approval
     last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
     observed: {}
-    assessment: 'Three issues in one applied-append hardening pass: #857, #877, #879. File ownership against
-      U5 is fixed by a scoping read at dispatch, never assumed disjoint.'
+    assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:50Z after
+      a scoping read, which is why #878 moved here from U5. The read found two collisions the original
+      split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
+      and U5''s #891 needs the reactor ProjectionAnnotationRegistrar and ComposedCatchupModel, which are
+      exactly the two files U12 was handed minutes earlier. U4 as re-scoped owns the store and wait surface
+      and touches NO reactor registrar, so it is disjoint from U12 and dispatchable now.'
   U5:
     issue: 878
-    goal: The blocking applied-append wait honours its deadline on a stalled connection, and a reactor
-      projection that applies an append always records it, so waitUntilApplied cannot time out on a write
-      that did land.
+    goal: A reactor projection that applies an append always records it, so waitUntilApplied cannot time
+      out on a write that did land.
     phase: PLANNED
     health: PROGRESSING
     swept: false
-    depends_on: []
+    depends_on:
+    - U12
     session: null
     deliverables:
     - check: pr_merged
@@ -199,20 +233,19 @@ units:
       met: false
       evidence: ''
     - check: issue_closed
-      ref: 878
-      met: false
-      evidence: ''
-    - check: issue_closed
       ref: 891
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after plan approval
+    next_action: dispatch to the U12 worker once PR for U12 merges, it will own those reactor files
     last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
     observed: {}
-    assessment: '#878 plus #891. #891 was ayi''s dec-0015 deferral, pulled into 0.34.0 by Johan at the
-      triage sweep because it is a hole in #740 on the reactor stack. Same family as U4, so the two are
-      serialized or split by verified-disjoint paths.'
+    assessment: '#891 ALONE now; #878 moved to U4. Sequenced behind U12 rather than run beside it: #891''s
+      fix path runs through framework/spring-boot-autoconfigure/reactor ProjectionAnnotationRegistrar.java
+      and ComposedCatchupModel.java, the two files U12 owns. Give it to the U12 worker when U12 merges,
+      per the rule that follow-up work on files a live session already holds goes to that session rather
+      than to a second worker racing it. #891 was ayi''s dec-0015 deferral, pulled into 0.34.0 by Johan
+      at the triage sweep because it is a hole in #740 on the reactor stack.'
   U6:
     issue: 837
     goal: Transaction advice on subscription handler methods is no longer silently bypassed. Invariant
@@ -267,7 +300,7 @@ units:
     goal: MigrateSubscriptionEnabledFalseInYaml and TrueInYaml_0_32 are document-scoped rather than file-scoped,
       so the recipe cannot rename an unrelated document's enabled key to an invalid mode value in a multi-document
       YAML file.
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -276,15 +309,19 @@ units:
     deliverables:
     - check: pr_merged
       ref: 899
-      met: false
-      evidence: ''
+      met: true
+      evidence: 'CAS-MERGED 2026-08-22T08:27:37Z pinned to 65220005697338570f54588b63c61d1a5dc99103, head-at-merge
+        equalled the pin (verified), squash 0ef8eefce, branch deleted by the merge. Gate: 26/26 checks
+        green including both misc shards which are the only ones covering the rewrite module, 0 unresolved
+        threads by isResolved==false alone, Copilot approved the CURRENT head at 08:10Z with 0 new comments
+        and no suppressed block at Balanced effort, adversarial verify HELD on all three claims.'
     - check: issue_closed
       ref: 834
-      met: false
-      evidence: ''
+      met: true
+      evidence: CLOSED by the merge, verified; in-progress label released by the worker when the PR opened.
     blocking_on: []
-    next_action: hold for test (misc, java-21) and (misc, java-25), then CAS merge pinned to 65220005697338570f54588b63c61d1a5dc99103
-    last_meaningful_progress_at: '2026-08-22T08:40:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T08:45:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -412,6 +449,7 @@ units:
     - U1
     - U10
     - U11
+    - U12
     - U2
     - U3
     - U4
@@ -476,14 +514,19 @@ units:
       met: false
       evidence: ''
     blocking_on:
-    - the sdi sibling epic closing (dec-0001)
-    - the brk epic closing
+    - the brk epic closing (PRs 897 and 898, the U9 mechanical checklist, and U15's second PR)
     next_action: dispatch after plan approval
     last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
     observed: {}
-    assessment: Johan's manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
+    assessment: 'Johan''s manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
       The orchestrator hands him the checklist and verifies the observable results. The 1000-file allowance
-      is the one to read carefully now that three broker modules ship.
+      is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z:
+      #721 and #725 were re-milestoned from 0.34.0 to 0.35.0, verified on both issues and in milestone
+      3''s counts (open 19, closed 35). sdi brought the question back to Johan with a sizing measurement
+      attached (eleven units, a 115-file rename, 138 source files) and recommended the move. dec-0001''s
+      ''R3 gates on sdi'' is therefore SUPERSEDED; R3 now gates on brk alone. #837, #871 and #753 stay
+      rel34''s and stay in 0.34.0, and must NOT be reprioritised on sdi''s behalf now that the fence costs
+      the release nothing.'
   R4:
     issue: 740
     goal: '#740 closed as shipped and #361 closed as its duplicate, milestone 0.34.0 drained of rel34-owned
@@ -522,6 +565,7 @@ units:
     - U1
     - U10
     - U11
+    - U12
     - U2
     - U3
     - U4
@@ -581,3 +625,33 @@ units:
       is plan-first with a design gate, not a bounded fix. ADR 0134 is reserved as a resolved literal
       in the brief; a collision is BLOCKED, never a self-renumber. This is the unit whose C1 findings
       are most likely to be genuinely blocker-shaped.'
+  U12:
+    issue: 903
+    goal: The reactor stack's never-replays warning is bound to the identity of the model a projection
+      actually runs on, closing the same identity-binding gap PR 902 closes on the blocking stack. ComposedCatchupModel
+      retains the composed model suppliedBy was given, and verifiedNeverReplays compares it against the
+      capability the projection runs on.
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: ListAgents name peaceful-curran-e041e6-4a, worktree peaceful-curran-e041e6, Sonnet/medium,
+      same worker as U3 on a FRESH branch
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 903
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: worker implementing on a fresh branch
+    last_meaningful_progress_at: '2026-08-22T08:45:00+00:00'
+    observed: {}
+    assessment: Adopted by Johan at a structured ask, dec-0007, on U3's own routing recommendation after
+      it found the gap while reviewing its own PR 902. Reactor twin of U3's fix, similar size. Pre-granted
+      the OccurrentReactiveMongoAutoConfiguration bean-method extension up front, because dec-0005 already
+      established this fix shape is structurally cross-module and rediscovering that costs a round trip.
+      U6 (#837) must be fenced out of the two reactor files U12 owns.
