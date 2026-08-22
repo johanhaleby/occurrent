@@ -27,10 +27,10 @@ description: >-
   from the top-level org.occurrent.annotation.StartPosition and keeps the constant BEGINNING_OF_TIME, moves with
   it. The old annotations are deprecated for removal and keep working until they go, so an application can run
   this recipe whenever it wants to. It is declarative ChangeType, so it rewrites Kotlin sources as well as Java
-  ones. What it does not do is move a void handler method to a descriptor, which the four subscription
+  ones. What it does not do is turn a void handler method into a descriptor, which the four subscription
   annotations need, since the new ones take a Subscription or DcbSubscription value and declare no eventTypes
-  and no tags. See doc/migration/upgrading-to-0.35.0.md for that step and for the handlers it has to be done by
-  hand for.
+  and no tags. That conversion is a separate change with its own recipe. See
+  doc/migration/upgrading-to-0.35.0.md for what this rename covers and what it leaves.
 recipeList:
   - org.openrewrite.java.ChangeType:
       oldFullyQualifiedTypeName: org.occurrent.annotation.Projection

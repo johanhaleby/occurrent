@@ -25,9 +25,9 @@ description: >-
   application still compiles and behaves exactly as before until it runs this. The four new subscription
   annotations mark a factory method returning a Subscription or DcbSubscription descriptor instead of a void
   handler method, and they declare no eventTypes and no tags, because the descriptor's handlers say which events
-  it wants. This recipe renames the annotations, in Java and Kotlin alike, and does not rewrite a handler into a
-  descriptor, so an application that renames a subscription annotation without moving its handler stops
-  compiling. See doc/migration/upgrading-to-0.35.0.md for the handler move, and for the three kinds of handler
-  that have to be moved by hand rather than translated.
+  it wants. This recipe renames the annotations, in Java and Kotlin alike, and does not turn a void handler into
+  a descriptor, which is a separate change with its own recipe. A renamed annotation on a void handler is still
+  valid source, so only a use of the removed eventTypes, or of tags on @DcbSubscription, fails to compile after
+  this recipe has run. See doc/migration/upgrading-to-0.35.0.md for what the rename covers and what it leaves.
 recipeList:
   - org.occurrent.MigrateOccurrentAnnotationRenames_0_35

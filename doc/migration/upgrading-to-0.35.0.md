@@ -3,10 +3,9 @@
 Each section describes one 0.35.0 change that requires action from a caller on 0.34.0, what the
 `UpgradeToOccurrent_0_35` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-All seven framework annotations are renamed to an `Occurrent`-prefixed name, and the four subscription annotations
-also stop taking a `void` handler method. Nothing breaks at compile time when you upgrade, because the old
-annotations are deprecated rather than deleted and keep behaving exactly as they did in 0.34.0. Read
-[section 1](#1-the-seven-framework-annotations-get-an-occurrent-prefix).
+All seven framework annotations are renamed to an `Occurrent`-prefixed name. Nothing breaks at compile time when
+you upgrade, because the old annotations are deprecated rather than deleted and keep behaving exactly as they did
+in 0.34.0. Read [section 1](#1-the-seven-framework-annotations-get-an-occurrent-prefix).
 
 ## 1. The seven framework annotations get an `Occurrent` prefix
 
@@ -39,12 +38,12 @@ has the reasoning, including the three alternatives that were examined and rejec
 and `DEFAULT` constants it has today. It is still a different type from the top-level
 `org.occurrent.annotation.StartPosition` the other annotations use.
 
-### The four subscription annotations also change what the method returns
+### What each new annotation expects
 
 `@OccurrentProjection`, `@OccurrentSaga` and `@OccurrentSnapshot` are a plain rename. Their attributes and the
 factory method they mark are unchanged, so the import and the name are the whole change.
 
-The four subscription annotations are not a plain rename. The old ones go on a `void` handler method, the new ones
+The four subscription annotations are more than a rename. The old ones go on a `void` handler method, the new ones
 go on a no-arg factory method returning a `Subscription` or a `DcbSubscription` descriptor, the same way
 `@OccurrentProjection` and `@OccurrentSaga` already work:
 
@@ -74,6 +73,9 @@ two places to say it with no rule for which one wins. Every other attribute is t
 `id`, `startAt`, `startAtGlobalPosition`, `startAtDcbPosition`, `startAtTimeEpochMillis`, `startAtISO8601`,
 `resumeBehavior` and `startupMode` mean what they meant before.
 
+Turning a `void` handler into a descriptor is a change of its own, with its own recipe support and its own section
+in this guide. This section covers the rename.
+
 ### Run the recipe
 
 ```xml
@@ -100,55 +102,16 @@ mvn rewrite:run
 ```
 
 It changes the import and the annotation name at every use, in Java and Kotlin alike, and it moves a
-`StreamSubscription.StartPosition` reference to the new annotation's nested enum with it. On a
-`@Projection`, `@Saga` or `@Snapshot` that is the whole upgrade, and the module compiles and behaves as before.
+`StreamSubscription.StartPosition` reference to the new annotation's nested enum with it. On a `@Projection`,
+`@Saga` or `@Snapshot` that is the whole upgrade, and the module compiles and behaves as before.
 
-### By hand, for a subscription
+### What the rename does not do to a subscription
 
-A renamed subscription annotation still sits on a `void` handler method after the recipe has run, and a declared
-`eventTypes` or `tags` no longer has an attribute to live in, so the module does not compile until you move the
-handler into a descriptor. Do that in three steps:
+The rename alone does not make a subscription stop compiling. A renamed annotation on a `void` handler method is
+still valid source, because the new annotations target a method the same way the old ones did. What does fail
+compilation is a use of `eventTypes`, or of `tags` on `@OccurrentDcbSubscription`, since the new annotations do
+not declare them. Delete those two and the handler compiles again.
 
-1. **Keep the handler method and delete its annotation.** Anything that calls it directly, or references it as a
-   method reference, keeps working.
-2. **Add a factory method beside it** returning `Subscription<E>` (or `DcbSubscription<E>`, or the reactor twin),
-   annotated with the new name and repeating the old annotation's `id` and start-position attributes.
-3. **Register one handler per event type**, each one calling the method you kept. Where the old method declared a
-   `@StreamId` or a `@StreamVersion` parameter, read the same value off the `EventMetadata` the handler receives.
-
-A declared `eventTypes` becomes the set of types you register handlers for. On DCB, declared `tags` go into the
-builder's `tags(..)`, which narrows the types the handlers already select, exactly as the old annotation's query
-did. Do not put them into `criteria(..)` instead. That one replaces the derived selection rather than narrowing it,
-so the subscription would start receiving every type those tags admit.
-
-Three kinds of handler need a decision from you rather than a translation:
-
-- **A handler with Spring advice on a `@SynchronousSubscription`.** That is the one of the four annotations whose
-  path goes through the Spring proxy, so a `@Transactional`, `@Retryable` or `@Cacheable` on it, or on its class,
-  runs today. A body called from a lambda has no proxy in front of it, so the advice stops running. Take a
-  `TransactionTemplate` in the handler instead, or keep the work in an ordinary Spring bean the handler calls.
-- **A handler that declares a checked exception.** The registrars invoke reflectively today, so a `void` handler may
-  declare `throws`. A descriptor's handler cannot, so either catch inside the handler or change what the method throws.
-- **An application on both the blocking and the reactor stack.** Both bean post processors scan the same annotations,
-  so a `void` handler in such an application is registered twice and nothing in the source says which stack owns it.
-  Write the two descriptors by hand, one per stack, to keep both registrations.
-
-Advice attached by an external pointcut is invisible to a source rewrite, so check those by hand whichever
-annotation they reach.
-
-### The three asynchronous annotations never ran your advice
-
-`@Subscription`, `@StreamSubscription` and `@DcbSubscription` are
-registered before Spring wraps the bean in its AOP proxy, and their dispatch invokes that raw target, so a
-`@Transactional` on one of their handlers has never opened a transaction. Moving such a handler into a descriptor
-loses nothing, and the new code says so plainly, because a handler that needs a transaction takes a
-`TransactionTemplate` on the blocking stack or a `TransactionalOperator` on the reactor one.
-
-### When a synchronous subscription is delivered changes
-
-A `@OccurrentSynchronousSubscription` is registered later in startup than the old `@SynchronousSubscription`, after
-the singletons are instantiated, which is where `@Projection`, `@Saga` and `@Snapshot` already register. A write
-executed during startup, in between the two points, reaches the old annotation's handler and does not reach the new
-one. That is the correct order rather than a regression, since a synchronous handler whose collaborators are not
-wired yet cannot run safely, but it is a behaviour change and an application that writes during startup should know
-about it.
+A handler that compiles again is still not what the new annotation is for. It has the new name on a method
+returning `void`, where the annotation expects a factory method returning a descriptor, so the conversion is
+still owed. Finish it rather than reading a green compile as a finished migration.
