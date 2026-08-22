@@ -22,6 +22,7 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.DcbCriterion
 import org.occurrent.eventstore.api.dcb.Tag
+import org.occurrent.filter.internal.EventTypeExpansion
 import java.util.*
 import kotlin.reflect.KClass
 
@@ -60,20 +61,41 @@ class DcbCriteriaBuilder<E : Any> private constructor(
     /** Creates a builder that refines the given boundary criterion, backed by a [CloudEventConverter]. */
     constructor(cloudEventConverter: CloudEventConverter<E>, boundary: DcbCriterion) : this(CloudEventTypeGetter { cloudEventConverter.getCloudEventType(it) }, boundary)
 
-    /** A criterion matching events whose CloudEvent type is the type string mapped from [type]. */
-    fun type(type: Class<out E>): DcbCriterion {
-        val mapped = typeGetter.getCloudEventType(type)
-        return if (boundary != null) boundary.types(mapped) else DcbCriteria.type(mapped)
-    }
+    // Do not unify type/types below with a future buildDcbCriteria helper landing in this same module from a
+    // different epic. buildDcbCriteria narrows uniformly, using a declared type's own CloudEvent type string with no
+    // expansion, which is a different policy from the refusal type/types apply here. Two type-derivation helpers that
+    // look alike is not a reason to share an implementation: doing so picks one policy for both, and whichever one
+    // loses either starts refusing a caller that was fine, or starts silently missing concrete subtypes it used to
+    // find.
 
-    /** A criterion matching events whose CloudEvent type is any of the type strings mapped from the supplied classes (any-of). */
-    fun types(first: Class<out E>, vararg rest: Class<out E>): DcbCriterion {
-        val mapped = ArrayList<String>(rest.size + 1)
-        mapped.add(typeGetter.getCloudEventType(first))
-        // A Java caller can still pass a null vararg element despite the non-null Kotlin type, so validate each explicitly.
-        for (type in rest) mapped.add(typeGetter.getCloudEventType(Objects.requireNonNull(type, "Type cannot be null")))
+    /**
+     * A criterion matching events whose CloudEvent type is any of the CloudEvent types [type] expands into.
+     *
+     * [type] is expanded the way every other type-filter derivation in the library expands a declared type, through
+     * [EventTypeExpansion]: a sealed type expands to the concrete types it permits, all the way down, and a type
+     * whose concrete types cannot all be found is refused rather than turned into a criterion that would miss some
+     * of them.
+     */
+    fun type(type: Class<out E>): DcbCriterion {
+        val mapped = expandedCloudEventTypes(setOf(type))
         return if (boundary != null) boundary.types(mapped) else DcbCriteria.types(mapped)
     }
+
+    /**
+     * A criterion matching events whose CloudEvent type is any of the CloudEvent types the supplied classes expand
+     * into (any-of). Each declared type is expanded the way [type] expands one.
+     */
+    fun types(first: Class<out E>, vararg rest: Class<out E>): DcbCriterion {
+        val declaredTypes = LinkedHashSet<Class<out E>>(rest.size + 1)
+        declaredTypes.add(first)
+        // A Java caller can still pass a null vararg element despite the non-null Kotlin type, so validate each explicitly.
+        for (type in rest) declaredTypes.add(Objects.requireNonNull(type, "Type cannot be null"))
+        val mapped = expandedCloudEventTypes(declaredTypes)
+        return if (boundary != null) boundary.types(mapped) else DcbCriteria.types(mapped)
+    }
+
+    private fun expandedCloudEventTypes(declaredTypes: Set<Class<out E>>): List<String> =
+        EventTypeExpansion.expand(declaredTypes, ::cannotBuildCriterionOn).map { typeGetter.getCloudEventType(it) }
 
     /** A criterion matching events containing all the supplied DCB tags (all-of). */
     fun tags(first: Tag, vararg rest: Tag): DcbCriterion =
@@ -126,4 +148,24 @@ class DcbCriteriaBuilder<E : Any> private constructor(
             "$method() cannot refine a boundary criterion. Call criteria() without a boundary instead."
         }
     }
+}
+
+private fun cannotBuildCriterionOn(eventType: Class<*>): IllegalArgumentException {
+    if (eventType.isArray) {
+        return IllegalArgumentException(
+            "${eventType.typeName} cannot be a declared event type, since this expansion does not support an array. Declare the concrete event types instead."
+        )
+    }
+    if (eventType.isPrimitive) {
+        return IllegalArgumentException(
+            "${eventType.typeName} cannot be a declared event type, since no event is ever an instance of a primitive type. Declare the concrete event types instead."
+        )
+    }
+    return IllegalArgumentException(
+        "the concrete event types dispatch would accept for ${eventType.name} cannot all be enumerated, so a criterion " +
+            "derived from it would miss some of them. Declare the concrete event types instead, make ${eventType.simpleName} " +
+            "and every level below it final or sealed, or build the DcbCriterion yourself with the raw type string, " +
+            "which is the way out when a CloudEventTypeMapper of your own maps the whole hierarchy onto a single " +
+            "CloudEvent type string."
+    )
 }
