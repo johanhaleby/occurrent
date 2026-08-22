@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 48
-updated_at: '2026-08-22T14:26:58+00:00'
-updated_by: 'orchestrator rel34: 933 held, my own brief propagated a JDK-proxy defect'
+revision: 49
+updated_at: '2026-08-22T15:01:48+00:00'
+updated_by: 'orchestrator rel34: revert gating, U6 ruled, U19 delivered, brk finished'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -574,9 +574,9 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker resolves an invocable method against the proxy class at all four sites per file,
-      adds proxy-target-class=false coverage
-    last_meaningful_progress_at: '2026-08-22T14:26:58+00:00'
+    next_action: worker adds the no-regression floor to its resolve helper and routes the fourth call
+      site through it
+    last_meaningful_progress_at: '2026-08-22T15:01:48+00:00'
     observed:
       scope_derived_by_orchestrator:
         note: 'Enumerated the invocation sites myself rather than trusting the issue text. The defect
@@ -680,6 +680,28 @@ units:
           which Boot''s default subclass proxies hide.'
         via: gh api pulls/933/reviews, verified against origin/main
         at: '2026-08-22T14:26:58+00:00'
+      startup_hang_found_and_ruling:
+        note: 'Worker found a defect the brief did not anticipate and STRICTLY WORSE than #837 itself:
+          a @Transactional handler with startAt=BEGINNING and startupMode=WAIT_UNTIL_STARTED replays synchronously
+          inside the BeanPostProcessor, on the thread still creating that bean, so getBean(beanName) asks
+          the factory for a singleton it is mid-creating and Spring Boot hangs forever. Reproduced (timeout
+          90 killed at exit 124), fixed with an isCurrentlyInCreation check falling back to the raw bean,
+          reverted to confirm the hang returns, restored, regression test per stack. It also routed four
+          more defects to #935 (JDK interface proxy, prototype scope, private or final methods on a CGLIB
+          proxy, FactoryBean beans), all of which also affect the pre-existing processSynchronousSubscribeAnnotation.
+          ORCHESTRATOR RULING, overruling the worker in part: #935''s scope is right and goes to sdi,
+          but a NO-REGRESSION FLOOR must land in 933. Before this PR those three paths invoked the raw
+          bean, so in those configurations the handler RAN and merely lost its advice; after it they resolve
+          by name and Method.invoke throws, so the handler does not run at all. 933 converts ''advice
+          silently missing'' into ''delivery silently broken'' for those users, which is a regression
+          this PR introduces and cannot ship behind an issue. Not a restructuring: the worker ALREADY
+          built the shared resolve helper at lines 71-72, so the fix is that helper plus routing the fourth
+          call site at line 173 through it instead of its own bare getBean. Changelog placement upheld
+          against the worker''s own reviewer, on evidence: change streams require a replica set and every
+          subscription model here is change-stream based, so any deployment that can run these three annotations
+          already supports multi-document transactions.'
+        via: 'worker DELIVERY_RESULT + my own read of pr933 and #935'
+        at: '2026-08-22T15:01:48+00:00'
     assessment: 'Dispatched 2026-08-22 as a chip after U3 merged. The 2026-08-17 deferral to the ADR 127
       epic and my own 2026-08-22 supersede were BOTH argued on premises that did not survive. The deferral
       assumed a large fix that the epic would rewrite immediately; the supersede assumed the epic had
@@ -1148,7 +1170,7 @@ units:
     - 'brk''s fence-removal PR for #922, a PRODUCTION defect in code already merged to main; PR number
       pending'
     next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    last_meaningful_progress_at: '2026-08-22T15:01:48+00:00'
     observed:
       brk_gate:
         note: 'brk''s closing condition is now EXACTLY ONE PR. PR 910 merged as cacdc25b9 closing brk
@@ -1202,6 +1224,14 @@ units:
           can fail or the test does not pin it down. It was the first.'
         via: 'brk orchestrator verdict on #922'
         at: '2026-08-22T12:11:27+00:00'
+      brk_finished:
+        note: 'brk is FINISHED as of 2026-08-22T14:57:25Z: 17 units DONE, #388 closed, last brk commit
+          df0548bfa, monitor retired, sessions archived, #893 left open as the remainder. R3''s gate on
+          brk is CLEARED. Verified myself that PR 930 merged as df0548bfa and that it survives sdi''s
+          revert branch as an ancestor. #922 was still OPEN when I checked, brk said it was closing it,
+          so re-check before R4.'
+        via: brk orchestrator + gh pr view 930
+        at: '2026-08-22T15:01:48+00:00'
     assessment: 'Johan''s manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
       The orchestrator hands him the checklist and verifies the observable results. The 1000-file allowance
       is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z
@@ -1700,7 +1730,7 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 937
       met: false
       evidence: ''
     - check: issue_closed
@@ -1708,8 +1738,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: 'await the worker''s claim on #931'
-    last_meaningful_progress_at: '2026-08-22T14:02:19+00:00'
+    next_action: gate PR 937 once CI concludes
+    last_meaningful_progress_at: '2026-08-22T15:01:48+00:00'
     observed:
       origin:
         note: 'Found by U4 the expensive way. ReactiveMongoAppliedAppendStore counted attempts inside
@@ -1736,6 +1766,19 @@ units:
           57 chars, both title gates run BEFORE the spawn call this time rather than after.
         via: orchestrator
         at: '2026-08-22T14:02:19+00:00'
+      premise_corrected_then_delivered:
+        note: 'The worker BLOCKED rather than writing javadoc, because #931''s premise was false: sleepObservingShutdown
+          receives the RAW shutdownPredicate parameter, never retry.retryPredicate and never the combined
+          predicate applyShutdownPredicate builds, so retryIf is NOT polled during the backoff. I verified
+          that in RetryExecution on main rather than taking it. But U4''s symptom was real and I found
+          where it comes from: MongoAppliedAppendStore passes its counting predicate as executeWithRetry''s
+          SECOND parameter, which is the shutdown predicate, and that IS polled every SHUTDOWN_POLL_INTERVAL_MILLIS
+          (50ms) for the whole backoff. Same symptom, same fix U4 applied, different parameter. So #931
+          was RETARGETED rather than closed, retitled ''The shutdown predicate is polled during every
+          backoff, and nothing says so'', and the worker delivered PR 937 against the corrected scope.
+          My filing error, caught by the worker before it wrote anything.'
+        via: my read of RetryExecution + MongoAppliedAppendStore
+        at: '2026-08-22T15:01:48+00:00'
     assessment: Small and documentation only, but it closes a behaviour change this release introduces.
       Registered rather than folded into U4 so PR 914 can merge on its own gate.
 cross_epic:
@@ -1753,3 +1796,15 @@ cross_epic:
       pointing at upgrading-to-0.34.0.md. No rel34 brief cites ADR 0127''s CONTENT, only its existence,
       so nothing in this epic went stale. Checked, not assumed.'
     at: '2026-08-22T12:41:01+00:00'
+  sdi_revert_and_hold:
+    note: 'Johan ruled REVERT after I escalated #929. sdi''s PR 936 (sdi/revert-0_35-work-for-0_34-tag,
+      167 files, +723/-2901) reverts a714f8d32 (the SubscriptionHandle rename) and 6f47516c6 (the seven
+      @Occurrent* annotations). rel34 gates it since it is release-affecting. Verified independently:
+      df0548bfa is still an ancestor so brk''s fix survives; the branch reaches nothing beyond its two
+      commits plus PR 930''s own files; every 0.35.0 artifact is gone; the only surviving references are
+      in ADR 0127, which is CORRECT since an ADR records a decision and reverting an implementation does
+      not unmake it. Java CI still running at time of writing. sdi has HELD entirely: no further sdi unit
+      merges until the 0.34.0 tag exists, so sdi is no longer an input to R3. THE RULE, agreed by sdi
+      and brk both: anything merged to main before the tag ships in 0.34.0 whatever its documentation
+      says, because renaming the ''### Changelog next version'' heading is what assigns the release.'
+    at: '2026-08-22T15:01:48+00:00'
