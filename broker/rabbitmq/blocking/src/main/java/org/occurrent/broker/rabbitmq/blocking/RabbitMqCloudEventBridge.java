@@ -237,11 +237,10 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         return new Builder(connection, model, outcomeChannel, queue);
     }
 
-    private void start(Builder builder) {
+    private void start(Builder builder, Set<RabbitMqDestination> destinations) {
         try {
             if (builder.declareTopology) {
                 consumeChannel.queueDeclare(queue, true, false, false, null);
-                Set<RabbitMqDestination> destinations = RabbitMqTopology.destinationsToBind(builder.resolver, builder.bindingFilter, builder.bindings);
                 for (RabbitMqDestination destination : destinations) {
                     consumeChannel.queueBind(queue, destination.exchange(), destination.routingKey());
                 }
@@ -772,6 +771,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             if (deliveryFailurePolicy == DeliveryFailurePolicy.PARK && parkingDestination == null) {
                 throw new IllegalStateException("A parkingDestination is required when onDeliveryFailure(PARK) is set");
             }
+            Set<RabbitMqDestination> destinations = declareTopology
+                    ? RabbitMqTopology.destinationsToBind(resolver, bindingFilter, bindings)
+                    : Set.of();
             // Validated above, before opening anything: a failure past this point has a channel (and, under PARK, a
             // parking sink) already open, so every later failure path in this method closes what it opened rather
             // than leaking it.
@@ -782,7 +784,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
                 failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log);
                 bridge = new RabbitMqCloudEventBridge(model, outcomeChannel, channel, queue, prefetchCount,
                         pollInterval, failureAction, readinessSource);
-                bridge.start(this);
+                bridge.start(this, destinations);
                 return bridge;
             } catch (RuntimeException e) {
                 closeQuietly(channel);
