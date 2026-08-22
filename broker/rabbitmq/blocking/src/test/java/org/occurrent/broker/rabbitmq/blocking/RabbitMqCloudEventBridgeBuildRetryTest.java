@@ -43,9 +43,9 @@ import static org.mockito.Mockito.when;
 /**
  * {@link RabbitMqCloudEventBridge.Builder#build()}'s retry, exercised against a mocked {@link Connection} and
  * {@link Channel} instead of a real broker, which has no way to force a channel open to fail on demand the exact
- * number of times a bound needs proving. {@code RabbitMqCloudEventBridgeConnectionRecoveryTest} proves the same
- * retry against a real broker end to end; this file proves the bound and the transient-versus-permanent predicate
- * precisely and fast.
+ * number of times a bound needs proving. {@code RabbitMqCloudEventBridgeBuildSurvivesBrokerOutageTest} proves the
+ * same retry against a real broker end to end; this file proves the bound and the transient-versus-permanent
+ * classification precisely and fast.
  */
 class RabbitMqCloudEventBridgeBuildRetryTest {
 
