@@ -40,9 +40,10 @@ import java.util.stream.Stream;
 public class RetryExecution {
 
     /**
-     * Upper bound, in milliseconds, on how long a backoff sleep runs before the shutdown predicate is re-checked.
-     * A shutdown signaled through the predicate is therefore observed within this many milliseconds of being
-     * raised, no matter how long the remaining backoff is, rather than only after the full backoff has elapsed.
+     * How often, in milliseconds, a backoff sleep re-checks the shutdown predicate. A shutdown signaled during the
+     * sleep is therefore caught at the next check, not only once the full remaining backoff has elapsed, no matter
+     * how long that remaining backoff is. This is a polling cadence, not a hard deadline. A single {@link Sleeper}
+     * call can itself run longer than requested under ordinary scheduling delay.
      */
     private static final long SHUTDOWN_POLL_INTERVAL_MILLIS = 50;
 
@@ -182,12 +183,12 @@ public class RetryExecution {
 
     /**
      * Sleeps up to {@code totalMillis}, polling the caller's own {@code shutdownPredicate} (not the combined
-     * retry-and-shutdown predicate {@code retry.retryPredicate} holds) every {@link #SHUTDOWN_POLL_INTERVAL_MILLIS}
-     * so a shutdown signaled during the sleep is observed within that bound instead of only after the full backoff
-     * has elapsed. Testing only the raw shutdown predicate here, rather than the combined one, means the caller's
-     * retry predicate is invoked once per attempt as before, not once per poll. Returns {@code false} the moment
-     * shutdown is observed, leaving any remaining backoff unslept, or {@code true} once the full duration has
-     * elapsed without shutdown being observed.
+     * retry-and-shutdown predicate {@code retry.retryPredicate} holds) every {@link #SHUTDOWN_POLL_INTERVAL_MILLIS},
+     * so a shutdown signaled during the sleep is caught at the next poll instead of only once the full backoff has
+     * elapsed. Testing only the raw shutdown predicate here, rather than the combined one, means the caller's retry
+     * predicate is invoked once per attempt as before, not once per poll. Returns {@code false} the moment shutdown
+     * is observed, leaving any remaining backoff unslept, or {@code true} once the full duration has elapsed
+     * without shutdown being observed.
      * <p>
      * An interrupted sleep restores the thread's interrupt status before rethrowing, so a caller's own interrupt
      * handling (e.g. an executor shutting down its worker threads) is preserved rather than swallowed here.
