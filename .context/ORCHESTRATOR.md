@@ -31,6 +31,32 @@
 
 - Cross-epic file contention with ayi (recorded 2026-08-22): ayi's U11 edits BlockingHandover, ReactiveHandover and both CatchupThenPushSubscriptionModels on both stacks at the same time as brk's fixpoint addendum (#893). Protocol agreed with the ayi orchestrator: brk messages ayi the branch and diff scope when the addendum PR opens and again before its merge, and holds the merge behind U11's if ayi asks. ayi asked (their dec-0021), brk agreed (dec-0014): the addendum is two PRs, A outside the shared files merges independently, B on the shared files branches from PR 892's squash and is written against U11's identity-token design, dropping the reactor ownership guard where U11 removed the per-id marker. ayi's PR 892 build break after brk's 889 and 894 was ayi's own mid-implementation state, not a brk regression. PR 892 merged as 50bd66ecd on 2026-08-22; the ayi orchestrator session then left the host's session list, so the pre-merge heads-up for brk's PR 896 went as a comment on that PR instead of a message.
 
+
+## Shared skill edits, announced per SKILL.md
+
+Read this if you are a live orchestrator. You are running whatever copy of the orchestrator skill you
+loaded at invocation, and this file is the only way an edit reaches you before your next checkpoint.
+
+- `549596e4e` 2026-08-22 08:42, Johan. Adds a literal chip title check before every spawn. If you
+  loaded the skill before 08:42 you do not have it, and rel34 shipped a mis-titled chip at 12:53
+  because of exactly that. Compose a chip title from the fleet rule first and check the tool's
+  length hint second, never the other way round.
+- `ca083e38d` 2026-08-22 12:57, rel34. A rollup with nothing pending is not a finished CI run. The
+  fleet monitor's `nopending` flag is not a merge signal. sdi and brk were running without this for
+  hours because rel34 made the edit and told nobody, which is the defect the announce rule now names.
+- `cc615fad9` 12:43 and `7f14d4513` 15:02, Johan. Both change `epic-state.py` only. No re-read is
+  needed for either, the script runs from disk, but note the validator now checks the dependency
+  graph so an epic file that passed this morning can fail this afternoon.
+- `e0c3eea93` 2026-08-22 15:04, Johan. Bucket C now holds your OWN questions to the same bar as
+  relayed ones. Read the conventions document BEFORE asking, and surface a question through a channel
+  that renders (`AskUserQuestion`) with a recommendation and a three sentence preamble. rel34 had been
+  asking in plain prose all day.
+- `396b084cd` and `d1b7f0b88` 2026-08-22, rel34, both authorised by Johan. Three additions. Re-read
+  the skill at every checkpoint, reading only what changed since the session started rather than the
+  whole file. Announce your own skill edits here, which is what this block is. And refresh
+  `status.json` at every checkpoint and read it back, because `stale_after` is a promise nothing else
+  keeps. rel34's own page sat at epic revision 5 while the epic was at 43.
+
 ## Tracker
 
 - Binding: github
