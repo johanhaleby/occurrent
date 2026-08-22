@@ -28,6 +28,7 @@ import org.occurrent.broker.rabbitmq.blocking.RabbitMqBridgeException;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.retry.RetryStrategy;
 
 import java.io.IOException;
 import java.net.URI;
@@ -89,8 +90,12 @@ class RabbitMqDomainEventBridgeBuildFailureTest {
         DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
         RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(EXCHANGE, ReflectionCloudEventTypeMapper.qualified());
 
+        // retryStrategy(none()): this test is about the unwind on ONE failed attempt, not about retrying, and a
+        // queue declare failure wrapped as RabbitMqBridgeException is retried by default (see
+        // RabbitMqDomainEventBridgeBuildRetryTest), which would both slow this down and call close() more than once.
         RabbitMqDomainEventBridge.Builder<TestOrderPlaced> builder = RabbitMqDomainEventBridge.builder(connection, feed, "queue")
-                .resolver(resolver);
+                .resolver(resolver)
+                .retryStrategy(RetryStrategy.none());
 
         assertThatThrownBy(builder::build).isInstanceOf(RabbitMqBridgeException.class);
 

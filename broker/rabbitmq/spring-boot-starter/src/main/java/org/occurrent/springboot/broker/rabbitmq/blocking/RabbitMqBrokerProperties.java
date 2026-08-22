@@ -115,6 +115,7 @@ public class RabbitMqBrokerProperties {
         private DeliveryFailurePolicy onDeliveryFailure = DeliveryFailurePolicy.REDELIVER;
 
         private final ParkingDestination parkingDestination = new ParkingDestination();
+        private final BridgeRetry retry = new BridgeRetry();
 
         public Duration getPollInterval() {
             return pollInterval;
@@ -150,6 +151,10 @@ public class RabbitMqBrokerProperties {
 
         public ParkingDestination getParkingDestination() {
             return parkingDestination;
+        }
+
+        public BridgeRetry getRetry() {
+            return retry;
         }
     }
 
@@ -240,6 +245,76 @@ public class RabbitMqBrokerProperties {
 
         public void setMultiplier(double multiplier) {
             this.multiplier = multiplier;
+        }
+    }
+
+    /**
+     * The same {@code initial}/{@code max}/{@code multiplier} shape as {@link Retry}, plus {@code maxAttempts}. A
+     * bridge's {@code build()} retry has nothing else to stop it, no {@code close()} to cancel an attempt already
+     * in flight the way a sink's publish retry has, so it needs its own attempt limit instead of the sink's
+     * deliberately uncapped default. A distinct type rather than an added field on {@link Retry}, so
+     * {@code sink.retry.max-attempts} never appears as a setting that looks wired in but does nothing. See
+     * {@code RabbitMqCloudEventSink}'s class javadoc for why the sink's own retry stays uncapped.
+     */
+    public static class BridgeRetry {
+
+        /**
+         * The first retry delay. 100 milliseconds by default, matching {@code RabbitMqCloudEventBridge.Builder}'s
+         * own default backoff.
+         */
+        private Duration initial = Duration.ofMillis(100);
+
+        /**
+         * The longest the retry delay grows to. Two seconds by default, matching
+         * {@code RabbitMqCloudEventBridge.Builder}'s own default backoff.
+         */
+        private Duration max = Duration.ofSeconds(2);
+
+        /**
+         * What the delay is multiplied by after each retried attempt. {@code 2.0} by default, matching
+         * {@code RabbitMqCloudEventBridge.Builder}'s own default backoff.
+         */
+        private double multiplier = 2.0;
+
+        /**
+         * The most attempts {@code build()} makes before failing loudly instead of retrying again. Ten by default,
+         * matching {@code RabbitMqCloudEventBridge.Builder}'s own default, which spends roughly eleven seconds
+         * sleeping between the nine retried attempts with the backoff above, on top of whatever each attempt's own
+         * broker calls take. Set lower for a deployment that would rather fail startup fast, or higher for a
+         * broker that routinely takes longer than that to come back.
+         */
+        private int maxAttempts = 10;
+
+        public Duration getInitial() {
+            return initial;
+        }
+
+        public void setInitial(Duration initial) {
+            this.initial = initial;
+        }
+
+        public Duration getMax() {
+            return max;
+        }
+
+        public void setMax(Duration max) {
+            this.max = max;
+        }
+
+        public double getMultiplier() {
+            return multiplier;
+        }
+
+        public void setMultiplier(double multiplier) {
+            this.multiplier = multiplier;
+        }
+
+        public int getMaxAttempts() {
+            return maxAttempts;
+        }
+
+        public void setMaxAttempts(int maxAttempts) {
+            this.maxAttempts = maxAttempts;
         }
     }
 }
