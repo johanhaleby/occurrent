@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 10
+revision: 12
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -122,14 +122,15 @@ units:
   U8:
     issue: 725
     goal: "The OpenRewrite Java body visitor with its three refusals, reactor Mono wrapping, plus wiring every recipe into org.occurrent.UpgradeToOccurrent_0_34 and a migration-guide coherence pass."
-    phase: PLANNED
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: [U5, U6, U7]
     session: null
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
-    blocking_on: []
+    blocking_on:
+      - {what: "CHANGELOG GATE: no sdi unit writes changelog.md until the occurrent-0.34.0 tag exists, because a release cut RENAMES the 'Changelog next version' heading in place (4c04880e5 did exactly that for 0.33.0) and would publish sdi entries as 0.34.0 notes. U8 lands the collected block once the heading means 0.35.0. Units author their entries in their DELIVERY_RESULT meanwhile.", since: 2026-08-22T10:45:00Z, recheck_after: 2026-08-22T14:00:00Z}
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T09:35:00Z
     observed: {}
