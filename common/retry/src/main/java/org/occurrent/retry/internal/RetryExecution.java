@@ -186,9 +186,11 @@ public class RetryExecution {
      * retry-and-shutdown predicate {@code retry.retryPredicate} holds) every {@link #SHUTDOWN_POLL_INTERVAL_MILLIS},
      * so a shutdown signaled during the sleep is caught at the next poll instead of only once the full backoff has
      * elapsed. Testing only the raw shutdown predicate here, rather than the combined one, means the caller's retry
-     * predicate is invoked once per attempt as before, not once per poll. Returns {@code false} the moment shutdown
-     * is observed, leaving any remaining backoff unslept, or {@code true} once the full duration has elapsed
-     * without shutdown being observed.
+     * predicate is never invoked more than once per attempt, as before this method existed, and never once per poll
+     * (it can still be skipped entirely for an attempt where the shutdown predicate itself already answers stop,
+     * since {@code applyShutdownPredicate} combines the two with {@code Predicate.and}, which short-circuits).
+     * Returns {@code false} the moment shutdown is observed, leaving any remaining backoff unslept, or {@code true}
+     * once the full duration has elapsed without shutdown being observed.
      * <p>
      * An interrupted sleep restores the thread's interrupt status before rethrowing, so a caller's own interrupt
      * handling (e.g. an executor shutting down its worker threads) is preserved rather than swallowed here.

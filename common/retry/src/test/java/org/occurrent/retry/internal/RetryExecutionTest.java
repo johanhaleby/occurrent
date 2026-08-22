@@ -90,7 +90,7 @@ class RetryExecutionTest {
     }
 
     @Test
-    void the_retry_predicate_is_tested_once_per_attempt_even_though_the_backoff_after_it_is_polled_many_times() {
+    void the_retry_predicate_is_invoked_at_most_once_per_attempt_never_once_per_poll() {
         AtomicInteger retryPredicateInvocations = new AtomicInteger();
         AtomicInteger sleptChunks = new AtomicInteger();
 
@@ -114,6 +114,38 @@ class RetryExecutionTest {
         // stateful thing: it must be asked once per failed attempt, the same as before this fix, not once per poll.
         assertThat(sleptChunks).hasValue(20);
         assertThat(retryPredicateInvocations).hasValue(1);
+    }
+
+    @Test
+    void the_retry_predicate_is_never_invoked_when_shutdown_is_already_active_on_entry() {
+        AtomicInteger retryPredicateInvocations = new AtomicInteger();
+        AtomicInteger attempts = new AtomicInteger();
+
+        RetryExecution.Sleeper sleeper = millis -> {
+            throw new AssertionError("should never sleep: shutdown was already active on the first attempt");
+        };
+
+        RetryStrategy retryStrategy = RetryStrategy.fixed(20 * POLL_INTERVAL_MILLIS)
+                .maxAttempts(1000)
+                .retryIf(e -> {
+                    retryPredicateInvocations.incrementAndGet();
+                    return true;
+                });
+        Runnable failingAction = () -> {
+            attempts.incrementAndGet();
+            throw new IllegalStateException("always fails");
+        };
+
+        // Predicate.and short-circuits: applyShutdownPredicate combines the shutdown predicate and retryIf as
+        // shutdownPredicate.and(retryPredicate), so a shutdown predicate that already answers stop never reaches
+        // retryIf at all for that attempt. "At most once per attempt" includes this zero-invocation case, this is
+        // not a defect this unit introduced or is fixing, only a boundary the claim above must not overstate.
+        Runnable retrying = RetryExecution.executeWithRetry(failingAction, __ -> false, retryStrategy, sleeper);
+
+        assertThatThrownBy(retrying::run).isInstanceOf(IllegalStateException.class);
+
+        assertThat(attempts).hasValue(1);
+        assertThat(retryPredicateInvocations).hasValue(0);
     }
 
     @Test
