@@ -659,8 +659,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
          * {@code AGENTS.md} sets for every component that talks to an external store, capped at that count because a
          * {@link #build()} that never gives up turns a broker that is permanently misconfigured, a rejected
          * credential or a nonexistent vhost, into an application that hangs at startup with no diagnosis, which is
-         * worse than the failure this retry exists to absorb. {@link #build()} logs each retried attempt at
-         * {@code WARN} so a retrying startup is never mistaken for a hung one. See
+         * worse than the failure this retry exists to absorb. By default {@link #build()} logs each retried
+         * attempt at {@code WARN} so a retrying startup is never mistaken for a hung one. A caller-supplied
+         * {@link RetryStrategy} replaces that logging along with everything else this default configures. See
          * {@link RabbitMqBuildFailureClassifier} for exactly what is
          * retried and what is refused immediately, including under
          * {@link org.occurrent.broker.api.blocking.DeliveryFailurePolicy#PARK}, where the parking publisher's own
