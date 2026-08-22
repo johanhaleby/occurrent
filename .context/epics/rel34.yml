@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 28
-updated_at: '2026-08-22T14:45:00+00:00'
-updated_by: 'orchestrator session rel34-epic-registration-8c2066 (R3 gate widened: brk adds a recovery-race
-  investigation)'
+revision: 29
+updated_at: '2026-08-22T15:10:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U12 and U18 withdrawn as not reproducible,
+  brk 920 merged)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -802,9 +802,8 @@ units:
       met: false
       evidence: ''
     blocking_on:
-    - 'brk PR 920 (the #884 Kafka flake fix, test-only) merging'
-    - brk U17, the RabbitMqCloudEventBridgeConnectionRecoveryTest investigation, reaching a verdict; brk
-      does not close until it does
+    - brk U17, the RabbitMqCloudEventBridgeConnectionRecoveryTest verdict; brk does not close until it
+      is in
     next_action: dispatch after plan approval
     last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
     observed:
@@ -833,6 +832,14 @@ units:
           with that test present. That rules out deterministically broken, not an intermittent race.'
         via: brk orchestrator messages, gh run list, statusCheckRollup per JDK
         at: '2026-08-22T14:45:00+00:00'
+      brk_920_merged:
+        note: 'brk PR 920 merged as cfee1477b and #884 is closed by it, so brk''s remaining item before
+          closing is U17 alone. Adjacent brk finding for awareness, not action: the Kafka starter leaves
+          auto.offset.reset at Kafka''s default `latest`, so a brand-new consumer group receiving a publish
+          before its first rebalance never sees it. Pre-existing since the starter shipped, filed as #893
+          item 34 for Johan to rule, and no change to rel34''s tag unless he rules it in.'
+        via: brk orchestrator message
+        at: '2026-08-22T15:10:00+00:00'
     assessment: 'Johan''s manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
       The orchestrator hands him the checklist and verifies the observable results. The 1000-file allowance
       is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z:
@@ -1002,9 +1009,9 @@ units:
       actually runs on, closing the same identity-binding gap PR 902 closes on the blocking stack. ComposedCatchupModel
       retains the composed model suppliedBy was given, and verifiedNeverReplays compares it against the
       capability the projection runs on.
-    phase: RUNNING
-    health: PROGRESSING
-    swept: false
+    phase: CANCELLED
+    health: UNKNOWN
+    swept: true
     depends_on: []
     session: ListAgents name peaceful-curran-e041e6-4a, worktree peaceful-curran-e041e6, Sonnet/medium,
       same worker as U3 on a FRESH branch
@@ -1012,14 +1019,14 @@ units:
     - check: pr_merged
       ref: 908
       met: false
-      evidence: ''
+      evidence: PR 908 CLOSED unmerged. Branch left pushed for reference.
     - check: issue_closed
       ref: 903
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker implementing on a fresh branch
-    last_meaningful_progress_at: '2026-08-22T13:20:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T15:10:00+00:00'
     observed:
       pr_908:
         head: 2170cca7184b20dc7d90f2c3dd69466890db3f9c
@@ -1057,11 +1064,22 @@ units:
           Re-review requested.'
         via: gh pr view, gh run list, graphql reviewThreads
         at: '2026-08-22T13:20:00+00:00'
-    assessment: Adopted by Johan at a structured ask, dec-0007, on U3's own routing recommendation after
-      it found the gap while reviewing its own PR 902. Reactor twin of U3's fix, similar size. Pre-granted
+    assessment: 'Adopted by Johan at a structured ask, dec-0007, on U3''s own routing recommendation after
+      it found the gap while reviewing its own PR 902. Reactor twin of U3''s fix, similar size. Pre-granted
       the OccurrentReactiveMongoAutoConfiguration bean-method extension up front, because dec-0005 already
       established this fix shape is structurally cross-module and rediscovering that costs a round trip.
-      U6 (#837) must be fenced out of the two reactor files U12 owns.
+      U6 (#837) must be fenced out of the two reactor files U12 owns. WITHDRAWN 2026-08-22T15:0xZ, not
+      reproducible. The reactor starter''s durable-model bean carries ONE shared @ConditionalOnMissingBean
+      over both FluxSubscriptionModel and Subscribable, so the method that fills the holder runs only
+      when no replacement exists and the divergence both issues describe cannot occur; the RegisteringSubscribable
+      carve-out does not open a path, since that type never implements FluxSubscriptionModel and a hand-written
+      subclass implementing both loses to @Primary or fails startup. CRUCIALLY, and this is what Johan
+      challenged and what makes the argument sound rather than merely plausible: the wiring argument would
+      prove nothing for a released type, because AGENTS.md says this repository''s call sites are not
+      the population of users. It holds because ComposedCatchupModel is ABSENT from the occurrent-0.33.0
+      tag, added this cycle by #869 and #892, so no external consumer can have wired it. The blocking
+      twin #871 remains genuinely reachable and PR 902 stands, because there the durable model and the
+      Subscriptions DSL bean are gated on two INDEPENDENT conditions rather than one shared one.'
   U13:
     issue: 906
     goal: 'Documents already corrupted by the pre-fix updateEvent bug are healed, so they stop being permanently
@@ -1226,9 +1244,9 @@ units:
     goal: resolveCatchupModel compares the holder's model against the projection's actual capability instead
       of substituting it unconditionally, closing the recording-side twin of the warning-side gap U3 and
       U12 fixed.
-    phase: PLANNED
-    health: PROGRESSING
-    swept: false
+    phase: CANCELLED
+    health: UNKNOWN
+    swept: true
     depends_on:
     - U12
     session: null
@@ -1242,11 +1260,22 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch
-    last_meaningful_progress_at: '2026-08-22T11:15:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T15:10:00+00:00'
     observed: {}
-    assessment: Adopted by dec-0009. Found and correctly DECLINED by the U12 worker, whose remit covered
+    assessment: 'Adopted by dec-0009. Found and correctly DECLINED by the U12 worker, whose remit covered
       the warning rather than recording, and routed instead of folded in. Confirmed by two independent
       reviewers. It affects recording, which is the read-your-writes surface shipping in this release.
       Same fix shape as U3 and U12, including the AopProxyUtils.getSingletonTarget unwrapping both of
-      those needed, so give it to whichever worker still holds that context.
+      those needed, so give it to whichever worker still holds that context. WITHDRAWN 2026-08-22T15:0xZ,
+      not reproducible. The reactor starter''s durable-model bean carries ONE shared @ConditionalOnMissingBean
+      over both FluxSubscriptionModel and Subscribable, so the method that fills the holder runs only
+      when no replacement exists and the divergence both issues describe cannot occur; the RegisteringSubscribable
+      carve-out does not open a path, since that type never implements FluxSubscriptionModel and a hand-written
+      subclass implementing both loses to @Primary or fails startup. CRUCIALLY, and this is what Johan
+      challenged and what makes the argument sound rather than merely plausible: the wiring argument would
+      prove nothing for a released type, because AGENTS.md says this repository''s call sites are not
+      the population of users. It holds because ComposedCatchupModel is ABSENT from the occurrent-0.33.0
+      tag, added this cycle by #869 and #892, so no external consumer can have wired it. The blocking
+      twin #871 remains genuinely reachable and PR 902 stands, because there the durable model and the
+      Subscriptions DSL bean are gated on two INDEPENDENT conditions rather than one shared one.'

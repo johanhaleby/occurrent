@@ -1907,3 +1907,33 @@ sentence is false? A test suite will not ask that of a javadoc.
 
 And when the fix is a rewording, check the REPLACEMENT against the same question. Two of these three
 rewordings were themselves the second attempt.
+
+## A reachability argument from this repo's own wiring is subject to the call-sites rule (rel34, 2026-08-22)
+
+Two adopted units, #903 and #909, were withdrawn after a third Copilot round questioned not the
+fix but whether the bug could occur. The argument was that
+`OccurrentReactiveMongoAutoConfiguration.occurrentDurableSubscriptionModel` carries ONE shared
+`@ConditionalOnMissingBean(value = {FluxSubscriptionModel.class, Subscribable.class})`, so the
+method that fills the holder runs only when no replacement exists, and the divergence both issues
+describe cannot happen.
+
+That argument is correct here and would be worthless in the general case, and the difference is
+what matters. AGENTS.md says this repository's own call sites are not the population of users, so
+"the starter cannot produce this state" says nothing about a consumer wiring the beans by hand. The
+argument holds ONLY because `ComposedCatchupModel` is absent from the `occurrent-0.33.0` tag: it
+was added during this release cycle and has never shipped, so the starter genuinely is the whole
+population. Had it shipped, both issues would be reachable and closing them would have been wrong.
+
+So an unreachability claim needs two legs, and the second is the one that gets forgotten: the
+wiring cannot produce the state, AND no released surface lets a consumer produce it either. Check
+the tag, not just the auto-configuration.
+
+The maintainer caught this. The orchestrator argued only the first leg and presented the conclusion
+as settled, and AGENTS.md line 78 already carried the principle under a different heading, blast
+radius of an API change, which is why it did not get applied to a reachability question.
+
+The contrast that proves the shape: the blocking twin #871 IS reachable, because there the durable
+model is gated on `SubscriptionModel.class` while the `Subscriptions` DSL bean is gated separately
+on `Subscriptions.class`. Two independent conditions instead of one shared one, so an application
+replaces the DSL bean alone and the starter still fills the holder. Same feature, same fleet, one
+reachable and one not, decided by which types share a condition.
