@@ -131,12 +131,15 @@ public final class ComposedCatchupModel {
 
     // Unwraps through any number of nested AOP proxies to the innermost fixed target (AopProxyUtils.getSingletonTarget
     // stops at one layer, hence the loop), mirroring SubscriptionAnnotations.ultimateTarget. Returns model itself when
-    // it is not a proxy, or when a proxy's TargetSource is not a fixed singleton, so a prototype- or pool-scoped
-    // source is compared as the proxy it is rather than risking a side-effecting getTarget() call.
+    // it is not a proxy, when a proxy's TargetSource is not a fixed singleton (a prototype- or pool-scoped source is
+    // compared as the proxy it is rather than risking a side-effecting getTarget() call), or when the next layer in
+    // does not itself implement SubscriptionModelCapability, which happens when a proxy adds that capability through
+    // an introduction its target never had. Unwrapping past that layer would compare against an object this method
+    // could not honestly return as one, so it stops one layer short instead.
     private static SubscriptionModelCapability ultimateTarget(SubscriptionModelCapability model) {
         Object current = model;
         Object next;
-        while ((next = AopProxyUtils.getSingletonTarget(current)) != null) {
+        while ((next = AopProxyUtils.getSingletonTarget(current)) != null && next instanceof SubscriptionModelCapability) {
             current = next;
         }
         return (SubscriptionModelCapability) current;
