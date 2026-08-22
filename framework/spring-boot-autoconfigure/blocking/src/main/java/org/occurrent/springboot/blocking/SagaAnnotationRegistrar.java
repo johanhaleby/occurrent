@@ -182,6 +182,7 @@ class SagaAnnotationRegistrar {
             applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
                 SagaSubscription deferred = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
                 sagaSubscriptions.add(deferred);
+                registerSagaSubscriptionSingleton(id, deferred);
                 watchBackgroundCatchUpIfNobodyElseWill(annotation, id, deferred, waitUntilStarted);
             });
             return;
@@ -189,6 +190,7 @@ class SagaAnnotationRegistrar {
 
         SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
         sagaSubscriptions.add(sagaSubscription);
+        registerSagaSubscriptionSingleton(id, sagaSubscription);
         if (push) {
             watchBackgroundCatchUpIfNobodyElseWill(annotation, id, sagaSubscription, waitUntilStarted);
         }
@@ -389,9 +391,37 @@ class SagaAnnotationRegistrar {
         beanFactory.registerSingleton(beanName, instances);
     }
 
+    /**
+     * Publish the running {@link SagaSubscription} under {@code sagaSubscription-<id>}, next to the read-only
+     * {@code sagaInstances-<id>} above and registered the same way, as a singleton after refresh rather than as a bean
+     * definition. It is here because releasing a quarantined instance is the one saga operation that is not on
+     * {@link SagaInstances}, and without this bean an application on the annotation path could see a quarantined
+     * instance without being able to bring it back.
+     * <p>
+     * A saga in manual mode gets this bean when the application starts that saga, not at refresh, since there is no
+     * subscription to publish before then.
+     */
+    private void registerSagaSubscriptionSingleton(String id, SagaSubscription sagaSubscription) {
+        String beanName = sagaSubscriptionBeanName(id);
+        if (!(applicationContext instanceof ConfigurableApplicationContext configurableContext)) {
+            log.warn("Cannot publish '{}' because the application context is not a ConfigurableApplicationContext; the saga runs fine, but SagaSubscription.release(sagaId) is only reachable from a context that can hold the bean.", beanName);
+            return;
+        }
+        ConfigurableListableBeanFactory beanFactory = configurableContext.getBeanFactory();
+        if (beanFactory.containsBean(beanName)) {
+            throw new IllegalStateException("Cannot publish the SagaSubscription of saga '%s' as '%s' because a bean with that name already exists. Occurrent publishes each @Saga's SagaSubscription under 'sagaSubscription-<id>', so rename your bean or the saga.".formatted(id, beanName));
+        }
+        beanFactory.registerSingleton(beanName, sagaSubscription);
+    }
+
     /** The bean name the {@link SagaInstances} for {@code sagaId} is published under. */
     static String sagaInstancesBeanName(String sagaId) {
         return "sagaInstances-" + sagaId;
+    }
+
+    /** The bean name the {@link SagaSubscription} for {@code sagaId} is published under. */
+    static String sagaSubscriptionBeanName(String sagaId) {
+        return "sagaSubscription-" + sagaId;
     }
 
     // Gate the saga timer poller on the shared competing-consumer lease so only one instance polls, mirroring the
