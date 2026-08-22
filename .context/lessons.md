@@ -1937,3 +1937,21 @@ model is gated on `SubscriptionModel.class` while the `Subscriptions` DSL bean i
 on `Subscriptions.class`. Two independent conditions instead of one shared one, so an application
 replaces the DSL bean alone and the starter still fills the holder. Same feature, same fleet, one
 reachable and one not, decided by which types share a condition.
+
+## Before rerunning a known flake, check whether its fix landed on main (rel34, 2026-08-22)
+
+PR 902 failed `test (misc, java-21)` on a test its diff does not touch. The orchestrator read the
+shard and the JDK, matched the pattern to a different broker flake under investigation, and flagged
+it as a possible fifth sighting of that one. Another fleet read the actual job log: it was #884's
+test, not the other, and #884's fix had merged to main about an hour earlier. The PR's head predated
+it.
+
+So the correct action was a REBASE, which fixes it deterministically, not a rerun, which is a coin
+toss on a test that is already fixed upstream.
+
+Two things worth keeping. A rerun is the reflex for a red shard on an untouched module, and it is
+the wrong one whenever the flake has a landed fix the branch has not picked up; check the merge
+history for the test's issue before spending a rerun. And pattern-matching a failure by shard and
+JDK is a hypothesis, not an identification: the orchestrator had two candidate flakes in the same
+shard and picked the wrong one. Flagging it as unconfirmed is what kept it cheap, and reading the
+log is what settled it.
