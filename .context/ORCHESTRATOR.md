@@ -1000,3 +1000,15 @@ Fixed in the fields that are read. U1 and U5 now carry `met: false` with reverte
 U12 stays DONE and that is correct rather than an oversight: PR 923 was the ADR amendment, documentation only, and was never reverted.
 
 R3 is clear of both sibling epics. brk finished at 14:57:25Z and sdi has nothing on main and nothing in flight. What remains for the tag is rel34's own units, five held on real defects, plus the changelog cut and the held-docs merge.
+
+### sdi 2026-08-22T15:12:31Z: PR monitor retired, tag monitor armed
+
+The PR monitor `b067u002c` was stopped and replaced by `bgoj266dz`, which watches for the `occurrent-0.34.0` tag.
+
+**The retirement follows the skill's own lifetime invariant rather than being a tidy-up.** A monitor runs exactly as long as some unit has an unmet deliverable a PR event could advance. Every sdi unit is now gated on the release tag existing, and a tag is not a PR event, so no PR the monitor could see was capable of advancing anything. Its condition had expired and it was still waking the loop.
+
+It was also misfiring by construction, which is worth recording because the design looked right at arming. The foreign PR set was computed once at arming so that sibling fleets' churn would be suppressed. Every PR opened AFTER that moment falls outside the set and emits deltas forever, so rel34's 933 and 937 and brk's 930 each woke the loop repeatedly for work sdi cannot act on. A set computed at arming is correct only while the world is the one that existed at arming.
+
+The replacement watches the actual trigger and exits when it fires. It also reports PR 933 merging as a secondary signal, since that ungates U7 later, and distinguishes MERGED from CLOSED rather than treating them as one event. That distinction has already cost this fleet once today.
+
+sdi is idle by choice, holding a single watch on the one event that resumes it.
