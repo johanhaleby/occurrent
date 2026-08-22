@@ -153,4 +153,19 @@ public class OccurrentCloudEventExtension implements CloudEventExtension {
         String appendId = getAppendId(original);
         return appendId == null ? CloudEventBuilder.v1(updated).withoutExtension(APPEND_ID).build() : withAppendId(updated, appendId);
     }
+
+    /**
+     * Returns a copy of {@code updated} with {@code original}'s exact position, present or absent, the same
+     * present-or-absent treatment {@link #preserveAppendId} gives the append id. A store's {@code updateEvent}
+     * calls this so a replacement event an updater builds from scratch cannot silently drop the position an
+     * earlier write stamped, and cannot forge one it never had. Either mistake would move the event to a
+     * different point in, or out of, the store's global sequence. This only reapplies the extension on the
+     * returned {@link CloudEvent}, not the stored document's BSON type, which a store fixes separately.
+     */
+    public static CloudEvent preservePosition(CloudEvent original, CloudEvent updated) {
+        requireNonNull(original, "Original CloudEvent cannot be null");
+        requireNonNull(updated, "Updated CloudEvent cannot be null");
+        long position = getPosition(original);
+        return position > 0 ? withPosition(updated, position) : CloudEventBuilder.v1(updated).withoutExtension(POSITION).build();
+    }
 }

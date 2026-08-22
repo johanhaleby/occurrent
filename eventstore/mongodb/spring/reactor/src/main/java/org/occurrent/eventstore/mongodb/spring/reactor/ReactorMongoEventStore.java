@@ -897,7 +897,8 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                             result = Mono.error(UpdateEventFunctionValidator.updateFunctionReturnedNull());
                         } else {
                             CloudEvent appendIdPreservedCloudEvent = OccurrentCloudEventExtension.preserveAppendId(currentCloudEvent, updatedCloudEvent);
-                            CloudEvent preservedUpdatedCloudEvent = DcbCloudEvents.preserveTags(currentCloudEvent, appendIdPreservedCloudEvent);
+                            CloudEvent positionPreservedCloudEvent = OccurrentCloudEventExtension.preservePosition(currentCloudEvent, appendIdPreservedCloudEvent);
+                            CloudEvent preservedUpdatedCloudEvent = DcbCloudEvents.preserveTags(currentCloudEvent, positionPreservedCloudEvent);
                             if (!Objects.equals(preservedUpdatedCloudEvent, currentCloudEvent)) {
                                 String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                                 long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);

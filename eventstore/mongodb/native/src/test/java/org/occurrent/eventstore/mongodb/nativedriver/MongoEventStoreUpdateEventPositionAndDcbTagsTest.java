@@ -159,7 +159,41 @@ class MongoEventStoreUpdateEventPositionAndDcbTagsTest {
                 () -> assertThat(DcbCloudEvents.getTags(updated))
                         .as("the CloudEvent updateEvent returns must carry the original tags too, not the replacement event's")
                         .containsExactlyElementsOf(DcbCloudEvents.getTags(taggedEvent("a", "Defined", "name:1"))),
+                () -> assertThat(OccurrentCloudEventExtension.getPosition(updated))
+                        .as("the CloudEvent updateEvent returns must carry the original position too, not drop it")
+                        .isEqualTo(((Number) before.get(OccurrentCloudEventExtension.POSITION)).longValue()),
                 () -> assertThat(after.getString("type")).isEqualTo("Renamed")
+        );
+    }
+
+    @Test
+    void updating_an_unpositioned_event_with_a_forged_position_leaves_it_unpositioned() {
+        MongoEventStore eventStore = new MongoEventStore(mongoClient, databaseName, EVENT_COLLECTION,
+                new EventStoreConfig.Builder()
+                        .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                        .eventStoreCapabilities(STREAM)
+                        .withoutStreamPosition()
+                        .build());
+        eventStore.write("stream:1", List.of(event("a", "Defined")));
+        Document before = rawDocument("a");
+        assertThat(before.containsKey(OccurrentCloudEventExtension.POSITION))
+                .as("the original event must have no position to begin with")
+                .isFalse();
+
+        // Position is store-owned the same way streamId, streamVersion, the append id and DCB tags already are,
+        // so an updater forging one onto an event that never had it must not let it through.
+        CloudEvent updated = eventStore.updateEvent("a", SOURCE,
+                original -> OccurrentCloudEventExtension.withPosition(CloudEventBuilder.v1(original).withSubject("rewritten").build(), 999)).orElseThrow();
+
+        Document after = rawDocument("a");
+        assertAll(
+                () -> assertThat(OccurrentCloudEventExtension.getPosition(updated))
+                        .as("the CloudEvent updateEvent returns must not carry a forged position")
+                        .isZero(),
+                () -> assertThat(after.containsKey(OccurrentCloudEventExtension.POSITION))
+                        .as("the stored document must not gain a forged position")
+                        .isFalse(),
+                () -> assertThat(after.getString("subject")).isEqualTo("rewritten")
         );
     }
 
