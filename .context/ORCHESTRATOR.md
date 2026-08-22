@@ -988,3 +988,15 @@ Landing verified by content on `origin/main` rather than by the merge reporting 
 **The epic is idle by choice rather than blocked**, and the distinction matters for anyone reading this file. Nothing external prevents sdi from working. It is waiting on a release event, and the wait is what keeps 0.34.0 correct. The trigger to resume is the tag existing, not a fence clearing and not a sibling PR merging.
 
 The U7 brief remains staged and gated, so the first move after the tag is U1 and U5 going back, then U2, with U7 following once #837 merges.
+
+### sdi 2026-08-22T15:08:51Z: rel34 found sdi's state file claiming work that is no longer on main
+
+rel34 checked main after merging the revert and found four surviving `SubscriptionHandle` references, all in `.context/`, two of them in `sdi.yml`. U1's deliverable still read `pr_merged, ref: 934, met: true` with evidence naming `a714f8d32`, a commit whose effect is reverted. A restarted sdi orchestrator would have read that as shipped.
+
+The correction is larger than the two strings rel34 saw, and the reason is worth stating. `derive` computes phase from deliverables, `blocking_on` and `session`, and from nothing else. sdi's re-land obligation was written into `next_action` and its standing hold into this file, neither of which `derive` reads. So the machine-visible state said U1 and U5 were DONE and U2 was READY, while the human-visible state said reverted and held. The earlier decision to keep the units DONE was about the phase and was defensible; it was applied to a field that means "the code is on main", which had become false.
+
+Fixed in the fields that are read. U1 and U5 now carry `met: false` with reverted-pending-re-land evidence and a cleared `session`. All three units, including U2, carry a `blocking_on` entry naming the release gate, with the clearing condition stated as the `occurrent-0.34.0` tag existing rather than a sibling PR merging. All three derive BLOCKED, zero drift.
+
+U12 stays DONE and that is correct rather than an oversight: PR 923 was the ADR amendment, documentation only, and was never reverted.
+
+R3 is clear of both sibling epics. brk finished at 14:57:25Z and sdi has nothing on main and nothing in flight. What remains for the tag is rel34's own units, five held on real defects, plus the changelog cut and the held-docs merge.
