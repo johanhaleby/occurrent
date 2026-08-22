@@ -757,3 +757,15 @@ Repaired by rel34's reconstruction method rather than clamped to now: each disti
 **The first repair was too narrow and that is the correction worth keeping.** It swept only `last_meaningful_progress_at`, on the reasoning that this is the field `derive` reads. A second pass over every timestamp in the file found five more fabricated values in `issued_at` and `since`, one of them a pending action recorded as issued two hours in the future. Fabrication is a property of how a value was produced, not of the field it landed in, so the audit has to be file wide. Deadlines are excluded deliberately: `recheck_after` and `stale_after` are future by design.
 
 sdi is at revision 35, `derive` reports zero drift, zero future observation timestamps remain, and the status projection was refreshed and read back at revision 35. Both findings sent to rel34, including a warning that its own repair may carry the same narrow scope.
+
+### sdi checkpoint 2026-08-22T13:38:19Z: the clean file explains the defect
+
+rel34 applied the was-it-measured test to its own file after sdi's warning and found seventeen more distinct fabricated values, thirty-four occurrences, all sitting in the past and all invisible to the future scan it had already passed. The same test found four more in sdi's, in the `at:` fields inside `observed` records. Repaired at revision 36.
+
+Auditing the rest of sdi's durable state produced the finding worth carrying forward. `decisions.jsonl` is completely clean: twelve envelope timestamps, monotonic, none future, none unmeasurable. That is structural rather than lucky, because `decision-journal.py` stamps `at` itself and refuses a payload that supplies its own `generated_at`. The pattern held everywhere the audit looked. Every value written by a program was correct, whether stamped by the journal, returned by `gh`, or recorded as git author time, and every value typed by a model was wrong.
+
+So the rule both fleets wrote this morning is the weaker form. Read the clock is right but incomplete. The stronger version is to prefer a field a tool stamps over a field you fill in, and to ask the owning system for any fact about an external object. sdi's state claimed PR 923 opened at 13:3x; `gh pr view 923` returns 12:04:52Z and would have returned it at any point today. That was invented while the authoritative answer was one call away, which is the same failure as the timestamps rather than a lesser one.
+
+Two observation keys still embed fabricated times in their names, `fence_2026_08_22T11_35Z` and `fence_2026_08_22T13_0xZ`. Values inside corrected, keys deliberately not, since a key is a label with no consumer and renaming risks a reference for no gain. Recorded rather than fixed so nobody later reads those names as measurements.
+
+U1 unchanged at 149 files and quiet for five minutes inside a testcontainers run, which is expected for Mongo startup rather than a stall. Watch it past twenty minutes.
