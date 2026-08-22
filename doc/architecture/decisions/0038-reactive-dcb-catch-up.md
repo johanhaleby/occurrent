@@ -4,7 +4,10 @@ Date: 2026-06-30
 
 ## Status
 
-Accepted
+Accepted. The section "The one divergence from blocking" below is superseded by
+[ADR 135](0135-the-reactive-handover-dedup-is-fed-only-by-the-reconciliation-read.md), which stops the reactive
+handover dedup being fed from the bulk phase because that suppressed the only delivery a recording projection could
+act on. The rest of this decision stands.
 
 ## Context
 
