@@ -173,6 +173,140 @@ class SubscriptionModePropertyRenameTest implements RewriteTest {
     }
 
     @Test
+    void the_false_half_leaves_a_profile_holding_the_other_value_untouched() {
+        // Regression test for #834: MigrateSubscriptionEnabledFalseInYaml_0_32's precondition used to be checked
+        // over the whole file, so the default profile below setting enabled: false licensed ChangePropertyKey to
+        // rename enabled to mode in the prod profile too, even though ChangePropertyValue correctly left the prod
+        // profile's true value alone. The prod profile ended up with mode: true, an enum that does not bind to a
+        // boolean.
+        rewriteRun(
+                spec -> spec.recipeFromResource(
+                        "/META-INF/rewrite/subscription-mode-0_32.yml",
+                        "org.occurrent.MigrateSubscriptionEnabledFalseInYaml_0_32"),
+                yaml(
+                        """
+                        occurrent:
+                          subscription:
+                            enabled: false
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: prod
+                        occurrent:
+                          subscription:
+                            enabled: true
+                        """,
+                        """
+                        occurrent:
+                          subscription:
+                            mode: disabled
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: prod
+                        occurrent:
+                          subscription:
+                            enabled: true
+                        """
+                )
+        );
+    }
+
+    @Test
+    void the_true_half_leaves_a_profile_holding_the_other_value_untouched() {
+        // Regression test for #834, the mirror of the false half above: a document setting enabled: true used to
+        // license the key rename in a profile that set enabled: false, leaving that profile with mode: false.
+        rewriteRun(
+                spec -> spec.recipeFromResource(
+                        "/META-INF/rewrite/subscription-mode-0_32.yml",
+                        "org.occurrent.MigrateSubscriptionEnabledTrueInYaml_0_32"),
+                yaml(
+                        """
+                        occurrent:
+                          subscription:
+                            enabled: true
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: prod
+                        occurrent:
+                          subscription:
+                            enabled: false
+                        """,
+                        """
+                        occurrent:
+                          subscription:
+                            mode: auto
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: prod
+                        occurrent:
+                          subscription:
+                            enabled: false
+                        """
+                )
+        );
+    }
+
+    @Test
+    void the_default_recipe_migrates_each_profile_of_a_mixed_value_multi_document_file_on_its_own() {
+        // Regression test for #834 against the recipe users actually select, MigrateSubscriptionModeProperty_0_32,
+        // which chains the false half and the true half in one cycle over the same file. A third profile holds an
+        // unresolved placeholder, which neither half maps, so it must keep the deprecated key untouched.
+        rewriteRun(
+                yaml(
+                        """
+                        occurrent:
+                          subscription:
+                            enabled: false
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: prod
+                        occurrent:
+                          subscription:
+                            enabled: true
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: canary
+                        occurrent:
+                          subscription:
+                            enabled: ${SUBSCRIPTIONS_ON}
+                        """,
+                        """
+                        occurrent:
+                          subscription:
+                            mode: disabled
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: prod
+                        occurrent:
+                          subscription:
+                            mode: auto
+                        ---
+                        spring:
+                          config:
+                            activate:
+                              on-profile: canary
+                        occurrent:
+                          subscription:
+                            enabled: ${SUBSCRIPTIONS_ON}
+                        """
+                )
+        );
+    }
+
+    @Test
     void a_multi_document_file_where_one_profile_sets_the_deprecated_key_and_another_sets_the_new_key() {
         // Regression test for #828: DropRedundantSubscriptionEnabledInYaml_0_32 must check the replacement key
         // per document, not per file. The default profile below sets only the deprecated key and has no mode of
