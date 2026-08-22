@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 9
+revision: 10
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -166,7 +166,7 @@ units:
     assessment: "Design work, not a sweep, and the best available proof that the Java descriptor API is usable from Kotlin. Sonnet/high."
   U12:
     issue: 725
-    goal: "Amend ADR 0127 in place with the descriptor-execution decision (dec-0004): the runner is the single execution path, the registrar descriptor path calls the runner rather than StreamSubscriptions.subscribe, and the Kotlin Subscriptions and StreamSubscriptions classes are reshaped into an idiom layer over descriptor plus runner while keeping their class identity and their Spring bean."
+    goal: "Amend ADR 0127 in place with the descriptor-execution decision (dec-0004): the runner is the single execution path across all 21 call sites within 0.35.0 (U13 for the seventeen stream, agnostic and synchronous ones, U14 for the four DCB ones), the descriptor gains a PUBLIC type-free catch-all handler paired with an explicit selector, waitUntilStarted is forwarded rather than moved, and the registrar descriptor path calls the runner rather than StreamSubscriptions.subscribe, and the Kotlin Subscriptions and StreamSubscriptions classes are reshaped into an idiom layer over descriptor plus runner while keeping their class identity and their Spring bean."
     phase: READY
     health: PROGRESSING
     swept: false
@@ -195,6 +195,21 @@ units:
     last_meaningful_progress_at: 2026-08-22T09:35:00Z
     observed: {}
     assessment: "Signature-preserving by constraint: the inline/reified overloads and the @JvmName and @JvmOverloads surface are a released API since 0.20.4 and the starter exposes the type as a ConditionalOnMissingBean, so this changes bodies rather than shapes. waitUntilStarted and StartAt handling move to the runner, which is where ADR 0127 already puts them. MUST PRESERVE getSubscriptionModel(), which the census did not list and which ProjectionAnnotationRegistrar:525 depends on to resolve the recording phase from the exact model the subscription runs on. This unit is what puts @Projection and @Snapshot on the runner without touching their registrars. Sonnet/high."
+  U14:
+    issue: 725
+    goal: "Reshape DcbSubscriptions on both stacks so its subscribeWithMetadata path builds a DcbSubscription descriptor and hands it to the DCB runners, completing the single-execution-path claim for all 21 registrar call sites within 0.35.0."
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U3, U4, U13]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Sequenced last. Nothing to do until U13 establishes the pattern."
+    last_meaningful_progress_at: 2026-08-22T10:35:00Z
+    observed: {}
+    assessment: "Johan's dec-0005 ruling, chosen OVER the recommendation to leave DCB out of 0.35.0, so the ADR amendment claims single-path for the release rather than as a two-release goal. Covers the four dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, consumer) sites in the blocking and reactor Projection, Snapshot and Subscription registrars. Owns dsl/dcb-dsl, which U3 also touches for the buildDcbCriteria extraction, so U3 must land first and U14 inherits its extraction rather than repeating it. Uses the two DCB runners U4 builds. Longest dependency chain in the epic, so a slip here slips the release: flag early if U13 reveals the pattern does not transfer. Sonnet/high."
   U11:
     issue: 721
     goal: "Documentation site: pages/docs/docs.md plus seven _includes/macros/annotation/ files, on ONE new branch off docs main held for 0.35.0, disjoint from the seven branches held for 0.34.0. Historical news posts excluded. Writes a 0.35.0 news post. Does NOT touch _config.yml occurrentversion, which belongs to a release-notes branch. Re-sweeps after 0.34.0 merges, because docs/append-identity and docs/remove-saga-join add seven annotation-bearing lines this branch cannot see."
