@@ -310,7 +310,7 @@ class SagaQuarantineTest {
             assertThatThrownBy(() -> subscription.release(POISON))
                     .isInstanceOf(UnsupportedOperationException.class)
                     .hasMessageContaining("RepositionableSubscriptions");
-            // Refused rather than half done: the instance is not left marked as released.
+            // Refused rather than half done, so the instance is not left marked as released.
             assertThat(subscription.instances().find(POISON).orElseThrow().failure().isReleased()).isFalse();
         }
 

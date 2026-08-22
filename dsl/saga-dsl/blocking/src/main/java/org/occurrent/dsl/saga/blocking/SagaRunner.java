@@ -82,7 +82,7 @@ import static java.util.Objects.requireNonNull;
  *       while one event keeps failing the events queued behind it wait. That wait is bounded by
  *       {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. Once one event has kept failing for one
  *       instance that long, the instance becomes {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED}, the executor
- *       stops rethrowing, and the subscription moves past the event so the saga's other instances carry on. The
+ *       stops rethrowing, and the subscription moves past the event so the saga's other instances keep going. The
  *       quarantined instance stops there, and {@link SagaSubscription#release(String)} brings it back once the cause is
  *       fixed. Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of blocking indefinitely
  *       instead.</li>

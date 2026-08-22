@@ -46,7 +46,7 @@ final class QuarantinedInstances<S extends @Nullable Object> {
      * quarantined and there is nothing to release.
      * <p>
      * The mark goes in before the replay starts, not after. Clearing the record first, or marking it only once the
-     * replay is running, both leave a window where a live event lands on state that still has the gap in it, and
+     * replay is running, both leave a window where a live event is applied to state that still has the gap in it, and
      * nothing downstream of that can tell the gap is there.
      */
     OptionalLong markReleased(String sagaId) {
@@ -59,8 +59,8 @@ final class QuarantinedInstances<S extends @Nullable Object> {
         if (!stateStore.compareAndSave(sagaId, released.envelope(), released.expectedVersion())) {
             throw new SagaConcurrencyException("Failed to release saga instance '" + sagaId + "' because it was written concurrently. Nothing writes to a quarantined instance, so this is either a second release racing this one or the instance leaving quarantine some other way. Read it again and decide.");
         }
-        // onRelease built this envelope from the record, so it always carries one.
-        return OptionalLong.of(requireNonNull(released.envelope().failure(), "a released envelope carries its failure record").position());
+        // onRelease built this envelope from the record, so the record is always there.
+        return OptionalLong.of(requireNonNull(released.envelope().failure(), "a released envelope has a failure record").position());
     }
 
     /** Take the release mark back off {@code sagaId}, for a release whose replay could not be started after all. */

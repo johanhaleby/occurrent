@@ -88,7 +88,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String COMPLETED_AT = "completedAt";
     private static final String STARTED = "started";
     // The failure record is flattened into top-level fields rather than a sub-document, for the same reason currentStep
-    // is one: both enumeration queries project the SagaInstance members and neither may decode the state, and a
+    // is one, because both enumeration queries project the SagaInstance members and neither may decode the state, and a
     // quarantined instance whose state no longer decodes is exactly the instance somebody is looking for.
     private static final String FAILURE_INPUT = "failureInput";
     private static final String FAILURE_POSITION = "failurePosition";
@@ -437,7 +437,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         Long positionWatermark = document.containsKey(POSITION_WATERMARK) ? document.getLong(POSITION_WATERMARK) : null;
 
-        // A document written before 0.34.0 carries no started flag, and every instance in one had started, so a missing
+        // A document written before 0.34.0 has no started flag, and every instance in one had started, so a missing
         // field means true rather than false.
         boolean started = !document.containsKey(STARTED) || document.getBoolean(STARTED);
 

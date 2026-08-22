@@ -20,7 +20,7 @@ package org.occurrent.dsl.saga;
  * Where a saga instance is in its lifecycle. An instance is {@link #ACTIVE} until its saga reaches a terminal state,
  * at which point it becomes {@link #COMPLETED} and absorbing: it cancels its timers and skips any further event. An
  * instance whose input kept failing for longer than the runner's quarantine budget becomes {@link #QUARANTINED}
- * instead, which is neither of those: it has stopped moving but it has not finished.
+ * instead, which is neither of those, because it has stopped moving but it has not finished.
  * <p>
  * This is a top-level type rather than a member of {@link SagaEnvelope} because it is part of the user-facing
  * {@link SagaInstance} view as well as the {@link SagaStateStore} SPI, and a narrow observation interface should not
