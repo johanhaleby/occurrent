@@ -136,9 +136,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // subscribe(), and kept for the id's whole lifetime (a stop-then-relaunch reuses the same handover), removed only
     // by cancelSubscription and shutdown.
     private final ConcurrentMap<String, BlockingHandover<CloudEvent>> handoversBySubscriptionId = new ConcurrentHashMap<>();
-    // One lock per id whose catch-up has reached its marker write, so that write and the lifecycle calls that move
-    // the id are one step against each other without the model monitor being held across a checkpoint store call.
-    // Entries are created only by markIfStillOwned and outlive the subscription, which is the same trade ADR 131
+    // One lock per registered subscription id, so the marker write and the lifecycle calls that move the id are
+    // one step against each other without the model monitor being held across a checkpoint store call.
+    // Entries are created only by a registration and outlive the subscription, which is the same trade ADR 131
     // made, since a subscription id is application-defined and low-cardinality, so slow growth over a model's
     // lifetime is cheaper than reference counting a key space that does not need it.
     private final ConcurrentMap<String, ReentrantLock> markerLocks = new ConcurrentHashMap<>();
@@ -149,6 +149,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // Runs between the live feed being asked whether it is running and being told to pause. Exists so a test can
     // put a stop exactly there, which nothing outside this model can.
     private volatile Runnable betweenPauseCheckAndPause = () -> {
+    };
+    // Runs inside a lifecycle call that found no marker lock for its id, before it moves the id. Exists so a test
+    // can stand there, which nothing outside this model can.
+    private volatile Runnable betweenMarkerLockLookupAndAction = () -> {
     };
 
     /**
@@ -401,6 +405,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // per-attempt catch-up state is set inside the same guarded step, so this attempt starts in the history part
         // of its catch-up whatever the previous attempt for the same id left behind.
         synchronized (this) {
+            // Created before the id is published and under this monitor, so every later lookup for this id finds
+            // it and no write can be the thing that brings it into existence (ADR 131 does the same).
+            markerLocks.computeIfAbsent(subscriptionId, id -> new ReentrantLock());
             // On this id's marker lock too, so a fresh attempt cannot take the id while the previous attempt's
             // marker write is still running. Monitor first and the lock second, matching cancelSubscription.
             whileHoldingMarkerLock(subscriptionId, () -> replayingSubscriptions.put(subscriptionId, replay));
@@ -478,10 +485,15 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // (ADR 131). The lock is taken without the model monitor held, and every lifecycle call takes the monitor
     // first and this second, so the two are always acquired in that order.
     private void markIfStillOwned(String subscriptionId, @Nullable Future<Boolean> replay) {
-        ReentrantLock lock = markerLocks.computeIfAbsent(subscriptionId, id -> new ReentrantLock());
+        ReentrantLock lock = markerLocks.get(subscriptionId);
+        if (lock == null) {
+            // Only a registration creates one, and a replay cannot reach this without having been registered, so
+            // there is nothing this attempt could be entitled to mark.
+            return;
+        }
         lock.lock();
         try {
-            if (replay != null && replayingSubscriptions.get(subscriptionId) == replay) {
+            if (replay != null && !shuttingDown && !stopped && replayingSubscriptions.get(subscriptionId) == replay) {
                 markCaughtUp(subscriptionId);
             }
         } finally {
@@ -490,13 +502,18 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     // Held across a lifecycle call that moves an id, so it waits for a marker write already running for that id
-    // rather than taking the id from under it. Takes a lock only when one exists, never creating one, so an id
-    // this model has never run a catch-up for leaves nothing behind in the registry. Only markIfStillOwned
-    // creates an entry, which happens after the id was registered, so a missing lock means no marker write for
-    // this id has ever started and there is nothing to wait for.
+    // rather than taking the id from under it. Takes a lock only when one exists and never creates one, so an id
+    // this model has never registered adds nothing to the registry. A registration creates the lock before it
+    // publishes the id, both under this monitor, so a missing lock here means the id was never registered and
+    // there is nothing to wait for. Creating it lazily at the write instead would not be safe: a get can return
+    // null while a computeIfAbsent for the same key is still in flight, and the two would then run unserialized.
     private void whileHoldingMarkerLock(String subscriptionId, Runnable action) {
         ReentrantLock lock = markerLocks.get(subscriptionId);
         if (lock == null) {
+            // Package-private and a no-op in production. Lets a test stand where a lock does not exist yet, which
+            // is the only moment a write could start behind a lifecycle call's back if the write did not take the
+            // monitor to start.
+            betweenMarkerLockLookupAndAction.run();
             action.run();
             return;
         }
@@ -512,6 +529,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // model's contract.
     void runBeforeCompletingCatchup(Runnable hook) {
         this.beforeCompletingCatchup = Objects.requireNonNull(hook, "hook cannot be null");
+    }
+
+    // Package-private for the test that stands where the field describes.
+    void runBetweenMarkerLockLookupAndAction(Runnable hook) {
+        this.betweenMarkerLockLookupAndAction = Objects.requireNonNull(hook, "hook cannot be null");
     }
 
     // Package-private for the test that stands where the field describes.

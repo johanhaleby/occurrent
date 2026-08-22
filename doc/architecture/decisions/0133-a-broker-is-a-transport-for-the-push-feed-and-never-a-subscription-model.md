@@ -1085,15 +1085,28 @@ reasoning applies here. The ownership question and the write now happen under a 
 `cancelSubscription` and `subscribe` take the same lock, since those are the two calls that move an id out from
 under a write, so the atomicity is unchanged. `stop`, `start`, `pause` and `resume` do not, so they no longer wait
 for a store. The model monitor is always taken before that lock and never after it, which is what keeps the two
-from deadlocking. The lock registry is only ever added to by a write, and a lifecycle call takes a lock only if one
-already exists, so an id this model never ran a catch-up for adds nothing to it.
+from deadlocking.
 
-**A stop between the last replayed event and the write is a stop, on both stacks.** The replay is asked whether to
-keep going before every event and never after the last one, so a stop arriving in that gap reaches the marker step
-with the replay already finished. `BlockingHandover` has always asked once more right before the write for exactly
-that reason, so the blocking model marked nothing. The reactive pipeline has no equivalent re-ask, and the
-ownership question the amendment above introduced asks only who owns the id, so the reactive model wrote a marker
-there where its twin did not. The reactive marker step now asks about the stop as well as about ownership, which
-is what `stop()` already documents on both stacks, that a stopped replay marked nothing and is replayed from the
-beginning by `start(..)`. Nothing about the contract above changes. A marker still means the id's history was read
-by an attempt that held the id, there is just one fewer way to get one that the documentation said was impossible.
+The write still takes the model monitor, for the ownership check and to take the lock, and releases it before the
+store call. Without that, the first write for an id would race the first lifecycle call for it. A lock only comes
+into existence when a write creates one, so a cancel arriving before any write finds no lock, and a write starting
+in the moment between that lookup and the cancel moving the id would see itself as the owner and run alongside the
+cancel. Taking the monitor to decide and to take the lock removes the ordering that allows, since a cancel holding
+the monitor now either moves the id before any write can start, or finds a lock and waits for the write that holds
+it. The lock registry is only ever added to by a write, and a lifecycle call takes a lock only if one already
+exists, so an id this model never ran a catch-up for adds nothing to it.
+
+**A stop that arrives once the history has been read is still a stop, on both stacks.** The replay is asked
+whether to keep going before every event and never after the last one, so a stop arriving after that reaches the
+marker step with the replay already finished. `BlockingHandover` asks once more right before it hands over, for
+exactly that reason, which covers a stop arriving in the gap after the last event. It does not cover the whole
+way, though. The buffered live events are drained after that question and the marker is written after them, so a
+stop landing during the drain arrived past every question either stack asked, and the ownership question the
+amendment above introduced asks only who owns the id.
+
+Both marker steps now ask whether the model is stopped as well as who owns the id. That is what `stop()` already
+documents on both stacks, that a stopped replay marked nothing and is replayed from the beginning by `start(..)`,
+and it is now true for a stop arriving anywhere between the last replayed event and the write rather than only for
+one arriving before the handover's own question. Nothing about the contract above changes. A marker still means
+the id's history was read by an attempt that held the id, there are just fewer ways to get one that the
+documentation said was impossible.

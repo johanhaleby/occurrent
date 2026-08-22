@@ -246,6 +246,99 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
         }
     }
 
+    /**
+     * A lifecycle call runs its work unlocked when it finds no lock for the id, and that is only safe if a
+     * registered id always has one. Creating the lock at the marker write instead would not give that, since the
+     * write happens at the end of the replay and a {@code ConcurrentHashMap} get can return null while a
+     * {@code computeIfAbsent} for the same key is still in flight. A cancel could then run its removal unlocked
+     * while the write it should have waited for was starting, return, and let the caller delete a checkpoint that
+     * the in-flight write then puts back.
+     * <p>
+     * So the lock is created where the id is registered, and this asserts the property that makes the unlocked
+     * branch safe rather than trying to lose that race on purpose.
+     */
+    @Test
+    void a_lifecycle_call_for_a_registered_id_always_finds_its_marker_lock() throws Exception {
+        CountDownLatch handlerParked = new CountDownLatch(1);
+        CountDownLatch releaseHandler = new CountDownLatch(1);
+        List<String> tookTheUnlockedBranch = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(() -> Stream.of(cloudEvent("1"))), feed, marker);
+
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            handlerParked.countDown();
+            awaitLatch(releaseHandler, Duration.ofSeconds(60));
+        });
+        assertThat(handlerParked.await(10, TimeUnit.SECONDS))
+                .as("the replay is parked in its handler, so it has not reached its marker write")
+                .isTrue();
+
+        // Installed after subscribe so it reports only on the cancel below.
+        model.runBetweenMarkerLockLookupAndAction(() -> tookTheUnlockedBranch.add("cancel"));
+
+        // Cancelled before any marker write has run, which is when a lazily created lock would not exist yet.
+        model.cancelSubscription("sub");
+        releaseHandler.countDown();
+
+        assertThat(tookTheUnlockedBranch)
+                .as("the id was registered, so its lock already existed and the cancel took it rather than "
+                        + "running its removal unlocked")
+                .isEmpty();
+    }
+
+    /**
+     * The other side of a stop reaching the marker step. {@code BlockingHandover} asks once more after the last
+     * replayed event, but the buffered live events are drained after that and the marker is written after them, so
+     * a stop landing during the drain arrives past every question the handover asks.
+     * <p>
+     * The stop is placed there through the handler for a buffered event, which is delivered during the drain and
+     * nowhere else. The live event is fed while the history is being read, which is what puts it in the buffer.
+     */
+    @Test
+    void a_stop_arriving_during_the_buffer_drain_leaves_nothing_marked() throws Exception {
+        CountDownLatch drainParked = new CountDownLatch(1);
+        CountDownLatch releaseDrain = new CountDownLatch(1);
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        AtomicReference<CatchupThenPushSubscriptionModel> modelRef = new AtomicReference<>();
+        // The live event is fed while the history stream is being read, so it is buffered rather than delivered.
+        PositionOrderedReader reader = reader(() -> Stream.of(cloudEvent("hist"))
+                .peek(ignored -> feed.accept(cloudEvent("live"))));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
+        modelRef.set(model);
+
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            if (ce.getId().equals("live")) {
+                drainParked.countDown();
+                awaitLatch(releaseDrain, Duration.ofSeconds(60));
+            }
+        });
+
+        assertThat(drainParked.await(10, TimeUnit.SECONDS))
+                .as("the buffered event is being delivered, which happens during the drain and after the handover "
+                        + "has asked its last question about stopping")
+                .isTrue();
+        modelRef.get().stop();
+        releaseDrain.countDown();
+
+        // Long enough for a marker write that was not refused to have finished.
+        Thread.sleep(1000);
+        assertThat(marker.exists("sub"))
+                .as("the marker step asks about the stop as well as about ownership, so a stop that arrives with "
+                        + "the history already read still marks nothing")
+                .isFalse();
+    }
+
+    // A thread waiting for the model monitor is BLOCKED, one queued on a ReentrantLock is WAITING. This test
+    // covers both, since which one a caller ends up in is exactly what the change under test moves.
+    private static boolean isQueued(Thread thread) {
+        Thread.State state = thread.getState();
+        return state == Thread.State.BLOCKED || state == Thread.State.WAITING;
+    }
+
     private static void awaitLatch(CountDownLatch latch, Duration timeout) {
         try {
             if (!latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
@@ -329,11 +422,13 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
             order.add("cancel returned");
         }, "canceller");
         canceller.start();
-        // Either it is waiting for the monitor the write holds, which is the invariant, or it already ran, which is
-        // the falsification. Waiting for one of the two rather than sleeping is what makes the assertion below mean
-        // something in both cases.
+        // Either it is queued behind the write, which is the invariant, or it already ran, which is the
+        // falsification. Waiting for one of the two rather than sleeping is what makes the assertion below mean
+        // something in both cases. WAITING as well as BLOCKED, since a thread queued on a ReentrantLock parks
+        // rather than contending for a monitor, and checking only for BLOCKED spun here for the full deadline on
+        // every run.
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
-        while (canceller.getState() != Thread.State.BLOCKED && order.isEmpty() && System.nanoTime() < deadline) {
+        while (!isQueued(canceller) && order.isEmpty() && System.nanoTime() < deadline) {
             Thread.onSpinWait();
         }
 
