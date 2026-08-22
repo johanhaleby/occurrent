@@ -110,8 +110,8 @@ class ReactiveMongoAppliedAppendStoreBoundsTest {
         ReactiveMongoOperations mongoOperations = mongoOperationsWhoseIndexSetupConflicts(indexAttempts);
         when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
                 .thenReturn(Mono.just(mock(UpdateResult.class)));
-        // The store's own shipped retry, which would attempt the index 20 times over roughly half a minute if it
-        // repeated error 85 at all.
+        // The store's own shipped retry, which would attempt the index DEFAULT_MAX_ATTEMPTS times if it repeated
+        // error 85 at all.
         AppliedAppendStore store = storeWith(mongoOperations, ReactiveMongoAppliedAppendStore.defaultRetry());
 
         assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))

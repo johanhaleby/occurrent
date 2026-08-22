@@ -182,8 +182,8 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
     /**
      * A read for {@link #waitUntilApplied(String, AppendId, Duration, Backoff)} whose retries stop once
      * {@code deadlineNanos} ({@link System#nanoTime()} scale) passes, rather than running out
-     * {@link #retryStrategy}'s own attempts, which take about half a minute by default and can be configured to
-     * take much longer. {@link #readOnce} also
+     * {@link #retryStrategy}'s own attempts, which are {@link #DEFAULT_MAX_ATTEMPTS} by default and take as long
+     * as the store makes them take. {@link #readOnce} also
      * ensures the indexes exist, so a fresh store whose index setup fails during an outage is retried, and limited
      * to this same deadline, exactly like a failing read, rather than throwing out of a method documented to never
      * throw.
