@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 23
+revision: 24
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -184,7 +184,7 @@ units:
     assessment: "Design work, not a sweep, and the best available proof that the Java descriptor API is usable from Kotlin. Sonnet/high."
   U12:
     issue: 725
-    goal: "Amend ADR 0127 in place with the descriptor-execution decision (dec-0004): the runner is the single execution path across all 21 call sites within 0.35.0 (U13 for the seventeen stream, agnostic and synchronous ones, U14 for the four DCB ones), the descriptor gains a PUBLIC type-free catch-all handler paired with an explicit selector, waitUntilStarted is forwarded rather than moved, and the registrar descriptor path calls the runner rather than StreamSubscriptions.subscribe, and the Kotlin Subscriptions and StreamSubscriptions classes are reshaped into an idiom layer over descriptor plus runner while keeping their class identity and their Spring bean."
+    goal: "Amend ADR 0127 in place with the descriptor-execution decision (dec-0004): the runner is the single execution path across all 21 call sites within 0.35.0 (U13 for the sixteen stream, agnostic and synchronous ones, U14 for the five DCB ones), the descriptor gains a PUBLIC type-free catch-all handler paired with an explicit selector, waitUntilStarted is forwarded rather than moved, and the registrar descriptor path calls the runner rather than StreamSubscriptions.subscribe, and the Kotlin Subscriptions and StreamSubscriptions classes are reshaped into an idiom layer over descriptor plus runner while keeping their class identity and their Spring bean."
     phase: RUNNING
     health: PROGRESSING
     swept: false
