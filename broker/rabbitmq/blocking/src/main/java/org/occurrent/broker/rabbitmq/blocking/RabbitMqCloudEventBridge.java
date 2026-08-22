@@ -68,7 +68,8 @@ import static java.util.Objects.requireNonNull;
  * {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED} acknowledges. A normal return with
  * {@link RoutingOutcome#UNAVAILABLE} never acknowledges either, and is held and paced rather than sent through a
  * failure policy, see below. A normal return with {@link RoutingOutcome#NOT_DELIVERABLE} cannot happen, since that
- * outcome always comes with the filter's own exception. A {@link RoutingOutcome#REFUSED} stops this bridge for
+ * outcome always comes with an exception, the filter's own or a transient action refusal's. A
+ * {@link RoutingOutcome#REFUSED} stops this bridge for
  * good, also below. For every other failure this bridge's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) negatively
  * acknowledges with requeue, {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only then
  * acknowledges the original. A normal return with {@link RoutingOutcome#DEFERRED}, a
@@ -236,11 +237,10 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         return new Builder(connection, model, outcomeChannel, queue);
     }
 
-    private void start(Builder builder) {
+    private void start(Builder builder, Set<RabbitMqDestination> destinations) {
         try {
             if (builder.declareTopology) {
                 consumeChannel.queueDeclare(queue, true, false, false, null);
-                Set<RabbitMqDestination> destinations = RabbitMqTopology.destinationsToBind(builder.resolver, builder.bindingFilter, builder.bindings);
                 for (RabbitMqDestination destination : destinations) {
                     consumeChannel.queueBind(queue, destination.exchange(), destination.routingKey());
                 }
@@ -488,9 +488,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             // thread to act on instead.
             heldDeferredDeliveryTags.add(new HeldDelivery(deliveryTag, deliveryGeneration));
         } else {
-            // NOT_DELIVERABLE, the filter itself having failed to answer. It always arrives with the filter's own
-            // exception, which the catch above already routed, so reaching here means a future outcome this bridge
-            // has not been taught yet. Routed as a failure either way.
+            // NOT_DELIVERABLE, whether the filter itself failed to answer or a transient refusal reported it. It
+            // always arrives with an exception, which the catch above already routed, so reaching here means a
+            // future outcome this bridge has not been taught yet. Routed as a failure either way.
             log.debug("A message on queue \"{}\", delivery tag {}, reported an outcome this bridge does not " +
                     "recognize. Routing it as a failure.", queue, deliveryTag);
             routeFailure(deliveryTag, deliveryGeneration, delivery.getProperties(), delivery.getBody());
@@ -770,6 +770,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             if (deliveryFailurePolicy == DeliveryFailurePolicy.PARK && parkingDestination == null) {
                 throw new IllegalStateException("A parkingDestination is required when onDeliveryFailure(PARK) is set");
             }
+            Set<RabbitMqDestination> destinations = declareTopology
+                    ? RabbitMqTopology.destinationsToBind(resolver, bindingFilter, bindings)
+                    : Set.of();
             // Validated above, before opening anything: a failure past this point has a channel (and, under PARK, a
             // parking sink) already open, so every later failure path in this method closes what it opened rather
             // than leaking it.
@@ -780,7 +783,7 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
                 failureAction = RabbitMqDeliveryFailureAction.create(connection, channel, deliveryFailurePolicy, parkingDestination, log);
                 bridge = new RabbitMqCloudEventBridge(model, outcomeChannel, channel, queue, prefetchCount,
                         pollInterval, failureAction, readinessSource);
-                bridge.start(this);
+                bridge.start(this, destinations);
                 return bridge;
             } catch (RuntimeException e) {
                 closeQuietly(channel);

@@ -79,6 +79,18 @@ class KafkaDomainEventBridgeBuildFailureTest {
     }
 
     @Test
+    void an_explicit_empty_bindings_set_is_refused_before_any_consumer_is_opened() {
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+
+        KafkaDomainEventBridge.Builder<TestOrderPlaced> builder = KafkaDomainEventBridge.builder(validConsumerConfig(), feed)
+                .bindings(Set.of());
+
+        assertThatThrownBy(builder::build)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("bindings(...)");
+    }
+
+    @Test
     void consumerConfig_missing_group_id_is_refused_rather_than_failing_invisibly_later() {
         DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
         Map<String, Object> consumerConfig = Map.of(

@@ -39,10 +39,14 @@ import static java.util.Objects.requireNonNull;
  * declared type whose concrete types cannot all be found is refused rather than turned into a filter that would miss
  * some of them.
  * <p>
- * One case is exempt on purpose. A non-sealed concrete class declared directly is accepted, and its subclasses are not
- * found, so dispatch accepts events the filter does not name. Refusing it would refuse every saga and subscription that
- * declares a class which is not final, which is behaviour that shipped. Events written as records or Kotlin data classes
- * are final already, so the exemption is narrow in practice.
+ * Nothing is exempt from that rule any more. Up to 0.33.0 a non-sealed concrete class declared directly was accepted
+ * with only itself in the filter. Under every {@code CloudEventTypeMapper} Occurrent ships, which store a subclass
+ * under its own name, a caller declaring {@code class OrderPlaced} and publishing a subclass of it never saw that
+ * subclass and got no warning. A mapper of the caller's own that maps the whole hierarchy onto one CloudEvent type
+ * string is the exception, and that caller was working. It is refused from 0.34.0 either way, and the caller makes the
+ * class final, seals the hierarchy, declares the concrete types, or sets an explicit filter, which is the one the
+ * collapsing mapper wants. Events written as records or Kotlin data classes are final already, so an ordinary
+ * hierarchy of records needs nothing.
  * <p>
  * Shared by every DSL that derives a type filter from declared event types, each of which used to walk the hierarchy on
  * its own. The caller formats and throws, because a saga, a projection, a subscription, a query and a snapshot view all
@@ -123,8 +127,8 @@ public final class EventTypeExpansion {
      * reason not to accept one here is that {@link #expand} and the subscription annotations both refuse a declared
      * array, so this path is not the place to become the single exception.
      * <p>
-     * An interface or an abstract class is different from both, since a hierarchy whose concrete types cannot all be
-     * found is exactly the case this method exists to be lenient about.
+     * An interface, an abstract class, and a concrete class that is not final are all different from both, since a
+     * hierarchy whose concrete types cannot all be found is exactly the case this method exists to be lenient about.
      *
      * @param cannotExpand builds the exception to throw for an array or a primitive
      */
@@ -161,7 +165,12 @@ public final class EventTypeExpansion {
 
     /**
      * The concrete event types {@code declaredType} covers, which is the type itself when it is stored under its own
-     * name, and every concrete type it permits when it is sealed. Never empty.
+     * name, and every concrete type it permits when it is sealed. Never empty. A sealed class that can be instantiated
+     * is both, so it keeps itself and gains what it permits.
+     * <p>
+     * A concrete class that is neither final nor sealed is refused, because anything extending it is stored under its
+     * own name where no walk can reach it. That refusal is new in 0.34.0, and up to 0.33.0 such a type was accepted
+     * with only itself in the filter.
      *
      * @param cannotExpand builds the exception to throw for a type that cannot be turned into a filter
      */
@@ -171,12 +180,10 @@ public final class EventTypeExpansion {
         requireNonNull(cannotExpand, "cannotExpand cannot be null");
         Set<Class<? extends E>> concrete = new LinkedHashSet<>();
         boolean foundAll = collect(declaredType, concrete, new HashSet<>());
-        // A non-sealed concrete class declared directly is accepted even though its subclasses cannot be found, which is
-        // how every saga declaring a non-final event class kept working. Being instantiable is not itself enough. A
-        // sealed root says its subtypes are knowable, so an incomplete hierarchy under one is refused whether or not the
-        // root can be stored.
-        boolean declaredConcreteAndOpen = !declaredType.isSealed() && isStoredUnderItsOwnName(declaredType);
-        if (!declaredConcreteAndOpen && (!foundAll || concrete.isEmpty())) {
+        // Being instantiable is not itself enough. A concrete class that is neither final nor sealed can be extended
+        // where nothing here can see it, so it is refused like any other level that reopens the hierarchy, whether it
+        // was declared directly or reached from a sealed root above it.
+        if (!foundAll || concrete.isEmpty()) {
             throw cannotExpand.apply(declaredType);
         }
         return List.copyOf(concrete);
