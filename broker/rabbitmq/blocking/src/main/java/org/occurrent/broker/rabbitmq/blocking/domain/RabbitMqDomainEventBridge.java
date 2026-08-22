@@ -32,6 +32,7 @@ import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryFailureAction;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopology;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnreadableLiveFilterException;
@@ -82,6 +83,12 @@ import static java.util.Objects.requireNonNull;
  * not this bridge redelivering into its own refusal (its consumer is already cancelled, so nothing of this bridge's
  * can ever see it again), only what makes the event survive, visible for whoever consumes next once the
  * registration is fixed and restarted.
+ * <p>
+ * <strong>{@link Builder#build()} retries a broker briefly unreachable, per #867.</strong> Opening the channel,
+ * declaring the queue and its bindings, and setting QoS all happen inside {@link Builder#retryStrategy(RetryStrategy)},
+ * exponential backoff from 100 ms up to 2 seconds by default, ten attempts in total, so a broker that has not
+ * finished starting, or is mid-restart, when this bridge is built does not fail the whole application startup over
+ * it. See that method's own javadoc for exactly what is retried and what is refused immediately.
  * <p>
  * <strong>Coarse lifecycle.</strong> A background poll, {@link Builder#pollInterval(Duration)} apart (one second by
  * default), reads {@link DomainEventFeed#hasProjection()} and {@link DomainEventFeed#isReadyForLiveDelivery()} and
@@ -548,11 +555,13 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         private @Nullable RabbitMqDestination parkingDestination;
         private Duration pollInterval = Duration.ofSeconds(1);
         private int prefetchCount = 1;
+        private RetryStrategy retryStrategy;
 
         private Builder(Connection connection, DomainEventFeed<E> feed, String queue) {
             this.connection = requireNonNull(connection, "connection cannot be null");
             this.feed = requireNonNull(feed, DomainEventFeed.class.getSimpleName() + " cannot be null");
             this.queue = requireNonNull(queue, "queue cannot be null");
+            this.retryStrategy = defaultRetryStrategy(queue);
         }
 
         /**
@@ -643,6 +652,28 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             return this;
         }
 
+        /**
+         * How a broker briefly unreachable while {@link #build()} runs is retried before it throws. Exponential
+         * backoff from 100 ms up to 2 seconds by default, ten attempts in total, matching the shape
+         * {@code AGENTS.md} sets for every component that talks to an external store, capped at that count because a
+         * {@link #build()} that never gives up turns a broker that is permanently misconfigured, a rejected
+         * credential or a nonexistent vhost, into an application that hangs at startup with no diagnosis, which is
+         * worse than the failure this retry exists to absorb. {@link #build()} logs each retried attempt at
+         * {@code WARN} so a retrying startup is never mistaken for a hung one. Retries
+         * {@link RabbitMqBridgeException} and {@link ShutdownSignalException}, the two shapes opening a channel,
+         * declaring the queue and its bindings, or setting QoS already throw for "the broker is not reachable right
+         * now" ({@link ShutdownSignalException} unchecked, exactly the distinction {@code RabbitMqConfirmPublisher}'s
+         * own {@code openChannel} call draws). Never retries the {@link IllegalStateException} a missing
+         * {@code resolver} or {@code parkingDestination} throws above, since that failure is identical on every
+         * attempt regardless of the broker's state, and never any other {@link RuntimeException}, since that is a
+         * bug this retry cannot fix by trying again. Passing a {@link RetryStrategy} here replaces that predicate
+         * too, so a caller that wants a different bound or a wider retry configures its own.
+         */
+        public Builder<E> retryStrategy(RetryStrategy retryStrategy) {
+            this.retryStrategy = requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
+            return this;
+        }
+
         public RabbitMqDomainEventBridge<E> build() {
             if (declareTopology && bindings == null && resolver == null) {
                 throw new IllegalStateException("A resolver(...), or explicit bindings(...), is required unless declareTopology(false) is set");
@@ -653,9 +684,17 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             Set<RabbitMqDestination> destinations = declareTopology
                     ? RabbitMqTopology.destinationsToBind(resolver, bindingFilter, bindings)
                     : Set.of();
-            // Validated above, before opening anything: a failure past this point has a channel (and, under PARK, a
-            // parking sink) already open, so every later failure path in this method closes what it opened rather
-            // than leaking it.
+            // retryStrategy wraps only this call, not the validation above: a failed validation throws the same
+            // way on every attempt regardless of the broker's state, so retrying it would spend the whole backoff
+            // window on a failure a retry can never fix. Each attempt is a clean start, never a resume, since a
+            // failed one below always fully unwinds whatever it opened before rethrowing.
+            return retryStrategy.execute(() -> buildOnce(destinations));
+        }
+
+        // Validated above, before opening anything: a failure past this point has a channel (and, under PARK, a
+        // parking sink) already open, so every later failure path in this method closes what it opened rather
+        // than leaking it.
+        private RabbitMqDomainEventBridge<E> buildOnce(Set<RabbitMqDestination> destinations) {
             Channel channel = openChannel(connection);
             RabbitMqDeliveryFailureAction failureAction = null;
             RabbitMqDomainEventBridge<E> bridge = null;
@@ -677,6 +716,20 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
                 }
                 throw e;
             }
+        }
+
+        /**
+         * Retries {@link RabbitMqBridgeException} and {@link ShutdownSignalException} only, see
+         * {@link #retryStrategy(RetryStrategy)}. Takes {@code queue} explicitly rather than reading the field: this
+         * runs from the constructor, before the field assignment it would otherwise read completes.
+         */
+        private static RetryStrategy defaultRetryStrategy(String queue) {
+            return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0)
+                    .maxAttempts(10)
+                    .retryIf(throwable -> throwable instanceof RabbitMqBridgeException || throwable instanceof ShutdownSignalException)
+                    .onBeforeRetry((info, throwable) -> log.warn(
+                            "Attempt {} of {} to build the RabbitMQ domain event bridge for queue \"{}\" failed. Retrying in {}.",
+                            info.getAttemptNumber(), info.getMaxAttempts(), queue, info.getBackoff(), throwable));
         }
 
         private static Channel openChannel(Connection connection) {

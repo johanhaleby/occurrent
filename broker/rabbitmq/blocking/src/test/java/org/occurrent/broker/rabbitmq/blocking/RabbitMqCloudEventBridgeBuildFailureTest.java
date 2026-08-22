@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
 import java.io.IOException;
@@ -86,8 +87,12 @@ class RabbitMqCloudEventBridgeBuildFailureTest {
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
         RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(EXCHANGE, ReflectionCloudEventTypeMapper.qualified());
 
+        // retryStrategy(none()): this test is about the unwind on ONE failed attempt, not about retrying, and a
+        // queue declare failure wrapped as RabbitMqBridgeException is retried by default (see
+        // RabbitMqCloudEventBridgeBuildRetryTest), which would both slow this down and call close() more than once.
         RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, "queue")
-                .resolver(resolver);
+                .resolver(resolver)
+                .retryStrategy(RetryStrategy.none());
 
         assertThatThrownBy(builder::build).isInstanceOf(RabbitMqBridgeException.class);
 

@@ -17,16 +17,23 @@
 package org.occurrent.springboot.broker.rabbitmq.blocking.domain;
 
 import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ShutdownSignalException;
 import org.occurrent.broker.api.blocking.DestinationResolver;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqBridgeException;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
 import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventBridge;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.retry.RetryStrategy;
 import org.occurrent.springboot.broker.rabbitmq.blocking.RabbitMqBrokerProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 
 import static java.util.Objects.requireNonNull;
 
 class DefaultRabbitMqDomainEventBridgeFactory implements RabbitMqDomainEventBridgeFactory {
+
+    private static final Logger log = LoggerFactory.getLogger(DefaultRabbitMqDomainEventBridgeFactory.class);
 
     private final Connection connection;
     private final RabbitMqBrokerProperties properties;
@@ -46,12 +53,29 @@ class DefaultRabbitMqDomainEventBridgeFactory implements RabbitMqDomainEventBrid
                 .declareTopology(bridgeProperties.isDeclareTopology())
                 .onDeliveryFailure(bridgeProperties.getOnDeliveryFailure())
                 .pollInterval(bridgeProperties.getPollInterval())
-                .prefetchCount(bridgeProperties.getPrefetchCount());
+                .prefetchCount(bridgeProperties.getPrefetchCount())
+                .retryStrategy(buildRetryStrategy(queue, bridgeProperties.getRetry()));
         DestinationResolver<RabbitMqDestination> resolver = resolverProvider.getIfAvailable();
         if (resolver != null) {
             builder.resolver(resolver);
         }
         bridgeProperties.getParkingDestination().toDestination().ifPresent(builder::parkingDestination);
         return builder;
+    }
+
+    /**
+     * The same predicate {@code RabbitMqDomainEventBridge.Builder}'s own default {@code build()} retry strategy
+     * uses, including its {@code onBeforeRetry} logging. Calling {@code retryStrategy(...)} replaces that default
+     * entirely, so applying the property-driven timing without either would retry an {@code IllegalStateException}
+     * from a missing resolver or parking destination forever instead of failing on the first attempt, and leave a
+     * retrying startup logging nothing to tell it apart from a hung one.
+     */
+    private static RetryStrategy buildRetryStrategy(String queue, RabbitMqBrokerProperties.BridgeRetry retry) {
+        return RetryStrategy.exponentialBackoff(retry.getInitial(), retry.getMax(), retry.getMultiplier())
+                .maxAttempts(retry.getMaxAttempts())
+                .retryIf(throwable -> throwable instanceof RabbitMqBridgeException || throwable instanceof ShutdownSignalException)
+                .onBeforeRetry((info, throwable) -> log.warn(
+                        "Attempt {} of {} to build the RabbitMQ domain event bridge for queue \"{}\" failed. Retrying in {}.",
+                        info.getAttemptNumber(), info.getMaxAttempts(), queue, info.getBackoff(), throwable));
     }
 }

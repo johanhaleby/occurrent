@@ -22,10 +22,7 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
-import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqBridgeException;
-import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.retry.RetryStrategy;
@@ -33,73 +30,77 @@ import org.occurrent.retry.RetryStrategy;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Optional;
-import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * The domain bridge's twin of {@code RabbitMqCloudEventBridgeBuildFailureTest}: a failed
- * {@link RabbitMqDomainEventBridge.Builder#build()} must not leave a {@link Channel} open behind it.
+ * The domain bridge's twin of {@code RabbitMqCloudEventBridgeBuildRetryTest}: {@link RabbitMqDomainEventBridge.Builder#build()}'s
+ * retry, exercised against a mocked {@link Connection} and {@link Channel} instead of a real broker.
  */
-class RabbitMqDomainEventBridgeBuildFailureTest {
-
-    private static final String EXCHANGE = "test-exchange";
+class RabbitMqDomainEventBridgeBuildRetryTest {
 
     @Test
-    void onDeliveryFailure_PARK_without_a_parkingDestination_is_refused_before_any_channel_is_opened() throws Exception {
+    void a_broker_communication_failure_is_retried_with_the_default_strategy_and_build_eventually_succeeds() throws Exception {
         Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel())
+                .thenThrow(new IOException("expected, simulates a broker briefly unreachable"))
+                .thenThrow(new IOException("expected, simulates a broker briefly unreachable"))
+                .thenReturn(Optional.of(channel));
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+
+        try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = RabbitMqDomainEventBridge.builder(connection, feed, "queue")
+                .declareTopology(false)
+                .build()) {
+            assertThat(bridge).isNotNull();
+        }
+
+        verify(connection, times(3)).openChannel();
+    }
+
+    @Test
+    void retries_are_exhausted_and_the_last_failure_is_thrown_after_the_configured_bound() throws Exception {
+        Connection connection = mock(Connection.class);
+        when(connection.openChannel()).thenThrow(new IOException("expected, simulates a broker that never comes back"));
         DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
 
         RabbitMqDomainEventBridge.Builder<TestOrderPlaced> builder = RabbitMqDomainEventBridge.builder(connection, feed, "queue")
                 .declareTopology(false)
-                .onDeliveryFailure(DeliveryFailurePolicy.PARK);
-
-        assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class);
-
-        verify(connection, never()).openChannel();
-    }
-
-    @Test
-    void an_explicit_empty_bindings_set_is_refused_before_any_channel_is_opened() throws Exception {
-        Connection connection = mock(Connection.class);
-        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
-
-        RabbitMqDomainEventBridge.Builder<TestOrderPlaced> builder = RabbitMqDomainEventBridge.builder(connection, feed, "queue")
-                .bindings(Set.of());
-
-        assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class);
-
-        verify(connection, never()).openChannel();
-    }
-
-    @Test
-    void a_topology_declaration_failure_closes_the_channel_it_already_opened() throws Exception {
-        Connection connection = mock(Connection.class);
-        Channel channel = mock(Channel.class);
-        when(connection.openChannel()).thenReturn(Optional.of(channel));
-        when(channel.queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any()))
-                .thenThrow(new IOException("queue declare failed"));
-        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
-        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(EXCHANGE, ReflectionCloudEventTypeMapper.qualified());
-
-        // retryStrategy(none()): this test is about the unwind on ONE failed attempt, not about retrying, and a
-        // queue declare failure wrapped as RabbitMqBridgeException is retried by default (see
-        // RabbitMqDomainEventBridgeBuildRetryTest), which would both slow this down and call close() more than once.
-        RabbitMqDomainEventBridge.Builder<TestOrderPlaced> builder = RabbitMqDomainEventBridge.builder(connection, feed, "queue")
-                .resolver(resolver)
-                .retryStrategy(RetryStrategy.none());
+                .retryStrategy(RetryStrategy.fixed(Duration.ofMillis(1))
+                        .maxAttempts(3)
+                        .retryIf(throwable -> throwable instanceof RabbitMqBridgeException));
 
         assertThatThrownBy(builder::build).isInstanceOf(RabbitMqBridgeException.class);
 
-        verify(channel).close();
+        verify(connection, times(3)).openChannel();
+    }
+
+    @Test
+    void a_bug_shaped_runtime_exception_is_never_retried() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel channel = mock(Channel.class);
+        when(connection.openChannel()).thenReturn(Optional.of(channel));
+        doThrow(new RuntimeException("expected, simulates a bug, not a broker failure"))
+                .when(channel).basicQos(1);
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+
+        RabbitMqDomainEventBridge.Builder<TestOrderPlaced> builder = RabbitMqDomainEventBridge.builder(connection, feed, "queue")
+                .declareTopology(false);
+
+        assertThatThrownBy(builder::build)
+                .isInstanceOf(RuntimeException.class)
+                .isNotInstanceOf(RabbitMqBridgeException.class)
+                .hasMessage("expected, simulates a bug, not a broker failure");
+
+        verify(connection, times(1)).openChannel();
     }
 
     private record TestOrderPlaced(String orderId) {
