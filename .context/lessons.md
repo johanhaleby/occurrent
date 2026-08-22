@@ -2634,3 +2634,22 @@ artifact you fetched before the head moved.
 The practical sequence is `gh pr view --json headRefOid`, then query runs by `head_sha`, then re-run
 that run's id. Re-running the id you happen to be holding is how you get a green result for code
 nobody is proposing to merge.
+
+## A Copilot review request does not survive the next push, and is not queued behind it
+
+rel34 requested fresh Copilot reviews on four pull requests to clear a fleet-wide stale-review
+problem. Each request produced exactly one review, each worker then pushed again, and every review
+went stale with NO request left pending. A later sweep found five of six pull requests in that state:
+stale review, zero pending requests, nothing that would ever produce a current one. The orchestrator
+would have waited indefinitely for a review that was never coming.
+
+So a request is consumed by the review it produces and is not carried forward. Requesting early, when
+a worker is still iterating, buys one review of a head nobody intends to merge.
+
+Request at the moment of gating, not before. The sequence that works is: the worker declares settled,
+then resolve the current head, then request the review for that head, then read it. Anything earlier
+is spent by the next push.
+
+The same sweep is what surfaced it, and it is worth keeping as a habit rather than a one-off, since
+the condition is invisible per pull request. A stale review with no pending request looks exactly like
+a stale review with one pending, and only the request count separates them.
