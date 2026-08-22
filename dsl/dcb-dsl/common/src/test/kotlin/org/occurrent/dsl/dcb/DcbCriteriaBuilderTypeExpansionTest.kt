@@ -68,11 +68,13 @@ class DcbCriteriaBuilderTypeExpansionTest {
 
     @Test
     fun types_expands_each_declared_type_the_same_way_type_does() {
+        // The sealed supertype sits in the vararg rest, not first, so a regression that maps rest straight across
+        // without expanding it still fails this test.
         val builder = DcbCriteriaBuilder(simpleNameConverter<OrderEvent>())
 
-        val criterion = builder.types(OrderEvent::class.java)
+        val criterion = builder.types(OrderPlaced::class.java, OrderEvent::class.java)
 
-        assertThat(criterion).isEqualTo(DcbCriteria.types(listOf("OrderEvent", "OrderPlaced", "OrderCancelled")))
+        assertThat(criterion).isEqualTo(DcbCriteria.types(listOf("OrderPlaced", "OrderEvent", "OrderCancelled")))
     }
 
     @Test

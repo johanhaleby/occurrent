@@ -92,7 +92,11 @@ public interface ExecuteFilter<E> {
      * {@link #type(Class)} and {@link #includeTypes} do, and on purpose. Excluding a supertype has to exclude
      * everything under it, or the exclusion silently lets the excluded family of events through. Widening never
      * excludes fewer of the concrete types that walk finds than a complete expansion would, so it is never the
-     * wrong direction to fail in. It does not promise the exclusion excludes something. A concrete class declared
+     * wrong direction to fail in. It does not promise the exclusion excludes something. {@code expandWhatCanBeFound}'s
+     * own documentation scopes itself to a caller that is not deriving a filter, since a missed type there would
+     * narrow what an inclusive filter reads. Excluding is the opposite question, where a missed type only narrows
+     * what gets excluded, never what gets read, so deriving an exclusive filter from it here is the safe direction
+     * that scope was written before, not the one it warns against. A concrete class declared
      * directly that is itself neither final nor sealed contributes itself, the same as before this method went
      * through {@link EventTypeExpansion}, since no downward walk can find a subclass stored under its own name, but
      * the exclusion is not empty. <strong>An interface or an abstract class whose hierarchy reopens before the walk
