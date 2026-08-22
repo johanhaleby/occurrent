@@ -1722,3 +1722,25 @@ that describes it.** rel34 drew a file fence from where a symbol is DECLARED rat
 CALLED. sdi measured a rename with a grep anchored on import syntax, missing fully qualified uses
 and every Kotlin import. sdi then read issue bodies in place of PR diffs. Declaration, syntax, and
 intent each stood in for the artifact, and each read as diligence while it happened.
+
+## An issue-number fence cannot see a unit that has no issue (rel34, 2026-08-22)
+
+Cross-epic fences here are keyed by issue number: rel34's sweeps exclude #388, #421, #893 and
+#896, and the reciprocal lists are the same shape. brk's U15 has no issue number at all. A unit
+like that can never appear in a list of that shape however carefully either side maintains it,
+so the fence reads as coverage while having a hole exactly the size of every unit nobody filed
+an issue for.
+
+Found by sdi, which also found that its own "no rel34 issue overlaps our units" claim had been
+built from issue BODIES rather than PR diffs, and was wrong: rel34's PR 914 edits two of sdi's
+three fence surfaces.
+
+The coverage check is at file level, not issue level: `gh pr list --state open --json
+number,headRefName`, attribute each PR to a fleet by branch prefix, then `gh pr view <n> --json
+files` and intersect. Run it before merging into a contended area rather than trusting the
+exclusion list. On this repository it takes seconds and it immediately showed that every
+cross-epic collision today is `changelog.md` alone, which is the known keep-both case, while the
+two within-epic collisions were in the same file but different bean methods, verified by
+comparing hunk headers rather than assumed from the file name matching.
+
+Issue-number exclusions stay useful as the first filter. They are not the coverage argument.
