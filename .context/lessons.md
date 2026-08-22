@@ -2002,3 +2002,4 @@ than diagnosing it, because a wrong owner would have concluded "flake" faster. I
 that narrowed it (JDK asymmetry, main green) as evidence rather than as a conclusion. And it said
 plainly which reading it could not rule out, so the receiving fleet knew what it was being asked to
 settle rather than to confirm.
+- 2026-08-22 brk: timestamps are read from a clock or from the system that owns the fact, never written from memory. brk's state file carried stamps an hour in the future (the clock read 13:55Z while U16 said 14:10 and U17 said 14:50) and one malformed `06:5x`, which disables stall detection since a future stamp yields a negative age, and the validator does not parse times. Repaired from `gh pr view --json mergedAt` and the journal's `at`. Rule: `date -u` for now, `mergedAt` for a merge, the journal for a ruling, and a commit author time as an at-or-before bound for anything nothing owns. Never write `HH:Mx` as a precision claim.
