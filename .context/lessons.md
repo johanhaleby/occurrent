@@ -2615,6 +2615,8 @@ then look at main. Searching is one command and it is the check that distinguish
 a known one. The worker's own instinct that its change could not reach the module was correct and was
 overruled by a more careful reading of the wrong evidence.
 
+sdi made the identical mistake the same day, on the same shard, and the entry above was written before sdi read it. PR 934 failed `SubscriptionModelConformance$TheLifeCycle.a_paused_subscription_receives_...`, sdi read the log, confirmed the shard was green on main's last three runs, told the worker the failure was attributable to its diff, and explicitly ruled out flakiness for want of evidence. **#781 was open the whole time**, naming that exact shard and that exact nested class, and reporting it flakes above the rate of the known-flake note. The worker then spent a round eliminating string literals and running both JDKs to establish a negative the tracker already held. Two fleets reaching the same wrong conclusion from the same correct evidence on one afternoon is what makes the tracker search a step rather than a suggestion, and the search that finds it is the test name, not the symptom: `ChangeStreamHistoryLost` surfaced #781 only incidentally, and the class name found it directly.
+
 The cost of getting this backwards is not only wasted work. Sending a worker to hunt a defect in its
 own change, when the change is innocent, invites it to find a plausible cause and fix something that
 was never broken.

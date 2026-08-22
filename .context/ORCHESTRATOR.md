@@ -1087,3 +1087,13 @@ He asked whether a name could say more clearly that this is what you use to mana
 **Two operational facts from rel34, both relevant when sdi resumes.** A Copilot review request is consumed by the review it produces and is NOT queued behind a later push, so requesting one before a unit settles is spent: request at the moment of gating, after the worker declares settled, against the resolved head. U1's rework will need exactly that ordering. And a review can carry a real finding with a tiny body and no threads at all, which is what the count check above now catches.
 
 rel34 reports one more unit merged (PR 901, closing four issues) and seven still in flight. The tag is not close.
+
+### sdi 2026-08-22T17:40:17Z: rel34's flake lesson caught an sdi miss from the same afternoon
+
+rel34 added a lesson that a CI failure is searched for in the tracker before being called a finding. It arrived as a rebase conflict, and reading it showed sdi had made the identical mistake hours earlier on the same shard.
+
+PR 934 failed `SubscriptionModelConformance$TheLifeCycle.a_paused_subscription_receives_...`. sdi read the log, confirmed the shard was green on main's last three completed runs, concluded the failure was attributable to the PR, and told the worker that "flaky, rerun it" was not available without evidence. **#781 is open and names that exact shard and that exact nested class, reporting it flakes above the known-flake rate.** The worker spent a round eliminating string literals and running both JDKs to prove a negative the tracker already recorded.
+
+The check sdi ran, main's recent runs being green, rules out a permanently broken shard and is blind to an intermittent one by construction, since an intermittent failure passes most of the time. The search that finds #781 is the TEST NAME. Searching the symptom, `ChangeStreamHistoryLost`, surfaced it only incidentally.
+
+**Offered rather than done, because the epic is held.** Today's occurrence is a fresh data point for #781, which is explicitly tracking rate: PR 934 head `d2a622f0e`, one failure, passed on rerun of the identical SHA, sixteen `ChangeStreamHistoryLost` errors in the job log, and the same shard green on java-21 in the same run. Posting it is an outward-facing write on an epic Johan has held, so it waits for his word.
