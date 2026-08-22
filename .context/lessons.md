@@ -2146,3 +2146,28 @@ shape had already produced a masked rebase failure earlier in this session.
 Any command whose exit code is the actual result gets run on its own line with `RC=$?` captured
 immediately, never piped into a formatter and never chained behind `&&`. Piping a verifier into `head`
 or `tail` destroys the one thing being verified.
+
+## Never edit a multi-unit YAML file with a regex that spans unit blocks (sdi, 2026-08-22)
+
+Clearing ONE unit's `blocking_on` after a fence was lifted, I matched the unit with a non-greedy
+block regex ending in `(?=\n  [A-Z0-9]+:|\Z)` and then ran `re.sub` for `blocking_on:` inside it.
+The lookahead did not bound where I assumed, the substitution applied across the whole tail of the
+file, and **six units silently lost their fence blockers**. Durable state, committed and pushed.
+
+What caught it was `epic-state.py derive` reporting DRIFT on six units in the same command. Nothing
+else would have: the file was still valid YAML, still passed `validate`, and the units still read
+plausibly. Running derive after every write is the only reason this was a near-miss rather than a
+fleet dispatching into a live fence.
+
+The fix is not a better regex. Bound the edit structurally: find the unit's start line by exact
+match on `  <NAME>:`, find its end by the next line matching `^  [A-Za-z0-9_]+:$`, and edit only
+between those indices. Verify afterwards by parsing the YAML and printing phase plus blocker COUNT
+per unit, which is the assertion that would have failed immediately.
+
+**A second failure hid inside the first, and it is the worse one.** An earlier edit marking a unit
+DONE never reached the commit at all. `validate` reported the new revision from the working tree, I
+read that as success, committed, saw a clean push, and told the user the unit was done. The state
+file's history shows the commit never touched it. So: a passing validate proves the FILE is good,
+never that the CHANGE was committed. After any state write, confirm the field actually landed in
+the commit, with `git show HEAD:<path>` and not from the working tree.
+
