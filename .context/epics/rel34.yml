@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 32
-updated_at: '2026-08-22T16:50:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (901 re-verify HELD, streamid finding
-  filed as 927)
+revision: 33
+updated_at: '2026-08-22T17:05:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (914 falsified a second time by its own
+  fix)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -373,8 +373,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker adding the ADR 132 correction (granted); then adversarial verify, then the gate
-    last_meaningful_progress_at: '2026-08-22T11:50:00+00:00'
+    next_action: worker fixing the reactive already-elapsed case and deciding the interface-contract question
+    last_meaningful_progress_at: '2026-08-22T17:05:00+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -402,12 +402,36 @@ units:
           the matrix here, so the 26 green contexts stand.'
         via: orchestrator ruling
         at: '2026-08-22T11:50:00+00:00'
+      reverify_2:
+        note: 'FALSIFIED a SECOND time, reactive stack only, and again by the fix itself. Defect 1, the
+          unbounded retry, is CLOSED on both stacks: the 1000 ceiling is enforced identically, verified
+          at 999, 1000 and 1500 configured attempts, and never shortens a policy already below it; the
+          real source of the original 203,766-calls measurement was the auto-configuration building Retry.backoff(Long.MAX_VALUE),
+          now bounded. Defect 2''s fix introduced a new asymmetry: ReactiveMongoAppliedAppendStore.readOnceBoundedBy
+          now reads `remainingNanos > 0 ? read.block(Duration.ofNanos(remainingNanos)) : read.block()`,
+          so an ALREADY-ELAPSED deadline falls to the UNBOUNDED block and the whole retry budget runs.
+          Measured with the shipped default: 9.9 SECONDS and 10 store calls, against 22ms and 1 call on
+          the blocking store for the same case. The branch is new in the fix commit c0d8a29b4, and the
+          added test covers only the conflicting-index and successful-but-false variants, never a genuinely
+          failing ordinary read at Duration.ZERO, which is why it shipped green. SECOND, a contract question
+          rather than a bug: the same block timeout cuts off a slow but SUCCESSFUL reactive read, turning
+          a true answer false (300ms read against a 100ms wait answered false where blocking answered
+          true). Pre-existing and disclosed in the ADR, but the INTERFACE javadoc the worker just added
+          says every implementation owes not answering false about an append it holds, and the reactive
+          store does not. Either the claim narrows or the store changes; a contract on the interface that
+          an implementation does not meet is the exact drift moving it up there was meant to prevent.'
+        via: orchestrator re-verify subagent, measured
+        at: '2026-08-22T17:05:00+00:00'
     assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:50Z after
       a scoping read, which is why #878 moved here from U5. The read found two collisions the original
       split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
       and U5''s #891 needs the reactor ProjectionAnnotationRegistrar and ComposedCatchupModel, which are
       exactly the two files U12 was handed minutes earlier. U4 as re-scoped owns the store and wait surface
-      and touches NO reactor registrar, so it is disjoint from U12 and dispatchable now.'
+      and touches NO reactor registrar, so it is disjoint from U12 and dispatchable now. TWICE FALSIFIED,
+      each time by its own preceding fix. That is a signal about this surface rather than about the worker:
+      the applied-append store''s wait path has a blocking implementation that folds the deadline into
+      a retry predicate and a reactive one that folds it into a block timeout, and those two mechanisms
+      disagree at every boundary case. Relevant to C1: this area should get more than one round.'
   U5:
     issue: 878
     goal: A reactor projection that applies an append always records it, so waitUntilApplied cannot time
