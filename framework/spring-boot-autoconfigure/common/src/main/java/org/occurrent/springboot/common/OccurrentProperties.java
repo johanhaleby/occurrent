@@ -798,8 +798,11 @@ public class OccurrentProperties {
              * timeout, so an ordinary primary failover is ridden out rather than turned into a failure.
              * <p>
              * A projection that records applied appends calls the store on the thread that delivers its events, so
-             * this is also how long an unreachable store holds that delivery up. Raising it rides out a longer
-             * outage and holds deliveries up for longer, and 1 means one attempt and no retry at all.
+             * this is also how long an unreachable store holds that delivery up. Reaching the limit fails the call,
+             * and that failure comes out of the projection's own event handling, where the subscription treats it
+             * like any other failing handler. The read model is updated before the recording runs, so a redelivery
+             * of that event applies it again. Raising the limit rides out a longer outage and holds deliveries up
+             * for longer, and 1 means one attempt and no retry at all.
              * <p>
              * {@code AppliedAppendStore.waitUntilApplied(..)} is unaffected. Its reads stop at the caller's own
              * timeout and answer that the append is not applied yet, whichever limit it reaches first.
@@ -844,6 +847,9 @@ public class OccurrentProperties {
             }
 
             public void setMaxAttempts(int maxAttempts) {
+                if (maxAttempts < 1) {
+                    throw new IllegalArgumentException("occurrent.projection.applied-append.max-attempts must be at least 1, a store that is never called cannot record or read anything");
+                }
                 this.maxAttempts = maxAttempts;
             }
 

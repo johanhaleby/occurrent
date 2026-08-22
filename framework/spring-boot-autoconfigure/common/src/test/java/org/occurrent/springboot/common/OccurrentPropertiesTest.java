@@ -327,4 +327,45 @@ class OccurrentPropertiesTest {
             assertThat(subscription.isRestartOnChangeStreamHistoryLost()).isTrue();
         }
     }
+
+    @Nested
+    class The_applied_append_attempt_limit {
+
+        @Test
+        void defaults_to_twenty_attempts() {
+            OccurrentProperties properties = new OccurrentProperties();
+
+            assertThat(properties.getProjection().getAppliedAppend().getMaxAttempts()).isEqualTo(20);
+        }
+
+        @Test
+        void rejects_zero_because_a_store_that_is_never_called_records_nothing() {
+            OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =
+                    new OccurrentProperties().getProjection().getAppliedAppend();
+
+            assertThatThrownBy(() -> appliedAppend.setMaxAttempts(0))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("occurrent.projection.applied-append.max-attempts");
+        }
+
+        @Test
+        void rejects_a_negative_number_of_attempts() {
+            OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =
+                    new OccurrentProperties().getProjection().getAppliedAppend();
+
+            assertThatThrownBy(() -> appliedAppend.setMaxAttempts(-1))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("at least 1");
+        }
+
+        @Test
+        void allows_a_single_attempt_meaning_no_retry_at_all() {
+            OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =
+                    new OccurrentProperties().getProjection().getAppliedAppend();
+
+            appliedAppend.setMaxAttempts(1);
+
+            assertThat(appliedAppend.getMaxAttempts()).isEqualTo(1);
+        }
+    }
 }
