@@ -63,7 +63,8 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * or {@link RoutingOutcome#FILTERED} stages this record's offset for the next commit. A normal return with
  * {@link RoutingOutcome#UNAVAILABLE} never does either, and is seeked back and paced rather than sent through a
  * failure policy, see below. A normal return with {@link RoutingOutcome#NOT_DELIVERABLE} cannot happen, since that
- * outcome always comes with the filter's own exception. A {@link RoutingOutcome#REFUSED} stops this bridge for
+ * outcome always comes with an exception, the filter's own or a transient action refusal's. A
+ * {@link RoutingOutcome#REFUSED} stops this bridge for
  * good, also below. For every other failure this bridge's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) seeks the consumer back to this record's offset,
  * {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only once that publish is confirmed
  * treats this record as resolved, exactly as a delivered one. A normal return with {@link RoutingOutcome#DEFERRED},
@@ -294,8 +295,9 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             } catch (RuntimeException e) {
                 log.warn("Failed to close the Kafka consumer cleanly during shutdown.", e);
             }
-            // This bridge has no permanent-stop path of its own today, but the loop can still exit here without
-            // close() ever having run, an uncaught Error escaping the try above, most notably. Closing
+            // The permanent-stop path above (permanentlyStopped) is one ordinary way this loop exits, but it can
+            // also exit here without close() ever having run, an uncaught Error escaping the try above, most
+            // notably. Closing
             // failureAction here too, independently of the Consumer close above, means the parking producer it
             // owns is never left open past this thread's own teardown. KafkaDeliveryFailureAction#close()
             // already does nothing on a second call, so close() calling it again afterward, on an ordinary
@@ -533,9 +535,9 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             // readinessSource-gated path already relied on.
             return false;
         }
-        // NOT_DELIVERABLE, the filter itself having failed to answer. It always arrives with the filter's own
-        // exception, which the catch above already routed, so reaching here means a future outcome this bridge has
-        // not been taught yet. Routed as a failure either way.
+        // NOT_DELIVERABLE, whether the filter itself failed to answer or a transient refusal reported it. It
+        // always arrives with an exception, which the catch above already routed, so reaching here means a
+        // future outcome this bridge has not been taught yet. Routed as a failure either way.
         log.debug("A record on topic \"{}\" partition {} offset {} reported an outcome this bridge does not " +
                 "recognize. Routing it as a failure.", record.topic(), record.partition(), record.offset());
         return resolve(record, toCommit, failureAction.apply(record));
@@ -759,12 +761,12 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
                         "auto-commit advances the offset on a timer regardless of what this bridge decided, and a " +
                         "seek back after a delivery failure would still be committed past by it");
             }
+            Set<KafkaDestination> destinations = KafkaTopology.topicsToSubscribe(resolver, bindingFilter, bindings);
             Map<String, Object> config = new HashMap<>(consumerConfig);
             KafkaConsumer<String, byte[]> consumer = new KafkaConsumer<>(config, new StringDeserializer(), new ByteArrayDeserializer());
             KafkaDeliveryFailureAction failureAction = null;
             try {
                 failureAction = KafkaDeliveryFailureAction.create(consumerConfig, deliveryFailurePolicy, parkingDestination, log);
-                Set<KafkaDestination> destinations = KafkaTopology.topicsToSubscribe(resolver, bindingFilter, bindings);
                 KafkaTopology.subscribe(consumer, destinations);
                 KafkaCloudEventBridge bridge = new KafkaCloudEventBridge(consumer, model, outcomeChannel, pollTimeout, closeTimeout, commitRetryStrategy, failureAction, groupId.toString(), readinessSource);
                 bridge.loopThread.start();

@@ -22,11 +22,14 @@ import com.rabbitmq.client.Connection;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -81,6 +84,45 @@ class RabbitMqDeliveryFailureActionTest {
 
         verify(consumeChannel).basicNack(42L, false, true);
         verify(consumeChannel, never()).basicAck(anyLong(), anyBoolean());
+    }
+
+    /**
+     * A {@code basicAck} failure on a confirmed park propagates rather than being swallowed, and the log line
+     * claiming the original was acknowledged never runs, since {@code ack(...)} throws before reaching it.
+     */
+    @Test
+    void apply_never_logs_the_parked_and_acknowledged_line_when_basicAck_itself_fails() throws Exception {
+        Channel consumeChannel = mock(Channel.class);
+        RabbitMqConfirmPublisher parkingPublisher = mock(RabbitMqConfirmPublisher.class);
+        RabbitMqDestination parkingDestination = RabbitMqDestination.of("exchange", "routingKey");
+        doThrow(new IOException("ack failed")).when(consumeChannel).basicAck(42L, false);
+        Logger log = mock(Logger.class);
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.PARK,
+                parkingPublisher, parkingDestination, log);
+
+        assertThatThrownBy(() -> action.apply(42L, new BasicProperties(), new byte[0]))
+                .isInstanceOf(RabbitMqBridgeException.class);
+
+        verifyNoInteractions(log);
+    }
+
+    /**
+     * A {@code basicNack} failure on {@link RabbitMqDeliveryFailureAction#redeliverFailure(long)} propagates rather
+     * than being swallowed, and the "Redelivered" log line never runs, since {@code redeliver(...)} throws before
+     * reaching it.
+     */
+    @Test
+    void redeliverFailure_never_logs_the_redelivered_line_when_basicNack_itself_fails() throws Exception {
+        Channel consumeChannel = mock(Channel.class);
+        doThrow(new IOException("nack failed")).when(consumeChannel).basicNack(42L, false, true);
+        Logger log = mock(Logger.class);
+        RabbitMqDeliveryFailureAction action = new RabbitMqDeliveryFailureAction(consumeChannel, DeliveryFailurePolicy.REDELIVER,
+                null, null, log);
+
+        assertThatThrownBy(() -> action.redeliverFailure(42L))
+                .isInstanceOf(RabbitMqBridgeException.class);
+
+        verifyNoInteractions(log);
     }
 
     /**

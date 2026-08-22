@@ -1676,3 +1676,282 @@ Two supporting habits from the same pass. Ask for at least one independently re-
 as which files a diff touches, so the report can be spot-checked without rerunning it. And ask what
 the pass could NOT verify: this one surfaced that `suppliedBy` has no once-only guard and that it
 had not constructed the double-call scenario, which is a real gap nobody had named.
+- 2026-08-22 brk: a checkpoint merge commit without the `[ci skip]` prefix pushed to main triggers a workflow run and cancels main's in-flight run for the real merge (56c215729's Maven run was cancelled by 2c7079739). Merge main into the session branch with `git merge --no-edit -m "[ci skip] brk: merge main" origin/main` before every checkpoint push.
+- 2026-08-22 brk: four timing assertions on U15 PR 2 were green for reasons nobody chose (a quiet period asserting before the code reached the write, two equal ten second timeouts cancelling out, a handshake waiting for BLOCKED when the thread parks WAITING, a one second sleep the replay happened to finish inside). Each killed its mutation on one machine. A concurrency test waits on a signal from the code under test, never on a sleep or an equal timeout, and a verify re-runs every mutation itself and reads the test's wait mechanism, never the worker's kill record.
+
+## A green rollup over a partial matrix reads exactly like a green rollup (rel34, 2026-08-22)
+
+SUPERSEDED IN ITS REMEDY, kept for the diagnosis. The rollup on a pull request here reports zero
+pending and zero failing over a partial set of contexts while the shard matrix has not spawned, and
+every ordinary gate condition passes. The first remedy recorded here was to compare the context
+COUNT against a full matrix on a sibling pull request, 26 or 27. That remedy is wrong and sdi's
+argument for why is decisive: counting needs a magic number, needs a comparable sibling to derive
+it from, and breaks silently the day the matrix legitimately changes size, in the DANGEROUS
+direction, because a matrix that shrinks makes a real partial set look full.
+
+THE REMEDY THAT WORKS: ask the workflow, not the contexts. `gh run list --commit <sha>` and require
+the "Java CI with Maven" run to be `completed` with conclusion `success` for that exact head. A
+workflow only concludes once every shard job it spawned has finished, so the partial state is
+unambiguous at the workflow level while being invisible at the context level. It needs no magic
+number and survives any matrix change.
+
+Measured live. PR 913 rollup 27 contexts all green and the run `completed/success`, genuinely done.
+PR 916 is the real evidence: its monitor event read `0fail DONE` and the immediate next read showed
+`contexts=6 pending=6` with "Java CI with Maven" QUEUED, so the flag fired on an EMPTY context set,
+not merely a partial one.
+
+AND THE COROLLARY THAT COST ME A WRONG CLAIM. An ABSENT "Java CI with Maven" run is not by itself a
+red flag. The workflow carries `paths-ignore: '**/*.md'`, so a markdown-only push produces no run BY
+DESIGN and the verdict carries by compare from the last code-bearing green head. PR 914 was exactly
+that case, its delta from the previous head being one ADR file, and I reported it to three parties as
+a matrix that had never started. So the rule is two-part: require `completed/success` for the head,
+OR establish that every file changed since the last `completed/success` head is markdown. Checking
+only the first half turns a documented exception into a false alarm, which is the same error shape as
+trusting the rollup, made in the safe direction instead of the dangerous one.
+
+AND THE SAME DEFECT IS IN THE SHARED WORK-ITEM MONITOR. The v7 pattern derives its DONE flag from
+`statusCheckRollup` with exactly the "zero contexts still pending" test, so on PR 914's partial head
+it emitted `0fail DONE`. A monitor DONE is therefore an invitation to check, never a merge signal.
+Three fleets run that pattern.
+
+Credit where it belongs: the partial-rollup diagnosis came from a worker volunteering it in a
+delivery result, the better remedy came from another orchestrator refusing the first one, and the
+monitor consequence came from verifying that suggestion instead of adopting it.
+
+## An exclusion list keyed by issue number cannot see a unit that has no issue (sdi, 2026-08-22)
+
+Three fleets ran concurrently and fenced each other by listing issue numbers: sdi's registration
+prompt excluded "#388, #421, #893 and #896" for brk. brk's U15 carries no issue number at all, and
+its PR 910 edits both `CatchupThenPushSubscriptionModel` files plus two tests, every one of which
+imports the type sdi's rename unit changes across the repository. Neither fleet could see it. The
+list was maintained correctly and the collision still could not appear in it, because the key does
+not exist for that unit.
+
+Diffing the open PRs by branch prefix found it in one pass:
+`gh pr list --state open --json number,headRefName` then `gh pr view <n> --json files`. That is the
+check to run, and issue-number exclusion lists are a starting filter rather than the coverage.
+
+The same sweep caught a second one the same way, in sdi's own recorded memory: sdi had written
+"every other rel34 issue was checked against the units' files and none overlap", a claim built from
+issue BODIES. rel34's PR 914 edits `OccurrentProperties.java` and both auto-configuration classes,
+which are two of sdi's three fence surfaces. An issue body describes intent; only the diff carries
+the files.
+
+This is the third form of one mistake seen in a single session, and the general rule is worth more
+than any of them: **verify against the artifact that carries the change, never against the thing
+that describes it.** rel34 drew a file fence from where a symbol is DECLARED rather than where it is
+CALLED. sdi measured a rename with a grep anchored on import syntax, missing fully qualified uses
+and every Kotlin import. sdi then read issue bodies in place of PR diffs. Declaration, syntax, and
+intent each stood in for the artifact, and each read as diligence while it happened.
+
+## An issue-number fence cannot see a unit that has no issue (rel34, 2026-08-22)
+
+Cross-epic fences here are keyed by issue number: rel34's sweeps exclude #388, #421, #893 and
+#896, and the reciprocal lists are the same shape. brk's U15 has no issue number at all. A unit
+like that can never appear in a list of that shape however carefully either side maintains it,
+so the fence reads as coverage while having a hole exactly the size of every unit nobody filed
+an issue for.
+
+Found by sdi, which also found that its own "no rel34 issue overlaps our units" claim had been
+built from issue BODIES rather than PR diffs, and was wrong: rel34's PR 914 edits two of sdi's
+three fence surfaces.
+
+The coverage check is at file level, not issue level: `gh pr list --state open --json
+number,headRefName`, attribute each PR to a fleet by branch prefix, then `gh pr view <n> --json
+files` and intersect. Run it before merging into a contended area rather than trusting the
+exclusion list. On this repository it takes seconds and it immediately showed that every
+cross-epic collision today is `changelog.md` alone, which is the known keep-both case, while the
+two within-epic collisions were in the same file but different bean methods, verified by
+comparing hunk headers rather than assumed from the file name matching.
+
+Issue-number exclusions stay useful as the first filter. They are not the coverage argument.
+
+## Ask the workflow whether it finished, not the contexts whether they are pending (sdi, 2026-08-22)
+
+rel34 found that a green rollup over a partial matrix reads exactly like a green rollup, and
+proposed comparing the context COUNT against a sibling pull request. brk turned out to have a
+better mechanism already, and it is the one to use.
+
+`gh run list --commit <sha>` and require the "Java CI with Maven" workflow RUN to be `completed`
+with conclusion `success`. A workflow only concludes after every shard job it spawned has
+finished, so a partial matrix cannot pass. Measured on two live heads:
+
+```
+PR 910 head:  Java CI with Maven   status=in_progress  conclusion=null     (rollup: 7 contexts, 5 pending)
+PR 913 head:  Java CI with Maven   status=completed    conclusion=success  (rollup: 27 contexts, all green)
+```
+
+The state that is indistinguishable at the context layer is unambiguous one layer up.
+
+Why it beats counting. Counting needs the magic number, 26 here or 27 with an extra job. It needs
+a comparable sibling to derive that number from. And it fails in the DANGEROUS direction the day
+the matrix legitimately changes size: a matrix that shrinks makes a real partial set look
+complete, so the check goes quiet exactly when it stops being true. Asking whether the run
+concluded needs no number, no sibling, and survives any matrix change.
+
+The wider point, which cost nothing here and could have cost more: I warned brk their gate was
+about to merge on a partial matrix without first asking what their gate reads. It read the
+workflow, not the rollup, and was never exposed. Ask what a peer's mechanism actually is before
+telling them it is broken, because the fleet's shared lesson describes the mechanism SOMEONE used,
+not the one they use.
+
+## The v7 work-item monitor's DONE flag is not a readiness signal (sdi with rel34, 2026-08-22)
+
+The shared monitor pattern in the orchestrator skill's `references/fleet-monitor.md` derives its
+flag at line 23 as:
+
+```
+if ([.statusCheckRollup[] | select(.status != "COMPLETED")] | length) == 0 then "DONE" else "running"
+```
+
+That is "no context is still pending", which is a different claim from "CI finished". On a head
+whose matrix has not spawned, the rollup holds only the few fast contexts, all of them complete,
+so the monitor emits `0fail DONE` for a pull request whose test matrix never started.
+
+Measured live on rel34's PR 914: `contexts=3`, all three SUCCESS, zero pending, a perfectly green
+rollup, while `gh run list --commit <sha>` shows "Java CI with Maven" ABSENT from the run list
+entirely. rel34 had reported that PR green forty minutes earlier against its previous head and
+would have merged it.
+
+Two consequences, and the first is the one to act on:
+
+**A monitor DONE is an invitation to check, never a merge signal.** The cheap fix costs no extra
+API calls and is not a rewrite: the flag is a fine CHANGE DETECTOR, so keep the derivation and fix
+the LABEL, which is what actually misleads. Call it `nopending` rather than `DONE`, and let the
+merge gate ask the authoritative question per PR, where it already runs one call anyway. Monitor
+emits transitions cheaply; the gate verifies.
+
+**The authoritative question is about the run, not the contexts.** `gh run list --commit <sha>`
+with "Java CI with Maven" `completed`/`success`. See the sibling lesson on why that beats counting
+contexts.
+
+This is a defect in shared tooling rather than in one fleet's use of it: all three fleets on this
+repository run the v7 pattern, so all three inherit it.
+
+## The round-N fix produces the round-N+1 defect, and naming it is what makes it visible (rel34, 2026-08-22)
+
+Four instances in one epic, three of them found only because a worker or a pass said so explicitly.
+
+PR 914's worker fixed a retry predicate that ran before the backoff sleep by guarding the read
+supplier against the deadline. That guard made a zero timeout skip the store entirely, so
+`waitUntilApplied` answered false for an append it held. The fix for the round-N finding WAS the
+round-N+1 defect, in the same diff, and the worker said so in those words rather than reporting two
+unrelated findings.
+
+PR 900's Copilot round two found a factual error inside round one's own correction. PR 913's round
+two did the same on prose. brk's ADR 133 ran ten rounds each finding something real.
+
+Two things follow, and the second is the useful one.
+
+A fix to a falsification gets re-verified against the NEW head rather than inheriting the old
+verdict, and the pass is aimed at where a fix typically fails rather than at the original bug. For
+an unwrapping fix that means asking what happens when the unwrap returns null; for a guard, what
+happens at the boundary the guard introduced.
+
+And a worker who names the pattern in its own diff is doing the thing that makes it tractable.
+Reported as two findings it reads as bad luck; reported as one it reads as a shape, and the shape
+is what tells you to keep verifying rather than to trust that the third round converged.
+
+## An instruction can be unimplementable, and the worker is better placed to know (rel34, 2026-08-22)
+
+I told a unit to reject an unbounded retry policy at construction, comparing it to the blank
+collection name and negative retention that the same constructor already rejects. The worker
+established that it cannot be done: `RetryStrategy.Retry` exposes only mutators with no accessor,
+`RetryImpl.maxAttempts` is package private, and reactor's `Retry` is abstract with only
+`generateCompanion`. A store cannot ask a policy whether it terminates.
+
+The comparison I drew was the error. Those other inputs are rejectable because they are values; a
+policy is behaviour, and behaviour cannot be interrogated. The worker's alternative, enforcing a
+ceiling in the store so the CALL stops rather than the construction, was better than what I asked
+for, and it rejected a constructor-parameter variant on the grounds that signature churn across 24
+call sites is how the previous rounds each produced the next defect.
+
+So: an instruction that names a mechanism ("reject at construction") rather than an outcome ("the
+round trips must be bounded whatever policy is supplied") invites a worker to either implement the
+wrong thing or spend a round pushing back. State the outcome and let the unit find the mechanism,
+and when a worker says an instruction is unimplementable, check its evidence rather than restating
+the instruction.
+
+## An adversarial pass can overstate the trigger while being right about the bug (rel34, 2026-08-22)
+
+A pass falsified PR 902 by wrapping the registered model in a Mockito `delegatesTo` proxy and
+showing the warning went silent. It described the trigger as "any `BeanPostProcessor` or Spring AOP
+auto-proxying", and the orchestrator relayed that wording to the worker, who built against it.
+
+The re-verify established that genuine Spring AOP proxies, which is what `@Transactional`, `@Async`
+and custom advisors actually produce, unwrap correctly through `AopProxyUtils.getSingletonTarget`
+and match. What does not unwrap is anything not implementing `Advised`: a Mockito mock, a
+hand-rolled `java.lang.reflect.Proxy`. So the defect was real and the fix closes the real-world
+case, while the characterisation of what triggers it was broader than the evidence supported.
+
+Two things follow. A falsification's REPRODUCTION is evidence; its description of the general case
+is a claim like any other and inherits no authority from the repro. Relay the repro and let the
+worker generalise from the code, or check the generalisation before relaying it.
+
+And the same discipline the passes apply to workers applies to the passes: state what was
+constructed, and do not let "I made this fail with X" become "anything of X's kind fails".
+
+## Three units, one epic, all overclaimed in prose rather than code (rel34, 2026-08-22)
+
+A 50 ms polling cadence described as an upper bound. A predicate "invoked exactly once per attempt"
+that is invoked zero times when a short-circuit fires. An unwrap covering "any BeanPostProcessor"
+that covers Spring's own framework only. Three separate units, three separate reviewers finding
+them, all in javadoc and changelog rather than in behaviour.
+
+The code was right in all three. What was wrong was the sentence next to it, and in two of the
+three the sentence shipped in a changelog, which is where an overclaim gets quoted back.
+
+So a correctness-bearing unit's invariant needs checking against the PROSE as well as the tests,
+and the check is the same question in both places: is there a reachable input for which this
+sentence is false? A test suite will not ask that of a javadoc.
+
+And when the fix is a rewording, check the REPLACEMENT against the same question. Two of these three
+rewordings were themselves the second attempt.
+
+## A reachability argument from this repo's own wiring is subject to the call-sites rule (rel34, 2026-08-22)
+
+Two adopted units, #903 and #909, were withdrawn after a third Copilot round questioned not the
+fix but whether the bug could occur. The argument was that
+`OccurrentReactiveMongoAutoConfiguration.occurrentDurableSubscriptionModel` carries ONE shared
+`@ConditionalOnMissingBean(value = {FluxSubscriptionModel.class, Subscribable.class})`, so the
+method that fills the holder runs only when no replacement exists, and the divergence both issues
+describe cannot happen.
+
+That argument is correct here and would be worthless in the general case, and the difference is
+what matters. AGENTS.md says this repository's own call sites are not the population of users, so
+"the starter cannot produce this state" says nothing about a consumer wiring the beans by hand. The
+argument holds ONLY because `ComposedCatchupModel` is absent from the `occurrent-0.33.0` tag: it
+was added during this release cycle and has never shipped, so the starter genuinely is the whole
+population. Had it shipped, both issues would be reachable and closing them would have been wrong.
+
+So an unreachability claim needs two legs, and the second is the one that gets forgotten: the
+wiring cannot produce the state, AND no released surface lets a consumer produce it either. Check
+the tag, not just the auto-configuration.
+
+The maintainer caught this. The orchestrator argued only the first leg and presented the conclusion
+as settled, and AGENTS.md line 78 already carried the principle under a different heading, blast
+radius of an API change, which is why it did not get applied to a reachability question.
+
+The contrast that proves the shape: the blocking twin #871 IS reachable, because there the durable
+model is gated on `SubscriptionModel.class` while the `Subscriptions` DSL bean is gated separately
+on `Subscriptions.class`. Two independent conditions instead of one shared one, so an application
+replaces the DSL bean alone and the starter still fills the holder. Same feature, same fleet, one
+reachable and one not, decided by which types share a condition.
+
+## Before rerunning a known flake, check whether its fix landed on main (rel34, 2026-08-22)
+
+PR 902 failed `test (misc, java-21)` on a test its diff does not touch. The orchestrator read the
+shard and the JDK, matched the pattern to a different broker flake under investigation, and flagged
+it as a possible fifth sighting of that one. Another fleet read the actual job log: it was #884's
+test, not the other, and #884's fix had merged to main about an hour earlier. The PR's head predated
+it.
+
+So the correct action was a REBASE, which fixes it deterministically, not a rerun, which is a coin
+toss on a test that is already fixed upstream.
+
+Two things worth keeping. A rerun is the reflex for a red shard on an untouched module, and it is
+the wrong one whenever the flake has a landed fix the branch has not picked up; check the merge
+history for the test's issue before spending a rerun. And pattern-matching a failure by shard and
+JDK is a hypothesis, not an identification: the orchestrator had two candidate flakes in the same
+shard and picked the wrong one. Flagging it as unconfirmed is what kept it cheap, and reading the
+log is what settled it.

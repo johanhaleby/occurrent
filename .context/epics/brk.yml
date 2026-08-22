@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 161
+revision: 169
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -288,7 +288,7 @@ units:
   U15:
     issue: null
     goal: "Durable fence on the catch-up marker write on both stacks (dec-0018): a checkpoint save from a replay attempt that lost its subscription id must not be trusted after a process restart, closing the window PR 896 narrowed from always to across-a-restart. Plan gate first (CheckpointWriteCondition keyed by the attempt token, or a durable delete of a marker written after ownership was lost), then implement, ships in 0.34.0."
-    phase: RUNNING
+    phase: DONE
     health: UNKNOWN
     swept: false
     depends_on: []
@@ -296,22 +296,48 @@ units:
     deliverables:
       - {check: manual_approval, ref: "plan approved at the orchestrator plan gate before implementation", met: true, evidence: "dec-0020 approve with amendments: contract (a), D2 split, D3 second PR in unit, D4 bundled"}
       - {check: pr_merged, ref: 897, met: true, evidence: "squash 74755df44, CAS pin e45d6b0 matched, branch deleted on tip match; 27/27 green, Copilot approval on the head after three rounds, Opus adversarial verify MERGE-SAFE with three mutations killed"}
-      - {check: pr_merged, ref: 910, met: false, note: "second PR, blocking per-id ReentrantLock replacing the monitor held across the marker save"}
+      - {check: pr_merged, ref: 910, met: true, evidence: "squash cacdc25b9, CAS pin e9be2b0 matched, branch deleted on tip match; Maven workflow concluded success on the exact head with 27 contexts, Copilot body read on the head (restates #893 item 32, non-loss), zero unresolved threads; Opus verify MERGE-SAFE on the code head after the lazy-lock loss fix was confirmed structurally and mutation (c) re-run; seven Copilot rounds bounded at the sixth, remainders #893 items 31 to 33", note: "second PR, blocking per-id ReentrantLock replacing the monitor held across the marker save"}
     blocking_on: []
-    next_action: "PR 910 (U15 PR 2, blocking per-id lock for the marker save, reactive stop-gap refusal per dec-0023) open at 61c5aa1, CI running, Copilot requested, Opus adversarial verify running. Merge on MERGE-SAFE plus gate facts"
-    last_meaningful_progress_at: 2026-08-22T08:35:00Z
+    next_action: "DONE 2026-08-22T13:0xZ. Session sharp-mirzakhani-1aa911-14 to archive at epic closeout"
+    last_meaningful_progress_at: 2026-08-22T13:05:00Z
+  U16:
+    issue: 884
+    goal: "Fix #893 item 21: KafkaCloudEventBridgeTest.resolver_alone_falls_back_to_catchAllDestination_subscribing_by_pattern_for_the_per_type_resolver times out on one of two events under load (three CI sightings, latest main run 32565000813). Make the test wait on a signal from the bridge or consumer assignment rather than a fixed window, or fix the pattern-subscription readiness it exposes if the wait is not the cause. Test-only unless the investigation proves a production gap."
+    phase: DONE
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: 920, met: true, evidence: "squash cfee1477b, CAS pin ef65c4d matched, branch deleted on tip match, #884 closed; Maven workflow success on the head, Copilot approval, Sonnet verify MERGE-SAFE (wait is the AdminClient assignment signal on the bridge's own group, 10/10 both ways locally since the race needs CI load, reported honestly)"}
+    blocking_on: []
+    next_action: "DONE 2026-08-22T14:1xZ. Adjacent pre-existing cold-start gap (auto.offset.reset latest on a new group) filed as #893 item 34 for Johan's decision"
+    last_meaningful_progress_at: 2026-08-22T14:10:00Z
+  U17:
+    issue: 922
+    goal: "Decide whether RabbitMqCloudEventBridgeConnectionRecoveryTest.a_held_deferred_delivery_tag_across_a_forced_connection_recovery (four sightings, #893 items 17 and 30, latest rel34 PR 914 misc java-21) is a real race in PR 895's recovery path (loss-class, fix in brk), a test racing its own fixture (fix the test), or infrastructure. The test pins the held-tag-survives-recovery guarantee, so a flake note is not an acceptable end state."
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: manual_approval, ref: "verdict with evidence chain and pass counts, and the fix merged if the verdict is race or fixture", met: false}
+    blocking_on: []
+    next_action: "Opus worktree subagent investigating on origin/main since 2026-08-22T13:4xZ, adopted under the epic's own authority (brk wrote the code), rel34 informed. Tracking issue #922 (filed by a rel34 worker, milestone 0.34.0 set by brk), #893 items 17 and 30 point at it"
+    last_meaningful_progress_at: 2026-08-22T13:45:00Z
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: [U7, U8, U10, U12]
     session: "ecstatic-dubinsky-bf9908-4e (local_621ec131), round 3 review; earlier friendly-meninsky-bcc054-06 for PR 889"
     deliverables:
-      - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
+      - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: true, evidence: "cap reached after round 3 (one loss-class finding fixed in PR 898 as 56c215729), remainders routed as the structured ask Johan ruled on as dec-0021 (#893 items 25 to 30 stay open); mechanical checklist run by a Sonnet subagent on main 2c7079739 with pasted output, all five PASS: release install emits jar, sources, javadoc and pom for all seven modules, required-test-images.sh warning-free listing rabbitmq:4.1 and apache/kafka:4.1.0, main run 32562338512 24/24 success with misc shards 9m35s and 9m12s as the only ones over 1.5x median, every cross-transport builder and starter asymmetry inherent (declareTopology, prefetchCount vs closeTimeout, commitRetryStrategy, bootstrapServers), #414 delivered in full"}
     blocking_on: []
-    next_action: "ROUND 3 (cap) DONE 2026-08-22T07:1xZ over 65041b387, session ecstatic-dubinsky-bf9908-4e: one loss-class finding (explicit empty bindings/topics binds nothing, bridge reports healthy), fixed regardless of severity per the standing bar via a Sonnet worktree subagent on brk/u9-round3-carry together with #893 items 16 and 24, the stale 896 prose (Kafka bridge comment, ADR 133 line 151, changelog line 6) and the stray .plan/u9-pr-b-plan.md. Below-threshold remainders posted as #893 items 25 to 28. Cap reached, so the remainder list goes to Johan as the one structured ask at closeout. U9 closes when the carry PR merges and the mechanical checklist in the goal is run. Monitor bkc4p3e8e active"
-    last_meaningful_progress_at: 2026-08-22T07:10:00Z
+    next_action: "DONE 2026-08-22T11:0xZ. Sessions to archive at epic closeout: friendly-meninsky-bcc054-06 (PR 889 chip), ecstatic-dubinsky-bf9908-4e (round 3 review). Synthetic 999.999.999-brk-closeout artifacts purged from ~/.m2"
+    last_meaningful_progress_at: 2026-08-22T11:05:00Z
     observed: {}
     assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."

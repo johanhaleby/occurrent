@@ -30,6 +30,14 @@ description: >-
   anything but a MongoDB event store or subscription model. See doc/migration/upgrading-to-0.34.0.md for what
   that rename cannot reach, such as an environment variable. Also adds the fourth binding, var appendId, to a
   WriteResult/DcbAppendResult record pattern that still names only the original three components (ADR 132).
+  A projection, a subscription, a query, a snapshot view and a saga now all refuse a declared event type whose
+  concrete subtypes cannot be found, including a concrete class that is neither final nor sealed, which every
+  one of them exempted in 0.33.0. That change gets no recipe entry, for the reason the 0.33.0 recipe already
+  gives, that telling a refused declaration from a sealed one that now works needs the sealed modifier, which
+  the type model behind a class literal does not include, and for a second reason on top of it. A recipe cannot
+  tell whether a class that is not final should become final or whether the declaration should list concrete
+  types instead, because a subclass may live in a module or a repository the recipe never sees. See section 3
+  of doc/migration/upgrading-to-0.34.0.md for the manual steps.
 recipeList:
   - org.occurrent.MigrateSagaJoinToStepCondition_0_34
   - org.occurrent.MigrateStoreNeutralMongoConfigKeys_0_34
