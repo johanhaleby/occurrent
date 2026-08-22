@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 145
+revision: 146
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -296,7 +296,7 @@ units:
     deliverables:
       - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
     blocking_on: []
-    next_action: "FIXPOINT PR B PLAN APPROVED 2026-08-22T~05:1xZ (dec-0015): RoutingOutcome gains UNAVAILABLE and REFUSED, refusal provenance, hasFailedCatchUp, reactor catchupOwners map, monitors widened on both stacks, stop/start re-check, emit serialization, drain leak, StepVerifier timeouts. Condition: second fresh-context pass over the changed parts before code. Planner a9f02179a679e94d8 implements at Opus/high on brk/u9-fixpoint-b. Then verify, gate, ayi heads-up, CAS merge, round 3 review. Monitor bkc4p3e8e active"
+    next_action: "FIXPOINT PR B PLAN REVISION APPROVED 2026-08-22T~06:5xZ (dec-0016): Refusal carries permanence (REFUSED permanent, NOT_DELIVERABLE transient), refusesPermanently() on both engines and the domain feed, invariant F2 (reactor relaunch gated on catchupOwners), emit retry without a lock, H1 in S1. Worker a9f02179a679e94d8 implementing at Opus/high on brk/u9-fixpoint-b from ae24a9dfc. Docs-site RoutingOutcome corrections (docs/421-broker-modules pages/docs/docs.md lines 3261, 3267, 3508) routed by the orchestrator after the merge. Then verify, gate, ayi heads-up, CAS merge, round 3 review. Monitor bkc4p3e8e active"
     last_meaningful_progress_at: 2026-08-21T05:50:00Z
     observed: {}
     assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."
