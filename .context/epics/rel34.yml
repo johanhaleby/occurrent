@@ -1,9 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 33
-updated_at: '2026-08-22T17:05:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (914 falsified a second time by its own
-  fix)
+revision: 34
+updated_at: '2026-08-22T17:20:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U3 merged, six units done)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -253,7 +252,7 @@ units:
       boolean, so a custom Subscriptions/StreamSubscriptions/DcbSubscriptions composition whose DEFAULT
       does replay no longer gets a warning claiming it never replays. Mirror the reactor pattern, which
       already carries owner facts on ComposedReplayPhase.
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -261,16 +260,20 @@ units:
       Sonnet/medium
     deliverables:
     - check: pr_merged
-      ref: null
-      met: false
-      evidence: ''
+      ref: 902
+      met: true
+      evidence: 'CAS-MERGED pinned to 094d29757, squash 4f12b2ffb. Full gate verified independently rather
+        than from the worker''s report: head matched the pin, Java CI completed/success, 0 unresolved
+        threads, Copilot APPROVED ON THE CURRENT HEAD at 12:16Z with 0 new comments, and no suppressed
+        block anywhere on this PR. Adversarial re-verify falsified the CLAIM rather than the code, the
+        javadoc was narrowed, and the orchestrator read the correction directly.'
     - check: issue_closed
       ref: 871
-      met: false
-      evidence: ''
+      met: true
+      evidence: '#871 CLOSED by the merge, verified.'
     blocking_on: []
-    next_action: worker narrowing the javadoc overclaim; head moving, diff the delta before merging
-    last_meaningful_progress_at: '2026-08-22T14:20:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T17:20:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -332,6 +335,18 @@ units:
           implement the interface, with a DelegatingIntroductionInterceptor-backed test on both stacks.'
         via: worker message, Copilot re-review on 908
         at: '2026-08-22T14:20:00+00:00'
+      path_to_merge:
+        note: 'The longest route of any unit today, and every step mattered. The brief''s file boundary
+          was WRONG, since the fix is structurally cross-module, and the worker returned BLOCKED before
+          writing a line rather than reasoning past it. The adversarial pass FALSIFIED it: a proxy made
+          the warning go silent for the composition it exists to serve, worse than the bug. A Copilot
+          re-review the orchestrator insisted on found a ClassCastException on introduction proxies that
+          would have failed startup outright. The re-verify then falsified the CLAIM, and in doing so
+          corrected the ORCHESTRATOR: the original falsification described the trigger as any BeanPostProcessor
+          when the unwrap only misses non-Advised wrappers. The same analysis that shipped this established
+          that the reactor twin does NOT exist, closing #903 and #909 as not reproducible.'
+        via: orchestrator
+        at: '2026-08-22T17:20:00+00:00'
     assessment: 'Warning-only defect, recording itself stays correct. Fix shape agreed in the issue body.
       Touches the blocking registrar, so U6 follows this unit rather than running beside it. OWNERSHIP
       EXTENDED by dec-0005 (2026-08-22T07:58Z) to framework/spring-boot-starter-mongodb/.../OccurrentMongoAutoConfiguration.java,
