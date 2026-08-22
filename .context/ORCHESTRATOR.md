@@ -956,3 +956,15 @@ Three verifications, none of them visible from the diff stat. No reference to th
 sdi is therefore no longer an input to R3. Nothing of sdi's will be on main for rel34 to worry about.
 
 #929 corrected with rel34's finding rather than left in a message thread. The annotations are non-functional rather than merely un-migrated, so hand adoption fails identically to running the recipe, and there is no position where they ship inert but usable.
+
+### sdi 2026-08-22T14:59:00Z: the stale banner was right, and it caught a rule adopted but never applied
+
+Johan pointed at the viewer's stale banner. It was correct and understated the problem. The projection was published at 13:38Z with `stale_after` 14:45Z, so it was eleven minutes past its own deadline, and it showed epic revision 36 against a state file at 44. Twenty-one sdi checkpoint commits happened in between with no refresh.
+
+**Would the new instruction have prevented it? Yes, and that is the uncomfortable part.** `d1b7f0b88` binds the refresh to the memory checkpoint and requires reading the projection back. sdi read that rule, refreshed twice, wrote into this file that "the projection is now bound to the memory checkpoint, so a stale page means a missed checkpoint rather than a forgotten command", and then skipped it twenty-one times. That sentence was false when written. Nothing was bound. Two manual refreshes had happened and no mechanism existed to cause a third.
+
+**On the skill re-read, sdi had not been doing it properly either.** `396b084cd` requires enumerating the skill commits since session start and reading what changed, and warns in its own text against inferring the change set from whichever commits you happen to know about. sdi had read the ones rel34 named plus the ones it went looking for, which happened to be all five prose commits, but by luck rather than by enumeration. Enumerated properly now: five prose commits (`ca083e38d`, `e0c3eea93`, `396b084cd`, `706d2e13b`, `d1b7f0b88`) and seven script-only ones, which need no re-read since scripts run from disk.
+
+**The fix is mechanical rather than a promise.** Each refresh had been a thirty line inline block at a checkpoint whose real work was two git commands, so it lost every time to whatever the checkpoint was actually about. It is now `.context/bin/sdi-status-refresh.sh <stale_after>`, one command that rebuilds the payload from the state file, writes through the ownership fence, regenerates the viewer, reads the projection back and exits nonzero if it disagrees with `sdi.yml`. The script is local only, since `.gitignore:40` excludes `.context/*` and that rule stays unnegated.
+
+Refreshed and read back at revision 44, `stale_after` 15:30Z, which is a checkpoint sdi actually intends rather than a round hour.
