@@ -106,7 +106,7 @@ public final class SagaExecutionSupport {
         if (current != null && current.isCompleted()) {
             return Outcome.skip();
         }
-        if (current != null && current.isQuarantined() && !hasReachedReleasePosition(current, meta)) {
+        if (current != null && current.isQuarantined() && !isTheInputAReleasedInstanceStoppedOn(current, meta)) {
             // A quarantined instance is inert. It skips every input addressed to it and its watermarks stay where they are.
             // Advancing one here would make the replay after a release treat the input as already handled and skip it a
             // second time, which is the loss the quarantine exists to avoid. A released instance stays inert too until
@@ -312,16 +312,18 @@ public final class SagaExecutionSupport {
                 current.currentStep(), current.started(), record);
     }
 
-    // Whether a released instance's replay has come back round to the input it stopped on. Until it has, the instance is
-    // as inert as it was before the release. Clearing the record first would let a newer event be applied to state with the gap
-    // still in it, and that gap is undetectable afterwards.
-    private static <S extends @Nullable Object> boolean hasReachedReleasePosition(SagaEnvelope<S> current, EventMeta meta) {
+    // Whether the input is the exact one a released instance stopped on. Equality rather than "at or past it", because
+    // a release marks the instance before the subscription is paused, and a live event arriving in that window sits
+    // past the recorded position without being the replay. Opening on it would apply it to state that never saw the
+    // event underneath, and that gap is undetectable afterwards. An instance whose recorded event a replay can no
+    // longer produce therefore stays quarantined, which is the safe end of that trade.
+    private static <S extends @Nullable Object> boolean isTheInputAReleasedInstanceStoppedOn(SagaEnvelope<S> current, EventMeta meta) {
         SagaFailure failure = current.failure();
         if (failure == null || !failure.isReleased()) {
             return false;
         }
         Long position = meta.position();
-        return position != null && position >= failure.position();
+        return position != null && position.longValue() == failure.position();
     }
 
     private static <E, S extends @Nullable Object, C> @Nullable E startEventOrNull(Saga<E, S, C> saga, boolean hasStarted, SagaInput<E> input) {
