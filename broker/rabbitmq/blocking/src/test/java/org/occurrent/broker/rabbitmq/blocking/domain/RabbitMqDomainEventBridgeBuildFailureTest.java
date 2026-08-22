@@ -33,6 +33,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -59,6 +60,19 @@ class RabbitMqDomainEventBridgeBuildFailureTest {
         RabbitMqDomainEventBridge.Builder<TestOrderPlaced> builder = RabbitMqDomainEventBridge.builder(connection, feed, "queue")
                 .declareTopology(false)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK);
+
+        assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class);
+
+        verify(connection, never()).openChannel();
+    }
+
+    @Test
+    void an_explicit_empty_bindings_set_is_refused_before_any_channel_is_opened() throws Exception {
+        Connection connection = mock(Connection.class);
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+
+        RabbitMqDomainEventBridge.Builder<TestOrderPlaced> builder = RabbitMqDomainEventBridge.builder(connection, feed, "queue")
+                .bindings(Set.of());
 
         assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class);
 

@@ -445,8 +445,8 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     return Mono.defer(() -> registration.action().route(cloudEvent))
                             .onErrorResume(error -> {
                                 // A RoutingAction.Refusal is decided before any dispatch was attempted
-                                // (ReactiveHandover's catch-up failure, say), never a delivery, so this is
-                                // NOT_DELIVERABLE, the same outcome a matcher that failed to answer reports, not
+                                // (ReactiveHandover's catch-up failure, say), never a delivery, so this reports
+                                // whichever of NOT_DELIVERABLE or REFUSED refusal.outcome() decided, never
                                 // DELIVERED, and the wrapped cause is what propagates, unchanged. Any other error
                                 // means the action was invoked, which is what DELIVERED has always meant; whether the
                                 // eventual fold succeeds or errors is a separate signal (RoutingOutcome's own javadoc
