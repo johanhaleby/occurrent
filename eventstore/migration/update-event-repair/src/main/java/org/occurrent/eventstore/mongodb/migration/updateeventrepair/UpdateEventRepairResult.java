@@ -36,11 +36,10 @@ import java.util.List;
  * @param unrecoverableEvents     Up to {@link UpdateEventRepairOptions#maxReportedUnrecoverable()} of those events.
  *                                Every one of them is also logged at WARN when it is found, so a truncated list
  *                                never means a lost report.
- * @param completed               {@code true} when the run walked the whole collection rather than throwing part way.
  */
 @NullMarked
 public record UpdateEventRepairResult(long eventsRepaired, long unrecoverableEventCount,
-                                      List<UnrecoverableEvent> unrecoverableEvents, boolean completed) {
+                                      List<UnrecoverableEvent> unrecoverableEvents) {
 
     public UpdateEventRepairResult {
         unrecoverableEvents = List.copyOf(unrecoverableEvents);

@@ -148,8 +148,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         this.requireBackfilledPosition = config.requireBackfilledPosition;
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
         if (writesPosition()) {
-            warnOrFailOnUnpositionedEvents(eventCollection, requireBackfilledPosition);
+            // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
+            // position updateEvent dropped has no position field either, so that check would fail startup
+            // naming the position backfill, and backfilling such an event assigns a wrong position for good.
             warnOnEventsDamagedByUpdateEvent(eventCollection);
+            warnOrFailOnUnpositionedEvents(eventCollection, requireBackfilledPosition);
         }
     }
 

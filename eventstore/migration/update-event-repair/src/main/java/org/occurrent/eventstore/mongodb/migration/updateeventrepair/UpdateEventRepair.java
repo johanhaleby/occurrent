@@ -114,7 +114,9 @@ public final class UpdateEventRepair {
 
     /**
      * Counts the damage in the collection without changing anything, so the size of a repair is known before one is
-     * started. Safe to run against a live store.
+     * started. It writes nothing, so it is safe to run against a live store, but it is not cheap. Finding an event
+     * whose tag array is missing cannot use an index, so this reads the whole collection. On a large store run it
+     * during a quiet period, the way the runbook's equivalent shell query says to.
      *
      * @return how many events the repair would touch, and how many of those have a position it cannot restore.
      */
@@ -134,6 +136,10 @@ public final class UpdateEventRepair {
      */
     public UpdateEventRepairResult run() {
         Object lastProcessedId = loadCheckpoint();
+        if (lastProcessedId != null) {
+            log.info("Resuming the repair of collection '{}' after _id {}, from an earlier run that did not finish. Drop the '{}' collection to start from the beginning instead.",
+                    eventStoreCollectionName, lastProcessedId, checkpointCollectionName(eventStoreCollectionName));
+        }
         long repaired = 0;
         long unrecoverableCount = 0;
         List<UnrecoverableEvent> unrecoverable = new ArrayList<>();
@@ -147,10 +153,12 @@ public final class UpdateEventRepair {
                 break;
             }
 
+            long repairedInBatch = 0;
             for (Document event : batch) {
                 List<UnrecoverableEvent> found = new ArrayList<>(1);
                 if (repairEvent(event, found)) {
                     repaired++;
+                    repairedInBatch++;
                 }
                 for (UnrecoverableEvent unrecoverableEvent : found) {
                     unrecoverableCount++;
@@ -166,6 +174,8 @@ public final class UpdateEventRepair {
             // damaged-event filter, so without this the next batch would return them again and the run would not end.
             lastProcessedId = batch.getLast().get(ID);
             checkpoint(lastProcessedId, batch.size());
+            log.info("Repaired {} of {} events in this batch of collection '{}', {} repaired so far.",
+                    repairedInBatch, batch.size(), eventStoreCollectionName, repaired);
 
             if (options.throttleMillis() > 0) {
                 sleep(options.throttleMillis());
@@ -175,7 +185,7 @@ public final class UpdateEventRepair {
         deleteCheckpoint();
         log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone.",
                 eventStoreCollectionName, repaired, unrecoverableCount);
-        return new UpdateEventRepairResult(repaired, unrecoverableCount, unrecoverable, true);
+        return new UpdateEventRepairResult(repaired, unrecoverableCount, unrecoverable);
     }
 
     /**
@@ -200,20 +210,30 @@ public final class UpdateEventRepair {
     private boolean repairEvent(Document event, List<UnrecoverableEvent> unrecoverable) {
         Object eventId = event.get(ID);
         Object storedPosition = event.get(POSITION);
-        String encodedTags = event.getString(DcbCloudEvents.TAGS);
+        Object rawTags = event.get(DcbCloudEvents.TAGS);
+        if (rawTags != null && !(rawTags instanceof String)) {
+            unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.UNREADABLE,
+                    "dcbtags is a " + rawTags.getClass().getSimpleName() + " rather than a string"));
+            return false;
+        }
+        String encodedTags = (String) rawTags;
         List<Bson> updates = new ArrayList<>(2);
 
         if (storedPosition instanceof String positionAsString) {
-            long position;
+            Long position;
             try {
                 position = Long.parseLong(positionAsString);
             } catch (NumberFormatException e) {
+                // The tag array does not depend on the position, so rebuild it anyway, the way a dropped position
+                // does below. Only the position itself is beyond saving here.
                 unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER, positionAsString));
-                return false;
+                position = null;
             }
-            Document positionHolder = new Document();
-            PositionDocumentMapper.addPosition(positionHolder, position);
-            updates.add(Updates.set(POSITION, positionHolder.get(POSITION)));
+            if (position != null) {
+                Document positionHolder = new Document();
+                PositionDocumentMapper.addPosition(positionHolder, position);
+                updates.add(Updates.set(POSITION, positionHolder.get(POSITION)));
+            }
         } else if (storedPosition == null && encodedTags != null) {
             // A DCB append always writes a position, so a DCB event without one lost it. The tag array below is still
             // worth rebuilding, and the position is reported rather than invented.
@@ -221,10 +241,14 @@ public final class UpdateEventRepair {
         }
 
         if (encodedTags != null && !event.containsKey(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD)) {
-            List<String> canonicalTags = DcbCloudEvents.decodeTags(encodedTags).stream()
-                    .map(Tag::canonical)
-                    .collect(toCollection(ArrayList::new));
-            updates.add(Updates.set(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, canonicalTags));
+            try {
+                List<String> canonicalTags = DcbCloudEvents.decodeTags(encodedTags).stream()
+                        .map(Tag::canonical)
+                        .collect(toCollection(ArrayList::new));
+                updates.add(Updates.set(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, canonicalTags));
+            } catch (RuntimeException e) {
+                unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.UNREADABLE, String.valueOf(e.getMessage())));
+            }
         }
 
         if (updates.isEmpty()) {
@@ -286,6 +310,9 @@ public final class UpdateEventRepair {
     /**
      * Command-line entry point taking {@code <mongoUri> <database> <collection> [report|repair]} and running with
      * {@link UpdateEventRepairOptions#defaults()}. Defaults to {@code report}, which changes nothing.
+     * <p>
+     * A {@code repair} that leaves any event unrepaired exits with status {@code 2}, so a job scheduler does not
+     * record it as a clean run when a person still has to look at something.
      */
     public static void main(String[] args) {
         if (args.length < 3 || args.length > 4) {
@@ -308,8 +335,16 @@ public final class UpdateEventRepair {
             UpdateEventRepair repair = new UpdateEventRepair(database, collectionName, UpdateEventRepairOptions.defaults());
             if (command.equals("report")) {
                 log.info("Report: {}", repair.report());
-            } else {
-                log.info("Repair result: {}", repair.run());
+                return;
+            }
+            UpdateEventRepairResult result = repair.run();
+            log.info("Repair result: {}", result);
+            if (result.unrecoverableEventCount() > 0) {
+                // Exit non-zero so a job scheduler does not record a run that left events unrepaired as a success.
+                // The events are named in the log above and each one needs a person to decide what to do about it.
+                System.err.println(result.unrecoverableEventCount() + " event(s) hold damage that cannot be undone automatically."
+                        + " See the WARN lines above and doc/runbooks/update-event-repair.md.");
+                System.exit(2);
             }
         }
     }

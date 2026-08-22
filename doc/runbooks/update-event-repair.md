@@ -50,8 +50,9 @@ db.events.countDocuments({ dcbtags: { $exists: true }, dcbTags: { $exists: false
 That second query is a collection scan, so run it during a quiet period on a large collection. If both return `0`, you are
 not affected and the rest of this runbook does not apply.
 
-From 0.34.0 the store also checks the first of these itself when it starts, and logs a warning naming this runbook
-when it finds something. A store with no damage logs nothing.
+From 0.34.0 the store also runs the first of these itself when it starts, and logs a warning naming this runbook
+when it finds something. It runs only the first, because that is the one that costs nothing, so a silent startup
+rules out a damaged position rather than every kind of damage. Run the second query yourself.
 
 ### 2. [tool] Take a report
 
@@ -95,7 +96,11 @@ java -jar eventstore-mongodb-update-event-repair-<version>-cli.jar \
   "mongodb://localhost:27017" my-database events repair
 ```
 
-It can run against a live store. Raise `throttleMillis` to leave more room for production traffic.
+It can run against a live store. Raise `throttleMillis` to leave more room for production traffic. Run one instance
+at a time, since two concurrent runs share one checkpoint document and would resume from the wrong place.
+
+Both the report and the repair read the whole collection, because finding an event whose tag array is missing cannot
+use an index. Neither is expensive in writes, but on a large store give them a quiet period.
 
 If the process is killed part way, run it again. It resumes from a checkpoint document, the events it already
 repaired stay repaired, and it only touches events that still look damaged, so a repeated run cannot double-apply
@@ -119,7 +124,15 @@ either document says which one is entitled to it. Look at both events and decide
 hand or accept that it stays outside position-ordered reads.
 
 **`POSITION_NOT_A_NUMBER`.** No known Occurrent path produces this, so it points at damage from somewhere else.
-Worth investigating before you do anything to it.
+Worth investigating before you do anything to it. The event's tag array is repaired even so, since it does not
+depend on the position.
+
+**`UNREADABLE`.** The tool could not read the event well enough to repair it, which means its `dcbtags` was edited
+outside Occurrent. The run continues past it, so one such event does not hold up the rest.
+
+**Run the repair once more after any hand fix.** A `POSITION_ALREADY_TAKEN` event still has no tag array, because
+the rejected update covered both fields together. Setting its position by hand makes it visible to position queries but
+not to DCB reads, and it silences the startup warning, which then tells you nothing. A second run rebuilds the tag array.
 
 ### 6. [you] Verify
 

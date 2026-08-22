@@ -784,8 +784,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
 
         if (writesPosition) {
-            chain = chain.then(warnIfUnpositionedEventsExist(eventStoreCollectionName, mongoTemplate))
-                    .then(warnOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate));
+            // Damage check first. The unpositioned check errors when requireBackfilledPosition is set, and an event
+            // whose position updateEvent dropped has no position field either, so it would fail startup naming the
+            // position backfill, and backfilling such an event assigns a wrong position for good.
+            chain = chain.then(warnOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate))
+                    .then(warnIfUnpositionedEventsExist(eventStoreCollectionName, mongoTemplate));
         }
 
         // SessionSynchronization must be ALWAYS for TransactionTemplate to work with MongoTemplate. See

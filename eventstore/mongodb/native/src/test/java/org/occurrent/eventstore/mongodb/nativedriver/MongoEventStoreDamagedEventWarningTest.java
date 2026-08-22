@@ -51,6 +51,7 @@ import java.util.UUID;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
@@ -121,6 +122,43 @@ class MongoEventStoreDamagedEventWarningTest {
         assertThat(warnings())
                 .as("a healthy store must not be warned about damage it does not have")
                 .noneSatisfy(message -> assertThat(message).contains("updateEvent damaged"));
+    }
+
+    @Test
+    void a_store_that_refuses_to_start_over_unpositioned_events_still_warns_about_the_damage_first() {
+        newEventStore().write("stream:1", List.of(event("Defined"), event("Renamed")));
+        makePositionAString();
+        // An update function returning an event built from scratch stored no position at all, so this event reaches
+        // the unpositioned check looking like history that predates position. Backfilling it would give it a
+        // position it never had, so the damage warning has to be out before that check refuses to start.
+        dropPositionFromTheSecondEvent();
+
+        logAppender.list.clear();
+        assertThatThrownBy(this::newStoreRequiringBackfilledPosition)
+                .as("the unpositioned check must still fail startup when it is configured to")
+                .isInstanceOf(IllegalStateException.class);
+
+        assertThat(warnings())
+                .as("the damage warning must be logged before startup is refused, otherwise the only message an operator sees points at the position backfill")
+                .anySatisfy(message -> assertThat(message).contains("updateEvent damaged", "update-event-repair"));
+    }
+
+    private MongoEventStore newStoreRequiringBackfilledPosition() {
+        EventStoreConfig config = new EventStoreConfig.Builder()
+                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                .eventStoreCapabilities(STREAM)
+                .withStreamPosition()
+                .requireBackfilledPosition(true)
+                .build();
+        return new MongoEventStore(mongoClient, databaseName, EVENT_COLLECTION, config);
+    }
+
+    private void dropPositionFromTheSecondEvent() {
+        MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
+        Document withNumericPosition = requireNonNull(events.find(
+                new Document(OccurrentCloudEventExtension.POSITION, new Document("$type", "long"))).first());
+        events.updateOne(new Document("_id", withNumericPosition.get("_id")),
+                new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
     }
 
     private void makePositionAString() {
