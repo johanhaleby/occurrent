@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 27
+revision: 28
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -35,10 +35,10 @@ units:
     deliverables:
       - {check: pr_merged, ref: 924, met: false, evidence: null}
     blocking_on: []
-    next_action: "PR 924 open and clean against every declared boundary and content requirement. NOT merging: CI still running and no Copilot review yet. Merge gate runs on DELIVERY_RESULT, reading the review body and any suppressed block, and pinning to the verified head."
+    next_action: "ROUND 2 delivered and verified at head 4abb58d11: 6 threads 0 unresolved, 1 marker comment in place, 2 Copilot reviews by login, Java CI with Maven QUEUED so blocked-on-a-wait is honest. Worker made a deliberate stop-and-escalate on the review loop; ORCHESTRATOR OVERRULED it for ONE final round on the sole ground that a queued matrix makes the round free in wall-clock, plus the guide being materially rewritten since either review saw it. That round is final regardless of outcome, substantive leftovers become marker-carrying issues rather than a fourth round."
     last_meaningful_progress_at: 2026-08-22T13:15:00Z
     observed:
-      pr_924: {head: 44af45f6d, files: 20, additions: 1948, deletions: 0, boundaries: "fence NOT touched, changelog.md NOT touched, no 0.34 artefact touched, all clean", content: "seven new Occurrent-prefixed types present; all seven old ones carry exactly '@Deprecated(forRemoval = true)', bare with no since, matching the twelve existing precedents; eventTypes absent from all four new subscription annotations; tags absent as an ATTRIBUTE on OccurrentDcbSubscription and present only inside a javadoc example as DcbSubscription.builder().tags(..), which is where ADR 0127 puts it; renames-annotations-0_35.yml, upgrade-0_35.yml and upgrading-to-0.35.0.md all created; three recipe tests including a Kotlin rename test", ci: "running at check time, not yet green", via: "git diff origin/main..branch, NOT git show", at: 2026-08-22T13:5xZ}
+      pr_924: {head:  4abb58d11, files: 20, additions: 1948, deletions: 0, boundaries: "fence NOT touched, changelog.md NOT touched, no 0.34 artefact touched, all clean", content: "seven new Occurrent-prefixed types present; all seven old ones carry exactly '@Deprecated(forRemoval = true)', bare with no since, matching the twelve existing precedents; eventTypes absent from all four new subscription annotations; tags absent as an ATTRIBUTE on OccurrentDcbSubscription and present only inside a javadoc example as DcbSubscription.builder().tags(..), which is where ADR 0127 puts it; renames-annotations-0_35.yml, upgrade-0_35.yml and upgrading-to-0.35.0.md all created; three recipe tests including a Kotlin rename test", ci: "running at check time, not yet green", via: "git diff origin/main..branch, NOT git show", at: 2026-08-22T13:5xZ}
     assessment: "Owns framework/annotations/** and rewrite/.../renames-annotations-0_34.yml. Carries its own changelog and migration-guide entries. UNFENCED: the only unit dispatchable at the gate. Sonnet/medium. Recipe precedent annotation-enums.yml:33-46."
   U1:
     issue: 725
