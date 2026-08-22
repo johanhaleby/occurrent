@@ -889,7 +889,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         Function<Function<CloudEvent, CloudEvent>, Mono<CloudEvent>> logic = (fn) -> {
             Query cloudEventQuery = cloudEventIdIs(cloudEventId, cloudEventSource);
             return mongoTemplate.findOne(cloudEventQuery, Document.class, eventStoreCollectionName)
-                    .log()
                     .flatMap(document -> {
                         CloudEvent currentCloudEvent = convertToCloudEvent(timeRepresentation, document);
                         CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
