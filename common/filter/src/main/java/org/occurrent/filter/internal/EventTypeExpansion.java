@@ -161,11 +161,12 @@ public final class EventTypeExpansion {
     }
 
     /**
-     * The concrete event types {@code declaredType} covers, which is the type itself when it is final and stored under
-     * its own name, and every concrete type it permits when it is sealed. Never empty.
+     * The concrete event types {@code declaredType} covers, which is the type itself when it is stored under its own
+     * name, and every concrete type it permits when it is sealed. Never empty. A sealed class that can be instantiated
+     * is both, so it keeps itself and gains what it permits.
      * <p>
-     * A concrete class that is neither final nor sealed is refused, because its own subclasses are stored under their
-     * own names and no walk can reach them. That refusal is new in 0.34.0, and up to 0.33.0 such a type was accepted
+     * A concrete class that is neither final nor sealed is refused, because anything extending it is stored under its
+     * own name where no walk can reach it. That refusal is new in 0.34.0, and up to 0.33.0 such a type was accepted
      * with only itself in the filter.
      *
      * @param cannotExpand builds the exception to throw for a type that cannot be turned into a filter
@@ -176,9 +177,9 @@ public final class EventTypeExpansion {
         requireNonNull(cannotExpand, "cannotExpand cannot be null");
         Set<Class<? extends E>> concrete = new LinkedHashSet<>();
         boolean foundAll = collect(declaredType, concrete, new HashSet<>());
-        // Being instantiable is not itself enough. A concrete class that is neither final nor sealed has subclasses
-        // stored under their own names that no walk can reach, so it is refused like any other level that reopens the
-        // hierarchy, whether it was declared directly or reached from a sealed root above it.
+        // Being instantiable is not itself enough. A concrete class that is neither final nor sealed can be extended
+        // where nothing here can see it, so it is refused like any other level that reopens the hierarchy, whether it
+        // was declared directly or reached from a sealed root above it.
         if (!foundAll || concrete.isEmpty()) {
             throw cannotExpand.apply(declaredType);
         }
