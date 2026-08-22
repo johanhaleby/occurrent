@@ -31,9 +31,9 @@ import java.util.Set;
  * that entry's key would produce {@code occurrent.subscription.mode} holding a boolean, which does not bind and fails
  * the application at startup. Leaving it alone keeps it on the deprecated property, which still works.
  * <p>
- * The yaml half of the same migration is declarative, because {@code org.openrewrite.yaml.search.FindProperty} can
- * match on a value and works as a precondition. {@code org.openrewrite.properties.search.FindProperties} matches only
- * on the key, which is why this side is written out.
+ * The yaml half of the same migration is {@link MigrateSubscriptionEnabledInYaml}, an imperative recipe rather than
+ * a declarative one, because a value-matching precondition there needs to be checked against each {@code Yaml.Document}
+ * of a multi-document file rather than the file as a whole.
  */
 public class RenameMappedSubscriptionEnabledKey extends Recipe {
 

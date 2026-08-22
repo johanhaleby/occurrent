@@ -48,40 +48,23 @@ type: specs.openrewrite.org/v1beta/recipe
 name: org.occurrent.MigrateSubscriptionEnabledFalseInYaml_0_32
 displayName: Migrate occurrent.subscription.enabled=false in yaml
 description: >-
-  Rewrites the value and then the key together, gated on the value the file arrives with. The gate has to name the
-  boolean rather than the enum it becomes, because a precondition is evaluated against the file as it enters the
-  run rather than after the steps in this list. Value and key move together so a file holding something the mapping
-  cannot translate, an unresolved placeholder for example, keeps the deprecated key, which still works.
-preconditions:
-  - org.openrewrite.yaml.search.FindProperty:
-      propertyKey: occurrent.subscription.enabled
-      propertyValue: 'false'
+  Rewrites the value and then the key together, scoped to the one YAML document that holds the matching value.
+  A declarative precondition here would be evaluated against the whole file rather than the document it matched
+  in, so in a multi-document application.yml one profile setting occurrent.subscription.enabled to false would
+  license the key rename across every document, including a profile whose own enabled held true and was never
+  meant for this half of the migration. See org.occurrent.rewrite.MigrateSubscriptionEnabledFalseInYaml for what
+  this actually does and why it is not one declarative recipe.
 recipeList:
-  - org.openrewrite.yaml.ChangePropertyValue:
-      propertyKey: occurrent.subscription.enabled
-      oldValue: 'false'
-      newValue: disabled
-  - org.openrewrite.yaml.ChangePropertyKey:
-      oldPropertyKey: occurrent.subscription.enabled
-      newPropertyKey: occurrent.subscription.mode
+  - org.occurrent.rewrite.MigrateSubscriptionEnabledFalseInYaml
 ---
 type: specs.openrewrite.org/v1beta/recipe
 name: org.occurrent.MigrateSubscriptionEnabledTrueInYaml_0_32
 displayName: Migrate occurrent.subscription.enabled=true in yaml
 description: >-
-  The true half of the yaml migration, gated the same way as the false half above.
-preconditions:
-  - org.openrewrite.yaml.search.FindProperty:
-      propertyKey: occurrent.subscription.enabled
-      propertyValue: 'true'
+  The true half of the yaml migration, scoped the same way as the false half above. See
+  org.occurrent.rewrite.MigrateSubscriptionEnabledTrueInYaml for what this actually does.
 recipeList:
-  - org.openrewrite.yaml.ChangePropertyValue:
-      propertyKey: occurrent.subscription.enabled
-      oldValue: 'true'
-      newValue: auto
-  - org.openrewrite.yaml.ChangePropertyKey:
-      oldPropertyKey: occurrent.subscription.enabled
-      newPropertyKey: occurrent.subscription.mode
+  - org.occurrent.rewrite.MigrateSubscriptionEnabledTrueInYaml
 ---
 type: specs.openrewrite.org/v1beta/recipe
 name: org.occurrent.MigrateSubscriptionModeProperty_0_32
