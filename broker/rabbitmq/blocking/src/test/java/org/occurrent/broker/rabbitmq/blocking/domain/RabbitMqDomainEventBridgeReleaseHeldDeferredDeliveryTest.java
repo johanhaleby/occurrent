@@ -30,23 +30,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
- * {@link RabbitMqDomainEventBridge#releaseHeldDeferredDelivery(Deque, java.util.function.LongConsumer, long)}, in
- * isolation from a real {@code Channel} or broker, the domain-bridge twin of the same Copilot review finding on
- * {@code RabbitMqCloudEventBridge}'s own pacing fix. A failed release (a nack that itself throws, an
+ * {@link RabbitMqDomainEventBridge#releaseHeldDeferredDelivery(Deque, java.util.function.LongConsumer)} in
+ * isolation, with no real {@code Channel} or broker behind it. A failed release (a nack that throws, an
  * {@code IOException} surfacing as {@link RabbitMqBridgeException}) must never drop the tag it was for, and must
- * not let a later, unrelated tag in the same pass jump ahead of the one that just failed. A held tag whose own
- * generation no longer matches the current one is dropped rather than redelivered, a second Copilot finding on the
- * same fix: the channel it belonged to is already dead and RabbitMQ has already requeued it by itself.
+ * not let a later tag in the same pass jump ahead of the one that just failed.
  */
 class RabbitMqDomainEventBridgeReleaseHeldDeferredDeliveryTest {
 
-    private static final long GENERATION = 0L;
-
     @Test
     void a_failed_release_puts_the_tag_back_at_the_front_and_stops_the_rest_of_the_pass() {
-        Deque<RabbitMqDomainEventBridge.HeldDelivery> held = new ArrayDeque<>(List.of(
-                new RabbitMqDomainEventBridge.HeldDelivery(1L, GENERATION),
-                new RabbitMqDomainEventBridge.HeldDelivery(2L, GENERATION)));
+        Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
         AtomicInteger attempts = new AtomicInteger();
         List<Long> released = new CopyOnWriteArrayList<>();
 
@@ -57,19 +50,17 @@ class RabbitMqDomainEventBridgeReleaseHeldDeferredDeliveryTest {
                         new IOException("channel hiccup"));
             }
             released.add(tag);
-        }, GENERATION));
+        }));
 
         assertThat(thrown).isInstanceOf(RabbitMqBridgeException.class).hasMessageContaining("delivery tag 1");
         assertThat(attempts.get()).isEqualTo(1);
         assertThat(released).isEmpty();
-        assertThat(held).extracting(RabbitMqDomainEventBridge.HeldDelivery::deliveryTag).containsExactly(1L, 2L);
+        assertThat(held).containsExactly(1L, 2L);
     }
 
     @Test
     void a_tag_that_failed_once_is_released_on_the_next_pass() {
-        Deque<RabbitMqDomainEventBridge.HeldDelivery> held = new ArrayDeque<>(List.of(
-                new RabbitMqDomainEventBridge.HeldDelivery(1L, GENERATION),
-                new RabbitMqDomainEventBridge.HeldDelivery(2L, GENERATION)));
+        Deque<Long> held = new ArrayDeque<>(List.of(1L, 2L));
         AtomicInteger attempts = new AtomicInteger();
         List<Long> released = new CopyOnWriteArrayList<>();
 
@@ -79,14 +70,14 @@ class RabbitMqDomainEventBridgeReleaseHeldDeferredDeliveryTest {
                         new IOException("channel hiccup"));
             }
             released.add(tag);
-        }, GENERATION));
+        }));
         assertThat(thrown).isInstanceOf(RabbitMqBridgeException.class);
-        assertThat(held).extracting(RabbitMqDomainEventBridge.HeldDelivery::deliveryTag).containsExactly(1L, 2L);
+        assertThat(held).containsExactly(1L, 2L);
 
         RabbitMqDomainEventBridge.releaseHeldDeferredDelivery(held, tag -> {
             attempts.incrementAndGet();
             released.add(tag);
-        }, GENERATION);
+        });
 
         assertThat(released).containsExactly(1L, 2L);
         assertThat(held).isEmpty();
@@ -94,28 +85,15 @@ class RabbitMqDomainEventBridgeReleaseHeldDeferredDeliveryTest {
 
     @Test
     void a_tag_added_while_the_pass_is_running_is_not_released_until_the_next_pass() {
-        Deque<RabbitMqDomainEventBridge.HeldDelivery> held = new ArrayDeque<>(List.of(new RabbitMqDomainEventBridge.HeldDelivery(1L, GENERATION)));
+        Deque<Long> held = new ArrayDeque<>(List.of(1L));
         List<Long> released = new CopyOnWriteArrayList<>();
 
         RabbitMqDomainEventBridge.releaseHeldDeferredDelivery(held, tag -> {
             released.add(tag);
-            held.addLast(new RabbitMqDomainEventBridge.HeldDelivery(2L, GENERATION));
-        }, GENERATION);
+            held.addLast(2L);
+        });
 
         assertThat(released).containsExactly(1L);
-        assertThat(held).extracting(RabbitMqDomainEventBridge.HeldDelivery::deliveryTag).containsExactly(2L);
-    }
-
-    @Test
-    void a_tag_from_a_generation_that_has_since_moved_on_is_dropped_rather_than_redelivered() {
-        Deque<RabbitMqDomainEventBridge.HeldDelivery> held = new ArrayDeque<>(List.of(
-                new RabbitMqDomainEventBridge.HeldDelivery(1L, 0L),
-                new RabbitMqDomainEventBridge.HeldDelivery(2L, 1L)));
-        List<Long> released = new CopyOnWriteArrayList<>();
-
-        RabbitMqDomainEventBridge.releaseHeldDeferredDelivery(held, released::add, 1L);
-
-        assertThat(released).containsExactly(2L);
-        assertThat(held).isEmpty();
+        assertThat(held).containsExactly(2L);
     }
 }
