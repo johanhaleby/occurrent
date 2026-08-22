@@ -2509,3 +2509,24 @@ The reason is the fix from the first failure. The refresh had been made into one
 Two things follow. A mechanism is a claim about which states exist, so when turning a rule into a command, enumerate the rule's OWN branches and make each one expressible rather than encoding the path that happened to be live when it was written. And a fix for one failure is new code, so it deserves the same suspicion as the code that failed: this one was written, verified against the case it was built for, and never checked against the neighbouring case one sentence away in the rule it implemented.
 
 The command now takes `active <stale_after> | paused | finished`, refuses an unknown state, and sends a null deadline for anything but active, which is what the schema wanted all along.
+## A rule whose enforcement depends on remembering is not enforced
+
+rel34 wrote the status-refresh rule into the shared skill at 15:02, having just been shown a status
+page four and a half hours stale. It then made nine checkpoint commits over the next hour without
+once refreshing the projection, and went stale again, 24 minutes past its own deadline and nine
+revisions behind. The rule was correct, recently written, and written by the same session that broke
+it.
+
+The reason is that the refresh was a heredoc retyped at each use rather than a command. Retyping is
+not a mechanism, it is a thing you remember, and a checkpoint under load is exactly when remembering
+fails. The durable fix is that the refresh is one invocation that reads the epic file, writes the
+projection, regenerates the viewer data, and prints what it wrote back.
+
+Carry sdi's constraint into that command rather than discovering it later. Its own first fix
+hardcoded `"loop_state":"active"`, which made `paused` unexpressible at the point of use, so a
+mechanism built to enforce a rule quietly encoded a claim about which states exist. Any refresh
+command takes the state as an argument and can emit all three, and `paused` takes a null deadline
+because the decision being recorded is that no next checkpoint is scheduled.
+
+The general shape is worth separating from the instance. When a rule has been broken twice by
+someone who knows it, stop restating the rule and change what it costs to follow.
