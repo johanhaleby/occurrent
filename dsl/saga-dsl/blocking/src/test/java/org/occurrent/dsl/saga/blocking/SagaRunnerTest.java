@@ -641,7 +641,10 @@ class SagaRunnerTest {
             assertAll(
                     () -> assertThat(shipAttempts.get()).isGreaterThanOrEqualTo(2),
                     () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
-                    () -> assertThat(envelope.version()).isEqualTo(2)
+                    // Three saves rather than two, because the first dispatch failure writes the record that starts the
+                    // quarantine budget before it rethrows. The successful redelivery then clears it again.
+                    () -> assertThat(envelope.version()).isEqualTo(3),
+                    () -> assertThat(envelope.failure()).isNull()
             );
         }
     }
