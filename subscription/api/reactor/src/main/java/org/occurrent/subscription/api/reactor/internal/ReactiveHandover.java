@@ -214,6 +214,9 @@ public final class ReactiveHandover<T> {
     // How long to wait before offering again. The claim is released by one queue write, so this only has to be
     // long enough not to retry into the same instant.
     private static final java.time.Duration CONCURRENT_EMISSION_RETRY_DELAY = java.time.Duration.ofMillis(1);
+    // Offers waiting their turn at the sink, oldest first, so the order they were made is the order they reach it.
+    private final java.util.Queue<PendingOffer> pendingOffers = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final AtomicBoolean offerDrainRunning = new AtomicBoolean();
     private volatile boolean stopped = false;
     // Set once, right before the buffered live payloads are drained on a successful catch-up, and never cleared
     // afterwards, mirroring BlockingHandover's live field. acceptIfLive(..) reads this to refuse a payload outright,
@@ -366,34 +369,73 @@ public final class ReactiveHandover<T> {
 
     // The unicast sink comes from the safe spec, so it rejects a second concurrent producer with
     // FAIL_NON_SERIALIZED instead of corrupting its queue. That rejection clears as soon as the producer holding
-    // the claim finishes its own offer, so retrying is the whole fix.
+    // the claim finishes its own offer, so offering again is the whole fix.
     //
-    // The retry is scheduled rather than spun, and no lock is taken. tryEmitNext drains inline when it wins the
-    // race, so both a lock and a spin would tie up the offering thread for as long as somebody else's handler
+    // Every offer goes through one queue, in the order the offers were made, and one thread at a time takes that
+    // queue to the sink. Two reasons for the queue rather than each offer retrying for itself. Retries that run
+    // independently can reach the sink in a different order than the offers were made, which for one caller
+    // offering two events in order means the second can be delivered first. And tryEmitNext delivers inline when
+    // it wins, so a caller that waited for its own turn would be held for as long as somebody else's handler
     // takes to run, on a carrier or event-loop thread that has other work.
+    //
+    // One drain at a time also means this engine is the sink's only producer, so FAIL_NON_SERIALIZED cannot happen
+    // any more. The handling below stays as defence, not as a path anything reaches today, which is why no test
+    // drives it.
     private void offerToLiveSink(Item item, MonoSink<Boolean> ackSink) {
-        offerToLiveSink(item, ackSink, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos());
+        pendingOffers.add(new PendingOffer(item, ackSink, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
+        drainPendingOffers();
     }
 
-    private void offerToLiveSink(Item item, MonoSink<Boolean> ackSink, long deadline) {
-        Sinks.EmitResult result = liveSink.tryEmitNext(item);
-        if (!result.isFailure()) {
+    private void drainPendingOffers() {
+        // One drain at a time. A caller that finds one already running has left its own offer on the queue, and
+        // that drain picks it up, so this returns rather than waiting.
+        if (!offerDrainRunning.compareAndSet(false, true)) {
             return;
         }
-        switch (result) {
-            case FAIL_NON_SERIALIZED -> {
-                if (System.nanoTime() >= deadline) {
-                    ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
+        try {
+            while (true) {
+                PendingOffer pending = pendingOffers.peek();
+                if (pending == null) {
                     return;
                 }
-                Schedulers.parallel().schedule(() -> offerToLiveSink(item, ackSink, deadline),
-                        CONCURRENT_EMISSION_RETRY_DELAY.toNanos(), TimeUnit.NANOSECONDS);
+                Sinks.EmitResult result = liveSink.tryEmitNext(pending.item());
+                if (!result.isFailure()) {
+                    pendingOffers.poll();
+                    continue;
+                }
+                switch (result) {
+                    case FAIL_NON_SERIALIZED -> {
+                        if (System.nanoTime() >= pending.deadline()) {
+                            pendingOffers.poll();
+                            pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
+                            continue;
+                        }
+                        // Left at the head, so whatever runs next starts with it and the order holds.
+                        Schedulers.parallel().schedule(this::drainPendingOffers,
+                                CONCURRENT_EMISSION_RETRY_DELAY.toNanos(), TimeUnit.NANOSECONDS);
+                        return;
+                    }
+                    // The pipeline is gone, so nothing is coming to deliver this payload. Dropped rather than
+                    // refused, the same answer the stopped check above gives. Also defence rather than a reachable
+                    // path, since that check runs first and catches every way the pipeline ends today.
+                    case FAIL_TERMINATED, FAIL_CANCELLED -> {
+                        pendingOffers.poll();
+                        pending.ack().success(false);
+                    }
+                    default -> {
+                        pendingOffers.poll();
+                        pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
+                    }
+                }
             }
-            // The pipeline is gone, so nothing is coming to deliver this payload. Dropped rather than refused,
-            // the same answer the stopped check above gives, which this is a race against.
-            case FAIL_TERMINATED, FAIL_CANCELLED -> ackSink.success(false);
-            default -> ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
+        } finally {
+            offerDrainRunning.set(false);
         }
+    }
+
+    // An offer waiting its turn at the sink, with the point in time after which this engine stops offering it and
+    // reports contention instead.
+    private record PendingOffer(Item item, MonoSink<Boolean> ack, long deadline) {
     }
 
     /**

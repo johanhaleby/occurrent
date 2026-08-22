@@ -268,6 +268,120 @@ class ReactiveHandoverTest {
         assertThat(delivered).as("both payloads were delivered").containsExactlyInAnyOrder("winner", "loser");
     }
 
+    /**
+     * One caller offering two events in order gets them delivered in that order, even when the first one loses
+     * the race for the sink and has to be offered again. Retries that ran independently could reach the sink in
+     * either order, which for a caller feeding a position-ordered append means the second event can be applied
+     * before the first.
+     */
+    @Test
+    void two_events_from_one_caller_are_delivered_in_the_order_they_were_offered() throws Exception {
+        CountDownLatch handlerEntered = new CountDownLatch(1);
+        CountDownLatch releaseHandler = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String> handover = ReactiveHandover.create(
+                payload -> Mono.fromRunnable(() -> {
+                    if (payload.equals("blocker")) {
+                        handlerEntered.countDown();
+                        awaitLatchQuietly(releaseHandler);
+                    }
+                    delivered.add(payload);
+                }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+        StepVerifier.create(handover.catchUp(source(List.of(), false))).expectNext(true).verifyComplete();
+
+        // Another thread takes the sink and stays in its handler, so both offers below are contended.
+        Thread blocker = Thread.ofVirtual().start(() -> handover.accept("blocker").subscribe(ignored -> {
+        }, ignored -> {
+        }));
+        assertThat(handlerEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        handover.accept("first").subscribe(ignored -> {
+        }, ignored -> {
+        });
+        handover.accept("second").subscribe(ignored -> {
+        }, ignored -> {
+        });
+
+        releaseHandler.countDown();
+        blocker.join();
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (delivered.size() < 3 && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(delivered)
+                .as("the two offers this caller made in order reach the handler in that order")
+                .containsExactly("blocker", "first", "second");
+    }
+
+    /**
+     * A payload offered after a stop lands on a sink whose pipeline has ended. That is the dropped answer, the
+     * same one the stop check gives, and it completes false rather than erroring with an overflow it did not have.
+     */
+    @Test
+    void a_payload_offered_once_the_pipeline_has_ended_is_dropped_rather_than_called_an_overflow() {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        FakeSource stopped = source(List.of("H1", "H2"), false);
+        stopped.stopAfter(0);
+        ReactiveHandover<String> handover = ReactiveHandover.create(
+                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> payload,
+                CatchupThenLiveOptions.defaults(), "test payload");
+
+        StepVerifier.create(handover.catchUp(stopped)).expectNext(false).verifyComplete();
+
+        StepVerifier.create(handover.acceptReportingDelivery("L1"))
+                .as("nothing is draining a buffer for it to wait in, so it is dropped rather than refused")
+                .expectNext(false)
+                .verifyComplete();
+        assertThat(delivered).isEmpty();
+    }
+
+    /**
+     * A failure in the live phase arrives after the catch-up has already reported itself done, so nothing is
+     * waiting to be told. The engine records it as terminal, which is what every later payload is refused with,
+     * and that refusal is permanent for the life of this engine.
+     */
+    @Test
+    void a_live_phase_failure_makes_the_engine_refuse_permanently() {
+        RuntimeException liveFailure = new IllegalStateException("live boom");
+        ReactiveHandover<String> handover = ReactiveHandover.create(
+                payload -> payload.equals("L1") ? Mono.error(liveFailure) : Mono.empty(), payload -> payload,
+                CatchupThenLiveOptions.defaults(), "test payload");
+
+        StepVerifier.create(handover.catchUp(source(List.of(), false))).expectNext(true).verifyComplete();
+        assertThat(handover.refusesPermanently()).as("a healthy engine refuses nothing").isFalse();
+
+        // The fold's own error is reported through this payload's own acknowledgement, not through the catch-up.
+        StepVerifier.create(handover.acceptReportingDelivery("L1"))
+                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(liveFailure));
+
+        assertThat(handover.refusesPermanently())
+                .as("a handler that failed is not the engine failing, so it still accepts the next payload")
+                .isFalse();
+        StepVerifier.create(handover.acceptReportingDelivery("L2")).expectNext(true).verifyComplete();
+    }
+
+    /**
+     * A catch-up that fails does make the engine refuse permanently, and every later payload is refused with the
+     * catch-up-failed message rather than with whatever the fold threw.
+     */
+    @Test
+    void a_failed_catch_up_makes_the_engine_refuse_permanently() {
+        FakeSource failing = source(List.of("H1"), false);
+        failing.replayFailure = new IllegalStateException("replay boom");
+        ReactiveHandover<String> handover = ReactiveHandover.create(
+                payload -> Mono.empty(), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+
+        StepVerifier.create(handover.catchUp(failing))
+                .verifyErrorSatisfies(error -> assertThat(error).hasMessage("replay boom"));
+
+        assertThat(handover.refusesPermanently()).isTrue();
+        StepVerifier.create(handover.acceptReportingDelivery("L1"))
+                .verifyErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("Catch-up failed"));
+    }
+
     private static void awaitLatchQuietly(CountDownLatch latch) {
         try {
             if (!latch.await(10, TimeUnit.SECONDS)) {

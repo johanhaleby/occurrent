@@ -389,6 +389,51 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
                         .containsExactly("1", "2"));
     }
 
+    /**
+     * The window this stands in is the one between the handover releasing its replaying entry at the drain and
+     * this model dropping the launcher. Read from the entry that says a replay is running, that window looks
+     * exactly like a catch-up a stop interrupted, so a resume arriving there would replay the whole history again
+     * over a handover that is already live. Nothing outside the model can reach the window, so the test stands in
+     * it through a hook the model exposes for that.
+     */
+    @Test
+    void a_resume_inside_the_completion_window_does_not_replay_a_catch_up_that_succeeded() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1"), cloudEvent("2")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+
+        CountDownLatch insideWindow = new CountDownLatch(1);
+        CountDownLatch leaveWindow = new CountDownLatch(1);
+        model.runBeforeCompletingCatchup(() -> {
+            insideWindow.countDown();
+            awaitLatch(leaveWindow);
+        });
+
+        List<String> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+                ce -> Mono.fromRunnable(() -> handled.add(ce.getId())));
+
+        assertThat(insideWindow.await(5, TimeUnit.SECONDS))
+                .as("the catch-up has read its whole history and is inside the completion window")
+                .isTrue();
+        assertThat(handled).containsExactly("1", "2");
+
+        // A resume arriving here reads a model whose replaying entry is already gone and whose launcher is still
+        // present, which is the state a stop leaves behind.
+        try {
+            model.resumeSubscription("sub");
+        } catch (SubscriptionAlreadyRunningException expected) {
+            // The live feed refusing a resume it never paused is the correct answer, and not what this is about.
+        }
+
+        leaveWindow.countDown();
+
+        await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertThat(handled)
+                        .as("the catch-up succeeded, so the resume must not replay its history a second time")
+                        .containsExactly("1", "2"));
+    }
+
     private static void awaitLatch(CountDownLatch latch) {
         try {
             if (!latch.await(10, TimeUnit.SECONDS)) {

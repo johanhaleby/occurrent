@@ -123,6 +123,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // The attempt currently writing each id's catch-up-complete marker, so a later attempt for the same id can tell
     // that the marker it reads may have been written for a history that attempt never read.
     private final ConcurrentMap<String, Sinks.One<Boolean>> markerWritesInFlight = new ConcurrentHashMap<>();
+    // Runs at the start of a successful catch-up's completion, where the replaying entry is already released and
+    // the launcher is not yet. Exists so a test can stand in that window, which nothing else can reach.
+    private volatile Runnable beforeCompletingCatchup = () -> {
+    };
 
     public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker) {
         this(reader, liveFeed, catchupMarker, CatchupThenLiveOptions.defaults());
@@ -265,6 +269,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         catchupDone.subscribe(
                 caughtUp -> {
                     if (caughtUp) {
+                        // Package-private and a no-op in production. The window this opens, between the handover
+                        // releasing the replaying entry at the drain and the launcher being dropped just below, is
+                        // inline and microseconds long, so a test cannot reach it from the outside.
+                        beforeCompletingCatchup.run();
                         // Guarded and by identity, so a completion arriving after a cancelSubscription(id) plus a
                         // fresh subscribe(id, ..) cannot evict the replacement's launcher or apply a pause meant
                         // for it. Not forgotten here, liveDrained does that once the payloads buffered during the
@@ -574,6 +582,12 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 // check above ends the loop on the next iteration rather than this one.
             }
         }
+    }
+
+    // Package-private for the test that stands in the window described on the field. Not public, and not part of
+    // this model's contract.
+    void runBeforeCompletingCatchup(Runnable hook) {
+        this.beforeCompletingCatchup = Objects.requireNonNull(hook, "hook cannot be null");
     }
 
     private Mono<Boolean> alreadyCaughtUp(String subscriptionId) {
