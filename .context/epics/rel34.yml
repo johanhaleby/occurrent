@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 43
-updated_at: '2026-08-22T12:57:57+00:00'
-updated_by: 'orchestrator rel34: U6 chip title gate failed at spawn, retitled and session recorded'
+revision: 44
+updated_at: '2026-08-22T13:44:39+00:00'
+updated_by: 'orchestrator rel34: 914 and 928 both held on confirmed review findings'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -389,7 +389,7 @@ units:
       write paths' retry so a store outage cannot block delivery forever, gives the compound applied-append
       index the same conflict recovery the TTL index has, and honours the blocking wait's deadline on
       a stalled connection.
-    phase: RUNNING
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -416,8 +416,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: await CI on e2554fdc, then run the gate from the top including a fresh adversarial pass
-    last_meaningful_progress_at: '2026-08-22T12:54:55+00:00'
+    next_action: worker answers three grouped defects on 914, then the gate re-runs from the top
+    last_meaningful_progress_at: '2026-08-22T13:44:39+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -479,6 +479,24 @@ units:
           reason its wait honours the caller''s timeout, and #878 credits it with exactly that.'
         via: worker message + gh pr view
         at: '2026-08-22T12:54:55+00:00'
+      copilot_five_findings_three_defects:
+        note: 'HELD. Copilot returned ''Changes recommended'' at Balanced effort on e2554fdc, five comments,
+          ONE OF THEM SUPPRESSED rather than threaded. They group to three defects. (1) THREE prose surfaces
+          still claim the reactive store always stops at the deadline or returns on time, which is false
+          for a zero or already-expired timeout because readOnceBoundedBy runs the mandatory first read
+          through an unbounded block(): ReactiveMongoAppliedAppendStore.java:86, AppliedAppendStore.java:147,
+          ADR 0132 line 286. This is the SECOND time today that a fix to an overclaim left siblings of
+          the overclaim in place, 928 being the other, so it was routed as one property to check across
+          every surface in a single pass rather than three fixes. (2) Retry''s no-argument constructor
+          drops the caller''s retry context in neverRetryingAConflictingIndex, the permanent-error wrapper
+          and retryUntil, so a caller''s hooks reading RetrySignal.retryContextView() stop seeing what
+          they supplied. One instance threaded at line 375, the SECOND ONLY IN THE SUPPRESSED BLOCK at
+          line 391, which creates no thread, so a green rollup with the threads answered would still have
+          shipped half of it. (3) The configured attempt count has no upper bound while both stores stop
+          at MAX_ATTEMPTS_CEILING, so a configured 2000 is accepted and silently performs 1000. The other
+          end of the ceiling defect U4 itself found.'
+        via: gh api pulls/914/reviews + graphql reviewThreads
+        at: '2026-08-22T13:44:39+00:00'
     assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:50Z after
       a scoping read, which is why #878 moved here from U5. The read found two collisions the original
       split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
@@ -1129,13 +1147,14 @@ units:
         at: '2026-08-22T12:11:27+00:00'
     assessment: 'Johan''s manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
       The orchestrator hands him the checklist and verifies the observable results. The 1000-file allowance
-      is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z (UNVERIFIED, a cross-fleet coordination event that no GitHub object owns, so nothing external can settle it):
-      #721 and #725 were re-milestoned from 0.34.0 to 0.35.0, verified on both issues and in milestone
-      3''s counts (open 19, closed 35). sdi brought the question back to Johan with a sizing measurement
-      attached (eleven units, a 115-file rename, 138 source files) and recommended the move. dec-0001''s
-      ''R3 gates on sdi'' is therefore SUPERSEDED; R3 now gates on brk alone. #837, #871 and #753 stay
-      rel34''s and stay in 0.34.0, and must NOT be reprioritised on sdi''s behalf now that the fence costs
-      the release nothing.'
+      is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z
+      (UNVERIFIED, a cross-fleet coordination event that no GitHub object owns, so nothing external can
+      settle it): #721 and #725 were re-milestoned from 0.34.0 to 0.35.0, verified on both issues and
+      in milestone 3''s counts (open 19, closed 35). sdi brought the question back to Johan with a sizing
+      measurement attached (eleven units, a 115-file rename, 138 source files) and recommended the move.
+      dec-0001''s ''R3 gates on sdi'' is therefore SUPERSEDED; R3 now gates on brk alone. #837, #871 and
+      #753 stay rel34''s and stay in 0.34.0, and must NOT be reprioritised on sdi''s behalf now that the
+      fence costs the release nothing.'
   R4:
     issue: 740
     goal: '#740 closed as shipped and #361 closed as its duplicate, milestone 0.34.0 drained of rel34-owned
@@ -1484,7 +1503,7 @@ units:
     goal: ExecuteFilter and DcbCriteriaBuilder derive their type filters through EventTypeExpansion like
       every other derivation in the library. type and includeTypes REFUSE what they cannot expand; excludeTypes
       WIDENS to the subtypes instead.
-    phase: RUNNING
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on:
@@ -1500,8 +1519,9 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: run the merge gate on PR 928, adversarial pass before merge
-    last_meaningful_progress_at: '2026-08-22T12:31:11+00:00'
+    next_action: worker restates the invariant's walk, corrects the excludeTypes javadoc, fixes the Kotlin
+      enum advice
+    last_meaningful_progress_at: '2026-08-22T13:44:39+00:00'
     observed:
       pr_opened:
         note: PR 928 on rel34/u16-type-filter-expansion, 8 files, touching ExecuteFilter, DcbCriteriaBuilder.kt,
@@ -1509,6 +1529,26 @@ units:
           Not yet gated.
         via: gh pr view
         at: '2026-08-22T12:31:11+00:00'
+      adversarial_928_falsified:
+        note: 'FALSIFIED, scoped to the exclusive half. excludeTypes on an abstract or interface declaration
+          whose hierarchy reopens below a sealed level excludes NOTHING at all, silently: EventTypeExpansion.java:204
+          stops the walk at the first non-sealed level and expandWhatCanBeFound then adds the declared
+          type unconditionally, naming a type string no stored event carries. Five of twenty declaration
+          forms leak; excludeTypes(Object.class) leaks all fifteen sample events. So the REVIEWER is right
+          on substance and the WORKER is right that refusing is not the fix, and the actual defect is
+          ExecuteFilter.java:93''s javadoc promising a widened exclusion is always safe and never fewer,
+          which is true and useless since never fewer than nothing is what the caller gets. Second finding,
+          unfixed: a Kotlin enum with constant bodies compiles unsealed and abstract, so both surfaces
+          refuse it advising to make it and every level below final or sealed, which is impossible for
+          that construct, and the sealed interface above it is refused too, so a Kotlin caller with one
+          enum branch cannot filter on their event root at all. HELD: inclusive half survived twenty declaration
+          forms against fifteen instances with zero misses, no disagreement between ExecuteFilter and
+          DcbCriteriaBuilder, the missing .distinct() is benign because DcbCriterion''s canonical constructor
+          collects through toUnmodifiableSet. Test-bite check: 6 of 6 and 9 of 11 fail on revert, the
+          two that stay green assert the pre-fix output and document the gap rather than covering the
+          fix.'
+        via: adversarial verify subagent
+        at: '2026-08-22T13:44:39+00:00'
     assessment: 'Johan adopted it OVERRIDING both the filing worker''s recommendation and the orchestrator''s,
       dec-0010. The override reason is the stronger one: a caller who fixes their declarations for the
       rest of the library would still find these two handing a decider nothing. THE TRAP, recorded so
