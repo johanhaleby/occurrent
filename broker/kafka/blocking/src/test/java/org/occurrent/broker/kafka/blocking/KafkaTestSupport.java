@@ -51,8 +51,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * A single-node Kafka container, the native KRaft {@code apache/kafka} image
@@ -175,6 +177,27 @@ public abstract class KafkaTestSupport {
             adminClient.deleteTopics(List.of(name)).all().get(30, TimeUnit.SECONDS);
         } catch (Exception ignored) {
         }
+    }
+
+    /**
+     * Awaits until {@code groupId}'s consumer group assignment, read through {@link AdminClient#describeConsumerGroups},
+     * covers every partition in {@code expectedPartitions}. A pattern-subscribed {@code Consumer} only starts
+     * fetching a topic once its own group rebalance completes and hands it that topic's partitions, not the instant
+     * {@code Consumer.subscribe(Pattern)} (or the bridge's own {@code build()}) returns. A test that publishes right
+     * after {@code build()} races that rebalance instead of the bridge's actual readiness, a race #893 item 21 traced
+     * to exactly this gap. Polls the group description on a short interval rather than sleeping a fixed window, so
+     * this converges the moment the assignment is actually in place and never earlier, and never later than a real
+     * stall would need.
+     */
+    protected void awaitPartitionsAssigned(String groupId, Set<TopicPartition> expectedPartitions) {
+        await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(50)).untilAsserted(() -> {
+            ConsumerGroupDescription description = adminClient.describeConsumerGroups(List.of(groupId))
+                    .describedGroups().get(groupId).get(30, TimeUnit.SECONDS);
+            Set<TopicPartition> assigned = description.members().stream()
+                    .flatMap(member -> member.assignment().topicPartitions().stream())
+                    .collect(Collectors.toSet());
+            assertThat(assigned).containsAll(expectedPartitions);
+        });
     }
 
     /**
