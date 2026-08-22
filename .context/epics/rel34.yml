@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 70
-updated_at: '2026-08-22T17:09:06+00:00'
-updated_by: 'orchestrator rel34: U2 DONE, PR 901 merged closing four issues, U14 widened'
+revision: 71
+updated_at: '2026-08-22T17:20:35+00:00'
+updated_by: 'orchestrator rel34: U13 and U14 dispatched the tick 901 unblocked them'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -1833,12 +1833,12 @@ units:
       stored as a BSON string and no indexed dcbTags array, and the DCB query filters on exists(dcbTags)
       while the numeric position range check excludes a string, so nothing finds it and nothing repairs
       it today.'
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on:
     - U2
-    session: null
+    session: chip dispatched, awaiting the worker's claim
     deliverables:
     - check: pr_merged
       ref: null
@@ -1849,9 +1849,19 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after PR 901 merges, since both build on its fix
-    last_meaningful_progress_at: '2026-08-22T08:40:58+00:00'
-    observed: {}
+    next_action: await the plan at the plan gate
+    last_meaningful_progress_at: '2026-08-22T17:20:35+00:00'
+    observed:
+      dispatched:
+        note: Dispatched PLAN FIRST as a chip, title gated before the spawn at 59 chars. Plan-first because
+          the unit designs a mutation of data users already hold, in a store this project does not run,
+          where a wrong repair is worse than the inert defect. The brief demands answers on who repairs
+          and when, how a caller knows they are affected, what the repair CANNOT recover (the dropped
+          dcbTags array may be unrecoverable unless the dcbtags extension string survived on the event),
+          idempotence and interruption, and how it is tested without a production store. It forbids taking
+          an ADR number, since 0135 is taken by U5 and numbering is shared across three fleets.
+        via: orchestrator
+        at: '2026-08-22T17:20:35+00:00'
     assessment: 'THE UNIT THAT DECIDES WHAT FIXING #876 MEANS. PR 901 stops the corruption going forward
       and does not touch a document already corrupted, so without this the release ships half a fix for
       exactly the users who already hit the bug, and their events stay invisible forever. Johan adopted
@@ -1867,12 +1877,12 @@ units:
     goal: InMemoryEventStore.updateEvent reapplies EVERY value the store owns, not only position, so a
       fresh replacement event neither loses them nor lets an updater forge them. The property is asserted
       in the TCK rather than per store, so a fourth implementation cannot miss it the way this one did.
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on:
     - U2
-    session: null
+    session: chip dispatched, awaiting the worker's claim
     deliverables:
     - check: pr_merged
       ref: null
@@ -1883,8 +1893,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after PR 901 merges, since both build on its fix
-    last_meaningful_progress_at: '2026-08-22T17:09:06+00:00'
+    next_action: 'await the worker''s claim on #905'
+    last_meaningful_progress_at: '2026-08-22T17:20:35+00:00'
     observed:
       widened_by_the_901_pass:
         note: 'WIDENED from #905''s position-only scope by the adversarial pass on PR 901, which found
@@ -1903,6 +1913,16 @@ units:
           class, so a TCK-level test would have caught this on the first run. U14 puts it in the TCK.'
         via: adversarial verify subagent on PR 901
         at: '2026-08-22T17:09:06+00:00'
+      dispatched:
+        note: 'Dispatched as a chip, title gated before the spawn at 56 chars. Scope is the WIDENED one:
+          all three instances in InMemoryEventStore, not just #905''s position. The brief makes the TCK
+          placement the point of the unit rather than an implementation detail, since EventStoreOperationsConformance
+          already asserts the append id survives a fresh replacement and its own comment names streamId
+          and streamVersion as owned the same way, with no sibling test. It also tells the worker that
+          a new conformance test failing against a store other than the in-memory one is a FINDING to
+          report rather than a test to weaken.'
+        via: orchestrator
+        at: '2026-08-22T17:20:35+00:00'
     assessment: 'Fourth store, same defect class. Small. Shipping #876 fixed on three of four stores is
       an asymmetry the changelog would have to caveat, and InMemoryEventStore is what people write their
       tests against, so the gap is most visible exactly where users are trying to prove their code works.
