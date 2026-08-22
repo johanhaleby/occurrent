@@ -664,6 +664,44 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
                 .isFalse();
     }
 
+    /**
+     * The reactor twin of the blocking model's own
+     * {@code a_stop_arriving_after_the_last_replayed_event_leaves_nothing_marked}, and the reason the marker step
+     * asks about the stop at all rather than only about ownership.
+     * <p>
+     * The replay is asked whether to keep going before every event and never after the last one. The blocking
+     * handover re-asks right before the write for exactly that reason. The reactor pipeline has no such re-ask, so
+     * without the question being asked at the marker step a stop arriving in that gap reached the write, and this
+     * stack alone marked a subscription that {@code stop()} documents as having marked nothing.
+     */
+    @Test
+    void a_stop_arriving_after_the_last_replayed_event_leaves_nothing_marked() throws Exception {
+        CountDownLatch lastEventReached = new CountDownLatch(1);
+        CountDownLatch stopped = new CountDownLatch(1);
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(() -> Flux.just(cloudEvent("1"))), feed, marker);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
+            lastEventReached.countDown();
+            awaitLatch(stopped);
+        }));
+
+        assertThat(lastEventReached.await(10, TimeUnit.SECONDS))
+                .as("the attempt is inside the handler for the last event of its history")
+                .isTrue();
+        model.stop();
+        stopped.countDown();
+
+        subscription.waitUntilStarted().block(Duration.ofSeconds(10));
+
+        assertThat(marker.read("sub").hasElement().block())
+                .as("a stop means nothing was marked, whether it arrives during the history or in the gap after "
+                        + "the last event of it, the same answer the blocking stack gives")
+                .isFalse();
+    }
+
     private static CloudEvent cloudEvent(String id) {
         return CloudEventBuilder.v1()
                 .withId(id)

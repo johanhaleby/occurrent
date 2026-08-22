@@ -1073,3 +1073,27 @@ What goes is the reactor model's record of which attempt was writing a marker, a
 A caller that wants an id to read its history again deletes its checkpoint, which is the recovery ADR 116 already
 documents for a subscription that must start over. That is now the only way to ask for it, in process as well as
 after a restart, rather than a cancel and a fresh subscribe sometimes meaning the same thing.
+
+Two things about that write turned out to need saying, both found while implementing the amendment above.
+
+**The write no longer holds the model monitor.** The blocking model asked its ownership question and wrote the
+marker inside one `synchronized` step on the model itself, which is what made the answer and the write one step.
+It also meant a checkpoint store that took seconds to answer held every other lifecycle call on that model for as
+long as the write ran, and the replay runs on a virtual thread, so blocking inside `synchronized` held the platform
+thread underneath it too. ADR 131 decided that same tradeoff the other way for the catch-up models, and the same
+reasoning applies here. The ownership question and the write now happen under a lock for that subscription id.
+`cancelSubscription` and `subscribe` take the same lock, since those are the two calls that move an id out from
+under a write, so the atomicity is unchanged. `stop`, `start`, `pause` and `resume` do not, so they no longer wait
+for a store. The model monitor is always taken before that lock and never after it, which is what keeps the two
+from deadlocking. The lock registry is only ever added to by a write, and a lifecycle call takes a lock only if one
+already exists, so an id this model never ran a catch-up for adds nothing to it.
+
+**A stop between the last replayed event and the write is a stop, on both stacks.** The replay is asked whether to
+keep going before every event and never after the last one, so a stop arriving in that gap reaches the marker step
+with the replay already finished. `BlockingHandover` has always asked once more right before the write for exactly
+that reason, so the blocking model marked nothing. The reactive pipeline has no equivalent re-ask, and the
+ownership question the amendment above introduced asks only who owns the id, so the reactive model wrote a marker
+there where its twin did not. The reactive marker step now asks about the stop as well as about ownership, which
+is what `stop()` already documents on both stacks, that a stopped replay marked nothing and is replayed from the
+beginning by `start(..)`. Nothing about the contract above changes. A marker still means the id's history was read
+by an attempt that held the id, there is just one fewer way to get one that the documentation said was impossible.

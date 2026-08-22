@@ -44,6 +44,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -135,6 +136,12 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // subscribe(), and kept for the id's whole lifetime (a stop-then-relaunch reuses the same handover), removed only
     // by cancelSubscription and shutdown.
     private final ConcurrentMap<String, BlockingHandover<CloudEvent>> handoversBySubscriptionId = new ConcurrentHashMap<>();
+    // One lock per id whose catch-up has reached its marker write, so that write and the lifecycle calls that move
+    // the id are one step against each other without the model monitor being held across a checkpoint store call.
+    // Entries are created only by markIfStillOwned and outlive the subscription, which is the same trade ADR 131
+    // made, since a subscription id is application-defined and low-cardinality, so slow growth over a model's
+    // lifetime is cheaper than reference counting a key space that does not need it.
+    private final ConcurrentMap<String, ReentrantLock> markerLocks = new ConcurrentHashMap<>();
     // Runs just before a successful catch-up's guarded completion step. Exists so a test can stand there, which
     // nothing outside this model can.
     private volatile Runnable beforeCompletingCatchup = () -> {
@@ -311,7 +318,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public void markCaughtUp() {
-                completeIfStillOwned(subscriptionId, self.get(), () -> CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId));
+                markIfStillOwned(subscriptionId, self.get());
             }
 
             @Override
@@ -394,7 +401,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // per-attempt catch-up state is set inside the same guarded step, so this attempt starts in the history part
         // of its catch-up whatever the previous attempt for the same id left behind.
         synchronized (this) {
-            replayingSubscriptions.put(subscriptionId, replay);
+            // On this id's marker lock too, so a fresh attempt cannot take the id while the previous attempt's
+            // marker write is still running. Monitor first and the lock second, matching cancelSubscription.
+            whileHoldingMarkerLock(subscriptionId, () -> replayingSubscriptions.put(subscriptionId, replay));
             // Sent where the id is taken and before the replay below runs, so it always precedes anything this
             // attempt delivers. The replay itself is the episode, so a later attempt for the same id starts its own.
             CatchupListener startListener = catchupListeners.get(subscriptionId);
@@ -456,6 +465,46 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     private synchronized void completeIfStillOwned(String subscriptionId, @Nullable Future<Boolean> replay, Runnable completion) {
         if (replay != null && replayingSubscriptions.get(subscriptionId) == replay) {
             completion.run();
+        }
+    }
+
+    // The ownership check and the marker write as one step, on this id's lock rather than on the model monitor.
+    // Same atomicity, since cancelSubscription and subscribe take the same lock before they move the id. What the
+    // model monitor no longer does is hold every other lifecycle call for as long as a checkpoint store takes to
+    // answer, so stop, start, pause and resume get through while a write is in flight.
+    //
+    // A ReentrantLock rather than the monitor, because this runs on the replay's virtual thread and the write can
+    // block on storage. Blocking inside synchronized holds the platform thread underneath for that whole span
+    // (ADR 131). The lock is taken without the model monitor held, and every lifecycle call takes the monitor
+    // first and this second, so the two are always acquired in that order.
+    private void markIfStillOwned(String subscriptionId, @Nullable Future<Boolean> replay) {
+        ReentrantLock lock = markerLocks.computeIfAbsent(subscriptionId, id -> new ReentrantLock());
+        lock.lock();
+        try {
+            if (replay != null && replayingSubscriptions.get(subscriptionId) == replay) {
+                markCaughtUp(subscriptionId);
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Held across a lifecycle call that moves an id, so it waits for a marker write already running for that id
+    // rather than taking the id from under it. Takes a lock only when one exists, never creating one, so an id
+    // this model has never run a catch-up for leaves nothing behind in the registry. Only markIfStillOwned
+    // creates an entry, which happens after the id was registered, so a missing lock means no marker write for
+    // this id has ever started and there is nothing to wait for.
+    private void whileHoldingMarkerLock(String subscriptionId, Runnable action) {
+        ReentrantLock lock = markerLocks.get(subscriptionId);
+        if (lock == null) {
+            action.run();
+            return;
+        }
+        lock.lock();
+        try {
+            action.run();
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -643,15 +692,20 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     @Override
     public synchronized void cancelSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
-        // Removing the replay entry is what stops a replay in flight, since shouldKeepReplaying reads this map.
-        // All of it under the monitor, so a subscribe running at the same time installs everything or nothing.
-        replayingSubscriptions.remove(subscriptionId);
-        pauseRequestedDuringReplay.remove(subscriptionId);
-        // A cancel is not a stop, so nothing is kept to launch again. This is also the recovery from a failed
-        // catch-up, freeing the id and releasing the registration that was refusing (ADR 104).
-        interruptibleReplays.remove(subscriptionId);
-        handoversBySubscriptionId.remove(subscriptionId);
-        liveFeed.cancelSubscription(subscriptionId);
+        // On this id's marker lock as well as the monitor, so a cancel arriving while that id's marker write is
+        // running waits for the write rather than taking the id from under it. Monitor first and the lock second,
+        // the one order every caller uses.
+        whileHoldingMarkerLock(subscriptionId, () -> {
+            // Removing the replay entry is what stops a replay in flight, since shouldKeepReplaying reads this map.
+            // All of it under the monitor, so a subscribe running at the same time installs everything or nothing.
+            replayingSubscriptions.remove(subscriptionId);
+            pauseRequestedDuringReplay.remove(subscriptionId);
+            // A cancel is not a stop, so nothing is kept to launch again. This is also the recovery from a failed
+            // catch-up, freeing the id and releasing the registration that was refusing (ADR 104).
+            interruptibleReplays.remove(subscriptionId);
+            handoversBySubscriptionId.remove(subscriptionId);
+            liveFeed.cancelSubscription(subscriptionId);
+        });
     }
 
     /**
@@ -672,6 +726,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Unlike stop(), a shutdown keeps nothing to launch again: it drops the registrations too.
         interruptibleReplays.clear();
         handoversBySubscriptionId.clear();
+        // markerLocks is deliberately not cleared. A replay that outlived the wait above may still hold one, and
+        // dropping the map would not release it, it would only hand the next caller for that id a different lock
+        // and lose the exclusion the write is relying on.
         liveFeed.shutdown();
     }
 
