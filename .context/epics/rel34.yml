@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 12
-updated_at: '2026-08-22T09:15:00+00:00'
-updated_by: 'orchestrator session rel34-epic-registration-8c2066 (dec-0008: #906 as U13, #905 as U14,
-  #907 folded into PR 901)'
+revision: 13
+updated_at: '2026-08-22T09:30:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U8 swept, U12 delivered PR 908, U4/U9/U11
+  dispatched, 900 held for re-review)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -54,8 +54,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: U1 must request Copilot on PR 900 and report the docs-branch half plus the code-side
-      surface enumeration
+    next_action: held for a Copilot re-review on d4df542fd, the commit that fixes Copilot's own finding
+      and has never been reviewed
     last_meaningful_progress_at: '2026-08-22T08:12:00+00:00'
     observed:
       dispatch:
@@ -75,6 +75,16 @@ units:
           both :6 and :27 to PR 900.'
         via: monitor bzqoo36k1 PR-OPENED, gh pr diff, gh api reviews
         at: '2026-08-22T08:12:00+00:00'
+      merge_hold:
+        note: 'Gate otherwise clean: 0 unresolved threads, mergeable, [ci skip] on the head so no workflow
+          ran, correct for a prose-only diff, and its verdict carries by compare from the last code-bearing
+          green state. HELD because Copilot''s only review is against 212ae021 while the head is d4df542fd,
+          and d4df542fd is the commit that CORRECTS what Copilot found. Insisting on a re-review for a
+          prose diff is a deliberate exception: the finding was a real factual error about which method
+          reports DEFERRED, I had read the same diff and missed it, and a correction to an overclaimed
+          guarantee is exactly the edit that overclaims in a new direction.'
+        via: gh api pulls/900/reviews commit_id compared to headRefOid
+        at: '2026-08-22T09:30:00+00:00'
     assessment: One invariant, four surfaces, two repos. The boolean-to-three fix already shipped once
       and was stale on arrival; the enumeration is derived from RoutingOutcome.java, not from a findings
       list. Takes PR 69's repair out of brk/U8's scope, recorded in ORCHESTRATOR.md. docs/append-identity
@@ -195,6 +205,17 @@ units:
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
+      flake:
+        note: 'test (misc, java-25) failed on PR 902 with KafkaCloudEventBridgeTest.resolver_alone_falls_back_to_catchAllDestination...,
+          awaitility timeout expecting 2 CloudEvents and getting 1. Triaged by a Haiku gatherer rather
+          than pulled into the orchestrator''s own context: the test lives in broker/kafka/blocking, a
+          module PR 902 does not touch, java-21 passed, main''s last run was green, and it matches the
+          known-flake issue #884 exactly. Reran the failed job rather than exercising the policy''s allow_one_equivalent_sibling
+          grant, because a clean green is better evidence than an exercised exception. NOTE: #884 was
+          re-milestoned to 0.35.0 an hour earlier, and it cost a rerun on an unrelated PR within that
+          hour.'
+        via: delegated log triage plus gh run list
+        at: '2026-08-22T09:30:00+00:00'
     assessment: 'Warning-only defect, recording itself stays correct. Fix shape agreed in the issue body.
       Touches the blocking registrar, so U6 follows this unit rather than running beside it. OWNERSHIP
       EXTENDED by dec-0005 (2026-08-22T07:58Z) to framework/spring-boot-starter-mongodb/.../OccurrentMongoAutoConfiguration.java,
@@ -330,7 +351,7 @@ units:
       YAML file.
     phase: DONE
     health: PROGRESSING
-    swept: false
+    swept: true
     depends_on: []
     session: ListAgents name relaxed-bardeen-0a12f8-4c, worktree relaxed-bardeen-0a12f8, chip task_b6a7ee0f,
       Sonnet/medium
@@ -402,6 +423,12 @@ units:
           grant does not reach this case.
         via: gh pr view statusCheckRollup, .github/workflows/maven.yml:243-250
         at: '2026-08-22T08:40:00+00:00'
+      hygiene:
+        note: Worktree removed and local branch johan/relaxed-bardeen-0a12f8 deleted 2026-08-22T09:2xZ
+          after confirming the worktree was clean, its head equalled the merged pin, and the remote branch
+          was already gone (deleted by the merge). Session archiving batches at epic closeout.
+        via: git worktree remove, git branch -D
+        at: '2026-08-22T09:30:00+00:00'
     assessment: 'Shipped defect in rewrite/src/main/resources/META-INF/rewrite/subscription-mode-0_32.yml,
       verified by git ls-tree against the tag. Same class as #828 (already closed), so read that fix first.'
   U9:
@@ -671,7 +698,7 @@ units:
       same worker as U3 on a FRESH branch
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 908
       met: false
       evidence: ''
     - check: issue_closed
@@ -681,7 +708,22 @@ units:
     blocking_on: []
     next_action: worker implementing on a fresh branch
     last_meaningful_progress_at: '2026-08-22T08:45:00+00:00'
-    observed: {}
+    observed:
+      pr_908:
+        head: 2170cca7184b20dc7d90f2c3dd69466890db3f9c
+        note: 'Opened non-draft from rel34/u12-reactor-never-replays-identity, a FRESH branch as instructed
+          since PR 902 still holds the other checkout. The worker did NOT blindly mirror the blocking
+          fix and was right not to: reactor''s SubscriptionModelCapability.capability(Class) is a direct
+          instanceof with NO wrapper-chain unwrap, unlike blocking''s, so a projection''s capability lookup
+          only ever sees the outer durable wrapper and never the inner catch-up layer that the existing
+          suppliedBy(catchupLayer) call was already given for a different purpose. A naive mirror would
+          have compared the wrong two objects and kept the bug. It added a SECOND identity, identifiedAs(outer
+          durable model), rather than reusing the first, with all three calls still in the one bean method.
+          Six configurations enumerated including positive controls. TO VERIFY AT THE GATE: that suppliedBy''s
+          original purpose, deriving the ReplayAwareSubscriptions capability the recording and catch-up-listening
+          wiring depends on, is genuinely untouched.'
+        via: worker message plus gh pr view
+        at: '2026-08-22T09:30:00+00:00'
     assessment: Adopted by Johan at a structured ask, dec-0007, on U3's own routing recommendation after
       it found the gap while reviewing its own PR 902. Reactor twin of U3's fix, similar size. Pre-granted
       the OccurrentReactiveMongoAutoConfiguration bean-method extension up front, because dec-0005 already
