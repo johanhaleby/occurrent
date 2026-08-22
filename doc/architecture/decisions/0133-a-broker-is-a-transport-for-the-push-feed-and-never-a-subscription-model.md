@@ -147,8 +147,8 @@ The bridge knows which id to ask about because ADR 90 gives it exactly one.
 What remains is that a stopped model drops live events, which ADR 85 decided and ADR 104 deliberately kept, on the
 grounds that a stop is an operator act with a `start()` on the other side. A bridge stops consuming when its
 subscription stops, checked on a coarse poll rather than before every message, so it mostly does not feed a stopped
-model, not never: a `stop()` or `pauseSubscription(...)` called from inside a handler can still hand a bridge a
-`NOT_DELIVERABLE` for a message already in flight before the next poll notices. The 2026-08-21 amendment's
+model, not never: a `stop()` or `pauseSubscription(...)` called from inside a handler can still hand a bridge an
+`UNAVAILABLE` for a message already in flight before the next poll notices. The 2026-08-21 amendment's
 follow-up note below covers what a bridge does with that message. This ADR inherits ADR 85 and ADR 104's decision
 rather than accepting a new loss of its own.
 
