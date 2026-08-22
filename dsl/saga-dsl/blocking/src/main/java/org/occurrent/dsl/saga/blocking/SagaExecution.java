@@ -46,6 +46,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link SagaExecutionSupport} step, dispatches commands before saving (at-least-once), and retries a lost compare-and-set
  * save. Timeouts re-enter the same path, fenced so a timer no longer present on the (reloaded) envelope is skipped.
  * <p>
+ * An event that keeps failing for one instance is quarantined rather than retried forever. The first failure records
+ * when the failing started and rethrows, which is what every version up to 0.33.0 did. Once the failing has lasted
+ * longer than {@link SagaRunnerConfig#quarantineAfter()}, the instance is marked
+ * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} at that event's position and this class returns normally, so the
+ * subscription acknowledges the event and the saga's other instances stop waiting behind it.
+ * <p>
  * Dispatch amplification: commands are dispatched before the save, and a lost compare-and-set retries the whole step, so a
  * single input can re-dispatch its entire command list up to {@code maxCasAttempts} times (see {@link SagaRunnerConfig}).
  * A command receiver must therefore be idempotent <em>and</em> tolerate that multiplicity, which is stronger than plain
