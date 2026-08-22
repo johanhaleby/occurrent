@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 18
-updated_at: '2026-08-22T10:35:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (preview freshness checked, rebuild deliberately
-  deferred to R2)
+revision: 19
+updated_at: '2026-08-22T10:55:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (PR 902 falsified and blocked, ADR 134
+  premises checked)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -243,8 +243,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: 26/26 green, Copilot clean on the production code, adversarial pass running
-    last_meaningful_progress_at: '2026-08-22T10:10:00+00:00'
+    next_action: worker fixing the proxy-unwrapping defect; re-verify after
+    last_meaningful_progress_at: '2026-08-22T10:55:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -262,6 +262,23 @@ units:
           hour.'
         via: delegated log triage plus gh run list
         at: '2026-08-22T09:30:00+00:00'
+      adversarial_verify:
+        note: 'FALSIFIED, merge BLOCKED. Verdict: HELD only for the shipped starter wiring as-is, FALSIFIED
+          as a general claim. isDefaultKnownLiveOnlyFor is a bare reference check with no unwrapping,
+          so a transparent pass-through proxy around the exact model suppliedBy registered, which any
+          BeanPostProcessor or Spring AOP auto-proxying produces routinely, makes the warning go SILENT
+          for the genuinely live-only shipped composition. Reproduced empirically with a control, not
+          argued. Strictly worse than the false positive the PR fixes. SAME defect Copilot found on the
+          reactor side in PR 908, which the worker had already fixed there via AopProxyUtils.getSingletonTarget,
+          so three independent routes reached it. WHAT HELD, and must not be broken by the fix: the three
+          states (never supplied, supplied and matched, supplied and mismatched) do not collapse, including
+          null and the pre-fix regression shape; the converse false positive is structurally impossible
+          under ==, so identity is the right relation and only the object it is applied to is wrong; recording
+          behaviour did not move, verified against real Mongo including reset and replay-window paths.
+          UNVERIFIED GAP surfaced: suppliedBy has no once-only guard, a second call silently overwrites
+          the first, and no path in this starter was found that calls it twice.'
+        via: orchestrator adversarial verify subagent
+        at: '2026-08-22T10:55:00+00:00'
     assessment: 'Warning-only defect, recording itself stays correct. Fix shape agreed in the issue body.
       Touches the blocking registrar, so U6 follows this unit rather than running beside it. OWNERSHIP
       EXTENDED by dec-0005 (2026-08-22T07:58Z) to framework/spring-boot-starter-mongodb/.../OccurrentMongoAutoConfiguration.java,
@@ -742,7 +759,7 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: premise verification running, then the design gate goes to Johan as one ask
+    next_action: route the premise defects to the worker before the design gate goes to Johan
     last_meaningful_progress_at: '2026-08-22T10:25:00+00:00'
     observed:
       design_gate:
@@ -763,6 +780,27 @@ units:
           quarantine time budget.'
         via: read the full ADR from gh pr diff
         at: '2026-08-22T10:25:00+00:00'
+      premise_check:
+        note: 'TWO REAL DEFECTS in ADR 134''s premises, plus one gap, found before the design gate reached
+          Johan. (1) FALSE: ''every blocking subscription model wraps the handler in executeWithRetry''.
+          Only NativeMongoSubscriptionModel, SpringMongoSubscriptionModel and InMemorySubscriptionModel
+          do, and InMemory defaults to fixed(200) not exponential. PushSubscriptionModel explicitly propagates
+          a handler exception with no retry at all, and DurableSubscriptionModel, the catchup models and
+          CompetingConsumerSubscriptionModel have none either. This is load-bearing: the design''s central
+          mechanism measures how long a failure has persisted ACROSS RETRIES, and on a transport that
+          never retries there is no second attempt for that clock to tick across, yet section 6 reasons
+          specifically about push-fed sagas with catchup = NONE. Follow-up dispatched to establish what
+          actually happens on those transports today. (2) WRONG IN DETAIL: SagaEnvelope has 11 components,
+          not the 6 the ADR enumerates; it omits sagaId, createdAt, updatedAt, completedAt and currentStep.
+          Section 2''s ownership argument is built on that enumeration, and currentStep in particular
+          is a denormalised observation field, which is arguably a counter-example to the ''everything
+          here is delivery bookkeeping or state'' reading. (3) GAP CONFIRMED: no default value is stated
+          for the quarantine time budget; five minutes appears only as an illustration. USEFUL FOR THE
+          MIGRATION QUESTION: no exhaustive switch or when over SagaStatus exists anywhere in the repository
+          today, so the compile-break half of the ADR''s open question is hypothetical for user code only,
+          while the silent findByStatus(ACTIVE) half is real.'
+        via: orchestrator premise-verification subagent
+        at: '2026-08-22T10:55:00+00:00'
     assessment: 'Johan ruled it IN 0.34.0 (dec-0002), overruling the recommendation to defer. Pre-existing:
       predates ADR 123 and ADR 126, both of which accepted the tradeoff deliberately, and PR 816''s review
       thread raised it against ADR 126. The event path has no equivalent of SagaExecution.pollTimers,
