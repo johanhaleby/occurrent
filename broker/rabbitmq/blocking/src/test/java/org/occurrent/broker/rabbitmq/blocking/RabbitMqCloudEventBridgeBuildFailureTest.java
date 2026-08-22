@@ -26,6 +26,7 @@ import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
 import java.io.IOException;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -54,6 +55,20 @@ class RabbitMqCloudEventBridgeBuildFailureTest {
         RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, "queue")
                 .declareTopology(false)
                 .onDeliveryFailure(DeliveryFailurePolicy.PARK);
+
+        assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class);
+
+        verify(connection, never()).openChannel();
+    }
+
+    @Test
+    void an_explicit_empty_bindings_set_is_refused_before_any_channel_is_opened() throws Exception {
+        Connection connection = mock(Connection.class);
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+
+        RabbitMqCloudEventBridge.Builder builder = RabbitMqCloudEventBridge.builder(connection, model, outcomeChannel, "queue")
+                .bindings(Set.of());
 
         assertThatThrownBy(builder::build).isInstanceOf(IllegalStateException.class);
 
