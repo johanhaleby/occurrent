@@ -39,9 +39,12 @@ description: >-
   not include, and for a second reason on top of it. A recipe cannot tell whether a class that is not final
   should become final or whether the declaration should list concrete types instead, because a subclass may
   live in a module or a repository the recipe never sees. ExecuteFilter's excludeTypes now widens a declared
-  type it cannot fully expand to every concrete subtype that can be found instead of refusing it, which is not
-  a breaking change and needs no recipe either, since it only makes an exclusion that already ran keep more
-  events out than before. See section 3 of doc/migration/upgrading-to-0.34.0.md for the manual steps.
+  type it cannot fully expand to every concrete subtype a downward walk can find instead of refusing it, which
+  needs no recipe either, since there is nothing mechanical to rewrite. It is not a breaking change for the
+  same reason section 3 of the migration guide gives: an already-narrow exclusion never becomes narrower.
+  It can still exclude nothing at all for an interface or an abstract declared type whose hierarchy reopens
+  before anything concrete is found, exactly as before this release, and section 3 names that shape and its
+  fix. See section 3 of doc/migration/upgrading-to-0.34.0.md for the manual steps.
 recipeList:
   - org.occurrent.MigrateSagaJoinToStepCondition_0_34
   - org.occurrent.MigrateStoreNeutralMongoConfigKeys_0_34

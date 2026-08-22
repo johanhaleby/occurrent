@@ -112,10 +112,16 @@ class ExecuteFilterTest {
         }
 
         @Test
-        void exclude_types_widens_instead_of_refusing_a_declared_type_reopened_below_a_sealed_level() {
+        void exclude_types_does_not_refuse_a_declared_type_reopened_below_a_sealed_level() {
             // Given: type and includeTypes refuse this same declaration. Refusing it here too would break a caller
             // who is already correctly excluding a final class below the reopened level, for no gain, so excludeTypes
-            // widens to what can be found instead.
+            // does not refuse. This particular declaration is the degenerate case, worth calling out rather than
+            // reading past: ReopenedEvent is an interface and ReopenedBase, the only level below it, is abstract, so
+            // neither is ever stored under its own CloudEvent type and the downward walk finds nothing concrete
+            // anywhere. The only excluded type ends up being ReopenedEvent's own name, which no stored event ever
+            // carries, so this specific exclusion excludes zero real events. That is not a narrower exclusion than
+            // asked for (still safe by that measure), but it is not a working one either, and a caller relying on it
+            // to keep a family of events out gets none of the protection they asked for, silently.
             ExecuteFilter<ReopenedEvent> executeFilter = ExecuteFilter.excludeTypes(ReopenedEvent.class);
 
             // When

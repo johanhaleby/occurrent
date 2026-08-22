@@ -87,15 +87,20 @@ public interface ExecuteFilter<E> {
     /**
      * Create a filter that excludes events whose CloudEvent type matches any of the supplied domain event types.
      * <p>
-     * A declared type is WIDENED to every concrete type that can be found rather than refused when it cannot all be
-     * enumerated, which is the opposite of what {@link #type(Class)} and {@link #includeTypes} do, and on purpose.
-     * Excluding a supertype has to exclude everything under it, or the exclusion silently lets the excluded family of
-     * events through. A widened exclusion is always safe, since it excludes at least the concrete types found and
-     * never fewer, so a type whose full hierarchy cannot be enumerated contributes the concrete types that can be
-     * found instead of being refused. That closes the gap for a sealed hierarchy reopened partway down, where the
-     * levels above the reopening are still found. A concrete class that is declared directly and is itself neither
-     * final nor sealed contributes only itself, the same as before this method went through {@link EventTypeExpansion},
-     * since no reflection can find a subclass stored under its own name. An array and a primitive are refused, for
+     * A declared type is WIDENED to every concrete type {@link EventTypeExpansion#expandWhatCanBeFound}'s downward
+     * walk can find rather than refused when it cannot all be enumerated, which is the opposite of what
+     * {@link #type(Class)} and {@link #includeTypes} do, and on purpose. Excluding a supertype has to exclude
+     * everything under it, or the exclusion silently lets the excluded family of events through. Widening never
+     * excludes fewer of the concrete types that walk finds than a complete expansion would, so it is never the
+     * wrong direction to fail in. It does not promise the exclusion excludes something. A concrete class declared
+     * directly that is itself neither final nor sealed contributes itself, the same as before this method went
+     * through {@link EventTypeExpansion}, since no downward walk can find a subclass stored under its own name, but
+     * the exclusion is not empty. <strong>An interface or an abstract class whose hierarchy reopens before the walk
+     * finds anything concrete is different: it contributes nothing at all, so the resulting filter excludes zero
+     * real events while looking like a working exclusion.</strong> {@code excludeTypes(SensitiveEvent.class)} on a
+     * sealed {@code SensitiveEvent} that permits a non-sealed abstract class, with nothing concrete found above
+     * that level, silently keeps every event of that family in the read. Seal the hierarchy, or declare the
+     * concrete types directly, to get a working exclusion for that shape. An array and a primitive are refused, for
      * two different reasons kept apart the way {@link EventTypeExpansion#expandWhatCanBeFound} keeps them apart: no
      * event is ever an instance of a primitive class, while an array is refused for consistency with {@link #type} and
      * {@link #includeTypes}, not because excluding one is impossible.

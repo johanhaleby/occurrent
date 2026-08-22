@@ -135,17 +135,31 @@ subscription too, so read it even if the six places above are not what you use. 
 [#753](https://github.com/johanhaleby/occurrent/issues/753) and [#912](https://github.com/johanhaleby/occurrent/issues/912).
 
 `ExecuteFilter.excludeTypes` mostly sits outside this refusal. A declared type it cannot fully expand is
-widened to every concrete subtype that can be found instead, since excluding a supertype has to exclude
-everything under it and a wider exclusion is always safe. That widening needs no migration step: `excludeTypes`
-now excludes at least as much as it used to, never less. It still refuses an array or a primitive declared
-type, the same two shapes `type`/`includeTypes` refuse, since no event is ever an instance of either. Declaring
-one to `excludeTypes` was accepted up to 0.33.0, whatever your `CloudEventTypeGetter` happened to return for it,
-so that one shape is new. Nobody sensibly excludes by array or primitive type, so in practice this affects
-close to nobody, but it is still a behavior change worth naming rather than folding into "no migration step."
-Widening also does not reach a concrete class that is declared directly and is itself neither final nor sealed:
-reflection cannot discover a subclass stored under its own name, so `excludeTypes(OrderPlaced.class)` on such a
-class still only excludes events of `OrderPlaced`'s own CloudEvent type, exactly as before. See the changelog
-entry under `#### Changes` for [#912](https://github.com/johanhaleby/occurrent/issues/912).
+widened to every concrete subtype a downward walk can find instead, since excluding a supertype has to
+exclude everything under it, and widening the concrete types the walk finds never removes fewer of them than
+a complete expansion would. That widening needs no migration step by itself. It still refuses an array or a
+primitive declared type, the same two shapes `type`/`includeTypes` refuse, since no event is ever an instance
+of either. Declaring one to `excludeTypes` was accepted up to 0.33.0, whatever your `CloudEventTypeGetter`
+happened to return for it, so that one shape is new. Nobody sensibly excludes by array or primitive type, so
+in practice this affects close to nobody, but it is still a behavior change worth naming rather than folding
+into "no migration step."
+
+**Widening is not completeness, and this is the one place in this section worth reading even if you never hit
+a refusal.** Two declared-type shapes still leave a gap after this fix, and one of them can silently exclude
+nothing at all rather than merely less than hoped.
+
+A concrete class that is declared directly and is itself neither final nor sealed contributes itself to the
+widened exclusion: reflection cannot discover a subclass stored under its own name, so
+`excludeTypes(OrderPlaced.class)` on such a class still only excludes events of `OrderPlaced`'s own CloudEvent
+type, exactly as before, but that exclusion is not empty.
+
+An interface or an abstract class whose hierarchy reopens before the downward walk finds anything concrete is
+different, and this is the shape to check your own declarations against. `excludeTypes(SensitiveEvent.class)`
+on a sealed `SensitiveEvent` that permits only a non-sealed abstract class, with nothing concrete found above
+that level, contributes nothing at all. The resulting filter excludes zero real events, silently, exactly as
+it did before this fix, and nothing about the exception-free result tells you that. Seal the hierarchy, or
+declare the concrete types directly, to get a working exclusion for that shape. See the changelog entry under
+`#### Changes` for [#912](https://github.com/johanhaleby/occurrent/issues/912).
 
 Widening on a boundary-seeded `DcbCriteriaBuilder` and DCB append conditions built from a `DcbCriteriaBuilder`
 also change, worth calling out even though `DcbCriteriaBuilder` has no `excludeTypes`. `type`/`types` now name

@@ -42,6 +42,17 @@ sealed interface ReopenedEvent
 // Sealed above, plain abstract here, so nothing below this class can be found.
 abstract class ReopenedBase : ReopenedEvent
 
+sealed interface EnumRoot
+
+enum class EnumWithBodies : EnumRoot {
+    A {
+        override fun toString() = "a"
+    },
+    B {
+        override fun toString() = "b"
+    }
+}
+
 @DisplayName("DcbCriteriaBuilder type expansion")
 @DisplayNameGeneration(ReplaceUnderscores::class)
 class DcbCriteriaBuilderTypeExpansionTest {
@@ -90,6 +101,39 @@ class DcbCriteriaBuilderTypeExpansionTest {
         val criterion = builder.type(OrderEvent::class.java)
 
         assertThat(criterion).isEqualTo(DcbCriterion(setOf("OrderEvent", "OrderPlaced", "OrderCancelled"), setOf(Tag.of("k", "v"))))
+    }
+
+    @Test
+    fun type_refuses_a_kotlin_enum_with_constant_bodies_declared_directly() {
+        // Given: unlike javac, which makes such an enum implicitly sealed with each constant body as a permitted
+        // subclass (JLS 8.9), Kotlin compiles EnumWithBodies itself as a plain non-final, non-sealed class, so
+        // EventTypeExpansion can see it is concrete but cannot see A and B as its permitted subclasses. This is a
+        // shared EventTypeExpansion limitation, verified here, not something a change in this class can fix.
+        val builder = DcbCriteriaBuilder(simpleNameConverter<EnumWithBodies>())
+
+        assertThatThrownBy { builder.type(EnumWithBodies::class.java) }
+            .isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining(EnumWithBodies::class.java.name)
+    }
+
+    @Test
+    fun type_refuses_the_sealed_interface_a_kotlin_enum_with_constant_bodies_reopens() {
+        val builder = DcbCriteriaBuilder(simpleNameConverter<EnumRoot>())
+
+        assertThatThrownBy { builder.type(EnumRoot::class.java) }
+            .isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining(EnumRoot::class.java.name)
+    }
+
+    @Test
+    fun types_declared_on_each_enum_constant_class_directly_still_works() {
+        // Given: the "declare the concrete event types instead" remedy the refusal message offers is real here.
+        // Each constant body compiles to its own final class, so naming them individually works around the gap.
+        val builder = DcbCriteriaBuilder(simpleNameConverter<EnumWithBodies>())
+
+        val criterion = builder.types(EnumWithBodies.A.javaClass, EnumWithBodies.B.javaClass)
+
+        assertThat(criterion).isEqualTo(DcbCriteria.types(listOf("A", "B")))
     }
 
     @Test
