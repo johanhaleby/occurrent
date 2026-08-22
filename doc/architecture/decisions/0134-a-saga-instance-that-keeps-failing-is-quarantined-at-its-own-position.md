@@ -4,8 +4,8 @@ Date: 2026-08-22
 
 ## Status
 
-Proposed. Resolves #818. 0133 is the current maximum, re-audited across every remote branch at write time per the
-max-plus-one rule.
+Proposed. Proposes a resolution for #818 rather than resolving it, because this is the design and no code has
+changed. 0133 is the current maximum, re-audited across every remote branch at write time per the max-plus-one rule.
 
 One question in the Decision below is not settled here and needs a ruling before implementation starts. It is marked
 **Open** and repeated at the end of this file.
@@ -121,6 +121,16 @@ the cost is one store write per failing input rather than one per retry. When th
 that first write fails too, the executor rethrows, and the behaviour is exactly today's until the store recovers,
 which is correct, because a saga with no reachable store cannot make progress in any case.
 
+The budget only works while something keeps re-delivering the input, and that is a constraint rather than a
+detail. The executor does not retry in process, it rethrows, so it reaches the budget only because the subscription
+retries. A user who replaces the subscription's `RetryStrategy` with a limited one, or a broker whose own redelivery
+policy runs out first, stops the input arriving before the budget elapses, and then nothing ever records a
+quarantine. The saga runner therefore refuses a configuration it can see will not reach the budget, and where it
+cannot see the redelivery policy it says so rather than assuming one. This is the second question the implementation
+gate has to settle, since the alternative is for the executor to own the retrying itself and hold the subscription
+thread for the whole budget, which trades the dependency for a shorter version of the block this decision exists to
+remove.
+
 The failure write uses the same compare-and-set as every other write to the instance, and a lost one is meaningful
 rather than something to retry. Losing it means another input advanced the instance while it was failing, most
 likely a timer that fired successfully, so the failing input is now being applied to different state and may well
@@ -188,6 +198,13 @@ for, so a quarantined instance must be enumerable without reading its state.
 Release is two things and both are needed. Clear the record alone and the instance handles new events against state
 with a gap in it. Restarting the subscription alone re-runs the quarantine.
 
+They also cannot just be ordered, which the first draft did not say. Clearing first lets the live subscription
+apply a newer event to state that still has the gap. Rewinding first means the replayed events arrive while the
+instance is still quarantined and are skipped. So release needs a third state between quarantined and active,
+meaning released and awaiting its replay, in which the instance accepts an input only once the replay has reached the
+position it stopped at. Defining that state, and how it behaves across competing nodes, is implementation work this
+decision requires rather than a detail it can leave open.
+
 So it is one operation, on `SagaSubscription`, which is the closest thing to a handle that owns both halves.
 `SagaInstances` stays read-only. This needs new plumbing rather than a new method over what is already there.
 `SagaSubscription` holds the live `Subscription`, the timer poller and the instances, and `Subscription` itself
@@ -215,16 +232,38 @@ unwrapping to the delegate to reposition would go around the wrapper's own lock 
 settle whether release is restricted to the node holding the lease or whether it coordinates across nodes, and that
 is named here as open work rather than assumed to fall out.
 
-Release is refused, rather than silently doing half the job, on a saga whose subscription cannot replay history. A
-push-fed saga configured with `catchup = NONE` under ADR 96 has no local history to restart from, so releasing it
-would resume the instance at the next live event and drop everything since the recorded position. The refusal names
-the remedy that already ships, `SagaStateStore.delete(sagaId)`, which is the same escape hatch ADR 128 names, and
-which abandons the instance deliberately instead of quietly.
+**A source that cannot replay does not get quarantine at all, and refusing only the release would have been wrong.**
+The first draft refused the release and allowed the quarantine, which loses the event at the moment of quarantine
+rather than at the release. Returning normally acknowledges the input to the source, and for a push-fed saga
+configured with `catchup = NONE` under ADR 96 there is no local history holding it, so on a queue it can be gone
+immediately. Nothing later can replay what was never retained.
 
-### Open: the migration treatment for the new `SagaStatus` constant
+So for such a source the executor keeps rethrowing and the instance keeps blocking, which is today's behaviour. The
+isolation rule stays broken for exactly that configuration, and it is named here rather than hidden, because the
+alternative on offer was a quiet loss and AGENTS.md ranks those the other way round. Closing it needs the quarantine
+record to hold the event itself for a non-replayable source, which is an extension of this design and is out of
+scope here.
 
-`SagaStatus` shipped in `occurrent-0.33.0`, verified with `git ls-tree` against the tag rather than inferred, so
-adding a constant is a breaking change under the release-status rule, and it breaks in two ways.
+The replay boundary is inclusive of the recorded position, and this needs saying because the existing vocabulary
+points the other way. `GlobalCheckpoint.of(p)` means resume after `p`, so restarting from the position of the event
+that failed would skip permanently the one event the release exists to reprocess. The record therefore holds the
+predecessor position, or the release uses an inclusive start, and either way the first position of a feed is a
+defined boundary case rather than an accident.
+
+Not every subscription model accepts a chosen start either. `CatchupThenPushSubscriptionModel.subscribe` rejects
+every non-default start and always replays from the beginning, so release has to name the replay capability it needs
+and what it does per model when that capability is absent, rather than assuming a `Subscribable` can be restarted
+anywhere.
+
+`SagaStateStore.delete(sagaId)`, the escape hatch ADR 128 already names, stays available throughout. It abandons the
+instance deliberately instead of quietly.
+
+### Open: the migration treatment for the shipped API this breaks
+
+`SagaStatus`, `SagaEnvelope` and `SagaInstance` all shipped in `occurrent-0.33.0`, verified with `git ls-tree`
+against the tag rather than inferred, so this decision breaks shipped API in four places. A new `SagaEnvelope`
+component changes its canonical constructor and record-pattern arity. A new `SagaInstance` accessor breaks anyone
+implementing that interface. And the new `SagaStatus` constant breaks in two further ways of its own.
 
 The visible half is that an exhaustive Java `switch` or Kotlin `when` over `SagaStatus` stops compiling. The silent
 half is worse. `findByStatus(ACTIVE, ...)` is the documented way to find instances that have stopped moving, and
@@ -238,8 +277,9 @@ has no precedent for a search-only reporting recipe either. `org.openrewrite.*.s
 changes something.
 
 This is the exception the migration convention names, so it is a ruling rather than a guess. The recommendation is a
-section in `doc/migration/upgrading-to-0.34.0.md` covering both halves, and no recipe, on the grounds that AGENTS.md
-asks for a recipe ideally rather than always and a recipe that cannot do the work is worse than an honest note.
+section in `doc/migration/upgrading-to-0.34.0.md` covering all four breaks, and no recipe, on the grounds that
+AGENTS.md asks for a recipe ideally rather than always and a recipe that cannot do the work is worse than an honest
+note.
 
 ## Consequences
 
@@ -268,10 +308,14 @@ A quarantined instance's timers stop firing, so a saga that uses a timeout as a 
 while quarantined. That is deliberate, since firing a timeout would advance state across the gap, but it means a
 quarantine has to be noticed rather than left alone.
 
-The change is additive to `SagaStateStore`. The SPI methods keep their signatures and the new fields ride on
-`SagaEnvelope`, which every store already round-trips, so an out-of-tree store implementation compiles unchanged. It
-will not persist the new fields until it is updated, which degrades that store to today's behaviour rather than
-breaking it.
+**The change is not additive for out-of-tree callers, and the first draft was wrong to say it was.** The
+`SagaStateStore` methods keep their signatures, but `SagaEnvelope` is a public record, so a new component changes its
+canonical constructor and the arity of any record pattern over it, and a store built outside this repository
+constructs envelopes. `SagaInstance` is a public interface, so a new accessor breaks anyone implementing it. Both are
+shipped API and both break at compile time.
+
+Where a delegating or default member can absorb the break it should, and where it cannot the break is real and
+belongs in the migration guide next to the enum constant.
 
 ## Rejected alternatives
 
@@ -299,6 +343,13 @@ derived from a gap, and nothing downstream can detect that.
 
 ## Open question repeated
 
-The migration treatment for adding `QUARANTINED` to the shipped `SagaStatus` enum, covered above. Recommendation is a
-migration-guide section covering both the compile break and the silent `findByStatus(ACTIVE, ...)` change, with no
-OpenRewrite recipe.
+Three questions need a ruling before implementation starts, all covered above.
+
+1. The migration treatment for the four shipped API breaks, meaning the `SagaEnvelope` component, the `SagaInstance`
+   accessor, the exhaustive switch over `SagaStatus`, and the silent change to what `findByStatus(ACTIVE, ...)`
+   returns. Recommendation is one migration-guide section covering all four, with no OpenRewrite recipe.
+2. Whether the executor keeps rethrowing and depends on the subscription re-delivering to reach the budget, refusing
+   a configuration that cannot, or owns the retrying itself and holds the subscription thread for the budget.
+   Recommendation is the first, because the second reintroduces a shorter version of the block being removed.
+3. Whether a non-replayable source is left blocking, as recommended here, or whether this decision grows to hold the
+   event itself for that case.
