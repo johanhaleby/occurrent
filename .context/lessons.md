@@ -2664,3 +2664,28 @@ The merge gate requires reading review bodies, because a finding can live in the
 The details block is what turns this into a check. Copilot writes `Comments generated: N` there, so compare N against the number of inline review comments. Equal means every finding became a thread and the thread-based signals are complete. A difference is the exact count of findings that exist only in the body, and the body is then read for that many. On rel34's PR 941 that reads one against zero, which names the missing finding without anyone having to notice a short body.
 
 Two properties make it worth preferring to the prose rule. It is a number against a number, so it fails loudly rather than by omission, and it works the same whether the extra findings sit in a suppressed block that announces itself or in a plain paragraph that does not.
+
+## Count Copilot's findings against its threads, and count the suppressed block separately
+
+"Read the review body" is a weak instruction, because a long body invites skimming for the part you
+came for. A sibling orchestrator proposed the stronger form and it is a number against a number:
+Copilot writes `Comments generated: N` in its details block, so compare N against the inline review
+comment count. Equal means every finding became a thread and the thread signals are complete. A
+difference is the exact number of findings living only in the prose.
+
+Tested across seven pull requests, and it has a hole that has to be closed with a second pair.
+`Comments generated` EXCLUDES suppressed comments. One PR read, two lines apart in the same block:
+
+    ### Suppressed comments (2)
+    - **Comments generated:** 0 new
+
+Zero generated, zero inline, aligned by the first check, and two real findings in the suppressed
+block. On that PR those two were the defect that had gone unaddressed longest.
+
+So the gate reads two pairs. `Comments generated` against the inline count, for findings in the prose.
+`Suppressed comments (N)` on its own, for findings that open no thread by construction. Neither
+implies the other, and the suppressed class is the one that has done the damage.
+
+One unverified detail worth a look if a re-review ever looks suspiciously clean: that line says
+`0 new`, not `0`. If the count is only what is new since the previous review, a re-review of a head
+with unaddressed prior findings could read zero while they still stand.

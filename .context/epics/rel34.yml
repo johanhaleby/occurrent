@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 77
-updated_at: '2026-08-22T17:40:00+00:00'
-updated_by: 'orchestrator rel34: U14 delivered PR 942 with the TCK test the unit existed for'
+revision: 78
+updated_at: '2026-08-22T17:42:39+00:00'
+updated_by: 'orchestrator rel34: the gate now counts findings against threads, two pairs not one'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -2442,3 +2442,18 @@ cross_epic:
       for the detect-but-never-self-repair decision. Next free is 0137. sdi committed to taking a number
       above 0135 and telling rel34 first, and must be told 0136 is now gone.
     at: '2026-08-22T17:36:44+00:00'
+  finding_count_check:
+    note: 'GATE IMPROVEMENT, from sdi and refined by testing it here. Copilot writes ''Comments generated:
+      N'' in its details block. Comparing N against the inline review comment count turns ''read the body''
+      from a habit into a number against a number that fails loudly. TESTED ACROSS SEVEN rel34 PRs, and
+      it has a hole. ''Comments generated'' EXCLUDES suppressed comments. PR 914 reads ''Suppressed comments
+      (2)'' and ''Comments generated: 0 new'' two lines apart, so it is perfectly aligned by the first
+      check while carrying two real findings, and on that PR those two were the retry-context defect that
+      had gone unaddressed longest. PR 938 is the same at larger numbers, aligned with four suppressed.
+      SO THE GATE READS TWO PAIRS. Generated against inline, for findings living in the prose. Suppressed
+      comments on its own, for findings that open no thread by construction. Neither implies the other
+      and the suppressed class is the one that has done the damage this epic. UNVERIFIED, worth one look
+      if a re-review ever looks suspiciously clean: the line says ''0 new'', not ''0''. If the count is
+      only what is new since the previous review, a re-review of a head carrying unaddressed prior findings
+      could read zero while they stand.'
+    at: '2026-08-22T17:42:39+00:00'
