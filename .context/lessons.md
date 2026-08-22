@@ -1695,11 +1695,19 @@ workflow only concludes once every shard job it spawned has finished, so the par
 unambiguous at the workflow level while being invisible at the context level. It needs no magic
 number and survives any matrix change.
 
-Measured live on three heads: PR 913 rollup 27 contexts all green and the run `completed/success`,
-genuinely done. PR 916 rollup 26 with 2 pending and the run `in_progress`, consistent. PR 914 rollup
-THREE contexts, zero pending, zero failing, and "Java CI with Maven" ABSENT from its runs entirely,
-so the matrix had not started at all for that head. The third case passes both the naive gate and
-the counting gate's spirit while being nowhere near green.
+Measured live. PR 913 rollup 27 contexts all green and the run `completed/success`, genuinely done.
+PR 916 is the real evidence: its monitor event read `0fail DONE` and the immediate next read showed
+`contexts=6 pending=6` with "Java CI with Maven" QUEUED, so the flag fired on an EMPTY context set,
+not merely a partial one.
+
+AND THE COROLLARY THAT COST ME A WRONG CLAIM. An ABSENT "Java CI with Maven" run is not by itself a
+red flag. The workflow carries `paths-ignore: '**/*.md'`, so a markdown-only push produces no run BY
+DESIGN and the verdict carries by compare from the last code-bearing green head. PR 914 was exactly
+that case, its delta from the previous head being one ADR file, and I reported it to three parties as
+a matrix that had never started. So the rule is two-part: require `completed/success` for the head,
+OR establish that every file changed since the last `completed/success` head is markdown. Checking
+only the first half turns a documented exception into a false alarm, which is the same error shape as
+trusting the rollup, made in the safe direction instead of the dangerous one.
 
 AND THE SAME DEFECT IS IN THE SHARED WORK-ITEM MONITOR. The v7 pattern derives its DONE flag from
 `statusCheckRollup` with exactly the "zero contexts still pending" test, so on PR 914's partial head
