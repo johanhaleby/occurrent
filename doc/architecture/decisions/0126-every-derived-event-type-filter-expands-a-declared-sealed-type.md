@@ -7,7 +7,10 @@ Date: 2026-08-16
 Accepted. Decides #750, #753 and #758. The code change follows in a separate unit. This
 records the decision, not the diff.
 
-Amended in 0.34.0 on the exemption only, by [#753](https://github.com/johanhaleby/occurrent/issues/753). What
+Amended in 0.34.0 on the exemption only, by [#753](https://github.com/johanhaleby/occurrent/issues/753), and this
+amendment is what supersedes the exemption
+[ADR 124](0124-a-saga-expands-a-declared-sealed-event-type.md) shipped in 0.33.0, which points here. Amended in
+place rather than through a successor because this ADR has not shipped in any release. What
 this ADR decided about #753 was to leave the exemption in place and record it, on the reading that a uniform
 exemption needed no code change. That reading held while the loss stayed invisible, and it is what changed. A
 caller declaring a concrete class that is neither final nor sealed and publishing a subclass of it never
