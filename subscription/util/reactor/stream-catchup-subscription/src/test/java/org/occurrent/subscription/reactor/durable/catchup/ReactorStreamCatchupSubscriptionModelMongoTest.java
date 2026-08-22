@@ -53,6 +53,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.net.URI;
 import java.time.Duration;
@@ -60,6 +61,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.Objects.requireNonNull;
@@ -164,6 +167,33 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
             assertThat(received).containsExactlyInAnyOrder("h1", "h2", "duringReplay");
             assertThat(received).doesNotHaveDuplicates();
         });
+    }
+
+    @Test
+    void a_small_cache_still_re_delivers_a_write_a_history_window_read_after_the_head() {
+        // The #891 shape against a real store, with the handover cache at 1 so nothing survives in it by accident.
+        // The reader reports a head one above what is committed, which ADR 84 allows since currentPosition is a
+        // high-watermark rather than a fence, and that is exactly what a position reserved by an uncommitted write
+        // looks like. The event written during the delayed first window read then lands at or below that head, so a
+        // history window reads it. Nothing a history window delivers is recorded, so the live stream has to deliver
+        // it again. Feed the cache from the history windows again and the second delivery disappears.
+        appendToStream("stream-1", name("h1"));
+
+        AtomicBoolean firstReadStarted = new AtomicBoolean(false);
+        CountDownLatch releaseTheFirstRead = new CountDownLatch(1);
+        PositionOrderedReader reader = new HeadAheadOfCommittedPositionOrderedReader(asReader(), 1, releaseTheFirstRead, firstReadStarted);
+
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, reader, null, 1000, 1);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.checkpoint(GlobalCheckpoint.of(0))), received);
+
+        await().atMost(Duration.ofSeconds(40)).untilTrue(firstReadStarted);
+        appendToStream("stream-1", name("committedAfterTheHeadRead"));
+        releaseTheFirstRead.countDown();
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() ->
+                assertThat(received).filteredOn("committedAfterTheHeadRead"::equals).hasSizeGreaterThanOrEqualTo(2));
+        assertThat(received).contains("h1");
     }
 
     @Test
@@ -289,6 +319,36 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
 
     // Delays the first bulk window read so an event can commit while the replay is in flight. currentPosition is the
     // head probe, so the delay is applied to the first window read after it.
+    // Reports a head above the highest committed position, which is what a position reserved by a write that has not
+    // committed yet looks like to a reader. ADR 84 allows it, currentPosition is a high-watermark. The first window
+    // read is held until the test releases it, rather than for a fixed time, so the query runs once the test has
+    // written and actually sees that write inside the window the head already covers. A fixed delay would race the
+    // write on a slow machine and fail without saying why.
+    private record HeadAheadOfCommittedPositionOrderedReader(PositionOrderedReader delegate, long ahead, CountDownLatch releaseFirstRead,
+                                                             AtomicBoolean firstReadStarted) implements PositionOrderedReader {
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            return Flux.defer(() -> {
+                if (!firstReadStarted.compareAndSet(false, true)) {
+                    return delegate.readInPositionOrder(filter, range);
+                }
+                return Mono.fromCallable(() -> releaseFirstRead.await(60, TimeUnit.SECONDS))
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .thenMany(delegate.readInPositionOrder(filter, range));
+            });
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return delegate.currentPosition().map(position -> position + ahead);
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return delegate.writesPosition();
+        }
+    }
+
     private static final class DelayFirstReadPositionOrderedReader implements PositionOrderedReader {
         private final PositionOrderedReader delegate;
         private final Duration delay;

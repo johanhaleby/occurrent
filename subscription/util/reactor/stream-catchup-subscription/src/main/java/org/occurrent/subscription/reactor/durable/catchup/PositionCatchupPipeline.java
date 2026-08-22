@@ -18,6 +18,7 @@ package org.occurrent.subscription.reactor.durable.catchup;
 
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -41,8 +42,12 @@ import static java.util.Objects.requireNonNull;
  * The live resume token is captured before the bulk replay so an event committing during the replay is still
  * delivered live. The replay pages in {@code position} windows, then reconciles once, draining up to a head
  * snapshotted at reconcile start so writes during replay are delivered in order. It does not chase a moving head,
- * which would never terminate under sustained writes; anything after the snapshot is left to the live subscription
- * (resuming from the pre-bulk token), deduped by the id cache.
+ * which would never terminate under sustained writes, and anything after the snapshot is left to the live
+ * subscription (resuming from the pre-bulk token), deduped by the id cache.
+ * <p>
+ * Only the reconciliation pass fills that cache. The history windows fill nothing, so the cache never suppresses a
+ * live delivery of an event that only the history read had delivered. See
+ * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0135-the-reactive-handover-dedup-is-fed-only-by-the-reconciliation-read.md">ADR 135</a>.
  * <p>
  * If the replay runs longer than the change stream history (e.g. the MongoDB oplog window), the captured token ages
  * out and the handover fails loudly rather than silently dropping events. Same if the model reports no resume token
@@ -100,18 +105,19 @@ final class PositionCatchupPipeline {
     }
 
     /**
-     * The replay half on its own: bulk windows then one reconcile pass, every emitted id recorded in {@code cache}.
-     * Cache the replayed ids, including the bulk tail, since the reactive global position resumes inclusively and the
-     * live change stream re-delivers boundary events already emitted. Dedup by id, not position, so an in-flight event
-     * never seen during the replay is still delivered once, live. Shared by the cold pipeline above and the named
-     * catch-up path in {@code NamedCatchupSupport}.
+     * The replay half on its own: bulk windows then one reconcile pass, with only the reconcile pass recording its
+     * ids in {@code cache}. The history windows record nothing, matching the blocking pipeline, because a position is
+     * reserved before its write commits, so a write in flight when the head was read can be read by a history window
+     * and needs the live delivery that the cache would otherwise suppress. Dedup by id, not position, so an in-flight
+     * event never seen during the replay is still delivered once, live. Used by the cold pipeline above. The named
+     * catch-up path in {@code NamedCatchupSupport} uses {@link #replayApplying} instead, which applies the same rule.
      */
     Flux<CloudEvent> replay(long startPosition, BoundedIdCache cache) {
         if (startPosition < 0) {
             throw new IllegalArgumentException("startPosition cannot be negative, was " + startPosition);
         }
         return reader.currentHead().flatMapMany(bulkHead -> {
-            Flux<CloudEvent> bulk = windows(startPosition, bulkHead, cache);
+            Flux<CloudEvent> bulk = windows(startPosition, bulkHead, null);
             Flux<CloudEvent> reconcile = reconcile(bulkHead, cache);
             return Flux.concat(bulk, reconcile);
         });
@@ -135,7 +141,7 @@ final class PositionCatchupPipeline {
             throw new IllegalArgumentException("startPosition cannot be negative, was " + startPosition);
         }
         return reader.currentHead().flatMapMany(bulkHead -> Flux.concat(
-                windows(startPosition, bulkHead, cache).takeWhile(ignored -> keepReplaying.getAsBoolean()).concatMap(action),
+                windows(startPosition, bulkHead, null).takeWhile(ignored -> keepReplaying.getAsBoolean()).concatMap(action),
                 Mono.defer(() -> {
                     if (!keepReplaying.getAsBoolean()) {
                         return Mono.empty();
@@ -150,16 +156,19 @@ final class PositionCatchupPipeline {
                         : Flux.empty())));
     }
 
-    // Emits events in (fromExclusive, toInclusive], paging in position windows. Records every emitted id in the cache
-    // so the inclusive live resume can skip the replayed events. Used by both the bulk and the reconciliation phases.
-    private Flux<CloudEvent> windows(long fromExclusive, long toInclusive, BoundedIdCache cache) {
+    // Emits events in (fromExclusive, toInclusive], paging in position windows. A null cache records nothing, which is
+    // what the history windows pass, so the live stream can deliver a history event again. Used by both the bulk and
+    // the reconciliation phases.
+    private Flux<CloudEvent> windows(long fromExclusive, long toInclusive, @Nullable BoundedIdCache cache) {
         if (fromExclusive >= toInclusive) {
             return Flux.empty();
         }
         long upTo = Math.min(fromExclusive + windowSize, toInclusive);
-        return reader.readWindow(fromExclusive, upTo)
-                .doOnNext(event -> cache.add(event.getId()))
-                .concatWith(Flux.defer(() -> windows(upTo, toInclusive, cache)));
+        Flux<CloudEvent> window = reader.readWindow(fromExclusive, upTo);
+        if (cache != null) {
+            window = window.doOnNext(event -> cache.add(event.getId()));
+        }
+        return window.concatWith(Flux.defer(() -> windows(upTo, toInclusive, cache)));
     }
 
     // Snapshot the head once and drain events up to it in position order. Re-reading a moving head would advance
