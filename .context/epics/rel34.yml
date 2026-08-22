@@ -1,9 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 23
-updated_at: '2026-08-22T12:20:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U17 retired to brk, U7 delivered, 917
-  folded into U7)
+revision: 24
+updated_at: '2026-08-22T13:00:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (ADR 134 merged, U11 planning phase DONE)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -833,8 +832,12 @@ units:
     deliverables:
     - check: manual_approval
       ref: 911
-      met: false
-      evidence: ''
+      met: true
+      evidence: 'CAS-MERGED pinned to 35152a7ba, squash e9360c959. Design gate closed by Johan''s three
+        rulings (dec-0011); merged on the standing authority that a prose deliverable merges when its
+        gate closes, not on green. Gate: mergeable, adr-numbering SUCCESS, 0 unresolved threads, 1 Copilot
+        review with NO suppressed block, ADR number unchanged at 0134. No further review round requested,
+        deliberately.'
     - check: pr_merged
       ref: null
       met: false
@@ -844,8 +847,9 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: route the premise defects to the worker before the design gate goes to Johan
-    last_meaningful_progress_at: '2026-08-22T10:25:00+00:00'
+    next_action: 'implementation is SEPARATE work and #818 stays open; dispatch as its own plan-approved
+      unit at Opus/high per the worker''s own derived recommendation'
+    last_meaningful_progress_at: '2026-08-22T13:00:00+00:00'
     observed:
       design_gate:
         note: 'ADR 134 delivered as PR 911, Proposed, design only, no code. NOT merged on green: a plan-first
@@ -893,7 +897,13 @@ units:
       touches the subscription''s redelivery and dedup guarantees for the quarantined instance, so it
       is plan-first with a design gate, not a bounded fix. ADR 0134 is reserved as a resolved literal
       in the brief; a collision is BLOCKED, never a self-renumber. This is the unit whose C1 findings
-      are most likely to be genuinely blocker-shaped.'
+      are most likely to be genuinely blocker-shaped. PLANNING PHASE DONE. ADR 134 accepted and merged.
+      The implementation is not started and #818 remains open on 0.34.0. The worker''s implementation
+      recommendation, derived from the plan rather than the brief: Opus/high, because three pieces look
+      done and are not, the start-detection change to startEventOrNull, the third release state across
+      competing nodes, and the inclusive replay boundary where an off-by-one loses exactly the event the
+      release exists for. ADR ledger: 0134 is now merged on main, so the next free number is 0135 and
+      the reservation is discharged.'
   U12:
     issue: 903
     goal: The reactor stack's never-replays warning is bound to the identity of the model a projection
