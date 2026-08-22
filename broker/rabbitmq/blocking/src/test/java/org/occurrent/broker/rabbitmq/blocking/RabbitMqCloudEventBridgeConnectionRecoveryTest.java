@@ -169,11 +169,15 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
 
         // Registered on the connection before the bridge is built, and recovery listeners run in registration
         // order, so this one holds every later listener back for two seconds after the recovered consumer has
-        // already been handed the requeued message.
+        // already been handed the requeued message. Two seconds rather than none, because a listener that returned
+        // at once could bump a generation counter before the redelivery had read it, which is the ordering that
+        // made the first test flaky rather than failing.
+        CountDownLatch recoveryComplete = new CountDownLatch(1);
         ((Recoverable) connection).addRecoveryListener(new RecoveryListener() {
             @Override
             public void handleRecovery(Recoverable recoverable) {
                 sleep(Duration.ofSeconds(2));
+                recoveryComplete.countDown();
             }
 
             @Override
@@ -189,10 +193,12 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
             sleep(Duration.ofMillis(500));
 
             forceCloseAllConnectionsOrFail();
-            await().atMost(Duration.ofSeconds(15)).until(() -> connection.isOpen());
-            // Deliberately shorter than the two seconds the listener above sleeps for, so the replay is released
-            // while the recovery listeners are still blocked.
-            sleep(Duration.ofSeconds(1));
+            // Waits for the listener above rather than for a fixed delay, so the replay is released only once the
+            // redelivery has been handed to the recovered consumer with the replay still parked, which is the
+            // ordering this test exists for.
+            assertThat(recoveryComplete.await(30, TimeUnit.SECONDS))
+                    .as("the connection's recovery listeners must have run")
+                    .isTrue();
 
             releaseReplay.countDown();
 

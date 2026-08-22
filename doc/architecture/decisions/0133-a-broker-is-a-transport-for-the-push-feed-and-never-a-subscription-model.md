@@ -1165,6 +1165,8 @@ The unit tests that asserted the drop,
 `a_tag_from_a_generation_that_has_since_moved_on_is_dropped_rather_than_redelivered` in both
 `RabbitMqCloudEventBridgeReleaseHeldDeferredDeliveryTest` and its domain twin, are deleted rather than replaced.
 Nothing in this repository decides whether a stale tag is safe any more, the client does, so no test with a stubbed
-release call can check it. `RabbitMqCloudEventBridgeConnectionRecoveryTest` is what covers the behaviour now, with
-a second test that delays every recovery listener on the connection past the redelivery. It fails against the fence
-and passes without it.
+release call can check it. `RabbitMqCloudEventBridgeConnectionRecoveryTest` and the new
+`RabbitMqDomainEventBridgeConnectionRecoveryTest` are what cover the behaviour now. Each has a test that delays
+every recovery listener on the connection past the first delivery after the recovery, against a real broker. Both
+fail against the fence and pass without it, and the domain one is there so that restoring the fence in one bridge
+alone cannot leave the suite green.
