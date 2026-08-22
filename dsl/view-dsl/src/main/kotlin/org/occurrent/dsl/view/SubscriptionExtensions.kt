@@ -20,9 +20,9 @@ package org.occurrent.dsl.view
 import org.occurrent.cloudevents.EventMetadata
 import org.occurrent.dsl.subscription.blocking.StreamSubscriptions
 import org.occurrent.subscription.StartAt
-import org.occurrent.subscription.api.blocking.Subscription
+import org.occurrent.subscription.api.blocking.SubscriptionHandle
 
-inline fun <reified E : Any> StreamSubscriptions<E>.updateView(viewName: String, startAt: StartAt? = null, crossinline updateFunction: (EventMetadata, E) -> Unit): Subscription {
+inline fun <reified E : Any> StreamSubscriptions<E>.updateView(viewName: String, startAt: StartAt? = null, crossinline updateFunction: (EventMetadata, E) -> Unit): SubscriptionHandle {
     val eventTypes: List<Class<out E>> = if (E::class.isSealed) {
         E::class.sealedSubclasses.map { it.java }.toList()
     } else {
@@ -33,14 +33,14 @@ inline fun <reified E : Any> StreamSubscriptions<E>.updateView(viewName: String,
     })
 }
 
-inline fun <reified E : Any> StreamSubscriptions<E>.updateView(viewName: String, startAt: StartAt? = null, crossinline updateFunction: (E) -> Unit): Subscription =
+inline fun <reified E : Any> StreamSubscriptions<E>.updateView(viewName: String, startAt: StartAt? = null, crossinline updateFunction: (E) -> Unit): SubscriptionHandle =
     updateView(viewName, startAt) { _, e -> updateFunction(e) }
 
 inline fun <reified E : Any> StreamSubscriptions<E>.updateView(
     viewName: String, materializedView: MaterializedView<E>, startAt: StartAt? = null,
     crossinline doBeforeUpdate: (E) -> Unit = {},
     crossinline doAfterUpdate: (E) -> Unit = {}
-): Subscription =
+): SubscriptionHandle =
     updateView(
         viewName,
         converter = { _, e -> e },
@@ -57,7 +57,7 @@ inline fun <reified E : Any, reified E2 : Any> StreamSubscriptions<E>.updateView
     startAt: StartAt? = null,
     crossinline doBeforeUpdate: (E2) -> Unit = { },
     crossinline doAfterUpdate: (E2) -> Unit = { }
-): Subscription =
+): SubscriptionHandle =
     updateView(viewName, startAt) { metadata, e ->
         val e2 = converter(metadata, e)
         doBeforeUpdate(e2)

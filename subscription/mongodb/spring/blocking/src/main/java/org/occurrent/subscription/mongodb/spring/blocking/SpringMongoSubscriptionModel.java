@@ -40,7 +40,7 @@ import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
 import org.occurrent.subscription.mongodb.MongoResumeTokenCheckpoint;
 import org.occurrent.subscription.mongodb.internal.MongoCloudEventsToJsonDeserializer;
@@ -83,7 +83,7 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
 
 /**
  * This is a subscription that uses Spring and its {@link MessageListenerContainer} for MongoDB to listen to changes from an event store.
- * This Subscription doesn't maintain the checkpoint, you need to store it yourself in order to continue the stream
+ * This SubscriptionHandle doesn't maintain the checkpoint, you need to store it yourself in order to continue the stream
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
@@ -171,7 +171,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     }
 
     @Override
-    public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public synchronized SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, "StartAt cannot be null");
@@ -330,7 +330,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * @see #resumeSubscription(String, StartAt)
      */
     @Override
-    public synchronized Subscription resumeSubscription(String subscriptionId) {
+    public synchronized SubscriptionHandle resumeSubscription(String subscriptionId) {
         return doResumeSubscription(subscriptionId, null);
     }
 
@@ -340,7 +340,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
      * @see RepositionableSubscriptions#resumeSubscription(String, StartAt)
      */
     @Override
-    public synchronized Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+    public synchronized SubscriptionHandle resumeSubscription(String subscriptionId, StartAt startAt) {
         requireNonNull(startAt, "StartAt cannot be null");
         MongoCommons.checkStartPosition(startAt, new StartAt.SubscriptionModelContext(SpringMongoSubscriptionModel.class));
         return doResumeSubscription(subscriptionId, startAt);
@@ -349,7 +349,7 @@ public class SpringMongoSubscriptionModel implements CheckpointAwareSubscription
     // The shared resume path. repositionTo is the caller's explicit position from the two-arg overload, or null
     // from the one-arg overload, in which case currentStartAt is left untouched and the resume continues from
     // whatever it already holds.
-    private Subscription doResumeSubscription(String subscriptionId, @Nullable StartAt repositionTo) {
+    private SubscriptionHandle doResumeSubscription(String subscriptionId, @Nullable StartAt repositionTo) {
         logDebug("Resuming subscription for {}", subscriptionId);
         requireKnown(subscriptionId);
         InternalSubscription internalSubscription = pausedSubscriptions.remove(subscriptionId);

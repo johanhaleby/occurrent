@@ -32,7 +32,7 @@ import org.occurrent.broker.rabbitmq.blocking.RoutingOutcomeChannel;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
@@ -112,7 +112,7 @@ class CatchupThenPushReadinessAmbiguousIdTest {
                 .withType(TestEvent.class.getName())
                 .build()));
         CatchupThenPushSubscriptionModel failingWrapper = new CatchupThenPushSubscriptionModel(failingStore, failingLiveFeed, null);
-        Subscription failingSubscription = failingWrapper.subscribe("orders", null, StartAt.subscriptionModelDefault(), ce -> {
+        SubscriptionHandle failingSubscription = failingWrapper.subscribe("orders", null, StartAt.subscriptionModelDefault(), ce -> {
             throw new RuntimeException("simulated permanent catch-up failure for the OTHER model sharing this id");
         });
         assertThatThrownBy(() -> failingSubscription.waitUntilStarted(Duration.ofSeconds(5)))

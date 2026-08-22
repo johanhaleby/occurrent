@@ -32,7 +32,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.net.URI;
@@ -69,9 +69,9 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
         // subscribe(..) does, so it arrives while the rest of the tail is still to run.
         PushSubscriptionModel feed = new PushSubscriptionModel() {
             @Override
-            Subscription subscribeCatchupThenPush(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
+            SubscriptionHandle subscribeCatchupThenPush(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt,
                                                   RegisteringSubscribable.RoutingAction action) {
-                Subscription subscription = super.subscribeCatchupThenPush(subscriptionId, filter, startAt, action);
+                SubscriptionHandle subscription = super.subscribeCatchupThenPush(subscriptionId, filter, startAt, action);
                 Thread.ofVirtual().start(() -> {
                     cancelStarted.countDown();
                     modelRef.get().cancelSubscription(subscriptionId);
@@ -310,7 +310,7 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
         modelRef.set(model);
 
-        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
             if (ce.getId().equals("live")) {
                 drainParked.countDown();
                 awaitLatch(releaseDrain, Duration.ofSeconds(60));
@@ -540,7 +540,7 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(() -> Stream.of(cloudEvent("1"))), feed, marker);
         modelRef.set(model);
 
-        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
             lastEventReached.countDown();
             awaitLatch(stopped);
         });

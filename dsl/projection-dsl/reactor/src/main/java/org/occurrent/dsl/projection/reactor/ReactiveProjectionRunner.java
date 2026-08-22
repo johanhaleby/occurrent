@@ -31,7 +31,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.Subscribable;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import reactor.core.publisher.Mono;
 
 import java.util.function.BiFunction;
@@ -89,7 +89,7 @@ public final class ReactiveProjectionRunner<E> {
      * {@code update} owns the reactive load-evolve-save against a reactive store, and is also the overload to use for
      * synchronous, in-transaction (read-your-writes) dispatch, since its work composes into the writer's reactive chain.
      */
-    public Subscription project(String subscriptionId, Projection<?, E, ?> projection, Function<E, Mono<Void>> update) {
+    public SubscriptionHandle project(String subscriptionId, Projection<?, E, ?> projection, Function<E, Mono<Void>> update) {
         return project(subscriptionId, projection, update, null);
     }
 
@@ -97,7 +97,7 @@ public final class ReactiveProjectionRunner<E> {
      * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
      * and applies {@code update} for every matching event.
      */
-    public Subscription project(String subscriptionId, Projection<?, E, ?> projection, Function<E, Mono<Void>> update, @Nullable StartAt startAt) {
+    public SubscriptionHandle project(String subscriptionId, Projection<?, E, ?> projection, Function<E, Mono<Void>> update, @Nullable StartAt startAt) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(update, "update cannot be null");
@@ -112,7 +112,7 @@ public final class ReactiveProjectionRunner<E> {
      * {@link #project(String, Projection, Function)}, for a caller that owns the reactive load-evolve-save but still
      * needs the delivering event's {@link EventMetadata}.
      */
-    public Subscription project(String subscriptionId, Projection<?, E, ?> projection, BiFunction<EventMetadata, E, Mono<Void>> update) {
+    public SubscriptionHandle project(String subscriptionId, Projection<?, E, ?> projection, BiFunction<EventMetadata, E, Mono<Void>> update) {
         return project(subscriptionId, projection, update, null);
     }
 
@@ -120,7 +120,7 @@ public final class ReactiveProjectionRunner<E> {
      * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
      * and applies {@code update} for every matching event, exposing the event's {@link EventMetadata}.
      */
-    public Subscription project(String subscriptionId, Projection<?, E, ?> projection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable StartAt startAt) {
+    public SubscriptionHandle project(String subscriptionId, Projection<?, E, ?> projection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable StartAt startAt) {
         return projectWithMetadata(subscriptionId, projection, update, startAt);
     }
 
@@ -137,7 +137,7 @@ public final class ReactiveProjectionRunner<E> {
      * single-instance. An id function that returns {@code null} for one event means that event is skipped,
      * and the projection is still keyed.</p>
      */
-    public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
+    public <S extends @Nullable Object, ID> SubscriptionHandle project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         return project(subscriptionId, projection, repository, null);
     }
 
@@ -155,7 +155,7 @@ public final class ReactiveProjectionRunner<E> {
      * single-instance. An id function that returns {@code null} for one event means that event is skipped,
      * and the projection is still keyed.</p>
      */
-    public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, @Nullable StartAt startAt) {
+    public <S extends @Nullable Object, ID> SubscriptionHandle project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, @Nullable StartAt startAt) {
         return projectWithMetadata(subscriptionId, projection, Projections.reactiveUpdateWithMetadata(projection, repository, subscriptionId), startAt);
     }
 
@@ -163,7 +163,7 @@ public final class ReactiveProjectionRunner<E> {
      * Subscribes with the given id and drives the blocking {@code materializedView} (scheduled on {@code boundedElastic})
      * for every matching event. Use this to reuse a {@link MaterializedView} with its own retry/locking policy.
      */
-    public Subscription project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView) {
+    public SubscriptionHandle project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView) {
         return project(subscriptionId, projection, materializedView, null);
     }
 
@@ -171,7 +171,7 @@ public final class ReactiveProjectionRunner<E> {
      * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
      * and drives the blocking {@code materializedView} (scheduled on {@code boundedElastic}) for every matching event.
      */
-    public Subscription project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView, @Nullable StartAt startAt) {
+    public SubscriptionHandle project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView, @Nullable StartAt startAt) {
         return projectWithMetadata(subscriptionId, projection, Projections.reactiveUpdateWithMetadata(materializedView), startAt);
     }
 
@@ -179,7 +179,7 @@ public final class ReactiveProjectionRunner<E> {
     // event-only, since a caller-supplied reactive update composes at the domain-event level; the BiFunction overload,
     // and the repository and MaterializedView overloads, route here so a metadata-keyed projection folds with real
     // metadata.
-    private Subscription projectWithMetadata(String subscriptionId, Projection<?, E, ?> projection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable StartAt startAt) {
+    private SubscriptionHandle projectWithMetadata(String subscriptionId, Projection<?, E, ?> projection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable StartAt startAt) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(update, "update cannot be null");

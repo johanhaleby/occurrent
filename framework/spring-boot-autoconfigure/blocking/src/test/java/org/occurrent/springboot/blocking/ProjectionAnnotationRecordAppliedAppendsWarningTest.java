@@ -38,7 +38,7 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -104,7 +104,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
+                .thenReturn(mock(SubscriptionHandle.class));
         ComposedDefaultStartPosition composedDefaultStartPosition = new ComposedDefaultStartPosition();
         composedDefaultStartPosition.suppliedBy(model);
         composedDefaultStartPosition.defaultBypassesCatchup();
@@ -135,7 +135,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(true);
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
+                .thenReturn(mock(SubscriptionHandle.class));
         ComposedDefaultStartPosition composedDefaultStartPosition = new ComposedDefaultStartPosition();
         composedDefaultStartPosition.suppliedBy(model);
         composedDefaultStartPosition.defaultBypassesCatchup();
@@ -168,7 +168,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) customModel)).when(customModel).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) customModel).isCatchingUp(anyString())).thenReturn(true);
         when(customModel.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
+                .thenReturn(mock(SubscriptionHandle.class));
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -197,7 +197,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) customModel)).when(customModel).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) customModel).isCatchingUp(anyString())).thenReturn(true);
         when(customModel.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
+                .thenReturn(mock(SubscriptionHandle.class));
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -222,7 +222,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
+                .thenReturn(mock(SubscriptionHandle.class));
         ComposedDefaultStartPosition composedDefaultStartPosition = new ComposedDefaultStartPosition();
         composedDefaultStartPosition.suppliedBy(model);
         composedDefaultStartPosition.defaultBypassesCatchup();
@@ -256,7 +256,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) customModel)).when(customModel).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) customModel).isCatchingUp(anyString())).thenReturn(true);
         when(customModel.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
+                .thenReturn(mock(SubscriptionHandle.class));
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -279,7 +279,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
+                .thenReturn(mock(SubscriptionHandle.class));
         ComposedDefaultStartPosition composedDefaultStartPosition = new ComposedDefaultStartPosition();
         composedDefaultStartPosition.suppliedBy(model);
         composedDefaultStartPosition.defaultBypassesCatchup();
@@ -339,7 +339,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
+                .thenReturn(mock(SubscriptionHandle.class));
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)
@@ -400,7 +400,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         Subscribable model = mock(Subscribable.class);
         doReturn(java.util.Optional.empty()).when(model).capability(ReplayAwareSubscriptions.class);
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
+                .thenReturn(mock(SubscriptionHandle.class));
         return model;
     }
 
@@ -411,7 +411,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when(model).capability(ReplayAwareSubscriptions.class);
         when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
-                .thenReturn(mock(Subscription.class));
+                .thenReturn(mock(SubscriptionHandle.class));
 
         new ApplicationContextRunner()
                 .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new)

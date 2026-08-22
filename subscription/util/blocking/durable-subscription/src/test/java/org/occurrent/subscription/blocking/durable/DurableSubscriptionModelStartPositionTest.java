@@ -27,7 +27,7 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.ManualStartSubscriptionModel;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.time.Duration;
@@ -93,7 +93,7 @@ class DurableSubscriptionModelStartPositionTest {
         private final Set<String> registeredIds = ConcurrentHashMap.newKeySet();
 
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             registeredIds.add(subscriptionId);
             return dummySubscription(subscriptionId);
         }
@@ -127,7 +127,7 @@ class DurableSubscriptionModelStartPositionTest {
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             return dummySubscription(subscriptionId);
         }
 
@@ -140,8 +140,8 @@ class DurableSubscriptionModelStartPositionTest {
             registeredIds.remove(subscriptionId);
         }
 
-        private static Subscription dummySubscription(String subscriptionId) {
-            return new Subscription() {
+        private static SubscriptionHandle dummySubscription(String subscriptionId) {
+            return new SubscriptionHandle() {
                 @Override
                 public String id() {
                     return subscriptionId;

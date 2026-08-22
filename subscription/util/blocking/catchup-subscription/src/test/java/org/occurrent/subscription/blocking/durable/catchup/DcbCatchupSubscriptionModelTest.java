@@ -35,7 +35,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
@@ -259,11 +259,11 @@ class DcbCatchupSubscriptionModelTest {
         };
         CatchupSubscriptionModel subscription = new CatchupSubscriptionModel(nullCheckpointSubscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")));
 
-        Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+        SubscriptionHandle started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
         });
 
         assertThat(started).isInstanceOf(CatchupSubscription.class);
-        Future<Subscription> delegatedSubscription = ((CatchupSubscription) started).delegatedSubscription();
+        Future<SubscriptionHandle> delegatedSubscription = ((CatchupSubscription) started).delegatedSubscription();
         assertThatThrownBy(() -> delegatedSubscription.get(10, TimeUnit.SECONDS))
                 .isInstanceOf(ExecutionException.class)
                 .hasCauseInstanceOf(IllegalStateException.class)
@@ -285,7 +285,7 @@ class DcbCatchupSubscriptionModelTest {
 
         CountDownLatch firstReplayReached = new CountDownLatch(1);
         CountDownLatch releaseFirstReplay = new CountDownLatch(1);
-        Subscription first = subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+        SubscriptionHandle first = subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
             firstReplayReached.countDown();
             awaitLatch(releaseFirstReplay);
         });
@@ -297,7 +297,7 @@ class DcbCatchupSubscriptionModelTest {
 
         CountDownLatch secondReplayReached = new CountDownLatch(1);
         CountDownLatch releaseSecondReplay = new CountDownLatch(1);
-        Subscription second = subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+        SubscriptionHandle second = subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
             secondReplayReached.countDown();
             awaitLatch(releaseSecondReplay);
         });
@@ -470,7 +470,7 @@ class DcbCatchupSubscriptionModelTest {
 
         DcbCatchupSubscriptionModel subscription = new DcbCatchupSubscriptionModel(subscriptionModel, eventStore, DcbCriteria.tags(Tag.parse("name:1")), new CatchupSubscriptionModelConfig(100));
 
-        Subscription staleAttempt = subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
+        SubscriptionHandle staleAttempt = subscription.subscribe(subscriptionId, StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> {
             replayReached.countDown();
             awaitLatch(releaseReplay);
         });
@@ -484,7 +484,7 @@ class DcbCatchupSubscriptionModelTest {
 
         releaseReplay.countDown();
 
-        Future<Subscription> staleDelegatedSubscription = ((CatchupSubscription) staleAttempt).delegatedSubscription();
+        Future<SubscriptionHandle> staleDelegatedSubscription = ((CatchupSubscription) staleAttempt).delegatedSubscription();
         assertThat(staleDelegatedSubscription.get(5, TimeUnit.SECONDS))
                 .as("a live subscribe claiming an id while a same-id catch-up is still replaying must cancel that "
                         + "catch-up's finishing tail instead of leaving it to also subscribe the delegate once its "
@@ -530,7 +530,7 @@ class DcbCatchupSubscriptionModelTest {
         }
 
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             StartAt resolved = startAt.get(new StartAt.SubscriptionModelContext(InMemorySubscriptionModel.class));
             StartAt startAtToUse = resolved != null && resolved.isDefault() ? StartAt.subscriptionModelDefault() : StartAt.now();
             return delegate.subscribe(subscriptionId, filter, startAtToUse, action);
@@ -567,7 +567,7 @@ class DcbCatchupSubscriptionModelTest {
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             return delegate.resumeSubscription(subscriptionId);
         }
 

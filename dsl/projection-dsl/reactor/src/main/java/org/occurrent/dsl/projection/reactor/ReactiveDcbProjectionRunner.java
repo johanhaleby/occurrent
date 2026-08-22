@@ -26,7 +26,7 @@ import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import reactor.core.publisher.Mono;
 
 import java.util.function.BiFunction;
@@ -76,7 +76,7 @@ public final class ReactiveDcbProjectionRunner<E> {
      * Subscribes with the given id and applies {@code update} for every event matching the projection's DCB criteria.
      * The primitive overload: {@code update} owns the reactive load-evolve-save against a reactive store.
      */
-    public Subscription project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, Function<E, Mono<Void>> update) {
+    public SubscriptionHandle project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, Function<E, Mono<Void>> update) {
         return project(subscriptionId, dcbProjection, update, null);
     }
 
@@ -84,7 +84,7 @@ public final class ReactiveDcbProjectionRunner<E> {
      * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
      * and applies {@code update} for every event matching the projection's DCB criteria.
      */
-    public Subscription project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, Function<E, Mono<Void>> update, @Nullable DcbStartAt startAt) {
+    public SubscriptionHandle project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, Function<E, Mono<Void>> update, @Nullable DcbStartAt startAt) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
         requireNonNull(update, "update cannot be null");
@@ -96,7 +96,7 @@ public final class ReactiveDcbProjectionRunner<E> {
      * The metadata-carrying sibling of {@link #project(String, DcbProjection, Function)}, for a caller that owns the
      * reactive load-evolve-save but still needs the delivering event's {@link EventMetadata}.
      */
-    public Subscription project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, BiFunction<EventMetadata, E, Mono<Void>> update) {
+    public SubscriptionHandle project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, BiFunction<EventMetadata, E, Mono<Void>> update) {
         return project(subscriptionId, dcbProjection, update, null);
     }
 
@@ -105,7 +105,7 @@ public final class ReactiveDcbProjectionRunner<E> {
      * and applies {@code update} for every event matching the projection's DCB criteria, exposing the event's
      * {@link EventMetadata}.
      */
-    public Subscription project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable DcbStartAt startAt) {
+    public SubscriptionHandle project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable DcbStartAt startAt) {
         return projectWithMetadata(subscriptionId, dcbProjection, update, startAt);
     }
 
@@ -122,7 +122,7 @@ public final class ReactiveDcbProjectionRunner<E> {
      * single-instance. An id function that returns {@code null} for one event means that event is skipped,
      * and the projection is still keyed.</p>
      */
-    public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository) {
+    public <S extends @Nullable Object, ID> SubscriptionHandle project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository) {
         return project(subscriptionId, dcbProjection, repository, null);
     }
 
@@ -140,7 +140,7 @@ public final class ReactiveDcbProjectionRunner<E> {
      * single-instance. An id function that returns {@code null} for one event means that event is skipped,
      * and the projection is still keyed.</p>
      */
-    public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository, @Nullable DcbStartAt startAt) {
+    public <S extends @Nullable Object, ID> SubscriptionHandle project(String subscriptionId, DcbProjection<S, E, ID> dcbProjection, ViewStateRepository<S, ID> repository, @Nullable DcbStartAt startAt) {
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
         return projectWithMetadata(subscriptionId, dcbProjection, Projections.reactiveUpdateWithMetadata(dcbProjection.projection(), repository, subscriptionId), startAt);
     }
@@ -149,7 +149,7 @@ public final class ReactiveDcbProjectionRunner<E> {
      * Subscribes with the given id and drives the blocking {@code materializedView} (scheduled on {@code boundedElastic})
      * for every event matching the projection's DCB criteria.
      */
-    public Subscription project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, MaterializedView<E> materializedView) {
+    public SubscriptionHandle project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, MaterializedView<E> materializedView) {
         return project(subscriptionId, dcbProjection, materializedView, null);
     }
 
@@ -158,13 +158,13 @@ public final class ReactiveDcbProjectionRunner<E> {
      * and drives the blocking {@code materializedView} (scheduled on {@code boundedElastic}) for every event matching
      * the projection's DCB criteria.
      */
-    public Subscription project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, MaterializedView<E> materializedView, @Nullable DcbStartAt startAt) {
+    public SubscriptionHandle project(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, MaterializedView<E> materializedView, @Nullable DcbStartAt startAt) {
         return projectWithMetadata(subscriptionId, dcbProjection, Projections.reactiveUpdateWithMetadata(materializedView), startAt);
     }
 
     // Routes through subscribeWithMetadata so the ViewStateRepository/MaterializedView overloads above carry real DCB
     // delivery metadata into the fold, instead of the plain subscribe() path, which has none to give.
-    private Subscription projectWithMetadata(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable DcbStartAt startAt) {
+    private SubscriptionHandle projectWithMetadata(String subscriptionId, DcbProjection<?, E, ?> dcbProjection, BiFunction<EventMetadata, E, Mono<Void>> update, @Nullable DcbStartAt startAt) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(dcbProjection, "dcbProjection cannot be null");
         requireNonNull(update, "update cannot be null");

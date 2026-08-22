@@ -24,7 +24,7 @@ import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
@@ -68,7 +68,7 @@ class RabbitMqCloudEventBridgeCatchUpFailureParkTest extends RabbitMqTestSupport
 
         // The replay fold throws for the one historical event, which BlockingHandover.catchUp(..) records as a
         // permanent catch-up failure (catchUpFailure), then rethrows.
-        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        SubscriptionHandle subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
             throw new RuntimeException("simulated catch-up fold failure for " + ce.getId());
         });
 
