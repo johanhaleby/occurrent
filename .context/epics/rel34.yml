@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 10
-updated_at: '2026-08-22T08:55:00+00:00'
-updated_by: 'orchestrator session rel34-epic-registration-8c2066 (U2 adversarial verify HELD, edge routed
-  as #904)'
+revision: 11
+updated_at: '2026-08-22T09:05:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U2 grew public API mid-flight, verify
+  discipline recorded)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -134,6 +134,29 @@ units:
           U2 because #876 is a silent-corruption fix on the critical path and this edge regresses nothing.'
         via: gh pr diff 901 read directly
         at: '2026-08-22T08:55:00+00:00'
+      scope_growth:
+        note: 'PR 901 gained NEW production code during its rebase that was NOT in the head the first
+          adversarial pass verified: DcbCloudEvents.preserveTags(original, updated), public, in the published
+          eventstore/api/dcb module, plus call sites in all three stores. Caught by comparing the PR''s
+          OWN file list at each head; a tree diff between the two commits was too polluted by main''s
+          drift to show it. It mirrors preserveAppendId and makes tags store-owned on the CloudEvent itself,
+          which CLOSES #904 by taking the second of the two remedies that issue proposed. Likely a direct
+          response to my telling the worker the verifier was hunting for other corrupted fields, so not
+          unsanctioned scope growth, but confirmation is pending. Changelog gap already closed by the
+          worker: the entry now names preserveTags and says why it exists. OPEN with the worker: whether
+          a store-only helper belongs on DcbCloudEvents at all, next to the user-facing withTags, getTags
+          and isDcbEvent, or in an internal package per this repo''s own convention (the mutable saga
+          registry lives in dsl.saga.internal for exactly this reason). Asked, not ruled.'
+        via: gh pr view --json files compared across heads, gh pr diff
+        at: '2026-08-22T09:05:00+00:00'
+      verify_discipline:
+        note: 'Head moved three times in fifteen minutes (9a2337dbf, b733100d8, d9589f867) while verify
+          passes ran. DO NOT spawn a pass per push. The rule: verify once the worker declares itself settled,
+          then at merge time diff the verified head against the final head. Prose-only delta means the
+          verdict carries; any code delta means re-verify. The first pass HELD against 9a2337dbf and does
+          NOT cover preserveTags; a second is running against b733100d8.'
+        via: orchestrator
+        at: '2026-08-22T09:05:00+00:00'
     assessment: Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
