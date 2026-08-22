@@ -621,6 +621,12 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
                 .resolver(resolver)
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
+            // A pattern subscription only starts fetching topicA and topicB once this bridge's Consumer completes
+            // its own group rebalance, not the instant build() returns above. Publishing before that assignment is
+            // in place races the rebalance under load instead of proving anything about the bridge (#893 item 21),
+            // so this waits on the actual assignment rather than a fixed window.
+            awaitPartitionsAssigned(groupId, Set.of(new TopicPartition(topicA, 0), new TopicPartition(topicB, 0)));
+
             publishCloudEvent(topicA, "stream-1", CloudEventBuilder.v1()
                     .withId("id-a").withSource(URI.create("urn:test")).withType("TypeA")
                     .withExtension("streamid", "stream-1").build());
