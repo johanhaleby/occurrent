@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 6
-updated_at: '2026-08-22T08:12:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U1 PR 900 open, U8 PR 899 Copilot-clean
-  and CI pending, sdi semantic gate on U9 recorded)
+revision: 7
+updated_at: '2026-08-22T08:40:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U8 adversarial verify HELD, merge held
+  on the misc shard)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -283,8 +283,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: wait for checks, then run the four-fact merge gate plus the adversarial verify pass
-    last_meaningful_progress_at: '2026-08-22T08:02:00+00:00'
+    next_action: hold for test (misc, java-21) and (misc, java-25), then CAS merge pinned to 65220005697338570f54588b63c61d1a5dc99103
+    last_meaningful_progress_at: '2026-08-22T08:40:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -312,6 +312,31 @@ units:
           verify pass, and verification of the PR body''s claim that the shipped recipe IDs are unchanged.'
         via: gh pr view, gh api graphql reviewThreads, gh api pulls/899/reviews
         at: '2026-08-22T08:12:00+00:00'
+      adversarial_verify:
+        note: 'Fresh-context pass, given only the diff and the three stated claims and never the authoring
+          rationale. It RAN the recipes rather than reading them, in a disposable worktree off pull/899/head.
+          14 constructed cases, none overlapping the PR''s own tests: empty document between matching
+          profiles, key absent, first-document-non-matching both directions, unresolved placeholder, three
+          documents with only the middle matching, anchor and alias reuse of the boolean across documents,
+          uppercase False, quoted ''false'', a mapping-valued key, an empty file, a bare --- null document,
+          and single-document parity both ways. No input found where a document was rewritten without
+          matching or left alone despite matching. VERDICT: claim 1 HELD, claim 2 HELD (no name: or displayName:
+          line changed anywhere, no file deleted or renamed, RenameMappedSubscriptionEnabledKey.java javadoc-only),
+          claim 3 HELD (grep for preconditions: returns exactly the two files, and the store-neutral recipe''s
+          yaml key renames carry no precondition and no value check). Nothing left unverified.'
+        via: orchestrator adversarial verify subagent under Johan's dec-0006 grant
+        at: '2026-08-22T08:40:00+00:00'
+      merge_gate:
+        note: HELD, and the reason is specific rather than caution. Head 65220005 is Copilot-clean on
+          the CURRENT head (reviewed 08:10Z, Approval recommended, 0 new comments, no suppressed block,
+          Balanced), 0 unresolved threads counted with isResolved==false alone, mergeable, 0 failing of
+          26. The two pending are test (misc, java-21) and test (misc, java-25). maven.yml:250 shows the
+          misc shard's paths include `rewrite`, which is the ONLY module this PR touches, so those two
+          jobs are the only CI that exercises the change at all. The policy's allow_one_equivalent_sibling
+          grant permits merging when a sibling has PASSED; neither misc sibling has completed, so the
+          grant does not reach this case.
+        via: gh pr view statusCheckRollup, .github/workflows/maven.yml:243-250
+        at: '2026-08-22T08:40:00+00:00'
     assessment: 'Shipped defect in rewrite/src/main/resources/META-INF/rewrite/subscription-mode-0_32.yml,
       verified by git ls-tree against the tag. Same class as #828 (already closed), so read that fix first.'
   U9:
