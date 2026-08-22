@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 165
+revision: 166
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -288,7 +288,7 @@ units:
   U15:
     issue: null
     goal: "Durable fence on the catch-up marker write on both stacks (dec-0018): a checkpoint save from a replay attempt that lost its subscription id must not be trusted after a process restart, closing the window PR 896 narrowed from always to across-a-restart. Plan gate first (CheckpointWriteCondition keyed by the attempt token, or a durable delete of a marker written after ownership was lost), then implement, ships in 0.34.0."
-    phase: RUNNING
+    phase: DONE
     health: UNKNOWN
     swept: false
     depends_on: []
@@ -296,10 +296,10 @@ units:
     deliverables:
       - {check: manual_approval, ref: "plan approved at the orchestrator plan gate before implementation", met: true, evidence: "dec-0020 approve with amendments: contract (a), D2 split, D3 second PR in unit, D4 bundled"}
       - {check: pr_merged, ref: 897, met: true, evidence: "squash 74755df44, CAS pin e45d6b0 matched, branch deleted on tip match; 27/27 green, Copilot approval on the head after three rounds, Opus adversarial verify MERGE-SAFE with three mutations killed"}
-      - {check: pr_merged, ref: 910, met: false, note: "second PR, blocking per-id ReentrantLock replacing the monitor held across the marker save"}
+      - {check: pr_merged, ref: 910, met: true, evidence: "squash cacdc25b9, CAS pin e9be2b0 matched, branch deleted on tip match; Maven workflow concluded success on the exact head with 27 contexts, Copilot body read on the head (restates #893 item 32, non-loss), zero unresolved threads; Opus verify MERGE-SAFE on the code head after the lazy-lock loss fix was confirmed structurally and mutation (c) re-run; seven Copilot rounds bounded at the sixth, remainders #893 items 31 to 33", note: "second PR, blocking per-id ReentrantLock replacing the monitor held across the marker save"}
     blocking_on: []
-    next_action: "PR 910 (U15 PR 2, blocking per-id lock for the marker save, reactive stop-gap refusal per dec-0023) open at 61c5aa1, CI running, Copilot requested, Opus adversarial verify running. Merge on MERGE-SAFE plus gate facts"
-    last_meaningful_progress_at: 2026-08-22T08:35:00Z
+    next_action: "DONE 2026-08-22T13:0xZ. Session sharp-mirzakhani-1aa911-14 to archive at epic closeout"
+    last_meaningful_progress_at: 2026-08-22T13:05:00Z
   U16:
     issue: 884
     goal: "Fix #893 item 21: KafkaCloudEventBridgeTest.resolver_alone_falls_back_to_catchAllDestination_subscribing_by_pattern_for_the_per_type_resolver times out on one of two events under load (three CI sightings, latest main run 32565000813). Make the test wait on a signal from the bridge or consumer assignment rather than a fixed window, or fix the pattern-subscription readiness it exposes if the wait is not the cause. Test-only unless the investigation proves a production gap."
