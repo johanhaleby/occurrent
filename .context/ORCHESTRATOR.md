@@ -797,3 +797,15 @@ Two findings from checking U1's in-flight diff rather than waiting for its deliv
 **U1 renamed three references to the wrong Subscription.** `org.occurrent.annotation.Subscription` is an annotation and keeps its name; only the API type `org.occurrent.subscription.api.{blocking,reactor}.Subscription` becomes `SubscriptionHandle`. Three added lines now reference a `@SubscriptionHandle` annotation that does not exist, two javadoc lines in the Mongo auto configurations and one comment. A text level rename cannot distinguish the two meanings, which is precisely issue #721, so the epic that exists to fix that ambiguity had begun introducing fresh instances of it. Sent to the worker with the rule that an `@` prefix means the annotation and stays, plus an instruction to sweep its own diff for the same shape rather than fixing only the three named lines.
 
 Caught by reading the worker's working tree during a wait rather than by any gate. The merge gate would have caught it, but only after a full CI run and a review round.
+
+### sdi checkpoint 2026-08-22T14:05:25Z: AGENTS.md rule change checked against sdi's recorded reasoning
+
+rel34's PR 932 changes one line of `AGENTS.md`, extending the release-status test from API changes to unreachability arguments. "Nothing in this repository reaches it" is now explicitly an observation about this repository rather than about the code, and argues for dropping or ignoring a shipped path no better than a call-site count argues for reshaping a shipped API. A path reachable only through a shipped type is reachable whatever the starter wires by default.
+
+Checked against sdi rather than noted and filed. The state file contains no unreachability reasoning at all. The plan uses the neighbouring rule exactly once, at line 305, and in the additive direction: "nothing here calls it" is no reason to skip a public API addition, applied to the catch-all handler U2 builds. That is the half of the rule that already existed and the change reinforces it.
+
+**One consequence for briefs not yet written.** U13 and U14 are scoped by a measured call-site split, sixteen non-DCB sites and five DCB sites. Under the amended rule that enumeration scopes the WORK and does not license the BREAKING CHANGE. Both reshape APIs that have shipped, so each still owes an `UpgradeToOccurrent_0_35` recipe addition and a `doc/migration/upgrading-to-0.35.0.md` entry regardless of how few sites the repository contains. Their briefs must say so explicitly, because a brief that leads with a call-site count invites exactly the inference this line now forbids.
+
+U1 already models the compliant shape: its diff carries `rewrite/src/main/resources/META-INF/rewrite/renames-subscription-handle-0_35.yml`, a wiring change to `upgrade-0_35.yml`, a recipe test, and a migration guide edit, alongside the rename itself.
+
+PR 932 touches only `AGENTS.md` and is disjoint from U1. No sdi action on the PR.
