@@ -20,6 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
+import org.springframework.aop.framework.AopProxyUtils;
 
 import java.util.Optional;
 
@@ -110,7 +111,7 @@ public final class ComposedCatchupModel {
      * most once, by the same bean method that calls {@link #suppliedBy} and {@link #defaultBypassesCatchup()}.
      */
     public void identifiedAs(SubscriptionModelCapability durableModel) {
-        this.composedModel = requireNonNull(durableModel, "durableModel cannot be null");
+        this.composedModel = ultimateTarget(requireNonNull(durableModel, "durableModel cannot be null"));
     }
 
     /**
@@ -118,10 +119,26 @@ public final class ComposedCatchupModel {
      * {@link #identifiedAs} was given and {@link #defaultBypassesCatchup()} was recorded for. {@code false} until
      * both were called, and {@code false} for any composition that is not that same instance, including one an
      * application supplied itself by replacing the durable model or the {@code FluxSubscriptionModel} it also
-     * satisfies. A warning keyed on this answers honestly rather than by inferring composition-specific behavior it
-     * cannot verify.
+     * satisfies. Both sides are unwrapped to their ultimate AOP target first (a fixed-singleton proxy only, the same
+     * rule {@code SubscriptionAnnotations.invokeDescriptorFactory} follows), since {@code identifiedAs} runs inside
+     * the {@code @Bean} method with the raw target, while a later {@code getBean} lookup can return a proxy around
+     * it. A warning keyed on this answers honestly rather than by inferring composition-specific behavior it cannot
+     * verify.
      */
     public boolean isDefaultKnownLiveOnlyFor(@Nullable SubscriptionModelCapability candidate) {
-        return defaultBypassesCatchup && candidate != null && candidate == composedModel;
+        return defaultBypassesCatchup && candidate != null && ultimateTarget(candidate) == composedModel;
+    }
+
+    // Unwraps through any number of nested AOP proxies to the innermost fixed target (AopProxyUtils.getSingletonTarget
+    // stops at one layer, hence the loop), mirroring SubscriptionAnnotations.ultimateTarget. Returns model itself when
+    // it is not a proxy, or when a proxy's TargetSource is not a fixed singleton, so a prototype- or pool-scoped
+    // source is compared as the proxy it is rather than risking a side-effecting getTarget() call.
+    private static SubscriptionModelCapability ultimateTarget(SubscriptionModelCapability model) {
+        Object current = model;
+        Object next;
+        while ((next = AopProxyUtils.getSingletonTarget(current)) != null) {
+            current = next;
+        }
+        return (SubscriptionModelCapability) current;
     }
 }
