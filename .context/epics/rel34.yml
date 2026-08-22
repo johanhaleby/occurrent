@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 21
-updated_at: '2026-08-22T11:30:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (changelog landing-zone collision with
-  sdi, two R1 gate items)
+revision: 22
+updated_at: '2026-08-22T11:50:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (seeding decided, U4 delivered, 915 granted
+  into U4, partial-matrix gate rule)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -300,7 +300,7 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 914
       met: false
       evidence: ''
     - check: issue_closed
@@ -320,9 +320,35 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    next_action: worker adding the ADR 132 correction (granted); then adversarial verify, then the gate
+    last_meaningful_progress_at: '2026-08-22T11:50:00+00:00'
+    observed:
+      delivery:
+        note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
+          FIFTH PATH found that no issue named: hasApplied carried the identical unlimited retry as the
+          write paths. Also found: a new key with no validation, and the wait starting a fresh read AFTER
+          its deadline because the retry predicate runs before the backoff sleep, which is the same shape
+          as the defect U7 is fixing in RetryExecution, found independently. Config contract: occurrent.projection.applied-append.max-attempts,
+          default 10, rejecting below 1; the first draft justified 20 as ''about 31 seconds'', which only
+          summed the backoff sleeps and ignored that each attempt can spend the driver''s own 30 second
+          server-selection timeout, so it is now documented as a COUNT with wall clock explicitly the
+          client''s job. Copilot 4 rounds, all Balanced and PR-confirmed from the review overview, 8 threads
+          with 7 resolved and 1 deliberately open, 4 suppressed items triaged with 3 fixed and 1 declined;
+          rounds 3 and 4 each found defects in the previous round''s fix, so the worker stopped at 4.
+          RESIDUAL STATED RATHER THAN HIDDEN: this bounds attempts, only the MongoDB client can bound
+          time, and a read already in flight when a deadline passes is not interrupted.'
+        via: worker DELIVERY_RESULT, gate facts verified independently
+        at: '2026-08-22T11:50:00+00:00'
+      adr132_granted:
+        note: '#915 (ADR 132 decision 5 stale on three counts plus its property list) GRANTED into PR
+          914 rather than becoming a separate unit. Not scope widening: the brief''s invariant requirement
+          lists ADRs as a surface the unit checks against, the worker checked, found the record contradicts
+          the code it just changed, and was blocked only by the blanket ADR-edit reservation. That reservation
+          exists to stop units minting numbers and rewriting SHIPPED decisions; ADR 132 has not shipped
+          in any release, so AGENTS.md permits correcting it in place. A markdown-only push does not re-run
+          the matrix here, so the 26 green contexts stand.'
+        via: orchestrator ruling
+        at: '2026-08-22T11:50:00+00:00'
     assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:50Z after
       a scoping read, which is why #878 moved here from U5. The read found two collisions the original
       split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
@@ -620,6 +646,18 @@ units:
           is not there is exactly who invents a premature `### 0.35.0`, which AGENTS.md forbids by name.'
         via: sdi cross-epic message, verified with git show 4c04880e5 and git ls-tree occurrent-0.33.0
         at: '2026-08-22T11:30:00+00:00'
+      seeding_decision:
+        note: 'DECIDED, and relayed to sdi so its U8 brief could unblock. The cut SEEDS a fresh `### Changelog
+          next version`, BARE, with no subsection headings under it. Derivation: the failure this removes
+          is a worker expecting a landing zone, finding none, and inventing a premature version heading,
+          which AGENTS.md forbids by name and which already caught one fleet this week; seeding removes
+          that case for one line. Bare rather than with its three subsections because AGENTS.md''s ''keeps
+          the same internal structure from the start'' governs the section once it HAS entries, and three
+          empty subsections assert a shape nobody has chosen, while a bare heading asserts only where
+          the next entry goes. Reversible: omit the line and the first writer creates the heading, which
+          is the 0.33.0 precedent.'
+        via: orchestrator decision under AGENTS.md
+        at: '2026-08-22T11:50:00+00:00'
     assessment: 'AGENTS.md:71-73: cutting a release renames the heading, it does not restructure the section.
       Runs after the last gating merge and after C1 reaches fixpoint.'
   R2:
