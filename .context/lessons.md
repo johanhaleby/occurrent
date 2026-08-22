@@ -2239,3 +2239,13 @@ string unique to the change just made. That is the only check that distinguishes
 main" from "some commit is on main", and it costs one command. Every ancestry or equality check
 answers a question adjacent to the one that matters.
 
+
+## A standing ask to the user is worth retesting against the host before you repeat it again
+
+The orchestrator skill instructed every epic session to hand the user its own session title and then REPEAT the ask in every report until the host's session list showed it set, on the stated grounds that rename tooling cannot retitle its own session. In CCD that ground is false. `set_session_title` takes the literal string `self` and documents it, so the ask that sdi had been carrying as an open pending action for the life of the epic was closable in one call, and it closed in one call.
+
+What made this survive so long is that the ask is cheap to repeat and expensive to question. Repeating it costs one line per report and looks diligent. Questioning it means reading a tool schema that the skill has already told you will not help. So the false premise never gets tested, and the user gets nagged for the life of every epic instead.
+
+The verification has its own trap, and it points the same way as the rest of today. The rename returned a success message, which is not evidence the title is visible, and it cannot be self checked: `ListAgents` returns peers and `list_sessions` excludes the calling session, so both of the obvious checks are blind to exactly the thing being checked. This is the same shape as the three near misses earlier today, a check answering the question next to the one that matters. The honest report until another session confirms it is renamed, not verified.
+
+Generalise it past titles. When a skill explains WHY the user has to do something, that explanation is a factual claim about the host, it was true of some host at some time, and it is the part most likely to have rotted. Test it before repeating the ask a second time.
