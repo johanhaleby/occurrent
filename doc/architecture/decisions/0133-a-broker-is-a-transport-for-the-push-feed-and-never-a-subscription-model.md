@@ -736,8 +736,8 @@ Shipping topic-per-type as the default and correcting it later is a breaking beh
 that has already created per-type topics and pointed consumers at them, since undoing it is a topology migration,
 not a code change on top of the same data.
 
-Johan delegated the choice with "do what's best long-term according to the principles of `AGENTS.md`," and the
-derivation above is that ruling. `KafkaSharedTopicDestinationResolver` is the new shipped default.
+I asked for whatever is best long-term according to the principles of `AGENTS.md`, and the derivation above is that
+answer. `KafkaSharedTopicDestinationResolver` is the new shipped default.
 `KafkaCloudEventSink` and `KafkaDomainEventSink`'s own documentation leads with it. It publishes every event to
 one topic given to its constructor, no default name invented, the same reasoning this decision already gives for
 refusing a parking bridge with no `parkingDestination` of its own, that a default destination name is precisely
@@ -1032,3 +1032,44 @@ spec, so a second thread offering at the same time is rejected rather than corru
 reported as an overflow, with the advice to rebuild the read model offline. It is retried briefly instead, since
 the claim clears as soon as the thread holding it finishes its own offer. A failure in the live phase also logs at
 error now, because the catch-up signal has already completed by then and nothing else tells anyone.
+
+## Amendment (2026-08-22): a catch-up marker means the id's history has been read, and every later attempt trusts it
+
+The marker `CatchupThenPushSubscriptionModel` writes when a catch-up finishes had two meanings at once, and they
+disagreed.
+
+Across a restart it meant what its constructor documentation says, that this subscription id has read its history
+and the next process can skip it. In one process it meant something narrower. A replacement attempt taking an id
+whose previous attempt was still writing its marker distrusted that marker and read the whole history again. That
+distrust rested on a map this model keeps in memory, so it did not survive a restart. Same durable state, two
+different answers, decided by whether the process happened to stay up.
+
+Closing that by making the distrust durable is not available. A checkpoint write can only be refused against
+something already stored, and the losing case starts with nothing stored at all. An attempt reads the whole
+history, loses the id to a cancel, and its write reaches an empty storage, which `notOlderThan` and `ifAbsent`
+both accept by design (ADR 116). For a condition to refuse it, the replacement would have to record a
+version first, and the replacement does not exist yet when that write is already in flight. Recording one at the
+start of every attempt needs a way to store a version without storing a checkpoint, which no `CheckpointStorage`
+offers, and `delete` clears the version along with the checkpoint rather than raising it. So the fence would be a
+new durable claim operation on both `CheckpointStorage` interfaces, in every implementation, with
+`cancelSubscription` making a store call it can fail. That is a lot of public surface for one window, and it buys
+an answer the marker was never asked for.
+
+**So the per-id meaning is the only meaning.** A marker is written only by an attempt that read the whole history
+and still owned the id when the write began, and a marker that is there is trusted by every later attempt, in this
+process and after a restart.
+
+Two things already made the first half true and stay as they are. The replay stops at its next event once the id
+moves, so an attempt that loses the id part way through never reaches the marker step. And the marker step asks
+whether it still owns the id before it writes, so an attempt that lost the id between its last event and that step
+writes nothing. The blocking model asks and writes under one monitor, which is why a cancel there waits for the
+write rather than racing it. The reactor model asks the same question and then writes outside the monitor, because
+a checkpoint store can take as long as it likes and every lifecycle call on that model takes the same monitor. A
+cancel landing during that write no longer needs to stop it, since what the write claims is true whatever happens
+next.
+
+What goes is the reactor model's record of which attempt was writing a marker, and the distrust that read it.
+
+A caller that wants an id to read its history again deletes its checkpoint, which is the recovery ADR 116 already
+documents for a subscription that must start over. That is now the only way to ask for it, in process as well as
+after a restart, rather than a cancel and a fresh subscribe sometimes meaning the same thing.

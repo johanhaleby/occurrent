@@ -330,8 +330,20 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
      * Run with no in-memory shortcut, the marker really is written and really is read back, so nothing here
      * depends on the model noticing the cancel in time.
      */
+    /**
+     * A marker is only ever written by an attempt that read the id's whole history and owned the id when the write
+     * began, so a replacement finds a marker that describes history somebody read, and skips reading it again. The
+     * same answer a restart gets, which is the point: the model no longer says one thing to a replacement in this
+     * process and another to the first subscription after a restart, for the same durable state.
+     * <p>
+     * What this no longer proves, said plainly because it used to: an earlier version of this test asserted the
+     * opposite, that the replacement replays. That behaviour was process-local, since the record it rested on was a
+     * map this model loses on restart, so the marker was distrusted in process and trusted after a restart. Closing
+     * that split by making the marker trustworthy is what this test now pins. A caller that wants an id to read its
+     * history again deletes the checkpoint, which is the recovery ADR 116 already documents.
+     */
     @Test
-    void a_marker_written_by_an_attempt_that_lost_the_id_does_not_make_the_replacement_skip_its_history() throws Exception {
+    void a_marker_written_by_an_attempt_that_owned_the_id_is_trusted_by_the_replacement() throws Exception {
         CountDownLatch saveEntered = new CountDownLatch(1);
         CountDownLatch releaseSave = new CountDownLatch(1);
         InMemoryCheckpointStorage backing = new InMemoryCheckpointStorage();
@@ -383,11 +395,14 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
         model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
                 ce -> Mono.fromRunnable(() -> replacementHandled.add(ce.getId())));
 
+        // Asserted through a live event rather than by waiting on an empty list, so a replacement that never got
+        // anywhere fails here instead of passing for the wrong reason.
+        feed.accept(cloudEvent("live")).block(Duration.ofSeconds(5));
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
                 assertThat(replacementHandled)
-                        .as("the marker on disk was written for a history this subscription never received, so it "
-                                + "reads that history rather than skipping it")
-                        .containsExactly("1", "2"));
+                        .as("the marker says this id's history has been read, so the replacement goes straight live "
+                                + "rather than reading it again")
+                        .containsExactly("live"));
     }
 
     /**
@@ -603,6 +618,51 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
                 return true;
             }
         };
+    }
+
+    /**
+     * The invariant every later attempt's trust rests on: an attempt that lost the id writes no marker at all.
+     * <p>
+     * The window is narrow and nothing outside the model reaches it, so the cancel is parked inside the handler for
+     * the last replayed event. By the time that handler returns there is no event left for {@code keepReplaying()}
+     * to be asked about, so the attempt runs on to its marker step having lost the id, which is the only ordering
+     * that puts a cancel between the end of the history and the write.
+     */
+    @Test
+    void an_attempt_that_lost_the_id_between_its_last_event_and_its_marker_step_writes_no_marker() throws Exception {
+        CountDownLatch lastEventReached = new CountDownLatch(1);
+        CountDownLatch cancelled = new CountDownLatch(1);
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1"), cloudEvent("2")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
+
+        List<String> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
+            handled.add(ce.getId());
+            if (ce.getId().equals("2")) {
+                lastEventReached.countDown();
+                awaitLatch(cancelled);
+            }
+        }));
+
+        assertThat(lastEventReached.await(5, TimeUnit.SECONDS))
+                .as("the attempt is inside the handler for the last event of its history")
+                .isTrue();
+        model.cancelSubscription("sub");
+        cancelled.countDown();
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(handled)
+                        .as("the attempt read its whole history before it lost the id")
+                        .containsExactly("1", "2"));
+        // Held for a while rather than sampled once, since the marker step runs after the handler returns and an
+        // assertion taken immediately would pass before the write it is meant to catch could even be attempted.
+        await().during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(marker.read("sub").hasElement().block())
+                        .as("the id was gone by the marker step, so nothing was written for it")
+                        .isFalse());
     }
 
     private static CloudEvent cloudEvent(String id) {
