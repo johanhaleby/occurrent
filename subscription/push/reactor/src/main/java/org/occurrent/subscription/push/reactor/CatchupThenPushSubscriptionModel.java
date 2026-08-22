@@ -31,7 +31,7 @@ import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.subscription.api.reactor.internal.ReactiveHandover;
 import org.occurrent.subscription.CatchupListener;
@@ -148,7 +148,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     @Override
-    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Objects.requireNonNull(startAt, "startAt cannot be null");
         Objects.requireNonNull(action, "action cannot be null");
@@ -522,7 +522,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     @Override
-    public synchronized SubscriptionHandle resumeSubscription(String subscriptionId) {
+    public synchronized Subscription resumeSubscription(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Sinks.One<Boolean> relaunched = relaunchInterruptedReplay(subscriptionId);
         if (relaunched != null) {
@@ -643,7 +643,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * {@link #isRunning(String)} about a restarted replay, or take the handle {@link #resumeSubscription(String)}
      * hands back.
      */
-    private record CatchingUpSubscription(String id, Sinks.One<Boolean> replay) implements SubscriptionHandle {
+    private record CatchingUpSubscription(String id, Sinks.One<Boolean> replay) implements Subscription {
         @Override
         public Mono<Void> waitUntilStarted() {
             return replay.asMono().then();
@@ -651,7 +651,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     // A signal that is already done, for a handle handed back when there is no longer a replay to track. The blocking
-    // twin does the same with CompletableFuture.completedFuture(true) rather than a second SubscriptionHandle type.
+    // twin does the same with CompletableFuture.completedFuture(true) rather than a second Subscription type.
     private static Sinks.One<Boolean> finished() {
         Sinks.One<Boolean> done = Sinks.one();
         done.tryEmitValue(true);

@@ -33,7 +33,7 @@ import org.occurrent.eventstore.mongodb.spring.reactor.ReactorMongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StringBasedCheckpoint;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
@@ -132,7 +132,7 @@ public class ReactorMongoSubscriptionLifecycleTest {
     @Test
     void wait_until_started_with_a_timeout_throws_npe_when_timeout_is_null() {
         // Given
-        SubscriptionHandle subscription = subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> Mono.empty());
+        Subscription subscription = subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> Mono.empty());
 
         // When
         Throwable throwable = catchThrowable(() -> subscription.waitUntilStarted(null));
@@ -386,7 +386,7 @@ public class ReactorMongoSubscriptionLifecycleTest {
     void wait_until_started_does_not_complete_for_a_subscription_created_while_the_model_is_stopped() {
         // Given
         subscriptionModel.stop();
-        SubscriptionHandle subscription = subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> Mono.empty());
+        Subscription subscription = subscriptionModel.subscribe(UUID.randomUUID().toString(), __ -> Mono.empty());
 
         // Then: it never actually starts while paused, so waitUntilStarted() on this handle never completes,
         // unlike before the fix where it misleadingly completed via doOnSubscribe just before being disposed.

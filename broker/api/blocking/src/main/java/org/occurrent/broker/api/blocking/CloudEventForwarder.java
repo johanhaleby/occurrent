@@ -19,7 +19,7 @@ package org.occurrent.broker.api.blocking;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.blocking.durable.DurableSubscriptionModel;
 
 import static java.util.Objects.requireNonNull;
@@ -54,7 +54,7 @@ public class CloudEventForwarder {
     /**
      * Start forwarding at the subscription model's default start position, with no filter.
      */
-    public SubscriptionHandle forward(String subscriptionId) {
+    public Subscription forward(String subscriptionId) {
         return subscriptionModel.subscribe(subscriptionId, sink::publish);
     }
 
@@ -62,14 +62,14 @@ public class CloudEventForwarder {
      * Start forwarding at {@code startAt}, with no filter. See the class javadoc for what an explicit
      * {@code startAt} costs on a restart.
      */
-    public SubscriptionHandle forward(String subscriptionId, StartAt startAt) {
+    public Subscription forward(String subscriptionId, StartAt startAt) {
         return subscriptionModel.subscribe(subscriptionId, startAt, sink::publish);
     }
 
     /**
      * Start forwarding only events matching {@code filter}, at the subscription model's default start position.
      */
-    public SubscriptionHandle forward(String subscriptionId, @Nullable SubscriptionFilter filter) {
+    public Subscription forward(String subscriptionId, @Nullable SubscriptionFilter filter) {
         return subscriptionModel.subscribe(subscriptionId, filter, sink::publish);
     }
 
@@ -77,7 +77,7 @@ public class CloudEventForwarder {
      * Start forwarding only events matching {@code filter}, at {@code startAt}. See the class javadoc for what an
      * explicit {@code startAt} costs on a restart.
      */
-    public SubscriptionHandle forward(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
+    public Subscription forward(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt) {
         return subscriptionModel.subscribe(subscriptionId, filter, startAt, sink::publish);
     }
 }

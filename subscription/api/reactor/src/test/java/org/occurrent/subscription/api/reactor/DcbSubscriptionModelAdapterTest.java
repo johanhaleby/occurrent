@@ -81,7 +81,7 @@ class DcbSubscriptionModelAdapterTest {
             return Mono.empty();
         };
 
-        SubscriptionHandle subscription = adapter.subscribe("sub-1", DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.afterPosition(5), action);
+        Subscription subscription = adapter.subscribe("sub-1", DcbCriteria.tags(Tag.parse("name:1")), DcbStartAt.afterPosition(5), action);
 
         assertThat(subscription.id()).isEqualTo("sub-1");
         assertThat(delegate.capturedFilter).isInstanceOf(DcbSubscriptionFilter.class);
@@ -175,11 +175,11 @@ class DcbSubscriptionModelAdapterTest {
         }
 
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
             this.capturedFilter = filter;
             this.capturedStartAt = startAt;
             this.capturedAction = action;
-            return new SubscriptionHandle() {
+            return new Subscription() {
                 @Override
                 public String id() {
                     return subscriptionId;
@@ -216,7 +216,7 @@ class DcbSubscriptionModelAdapterTest {
         }
 
         @Override
-        public SubscriptionHandle resumeSubscription(String subscriptionId) {
+        public Subscription resumeSubscription(String subscriptionId) {
             throw new UnsupportedOperationException("Not used by this test");
         }
 
@@ -240,7 +240,7 @@ class DcbSubscriptionModelAdapterTest {
         }
 
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
             throw new UnsupportedOperationException("Not used by this test");
         }
 

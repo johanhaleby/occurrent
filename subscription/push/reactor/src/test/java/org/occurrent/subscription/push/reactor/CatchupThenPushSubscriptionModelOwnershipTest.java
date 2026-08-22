@@ -28,7 +28,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
@@ -635,7 +635,7 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
 
         List<String> handled = new CopyOnWriteArrayList<>();
-        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
             if (ce.getId().equals("2")) {
                 lastEventReached.countDown();
                 awaitLatch(cancelled);
@@ -683,7 +683,7 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(() -> Flux.just(cloudEvent("1"))), feed, marker);
 
-        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
             lastEventReached.countDown();
             awaitLatch(stopped);
         }));

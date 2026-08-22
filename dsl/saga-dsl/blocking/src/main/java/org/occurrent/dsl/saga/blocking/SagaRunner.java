@@ -32,7 +32,7 @@ import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.Subscribable;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -191,7 +191,7 @@ public final class SagaRunner<E, C> {
         SubscriptionFilter filter = toSubscriptionFilter.apply(SagaFilters.filterFor(cloudEventConverter, saga));
         Consumer<CloudEvent> action = execution::onCloudEvent;
         StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
-        SubscriptionHandle subscription = subscriptionModel.subscribe(subscriptionId, filter, effectiveStartAt, action);
+        Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter, effectiveStartAt, action);
         // Deliberately above the lease registration and the poller's executor below. A replay failure thrown here
         // aborts before either is allocated, so nothing leaks and the caller never receives a SagaSubscription it
         // would have to close. Skipping the wait skips that protection too, which is what timersEnabled is for.

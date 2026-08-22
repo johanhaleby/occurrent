@@ -24,7 +24,7 @@ import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 
 import java.time.Duration;
@@ -229,12 +229,12 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
      * Start one subscription and block until it is actually listening, so a write that follows cannot outrun it.
      *
      * @param subscriptionId the id of a currently stopped subscription, must not be {@code null}
-     * @return the running {@link SubscriptionHandle}
+     * @return the running {@link Subscription}
      * @throws UnknownSubscriptionException        if no model has a subscription with that id
      * @throws SubscriptionAlreadyRunningException if the model that has it reports it is already running
      * @throws IllegalStateException               if it does not start within {@link #withStartTimeout(Duration)}
      */
-    public SubscriptionHandle start(String subscriptionId) {
+    public Subscription start(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId must not be null");
         return resumeAndWait(subscriptionId);
     }
@@ -262,11 +262,11 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     // A model that does not have the id says so with UnknownSubscriptionException, which is the one refusal worth
     // searching past. Every other refusal comes from the model that does own the id, so it is the answer rather than
     // something to keep looking behind.
-    private SubscriptionHandle resumeAndWait(String subscriptionId) {
+    private Subscription resumeAndWait(String subscriptionId) {
         List<UnknownSubscriptionException> notHere = new ArrayList<>();
         for (SubscriptionModelLifeCycle model : subscriptionModels) {
             try {
-                SubscriptionHandle subscription = model.resumeSubscription(subscriptionId);
+                Subscription subscription = model.resumeSubscription(subscriptionId);
                 knownIds.add(subscriptionId);
                 // Bounded rather than waitUntilStarted(), whose no-argument form waits forever. beforeEach runs this
                 // for every alwaysStart id, so a subscription that never starts would hang the run rather than fail

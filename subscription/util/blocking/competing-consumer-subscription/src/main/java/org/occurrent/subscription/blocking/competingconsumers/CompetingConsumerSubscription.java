@@ -2,7 +2,7 @@ package org.occurrent.subscription.blocking.competingconsumers;
 
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -10,17 +10,17 @@ import java.util.Optional;
 import java.util.StringJoiner;
 
 @NullMarked
-public class CompetingConsumerSubscription implements SubscriptionHandle {
+public class CompetingConsumerSubscription implements Subscription {
     private final String subscriptionId;
     private final String subscriberId;
     @Nullable
-    private final SubscriptionHandle subscription;
+    private final Subscription subscription;
 
     CompetingConsumerSubscription(String subscriptionId, String subscriberId) {
         this(subscriptionId, subscriberId, null);
     }
 
-    CompetingConsumerSubscription(String subscriptionId, String subscriberId, @Nullable SubscriptionHandle subscription) {
+    CompetingConsumerSubscription(String subscriptionId, String subscriberId, @Nullable Subscription subscription) {
         this.subscriptionId = subscriptionId;
         this.subscriberId = subscriberId;
         this.subscription = subscription;
@@ -30,7 +30,7 @@ public class CompetingConsumerSubscription implements SubscriptionHandle {
         return subscriberId;
     }
 
-    Optional<SubscriptionHandle> getSubscription() {
+    Optional<Subscription> getSubscription() {
         return Optional.ofNullable(subscription);
     }
 

@@ -72,14 +72,7 @@ import java.lang.annotation.*;
  * must carry an id equal to the projection's {@code id}. A {@code ViewStateRepository} bean is the store-agnostic
  * option when you need full control over how the id maps to the stored key.
  * </p>
- *
- * @deprecated Renamed to {@link OccurrentProjection}. Its attributes and the factory method it marks are unchanged,
- * only the annotation's own name moves, so it no longer takes the word a user needs for the {@code Projection} it
- * marks. Run {@code org.occurrent.UpgradeToOccurrent_0_35} to rewrite every use, or see
- * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md">the 0.35.0
- * migration guide</a>.
  */
-@Deprecated(forRemoval = true)
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented

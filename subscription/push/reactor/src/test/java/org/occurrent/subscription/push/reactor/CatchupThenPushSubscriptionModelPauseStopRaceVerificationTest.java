@@ -26,7 +26,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
@@ -76,7 +76,7 @@ class CatchupThenPushSubscriptionModelPauseStopRaceVerificationTest {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
 
-        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
                 ce -> Mono.fromRunnable(() -> {
                 }));
 

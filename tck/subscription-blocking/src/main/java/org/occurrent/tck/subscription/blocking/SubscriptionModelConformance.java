@@ -31,7 +31,7 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.UnsupportedStartAtException;
 import org.occurrent.subscription.UnsupportedSubscriptionFilterException;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.tck.ConformanceEvents;
 
@@ -124,7 +124,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
      */
     private RecordedEvents subscribeAndWait(String subscriptionId, @Nullable SubscriptionFilter filter) {
         RecordedEvents recorded = new RecordedEvents();
-        SubscriptionHandle subscription = subscriptionModel().subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), recorded);
+        Subscription subscription = subscriptionModel().subscribe(subscriptionId, filter, StartAt.subscriptionModelDefault(), recorded);
         assertThat(subscription.waitUntilStarted(deliveryTimeout()))
                 .as("the subscription must report started within %s, or nothing published afterwards can be expected "
                         + "to arrive", deliveryTimeout())
@@ -202,7 +202,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             // subscribe(id, action) documents itself as no filter plus the model's default start position, so a model
             // that reads either differently would deliver something other than everything.
             RecordedEvents recorded = new RecordedEvents();
-            SubscriptionHandle subscription = subscriptionModel().subscribe(subscriptionId(), recorded);
+            Subscription subscription = subscriptionModel().subscribe(subscriptionId(), recorded);
             assertThat(subscription.waitUntilStarted(deliveryTimeout())).isTrue();
             CloudEvent event = ConformanceEvents.event("1", "NameDefined");
 
@@ -259,7 +259,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             // time CHECKPOINT ran, the earlier variants had published events of their own, so a change-stream model
             // started at that older position replayed them and the wait below was satisfied by a replayed event
             // instead of this variant's own.
-            SubscriptionHandle subscription = subscriptionModel()
+            Subscription subscription = subscriptionModel()
                     .subscribe(id, null, variant.startAt(() -> fixture().aCheckpointToStartFrom()), recorded);
             assertThat(subscription.waitUntilStarted(deliveryTimeout()))
                     .as("this model declares it accepts %s, so a subscription starting there must report started", variant)
@@ -321,7 +321,7 @@ public abstract class SubscriptionModelConformance extends SubscriptionModelSuit
             RecordedEvents afterTheFailure = new RecordedEvents();
             // Throws once. Never forever: a retrying model has no attempt cap by default, so a handler that always
             // throws would spin until the test timed out instead of failing with a reason.
-            SubscriptionHandle subscription = subscriptionModel().subscribe(id, cloudEvent -> {
+            Subscription subscription = subscriptionModel().subscribe(id, cloudEvent -> {
                 if (calls.incrementAndGet() == 1) {
                     throw new IllegalStateException("failing on purpose, once");
                 }

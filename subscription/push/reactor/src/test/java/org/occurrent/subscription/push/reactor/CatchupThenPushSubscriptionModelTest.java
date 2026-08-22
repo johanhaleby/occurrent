@@ -34,7 +34,7 @@ import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -249,7 +249,7 @@ class CatchupThenPushSubscriptionModelTest {
 
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
         // Nothing is pushed to the feed while the replay runs, so the live buffer is empty at the drain.
-        SubscriptionHandle subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         // Parked inside the marker write, which is after the replay and after the drain point, and before the
         // handover has finished.
@@ -336,7 +336,7 @@ class CatchupThenPushSubscriptionModelTest {
         List<String> folded = new CopyOnWriteArrayList<>();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
         // Park inside the first fold so stop() lands mid-replay rather than after it.
-        SubscriptionHandle subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce ->
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce ->
                 Mono.fromRunnable(() -> {
                     folded.add(ce.getId());
                     firstFolded.countDown();
@@ -373,7 +373,7 @@ class CatchupThenPushSubscriptionModelTest {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), feed, null);
 
-        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
         assertThat(catchThrowable(() -> subscription.waitUntilStarted().block())).isInstanceOf(IllegalStateException.class);
 
         // Stopped and failed are not the same state. Restarting a replay that failed would turn a loud refusal into a
@@ -443,7 +443,7 @@ class CatchupThenPushSubscriptionModelTest {
 
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader, liveFeed, null);
 
-        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
         Throwable replayFailure = catchThrowable(() -> subscription.waitUntilStarted().block());
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
@@ -470,7 +470,7 @@ class CatchupThenPushSubscriptionModelTest {
         PositionOrderedReader failingReader = failingReader();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader, liveFeed, null);
 
-        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
         Throwable replayFailure = catchThrowable(() -> subscription.waitUntilStarted().block());
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
@@ -496,7 +496,7 @@ class CatchupThenPushSubscriptionModelTest {
         RuntimeException handlerFailure = new IllegalStateException("handler boom");
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Flux::empty, 0), liveFeed, null);
 
-        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
                 ce -> Mono.error(handlerFailure));
         assertThat(subscription.waitUntilStarted().block(Duration.ofSeconds(5))).isNull();
 
@@ -520,12 +520,12 @@ class CatchupThenPushSubscriptionModelTest {
 
         PushSubscriptionModel otherFeed = new PushSubscriptionModel();
         CatchupThenPushSubscriptionModel otherModel = new CatchupThenPushSubscriptionModel(failingReader(), otherFeed, null);
-        SubscriptionHandle otherSubscription = otherModel.subscribe("other", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        Subscription otherSubscription = otherModel.subscribe("other", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
         assertThat(catchThrowable(() -> otherSubscription.waitUntilStarted().block(Duration.ofSeconds(5))))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Flux::empty, 0), liveFeed, null);
-        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
                 ce -> otherFeed.accept(ce));
         assertThat(subscription.waitUntilStarted().block(Duration.ofSeconds(5))).isNull();
 
@@ -543,7 +543,7 @@ class CatchupThenPushSubscriptionModelTest {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();
 
         CatchupThenPushSubscriptionModel failingModel = new CatchupThenPushSubscriptionModel(failingReader(), liveFeed, null);
-        SubscriptionHandle failed = failingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        Subscription failed = failingModel.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
         // The replay is subscribed on boundedElastic, so joining is what orders the failure against this thread.
         Throwable replayFailure = catchThrowable(() -> failed.waitUntilStarted().block());
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
@@ -573,7 +573,7 @@ class CatchupThenPushSubscriptionModelTest {
         PushSubscriptionModel healthyFeed = new PushSubscriptionModel();
 
         CatchupThenPushSubscriptionModel failingModel = new CatchupThenPushSubscriptionModel(failingReader(), failedFeed, null);
-        SubscriptionHandle failed = failingModel.subscribe("failed", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        Subscription failed = failingModel.subscribe("failed", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
         Throwable replayFailure = catchThrowable(() -> failed.waitUntilStarted().block());
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 
@@ -670,7 +670,7 @@ class CatchupThenPushSubscriptionModelTest {
         PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
 
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
-        SubscriptionHandle subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce ->
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce ->
                 Mono.fromRunnable(() -> {
                     replayReached.countDown();
                     awaitLatch(releaseReplay);
@@ -703,7 +703,7 @@ class CatchupThenPushSubscriptionModelTest {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), feed, null);
 
-        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
         Throwable replayFailure = catchThrowable(() -> subscription.waitUntilStarted().block());
         assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
 

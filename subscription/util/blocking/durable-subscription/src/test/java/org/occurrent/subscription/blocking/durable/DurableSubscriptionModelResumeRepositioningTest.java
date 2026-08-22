@@ -27,7 +27,7 @@ import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.time.Duration;
@@ -283,11 +283,11 @@ class DurableSubscriptionModelResumeRepositioningTest {
 
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            Future<SubscriptionHandle> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+            Future<Subscription> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
             }));
             assertThat(insideSubscribe.await(10, TimeUnit.SECONDS)).isTrue();
 
-            Future<SubscriptionHandle> resumeFuture = pool.submit(() -> model.resumeSubscription(SUBSCRIPTION_ID));
+            Future<Subscription> resumeFuture = pool.submit(() -> model.resumeSubscription(SUBSCRIPTION_ID));
 
             assertThatThrownBy(() -> resumeFuture.get(200, TimeUnit.MILLISECONDS))
                     .as("resumeSubscription must wait for this id's lock rather than deciding from a state the "
@@ -322,7 +322,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
 
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
-            Future<SubscriptionHandle> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+            Future<Subscription> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
             }));
             assertThat(insideSubscribe.await(10, TimeUnit.SECONDS)).isTrue();
 
@@ -367,7 +367,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
             Future<?> cancelFuture = pool.submit(() -> model.cancelSubscription(SUBSCRIPTION_ID));
             assertThat(unregisteredAndPausing.await(10, TimeUnit.SECONDS)).isTrue();
 
-            Future<SubscriptionHandle> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
+            Future<Subscription> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, optOut, event -> {
             }));
 
             assertThatThrownBy(() -> subscribeFuture.get(200, TimeUnit.MILLISECONDS))
@@ -415,7 +415,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
             // A checkpoint-managed subscribe (not opt-out) reusing this id, racing the same in-flight cancel. Its
             // own generateStartAtPositionFrom writes this id's first checkpoint, which a concurrent cancel's
             // delete for the same id must not race.
-            Future<SubscriptionHandle> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), event -> {
+            Future<Subscription> subscribeFuture = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), event -> {
             }));
 
             assertThatThrownBy(() -> subscribeFuture.get(200, TimeUnit.MILLISECONDS))
@@ -455,7 +455,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
         private final Set<String> registeredIds = ConcurrentHashMap.newKeySet();
 
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             registeredIds.add(subscriptionId);
             return dummySubscription(subscriptionId);
         }
@@ -489,7 +489,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
         }
 
         @Override
-        public SubscriptionHandle resumeSubscription(String subscriptionId) {
+        public Subscription resumeSubscription(String subscriptionId) {
             plainResumeCalled = true;
             return dummySubscription(subscriptionId);
         }
@@ -503,8 +503,8 @@ class DurableSubscriptionModelResumeRepositioningTest {
             registeredIds.remove(subscriptionId);
         }
 
-        static SubscriptionHandle dummySubscription(String subscriptionId) {
-            return new SubscriptionHandle() {
+        static Subscription dummySubscription(String subscriptionId) {
+            return new Subscription() {
                 @Override
                 public String id() {
                     return subscriptionId;
@@ -525,19 +525,19 @@ class DurableSubscriptionModelResumeRepositioningTest {
         @Nullable StartAt repositionedTo = null;
 
         @Override
-        public SubscriptionHandle resumeSubscription(String subscriptionId, StartAt startAt) {
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
             repositionedTo = startAt;
             return dummySubscription(subscriptionId);
         }
     }
 
     /**
-     * The same repositionable fake, but {@code subscribe} throws instead of returning a {@link SubscriptionHandle},
+     * The same repositionable fake, but {@code subscribe} throws instead of returning a {@link Subscription},
      * standing in for a delegate that rejects a subscription outright.
      */
     private static class ThrowingOnSubscribeRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             throw new RuntimeException("delegate refused the subscription");
         }
     }
@@ -548,7 +548,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
      */
     private static class ErrorThrowingOnSubscribeRepositionableSubscriptionModel extends RecordingRepositionableSubscriptionModel {
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             throw new Error("delegate crashed");
         }
     }
@@ -561,7 +561,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
         private final Set<String> subscribed = ConcurrentHashMap.newKeySet();
 
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             if (!subscribed.add(subscriptionId)) {
                 throw new RuntimeException("duplicate subscription id " + subscriptionId);
             }
@@ -579,7 +579,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
         @Nullable CountDownLatch holdSubscribeUntil;
 
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             if (subscribeEntered != null) {
                 subscribeEntered.countDown();
             }
@@ -604,7 +604,7 @@ class DurableSubscriptionModelResumeRepositioningTest {
         @Nullable CountDownLatch holdReturnUntil;
 
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             // A real delegate resolves a dynamic StartAt's supplier while subscribing, which is what actually
             // performs a first checkpoint write for the "default" case. This fake mirrors that instead of leaving
             // the supplier uninvoked, the way a dumb stub would.

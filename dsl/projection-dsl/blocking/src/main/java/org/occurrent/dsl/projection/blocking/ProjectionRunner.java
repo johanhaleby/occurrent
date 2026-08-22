@@ -31,7 +31,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.Subscribable;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -48,7 +48,7 @@ import static java.util.Objects.requireNonNull;
  * ones. For a DCB consistency-boundary read model use {@link DcbProjectionRunner}.
  * <p>
  * The subscription filter comes from the projection (its explicit {@link Projection#filter() filter}, else a type filter
- * over its handled types). The returned {@link SubscriptionHandle} is already started.
+ * over its handled types). The returned {@link Subscription} is already started.
  *
  * @param <E> the domain event type
  */
@@ -96,7 +96,7 @@ public final class ProjectionRunner<E> {
      * single-instance. An id function that returns {@code null} for one event means that event is skipped,
      * and the projection is still keyed.</p>
      */
-    public <S extends @Nullable Object, ID> SubscriptionHandle project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
+    public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository) {
         return project(subscriptionId, projection, repository, null);
     }
 
@@ -114,7 +114,7 @@ public final class ProjectionRunner<E> {
      * single-instance. An id function that returns {@code null} for one event means that event is skipped,
      * and the projection is still keyed.</p>
      */
-    public <S extends @Nullable Object, ID> SubscriptionHandle project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, @Nullable StartAt startAt) {
+    public <S extends @Nullable Object, ID> Subscription project(String subscriptionId, Projection<S, E, ID> projection, ViewStateRepository<S, ID> repository, @Nullable StartAt startAt) {
         return project(subscriptionId, projection, Projections.materializedView(projection, repository, subscriptionId), startAt);
     }
 
@@ -123,7 +123,7 @@ public final class ProjectionRunner<E> {
      * overload when you already have a {@link MaterializedView} (for example one built by the view DSL's
      * {@code materialized(...)} with its own retry/locking policy).
      */
-    public SubscriptionHandle project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView) {
+    public Subscription project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView) {
         return project(subscriptionId, projection, materializedView, null);
     }
 
@@ -131,7 +131,7 @@ public final class ProjectionRunner<E> {
      * Subscribes with the given id, starting at {@code startAt} ({@code null} means the subscription model's default),
      * and calls {@code materializedView.update(event)} for every matching event.
      */
-    public SubscriptionHandle project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView, @Nullable StartAt startAt) {
+    public Subscription project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView, @Nullable StartAt startAt) {
         return project(subscriptionId, projection, materializedView, startAt, true);
     }
 
@@ -146,14 +146,14 @@ public final class ProjectionRunner<E> {
      * unavailable. A replay failure surfaces from the returned subscription's {@code waitUntilStarted} instead of from
      * here, so a caller that passes {@code false} and never waits will not see it.
      */
-    public SubscriptionHandle project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView, @Nullable StartAt startAt, boolean waitUntilStarted) {
+    public Subscription project(String subscriptionId, Projection<?, E, ?> projection, MaterializedView<E> materializedView, @Nullable StartAt startAt, boolean waitUntilStarted) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(projection, "projection cannot be null");
         requireNonNull(materializedView, "materializedView cannot be null");
         SubscriptionFilter filter = toSubscriptionFilter.apply(ProjectionFilters.filterFor(cloudEventConverter, projection));
         Consumer<CloudEvent> action = cloudEvent -> materializedView.update(EventMetadata.from(cloudEvent), cloudEventConverter.toDomainEvent(cloudEvent));
         StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
-        SubscriptionHandle subscription = subscriptionModel.subscribe(subscriptionId, filter, effectiveStartAt, action);
+        Subscription subscription = subscriptionModel.subscribe(subscriptionId, filter, effectiveStartAt, action);
         if (waitUntilStarted) {
             subscription.waitUntilStarted();
         }

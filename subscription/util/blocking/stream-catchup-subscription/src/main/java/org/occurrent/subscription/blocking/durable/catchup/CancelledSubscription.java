@@ -17,17 +17,17 @@
 package org.occurrent.subscription.blocking.durable.catchup;
 
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 
 import java.time.Duration;
 
 /**
- * A {@link SubscriptionHandle} for a catch-up that was cancelled or shut down before it could hand over to the
+ * A {@link Subscription} handle for a catch-up that was cancelled or shut down before it could hand over to the
  * live delegate. {@link #waitUntilStarted(Duration)} answers {@code false}, since this subscription never started and
  * nothing will start it.
  */
 @NullMarked
-record CancelledSubscription(String subscriptionId) implements SubscriptionHandle {
+record CancelledSubscription(String subscriptionId) implements Subscription {
 
     @Override
     public String id() {
