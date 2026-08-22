@@ -1,9 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 4
-updated_at: '2026-08-22T07:58:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U3 blocked ruling dec-0005 relayed, ownership
-  extended to one starter call site)
+revision: 5
+updated_at: '2026-08-22T08:02:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U8 delivered PR 899, checks running)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -262,7 +261,7 @@ units:
       Sonnet/medium
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 899
       met: false
       evidence: ''
     - check: issue_closed
@@ -270,14 +269,25 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker running, orchestrator waits for its PR or DELIVERY_RESULT
-    last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
+    next_action: wait for checks, then run the four-fact merge gate plus the adversarial verify pass
+    last_meaningful_progress_at: '2026-08-22T08:02:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
+      pr_899:
+        head: 27605d1553b6f46e8f3205d61a328a10b9f2bf51
+        note: 'opened non-draft 08:00:55Z from johan/relaxed-bardeen-0a12f8, Fixes #834, checks running.
+          Body reports the enumeration the brief demanded: only subscription-mode-0_32.yml and store-neutral-mongodb-config-0_34.yml
+          carry preconditions at all, and the latter uses FindProperties against .properties files which
+          have no multi-document concept, with its key renames running unconditionally. It also sharpened
+          the root cause past the issue''s framing: ChangePropertyValue IS value-scoped and correct, ChangePropertyKey
+          has no value check, which is the actual bug. TO VERIFY AT THE GATE: the claim that the shipped
+          recipe IDs are unchanged, since that is the compatibility promise the fix rests on.'
+        via: monitor bzqoo36k1 PR-OPENED plus gh pr view
+        at: '2026-08-22T08:02:00+00:00'
     assessment: 'Shipped defect in rewrite/src/main/resources/META-INF/rewrite/subscription-mode-0_32.yml,
       verified by git ls-tree against the tag. Same class as #828 (already closed), so read that fix first.'
   U9:
