@@ -17,9 +17,8 @@
 package org.occurrent.springboot.broker.rabbitmq.blocking.domain;
 
 import com.rabbitmq.client.Connection;
-import com.rabbitmq.client.ShutdownSignalException;
 import org.occurrent.broker.api.blocking.DestinationResolver;
-import org.occurrent.broker.rabbitmq.blocking.RabbitMqBridgeException;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqBuildFailureClassifier;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
 import org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventBridge;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
@@ -64,16 +63,17 @@ class DefaultRabbitMqDomainEventBridgeFactory implements RabbitMqDomainEventBrid
     }
 
     /**
-     * The same predicate {@code RabbitMqDomainEventBridge.Builder}'s own default {@code build()} retry strategy
-     * uses, including its {@code onBeforeRetry} logging. Calling {@code retryStrategy(...)} replaces that default
-     * entirely, so applying the property-driven timing without either would retry an {@code IllegalStateException}
-     * from a missing resolver or parking destination forever instead of failing on the first attempt, and leave a
-     * retrying startup logging nothing to tell it apart from a hung one.
+     * The same classification {@link RabbitMqBuildFailureClassifier} gives {@code RabbitMqDomainEventBridge.Builder}'s
+     * own default {@code build()} retry strategy, including its {@code onBeforeRetry} logging. Calling
+     * {@code retryStrategy(...)} replaces that default entirely, so applying the property-driven timing without
+     * either would retry an {@code IllegalStateException} from a missing resolver or parking destination forever
+     * instead of failing on the first attempt, and leave a retrying startup logging nothing to tell it apart from
+     * a hung one.
      */
     private static RetryStrategy buildRetryStrategy(String queue, RabbitMqBrokerProperties.BridgeRetry retry) {
         return RetryStrategy.exponentialBackoff(retry.getInitial(), retry.getMax(), retry.getMultiplier())
                 .maxAttempts(retry.getMaxAttempts())
-                .retryIf(throwable -> throwable instanceof RabbitMqBridgeException || throwable instanceof ShutdownSignalException)
+                .retryIf(RabbitMqBuildFailureClassifier::isTransient)
                 .onBeforeRetry((info, throwable) -> log.warn(
                         "Attempt {} of {} to build the RabbitMQ domain event bridge for queue \"{}\" failed. Retrying in {}.",
                         info.getAttemptNumber(), info.getMaxAttempts(), queue, info.getBackoff(), throwable));

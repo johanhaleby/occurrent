@@ -26,6 +26,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqBridgeException;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqBuildFailureClassifier;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventBridge;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDeliveryFailureAction;
@@ -659,15 +660,15 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
          * {@link #build()} that never gives up turns a broker that is permanently misconfigured, a rejected
          * credential or a nonexistent vhost, into an application that hangs at startup with no diagnosis, which is
          * worse than the failure this retry exists to absorb. {@link #build()} logs each retried attempt at
-         * {@code WARN} so a retrying startup is never mistaken for a hung one. Retries
-         * {@link RabbitMqBridgeException} and {@link ShutdownSignalException}, the two shapes opening a channel,
-         * declaring the queue and its bindings, or setting QoS already throw for "the broker is not reachable right
-         * now" ({@link ShutdownSignalException} unchecked, exactly the distinction {@code RabbitMqConfirmPublisher}'s
-         * own {@code openChannel} call draws). Never retries the {@link IllegalStateException} a missing
-         * {@code resolver} or {@code parkingDestination} throws above, since that failure is identical on every
-         * attempt regardless of the broker's state, and never any other {@link RuntimeException}, since that is a
-         * bug this retry cannot fix by trying again. Passing a {@link RetryStrategy} here replaces that predicate
-         * too, so a caller that wants a different bound or a wider retry configures its own.
+         * {@code WARN} so a retrying startup is never mistaken for a hung one. See
+         * {@link RabbitMqBuildFailureClassifier} for exactly what is
+         * retried and what is refused immediately, including under
+         * {@link org.occurrent.broker.api.blocking.DeliveryFailurePolicy#PARK}, where the parking publisher's own
+         * channel can fail too. Never retries the {@link IllegalStateException} a missing {@code resolver} or
+         * {@code parkingDestination} throws above, since that failure is identical on every attempt regardless of
+         * the broker's state, and never any other {@link RuntimeException}, since that is a bug this retry cannot
+         * fix by trying again. Passing a {@link RetryStrategy} here replaces that classification too, so a caller
+         * that wants a different bound or a wider retry configures its own.
          */
         public Builder<E> retryStrategy(RetryStrategy retryStrategy) {
             this.retryStrategy = requireNonNull(retryStrategy, RetryStrategy.class.getSimpleName() + " cannot be null");
@@ -719,14 +720,15 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
         }
 
         /**
-         * Retries {@link RabbitMqBridgeException} and {@link ShutdownSignalException} only, see
-         * {@link #retryStrategy(RetryStrategy)}. Takes {@code queue} explicitly rather than reading the field: this
-         * runs from the constructor, before the field assignment it would otherwise read completes.
+         * See {@link RabbitMqBuildFailureClassifier} for the classification
+         * and {@link #retryStrategy(RetryStrategy)} for the rest of this default. Takes {@code queue} explicitly
+         * rather than reading the field: this runs from the constructor, before the field assignment it would
+         * otherwise read completes.
          */
         private static RetryStrategy defaultRetryStrategy(String queue) {
             return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0)
                     .maxAttempts(10)
-                    .retryIf(throwable -> throwable instanceof RabbitMqBridgeException || throwable instanceof ShutdownSignalException)
+                    .retryIf(RabbitMqBuildFailureClassifier::isTransient)
                     .onBeforeRetry((info, throwable) -> log.warn(
                             "Attempt {} of {} to build the RabbitMQ domain event bridge for queue \"{}\" failed. Retrying in {}.",
                             info.getAttemptNumber(), info.getMaxAttempts(), queue, info.getBackoff(), throwable));

@@ -278,9 +278,10 @@ public class RabbitMqBrokerProperties {
 
         /**
          * The most attempts {@code build()} makes before failing loudly instead of retrying again. Ten by default,
-         * matching {@code RabbitMqCloudEventBridge.Builder}'s own default, which bounds the total wait to roughly
-         * fourteen seconds with the backoff above. Set lower for a deployment that would rather fail startup fast,
-         * or higher for a broker that routinely takes longer than that to come back.
+         * matching {@code RabbitMqCloudEventBridge.Builder}'s own default, which spends roughly eleven seconds
+         * sleeping between the nine retried attempts with the backoff above, on top of whatever each attempt's own
+         * broker calls take. Set lower for a deployment that would rather fail startup fast, or higher for a
+         * broker that routinely takes longer than that to come back.
          */
         private int maxAttempts = 10;
 

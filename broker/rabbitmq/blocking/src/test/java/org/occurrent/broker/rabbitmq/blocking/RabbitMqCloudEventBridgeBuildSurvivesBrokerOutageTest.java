@@ -106,6 +106,12 @@ class RabbitMqCloudEventBridgeBuildSurvivesBrokerOutageTest {
                 .build()) {
             assertThat(bridge).isNotNull();
 
+            // build() opening its own fresh channel proves the connection itself has recovered, but adminChannel
+            // is a channel recorded from before the forced close, recovered separately and possibly still in
+            // flight at this exact moment. Publishing through it before its own recovery finishes would throw
+            // AlreadyClosedException, unrelated to anything this test exists to prove.
+            await().atMost(Duration.ofSeconds(15)).until(adminChannel::isOpen);
+
             publish(OrderPlaced.class.getName(), "id-1");
 
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(received).contains("id-1"));

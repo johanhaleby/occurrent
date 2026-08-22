@@ -22,7 +22,9 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqBridgeException;
+import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.retry.RetryStrategy;
@@ -35,8 +37,12 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -46,6 +52,8 @@ import static org.mockito.Mockito.when;
  * retry, exercised against a mocked {@link Connection} and {@link Channel} instead of a real broker.
  */
 class RabbitMqDomainEventBridgeBuildRetryTest {
+
+    private static final String EXCHANGE = "test-exchange";
 
     @Test
     void a_broker_communication_failure_is_retried_with_the_default_strategy_and_build_eventually_succeeds() throws Exception {
@@ -101,6 +109,39 @@ class RabbitMqDomainEventBridgeBuildRetryTest {
                 .hasMessage("expected, simulates a bug, not a broker failure");
 
         verify(connection, times(1)).openChannel();
+    }
+
+    @Test
+    void each_retried_attempt_closes_the_channel_it_opened_before_the_one_that_succeeds_stays_open() throws Exception {
+        Connection connection = mock(Connection.class);
+        Channel firstChannel = mock(Channel.class);
+        Channel secondChannel = mock(Channel.class);
+        Channel thirdChannel = mock(Channel.class);
+        when(connection.openChannel())
+                .thenReturn(Optional.of(firstChannel))
+                .thenReturn(Optional.of(secondChannel))
+                .thenReturn(Optional.of(thirdChannel));
+        when(firstChannel.queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any()))
+                .thenThrow(new IOException("expected, simulates a broker briefly unreachable"));
+        when(secondChannel.queueDeclare(anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any()))
+                .thenThrow(new IOException("expected, simulates a broker briefly unreachable"));
+        // thirdChannel.queueDeclare(...) is left unstubbed, so it succeeds on the third attempt.
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(EXCHANGE, ReflectionCloudEventTypeMapper.qualified());
+
+        RabbitMqDomainEventBridge<TestOrderPlaced> bridge = RabbitMqDomainEventBridge.builder(connection, feed, "queue")
+                .resolver(resolver)
+                .build();
+        try {
+            assertThat(bridge).isNotNull();
+            // Each failed attempt's own unwind closes the channel it opened, never the next attempt's, and the
+            // channel the succeeding attempt opened is still the one the returned bridge is using.
+            verify(firstChannel).close();
+            verify(secondChannel).close();
+            verify(thirdChannel, never()).close();
+        } finally {
+            bridge.close();
+        }
     }
 
     private record TestOrderPlaced(String orderId) {
