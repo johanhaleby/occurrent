@@ -38,6 +38,7 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 import reactor.core.publisher.Mono;
 
@@ -66,6 +67,16 @@ class SubscriptionAnnotationRegistrar {
     SubscriptionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
+    }
+
+    // A startAt = BEGINNING, startupMode = WAIT_UNTIL_STARTED subscription replays its history synchronously
+    // inside this BeanPostProcessor, on the thread that is still creating beanName. Looking the bean up for such a
+    // delivery hangs, because the bean factory's lenient singleton locking re-enters bean creation on this
+    // delivering thread instead of blocking it. Falling back to the raw bean for that window matches this method's
+    // behavior before this fix. Every delivery after the bean finishes creation uses the proxy.
+    private Object resolveHandlerTarget(Object bean, String beanName) {
+        boolean beanStillBeingCreated = ((ConfigurableApplicationContext) applicationContext).getBeanFactory().isCurrentlyInCreation(beanName);
+        return beanStillBeingCreated ? bean : applicationContext.getBean(beanName);
     }
 
     Object postProcessBeforeInitialization(Object bean, String beanName) {
@@ -108,7 +119,7 @@ class SubscriptionAnnotationRegistrar {
         // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
         // so a handler-side @Transactional is honored when the subscription's handler is invoked.
         Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
-                invokeMono(method, applicationContext.getBean(beanName), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+                invokeMono(method, resolveHandlerTarget(bean, beanName), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
 
         boolean shouldWaitUntilStarted = subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(subscription.startAt() == StartPosition.BEGINNING_OF_TIME && streamHistoryReplaySupported, subscription.startupMode());
         StreamSubscriptions<E> streamSubscriptions = applicationContext.getBean(StreamSubscriptions.class);
@@ -134,7 +145,7 @@ class SubscriptionAnnotationRegistrar {
         // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
         // so a handler-side @Transactional is honored when the subscription's handler is invoked.
         Function2<EventMetadata, E, Mono<Void>> consumer = (metadata, event) ->
-                invokeMono(method, applicationContext.getBean(beanName), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+                invokeMono(method, resolveHandlerTarget(bean, beanName), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
 
         long startAtGlobalPosition = annotation.startAtGlobalPosition();
         if (startAtGlobalPosition >= 0 && annotation.startAt() != org.occurrent.annotation.StartPosition.DEFAULT) {
@@ -210,7 +221,7 @@ class SubscriptionAnnotationRegistrar {
         // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
         // so a handler-side @Transactional is honored when the subscription's handler is invoked.
         BiFunction<DcbEventMetadata, E, Mono<Void>> consumer = (dcbMetadata, event) -> {
-            Object target = applicationContext.getBean(beanName);
+            Object target = resolveHandlerTarget(bean, beanName);
             boolean hasDcbEventMetadataParam = parameters.stream().anyMatch(p -> p.type() == DcbEventMetadata.class);
             Object metadataArgument = hasDcbEventMetadataParam ? dcbMetadata : dcbMetadata.eventMetadata();
             return invokeMono(method, target, SubscriptionAnnotations.bindArguments(parameters, event, metadataArgument, dcbMetadata.eventMetadata()));

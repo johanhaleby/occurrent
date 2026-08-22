@@ -35,6 +35,7 @@ import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 
 import java.lang.reflect.Method;
@@ -59,6 +60,16 @@ class SubscriptionAnnotationRegistrar {
     SubscriptionAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport) {
         this.applicationContext = applicationContext;
         this.startPositionSupport = startPositionSupport;
+    }
+
+    // A startAt = BEGINNING, startupMode = WAIT_UNTIL_STARTED subscription replays its history synchronously
+    // inside this BeanPostProcessor, on the thread that is still creating beanName. Looking the bean up for such a
+    // delivery hangs, because the bean factory's lenient singleton locking re-enters bean creation on this
+    // delivering thread instead of blocking it. Falling back to the raw bean for that window matches this method's
+    // behavior before this fix. Every delivery after the bean finishes creation uses the proxy.
+    private Object resolveHandlerTarget(Object bean, String beanName) {
+        boolean beanStillBeingCreated = ((ConfigurableApplicationContext) applicationContext).getBeanFactory().isCurrentlyInCreation(beanName);
+        return beanStillBeingCreated ? bean : applicationContext.getBean(beanName);
     }
 
     void registerSubscriptions(Object bean, String beanName) {
@@ -97,7 +108,7 @@ class SubscriptionAnnotationRegistrar {
         // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
         // so a handler-side @Transactional is honored when the subscription's handler is invoked.
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            Object target = applicationContext.getBean(beanName);
+            Object target = resolveHandlerTarget(bean, beanName);
             invoke(method, target, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
@@ -127,7 +138,7 @@ class SubscriptionAnnotationRegistrar {
         // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
         // so a handler-side @Transactional is honored when the subscription's handler is invoked.
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            Object target = applicationContext.getBean(beanName);
+            Object target = resolveHandlerTarget(bean, beanName);
             invoke(method, target, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
@@ -201,7 +212,7 @@ class SubscriptionAnnotationRegistrar {
         // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
         // so a handler-side @Transactional is honored when the subscription's handler is invoked.
         BiConsumer<DcbEventMetadata, E> consumer = (dcbMetadata, event) -> {
-            Object target = applicationContext.getBean(beanName);
+            Object target = resolveHandlerTarget(bean, beanName);
             boolean hasDcbEventMetadataParam = parameters.stream().anyMatch(p -> p.type() == DcbEventMetadata.class);
             Object metadataArgument = hasDcbEventMetadataParam ? dcbMetadata : dcbMetadata.eventMetadata();
             invoke(method, target, SubscriptionAnnotations.bindArguments(parameters, event, metadataArgument, dcbMetadata.eventMetadata()));

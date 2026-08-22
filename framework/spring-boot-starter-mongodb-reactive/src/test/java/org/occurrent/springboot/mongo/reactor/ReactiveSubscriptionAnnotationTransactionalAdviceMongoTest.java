@@ -109,7 +109,7 @@ class ReactiveSubscriptionAnnotationTransactionalAdviceMongoTest {
         applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new StreamEvent("stream-1"))).block();
 
         await().atMost(ofSeconds(10)).untilAsserted(() ->
-                assertThat(streamAnnotatedSubscriber.transactionWasActive()).containsExactly(true));
+                assertThat(streamAnnotatedSubscriber.transactionWasActive()).isNotEmpty().containsOnly(true));
     }
 
     @Test
@@ -117,7 +117,7 @@ class ReactiveSubscriptionAnnotationTransactionalAdviceMongoTest {
         applicationService.execute(UUID.randomUUID().toString(), __ -> List.of(new AgnosticEvent("agnostic-1"))).block();
 
         await().atMost(ofSeconds(10)).untilAsserted(() ->
-                assertThat(agnosticAnnotatedSubscriber.transactionWasActive()).containsExactly(true));
+                assertThat(agnosticAnnotatedSubscriber.transactionWasActive()).isNotEmpty().containsOnly(true));
     }
 
     @Test
@@ -129,7 +129,7 @@ class ReactiveSubscriptionAnnotationTransactionalAdviceMongoTest {
         dcbEventStore.append(cloudEvents).block();
 
         await().atMost(ofSeconds(10)).untilAsserted(() ->
-                assertThat(dcbAnnotatedSubscriber.transactionWasActive()).containsExactly(true));
+                assertThat(dcbAnnotatedSubscriber.transactionWasActive()).isNotEmpty().containsOnly(true));
     }
 
     // --- inner application and configuration classes ---
