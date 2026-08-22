@@ -426,6 +426,40 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
     }
 
+    /**
+     * A handler that reaches into a second catch-up-then-live model whose own catch-up has failed lets that
+     * model's refusal out through this one. This handler genuinely ran, so its own outcome is DELIVERED, and the
+     * refusal propagates as any other handler failure would. Reporting it as this registration's own refusal is
+     * what #893 item 5 describes, and it would tell a broker bridge to stop for a failure that is not its own.
+     */
+    @Test
+    void a_refusal_from_a_handover_the_handler_reached_into_reports_delivered_for_this_registration() throws Exception {
+        List<RoutingOutcome> observed = new ArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+
+        // A second model, with its own live feed, whose catch-up fails and which therefore refuses everything.
+        PushSubscriptionModel otherFeed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel otherModel = new CatchupThenPushSubscriptionModel(failingReader(), otherFeed, null);
+        var otherSubscription = otherModel.subscribe("other", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        });
+        assertThat(catchThrowable(otherSubscription::waitUntilStarted))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Stream::empty, 0), liveFeed, null);
+        var subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+                cloudEvent -> otherFeed.accept(cloudEvent));
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+        Throwable thrown = catchThrowable(() -> liveFeed.acceptRedeliverable(cloudEvent("1", "Created")));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(observed)
+                .as("this registration's handler ran, so its own outcome is DELIVERED even though what it called "
+                        + "into refused")
+                .containsExactly(RoutingOutcome.DELIVERED);
+    }
+
     @Test
     void the_same_subscription_id_can_be_used_again_once_a_failed_catch_up_is_cancelled() {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();

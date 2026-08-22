@@ -506,6 +506,38 @@ class CatchupThenPushSubscriptionModelTest {
         assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
     }
 
+    /**
+     * The reactor twin of the blocking
+     * {@code a_refusal_from_a_handover_the_handler_reached_into_reports_delivered_for_this_registration}. A
+     * handler that reaches into a second model whose own catch-up has failed lets that model's refusal out through
+     * this one. This handler ran, so its own outcome is DELIVERED.
+     */
+    @Test
+    void a_refusal_from_a_handover_the_handler_reached_into_reports_delivered_for_this_registration() {
+        List<RoutingOutcome> observed = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+
+        PushSubscriptionModel otherFeed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel otherModel = new CatchupThenPushSubscriptionModel(failingReader(), otherFeed, null);
+        Subscription otherSubscription = otherModel.subscribe("other", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        assertThat(catchThrowable(() -> otherSubscription.waitUntilStarted().block(Duration.ofSeconds(5))))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Flux::empty, 0), liveFeed, null);
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+                ce -> otherFeed.accept(ce));
+        assertThat(subscription.waitUntilStarted().block(Duration.ofSeconds(5))).isNull();
+
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")).block());
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(observed)
+                .as("this registration's handler ran, so its own outcome is DELIVERED even though what it called "
+                        + "into refused")
+                .containsExactly(RoutingOutcome.DELIVERED);
+    }
+
     @Test
     void the_same_subscription_id_can_be_used_again_once_a_failed_catch_up_is_cancelled() {
         PushSubscriptionModel liveFeed = new PushSubscriptionModel();
