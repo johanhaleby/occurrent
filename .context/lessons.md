@@ -1655,3 +1655,24 @@ the guard genuinely does distinguish "nothing to reapply" from "reapply it". The
 mentioned an original WITHOUT a position, so the falsification attempt never constructed one. When
 writing the claim for a verify pass, state the absent and empty cases explicitly, or they go
 unexercised by construction.
+
+## Aim the adversarial pass at the fix's own worse failure, not at the bug (rel34, 2026-08-22)
+
+PR 902 fixed a false-positive startup warning by comparing model identity. The obvious verification
+question is whether the false positive is gone. The useful one was the opposite: could the new
+comparison silently switch the warning OFF for the composition it exists to serve?
+
+Asked that way, the pass falsified the mechanism. `isDefaultKnownLiveOnlyFor` was a bare reference
+check with no unwrapping, so a transparent proxy around the registered bean, which any
+`BeanPostProcessor` or Spring AOP auto-proxying produces routinely, made a genuinely live-only
+composition stop warning, permanently, with no error. Strictly worse than the bug being fixed. It
+was reproduced with a control rather than argued.
+
+The generalisation: when a fix narrows a condition, the failure worth hunting is the condition
+narrowing too far, not failing to narrow enough. State that as the claim to falsify, because a pass
+told to confirm the bug is gone will confirm the bug is gone.
+
+Two supporting habits from the same pass. Ask for at least one independently re-checkable fact, such
+as which files a diff touches, so the report can be spot-checked without rerunning it. And ask what
+the pass could NOT verify: this one surfaced that `suppliedBy` has no once-only guard and that it
+had not constructed the double-call scenario, which is a real gap nobody had named.

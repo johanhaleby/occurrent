@@ -26,7 +26,8 @@ package org.occurrent.subscription;
  * each calls for a different response.
  * <ul>
  *   <li>{@link #DEFERRED} and {@link #UNAVAILABLE} mean nothing is wrong. Offer the event again later.</li>
- *   <li>{@link #NOT_DELIVERABLE} means the filter failed to answer. The caller's own failure policy decides.</li>
+ *   <li>{@link #NOT_DELIVERABLE} means the filter failed to answer, or a registered action refused the event
+ *       without promising the refusal is permanent. The caller's own failure policy decides.</li>
  *   <li>{@link #REFUSED} means a registered action refused the event and promised that refusing is permanent for
  *       it. Offering the same event to the same registration again gets the same answer, so stop instead.</li>
  * </ul>

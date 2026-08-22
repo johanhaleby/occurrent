@@ -163,8 +163,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Register on the live feed first, so events committing during the replay are buffered in the sink, not
         // lost. Buffering, the write path, uses acceptReportingDelivery(..), never acceptIfLive(..), which would
         // refuse rather than buffer a payload arriving during the replay. Only the dedicated pre-dispatch exception
-        // is wrapped as a Refusal, so routeReportingMatch reports NOT_DELIVERABLE for it and DELIVERED for a
-        // handler's own exception, the same one-evaluation fix the blocking stack already has.
+        // is wrapped as a Refusal, so routeReportingMatch reports NOT_DELIVERABLE or REFUSED for it, whichever
+        // handover.refusesPermanently() decides, and DELIVERED for a handler's own exception, the same
+        // one-evaluation fix the blocking stack already has.
         RegisteringSubscribable.RoutingAction routingAction = cloudEvent -> handover.acceptReportingDelivery(cloudEvent)
                 .onErrorMap(ReactiveHandover.PreDispatchRefusalException.class, e -> e.thrownBy(handover)
                         ? new RegisteringSubscribable.RoutingAction.Refusal(e, handover.refusesPermanently())

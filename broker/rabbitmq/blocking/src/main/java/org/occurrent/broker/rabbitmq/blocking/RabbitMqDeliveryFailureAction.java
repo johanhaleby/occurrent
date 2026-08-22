@@ -143,9 +143,9 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
             redeliver(deliveryTag);
             return;
         }
+        ack(deliveryTag);
         log.warn("Parked delivery tag {} to exchange \"{}\" routing key \"{}\" and acknowledged the original; " +
                 "nothing consumed it.", deliveryTag, destination.exchange(), destination.routingKey());
-        ack(deliveryTag);
     }
 
     /**
@@ -210,8 +210,8 @@ public final class RabbitMqDeliveryFailureAction implements AutoCloseable {
      * log it.
      */
     public void redeliverFailure(long deliveryTag) {
-        log.warn("Redelivered delivery tag {} with requeue; nothing consumed it.", deliveryTag);
         redeliver(deliveryTag);
+        log.warn("Redelivered delivery tag {} with requeue; nothing consumed it.", deliveryTag);
     }
 
     /**

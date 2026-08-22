@@ -78,6 +78,19 @@ class KafkaCloudEventBridgeBuildFailureTest {
     }
 
     @Test
+    void an_explicit_empty_bindings_set_is_refused_before_any_consumer_is_opened() {
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+
+        KafkaCloudEventBridge.Builder builder = KafkaCloudEventBridge.builder(validConsumerConfig(), model, outcomeChannel)
+                .bindings(Set.of());
+
+        assertThatThrownBy(builder::build)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("bindings(...)");
+    }
+
+    @Test
     void consumerConfig_missing_group_id_is_refused_rather_than_failing_invisibly_later() {
         RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
