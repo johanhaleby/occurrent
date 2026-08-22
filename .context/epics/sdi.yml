@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 25
+revision: 26
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -194,10 +194,10 @@ units:
     deliverables:
       - {check: pr_merged, ref: 923, met: false, evidence: null}
     blocking_on: []
-    next_action: "PR 923 open and to brief. NOT merging: Copilot review is queued and the worker is still in its pr-fix loop. Merge gate runs on its DELIVERY_RESULT, and includes the review-body read plus any suppressed-comment block."
+    next_action: "PR 923 at head cdd9147db, four commits, all substantive. Scope extension and both decision-text corrections VERIFIED APPLIED from the diff, not assumed from the send. Holding for DELIVERY_RESULT before the merge gate: the worker may request a third review, and its brief makes a reasoned-decline round the final one."
     last_meaningful_progress_at: 2026-08-22T13:15:00Z
     observed:
-      pr_923: {head: 3bc60a12b, opened_at: 2026-08-22T13:3xZ, files: 1, additions: 71, deletions: 0, scope: "ADR 0127 only, exactly the brief's ownership", ci_skip: "yes, on the head commit, so no matrix runs and the verdict carries by compare from the last code-bearing green state", runs: "Copilot Code Review queued, no Java CI by design", content_check: "all four ruled decisions present (catch-all PUBLIC on the builder, runner as single execution path incl DCB in 0.35.0, waitUntilStarted forwarded not moved, DSL stays a real class); ADR 0051 cited, 0029 cited, ADR 0119 correctly ABSENT", via: "gh pr view + git show of the branch diff", at: 2026-08-22T13:35:00Z}
+      pr_923: {head: cdd9147db, opened_at: 2026-08-22T13:3xZ, files: 1, additions: 71, deletions: 0, scope: "ADR 0127 only, exactly the brief's ownership", ci_skip: "yes, on the head commit, so no matrix runs and the verdict carries by compare from the last code-bearing green state", runs: "Copilot Code Review queued, no Java CI by design", content_check: "all four ruled decisions present (catch-all PUBLIC on the builder, runner as single execution path incl DCB in 0.35.0, waitUntilStarted forwarded not moved, DSL stays a real class); ADR 0051 cited, 0029 cited, ADR 0119 correctly ABSENT", via: "gh pr view + git show of the branch diff", at: 2026-08-22T13:35:00Z}
     assessment: "UNFENCED prose, and it goes FIRST because every downstream unit reads it. ADR 0127 is unreleased so AGENTS.md permits amending in place rather than writing a successor. The hole it closes: decision 4 rewrites the two SubscriptionAnnotationRegistrar classes, which execute through applicationContext.getBean(StreamSubscriptions.class).subscribe(..) at six call sites across both stacks, and the ADR never says what the descriptor path executes through. ADR 0029 recorded that Spring-bean dependency in 2026-06 and ADR 0119 lines 71-76 already name the Extensions-over-a-class-based-API shape as the convention the Kotlin sugar follows. ADR 0029's binary-compatibility constraint still binds: Subscriptions has been released since 0.20.4 and callers inject it, so it stays a real class. Written through /johan-writing. Sonnet/high."
   U13:
     issue: 725
