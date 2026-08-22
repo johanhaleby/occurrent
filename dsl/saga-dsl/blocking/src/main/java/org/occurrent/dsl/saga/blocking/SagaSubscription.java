@@ -77,9 +77,13 @@ public final class SagaSubscription implements AutoCloseable {
      * <p>
      * Both halves are needed and neither is enough on its own. Clear the record alone and the instance handles new
      * events against state with a gap in it. Replay alone and the instance is still quarantined when the events arrive,
-     * so it skips them and quarantines again. So the instance is marked released first and stays inert until the
-     * replay reaches its recorded position, at which point it handles that event and becomes {@link SagaStatus#ACTIVE}
-     * again.
+     * so it skips them and quarantines again. So the instance is marked released first and stays inert until the replay
+     * delivers the exact event it stopped on, at which point it handles that event and leaves quarantine, becoming
+     * {@link SagaStatus#ACTIVE} again or {@link SagaStatus#COMPLETED} when that event finishes the saga.
+     * <p>
+     * It opens on that one event and not on a later one, so an instance whose recorded event a replay can no longer
+     * produce stays quarantined rather than resuming across the gap. {@code SagaStateStore.delete(sagaId)} abandons
+     * such an instance deliberately.
      * <p>
      * <strong>This pauses the saga's whole subscription while the replay catches up.</strong> Every other instance of
      * the same saga stops receiving events until it finishes, and each of them re-reads the events it already handled,
@@ -100,7 +104,10 @@ public final class SagaSubscription implements AutoCloseable {
      *                                       {@code SagaStateStore.delete(sagaId)} remains the way to abandon it
      * @throws SagaConcurrencyException      if the instance was written concurrently while being released
      */
-    public void release(String sagaId) {
+    // Serialized per saga, because release is two writes with a pause and a reposition between them. Two callers
+    // interleaving there would let the one that lost the race take the release mark back off while the winner's replay
+    // was already running, leaving an instance that looks released and never opens again.
+    public synchronized void release(String sagaId) {
         requireNonNull(sagaId, "sagaId cannot be null");
         RepositionableSubscriptions repositionable = RepositionableSubscriptions.findIn(subscriptionModel)
                 .orElseThrow(() -> new UnsupportedOperationException("Cannot release saga instance '" + sagaId + "' because the subscription model behind saga subscription '" + subscription.id() + "' does not implement RepositionableSubscriptions, so it cannot be resumed at the position the instance stopped at. The instance stays quarantined. Use SagaStateStore.delete(sagaId) to abandon it instead."));

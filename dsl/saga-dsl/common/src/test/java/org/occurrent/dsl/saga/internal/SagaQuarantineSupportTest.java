@@ -278,6 +278,16 @@ class SagaQuarantineSupportTest {
         }
 
         @Test
+        void skips_an_event_past_the_position_it_stopped_at_rather_than_resuming_across_the_gap() {
+            // A release marks the instance before the subscription is paused, so a live event can arrive in that window
+            // sitting past the recorded position without being the replay. Opening on it would leave a gap in the state.
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    saga(), "o1", released(), SagaInput.event(new PaymentReserved("o1")), at(11), NOW);
+
+            assertThat(outcome.processed()).isFalse();
+        }
+
+        @Test
         void folds_the_event_it_stopped_on_and_clears_the_record() {
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
                     saga(), "o1", released(), SagaInput.event(new PaymentReserved("o1")), at(9), NOW);

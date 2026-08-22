@@ -641,9 +641,10 @@ class SagaRunnerTest {
             assertAll(
                     () -> assertThat(shipAttempts.get()).isGreaterThanOrEqualTo(2),
                     () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
-                    // Three saves rather than two, because the first dispatch failure writes the record that starts the
-                    // quarantine budget before it rethrows. The successful redelivery then clears it again.
-                    () -> assertThat(envelope.version()).isEqualTo(3),
+                    // Still two saves. InMemorySubscriptionModel cannot be resumed at a chosen position, so this runner
+                    // has no quarantine budget and the failed attempt writes nothing at all, not even the record that
+                    // would start one.
+                    () -> assertThat(envelope.version()).isEqualTo(2),
                     () -> assertThat(envelope.failure()).isNull()
             );
         }
