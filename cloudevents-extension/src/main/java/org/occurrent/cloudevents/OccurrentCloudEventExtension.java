@@ -140,6 +140,21 @@ public class OccurrentCloudEventExtension implements CloudEventExtension {
     }
 
     /**
+     * Returns a copy of {@code updated} with {@code original}'s {@value #STREAM_ID} and {@value #STREAM_VERSION}. A
+     * store's {@code updateEvent} calls this so a replacement event an updater builds from scratch cannot silently
+     * lose which stream and version it belongs to, or move it to a different one. Every stored event belongs to
+     * exactly one stream at exactly one version, so unlike the append id or the position, there is no absent case
+     * to preserve here.
+     */
+    public static CloudEvent preserveStreamIdentity(CloudEvent original, CloudEvent updated) {
+        requireNonNull(original, "Original CloudEvent cannot be null");
+        requireNonNull(updated, "Updated CloudEvent cannot be null");
+        String streamId = OccurrentExtensionGetter.getStreamId(original);
+        long streamVersion = OccurrentExtensionGetter.getStreamVersion(original);
+        return CloudEventBuilder.v1(updated).withExtension(STREAM_ID, streamId).withExtension(STREAM_VERSION, streamVersion).build();
+    }
+
+    /**
      * Returns a copy of {@code updated} with {@code original}'s exact append id state, present or absent. A
      * store's {@code updateEvent} calls this so a replacement event an updater builds from scratch cannot silently
      * drop the append id an earlier write stamped, and cannot pick one up that it never had. Either mistake would
@@ -152,5 +167,20 @@ public class OccurrentCloudEventExtension implements CloudEventExtension {
         requireNonNull(updated, "Updated CloudEvent cannot be null");
         String appendId = getAppendId(original);
         return appendId == null ? CloudEventBuilder.v1(updated).withoutExtension(APPEND_ID).build() : withAppendId(updated, appendId);
+    }
+
+    /**
+     * Returns a copy of {@code updated} with {@code original}'s exact position, present or absent, the same
+     * present-or-absent treatment {@link #preserveAppendId} gives the append id. A store's {@code updateEvent}
+     * calls this so a replacement event an updater builds from scratch cannot silently drop the position an
+     * earlier write stamped, and cannot forge one it never had. Either mistake would move the event to a
+     * different point in, or out of, the store's global sequence. This only reapplies the extension on the
+     * returned {@link CloudEvent}, not the stored document's BSON type, which a store fixes separately.
+     */
+    public static CloudEvent preservePosition(CloudEvent original, CloudEvent updated) {
+        requireNonNull(original, "Original CloudEvent cannot be null");
+        requireNonNull(updated, "Updated CloudEvent cannot be null");
+        long position = getPosition(original);
+        return position > 0 ? withPosition(updated, position) : CloudEventBuilder.v1(updated).withoutExtension(POSITION).build();
     }
 }

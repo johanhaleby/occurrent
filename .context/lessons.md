@@ -2497,3 +2497,103 @@ Of the five here, two were correct: their blocker is a sibling PR still open and
 The tell is a set of units sharing one timestamp to the second. That is not a fact about the units, it is the signature of a single write that touched all of them, and every one of them has been untouched since.
 
 So when a blocked unit reports STALLED, resolve which of two claims it is making before repeating it: nothing has moved, or nobody has looked. Check the blocker itself, then either re-stamp the unit or leave it stalled deliberately. And propagate a blocker change to EVERY unit that shares it rather than to the one whose entry happened to be open at the time, because the units that miss the update are exactly the ones that will later look stalled for no reason.
+
+## A mechanism built for a rule encodes a claim about which states exist, and mine could only say `active`
+
+The status page went stale a second time, an hour after the first, and the cause was the opposite of the first. The first time the loop was busy and skipped the refresh 21 times. This time the loop was correctly quiet, zero checkpoints fired between 15:22Z and 16:00Z, because sdi is waiting on a release tag that may not arrive for hours. Nothing was neglected. The projection still promised a deadline it had no intention of meeting.
+
+The skill says what to do about exactly this: when the loop is about to go quiet for longer than the deadline, set `loop_state` to `paused` instead of leaving it `active` with a deadline nobody will meet, because active plus an expired deadline is the one combination that renders as a lie rather than as silence. That passage had been read the same day. The memory file already described the epic as idle by choice rather than blocked, in those words. And the refresh still went out as `active` with a 38 minute deadline.
+
+The reason is the fix from the first failure. The refresh had been made into one script so a busy checkpoint could not skip it, and that script hardcoded `"loop_state":"active"`. It could not express `paused` at all. So the mechanism built to enforce the rule had quietly encoded only the rule's common case, and made the exception unreachable by anyone using the mechanism. Choosing `paused` was no longer a decision that could be taken at the point of use, and the missing option is invisible from there.
+
+Two things follow. A mechanism is a claim about which states exist, so when turning a rule into a command, enumerate the rule's OWN branches and make each one expressible rather than encoding the path that happened to be live when it was written. And a fix for one failure is new code, so it deserves the same suspicion as the code that failed: this one was written, verified against the case it was built for, and never checked against the neighbouring case one sentence away in the rule it implemented.
+
+The command now takes `active <stale_after> | paused | finished`, refuses an unknown state, and sends a null deadline for anything but active, which is what the schema wanted all along.
+## A rule whose enforcement depends on remembering is not enforced
+
+rel34 wrote the status-refresh rule into the shared skill at 15:02, having just been shown a status
+page four and a half hours stale. It then made nine checkpoint commits over the next hour without
+once refreshing the projection, and went stale again, 24 minutes past its own deadline and nine
+revisions behind. The rule was correct, recently written, and written by the same session that broke
+it.
+
+The reason is that the refresh was a heredoc retyped at each use rather than a command. Retyping is
+not a mechanism, it is a thing you remember, and a checkpoint under load is exactly when remembering
+fails. The durable fix is that the refresh is one invocation that reads the epic file, writes the
+projection, regenerates the viewer data, and prints what it wrote back.
+
+Carry sdi's constraint into that command rather than discovering it later. Its own first fix
+hardcoded `"loop_state":"active"`, which made `paused` unexpressible at the point of use, so a
+mechanism built to enforce a rule quietly encoded a claim about which states exist. Any refresh
+command takes the state as an argument and can emit all three, and `paused` takes a null deadline
+because the decision being recorded is that no next checkpoint is scheduled.
+
+The general shape is worth separating from the instance. When a rule has been broken twice by
+someone who knows it, stop restating the rule and change what it costs to follow.
+
+## A hold posted to a PR reaches nobody if the worker has already stopped
+
+rel34 held five PRs on confirmed defects and then waited. A liveness check, run only because a
+sibling orchestrator argued for preferring mechanisms over memory, showed all five worker sessions
+were `isRunning: false`, last active between two and four hours earlier. Every hold had been posted
+to its PR AFTER its worker stopped, so none had been read and no work was in progress on any of
+them. The orchestrator had been reading "no push" as "working" when it meant "ended".
+
+The finding-routing protocol's own reasoning is what makes this easy to miss. It says to leave a
+durable trace because a message can fail silently, which is true. The durable trace cannot forget,
+and it also cannot act. A PR comment is a place for an actor to look, not an actor.
+
+So when a unit is held on a worker, check that the worker is alive at the moment the hold is
+posted, not later. It is one call. Waking all five took one message each and every one resumed
+within the minute, so the cost of the check is trivial against a fleet that was doing nothing for
+hours.
+
+The slower mechanism is worth keeping as the backstop rather than the primary. Once
+`last_meaningful_progress_at` tracks the blocked unit's PR rather than the orchestrator's own
+writes, a stopped worker eventually surfaces as STALLED. That is how the dropped U11 dispatch was
+finally caught, but it took four hours, and a held release unit cannot afford that.
+
+## Merged is not shipped, and the ADR immutability rule turns on the second
+
+AGENTS.md line 66 makes a shipped ADR immutable and lets an unshipped one be updated in place. rel34
+told a worker that ADR 134 was "immutable now that it is merged" and needed a new ADR amending it by
+reference, which was wrong and made the work harder than it had to be. ADR 134 appears in no release
+tag, because it is 0.34.0 work and 0.34.0 is not cut, so it can simply be corrected in the same pull
+request as the change that found the error.
+
+What makes this worth recording is that the same orchestrator applied the rule correctly about an
+hour later on a different unit, ruling that ADR 132 may be amended in place while ADR 38 may not,
+because ADR 38 is in the `occurrent-0.33.0` tag and ADR 132 is not. The rule was known. The first
+answer came from memory and the second came from `git ls-tree` against the tags.
+
+So the check is one command and it settles it: list the release tags and ask whether the ADR file is
+in any of them. Do that before ruling on an ADR's mutability, however recently the rule was read.
+
+There is a second-order point worth keeping. The worker in that exchange had just found a break the
+ADR missed, and found it by checking a shipped tag rather than inferring from the ADR's own list.
+Being told something inferred rather than checked, immediately after doing the opposite, is the
+version of this failure that costs credibility as well as time.
+
+## A stale review's verdict is evidence of nothing, exactly like an absent one
+
+rel34 held PR 919 on four suppressed Copilot comments that said "Changes recommended", and treated
+them as outstanding findings. The worker checked and they were already fixed, in a commit that sits
+between the head Copilot reviewed and the current one. Verified rather than taken: all four call
+sites show zero uses of the criticised listener at the current head, and the fixing commit is an
+ancestor of it while not being an ancestor of the reviewed head.
+
+The orchestrator had also framed this as two credible sources contradicting each other, because an
+earlier adversarial pass had observed the logging behaving correctly while Copilot said it did not.
+They never contradicted. Copilot reviewed a head where the defect was real and the pass ran against
+a head where it was fixed, and each was right about what it saw.
+
+So the rule has two halves and this epic has now been bitten by both. An ABSENT review looks
+identical to a clean one afterwards, which cost a merge in the morning. A STALE review looks
+identical to a live finding, which cost an unnecessary hold in the afternoon. Neither tells you
+anything about the head you intend to merge. Compare every review's `commit_id` against the current
+head before reading its verdict at all, and when it does not match, get a fresh review rather than
+interpreting the old one in either direction.
+
+A sweep is worth more than catching these one at a time. Checking all six open PRs at once found
+four with stale reviews carrying "Changes recommended" and between one and four suppressed comments
+each, which is a fleet-wide condition rather than a property of any one unit.

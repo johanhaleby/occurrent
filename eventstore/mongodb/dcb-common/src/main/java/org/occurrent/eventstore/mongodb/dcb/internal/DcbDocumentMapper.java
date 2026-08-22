@@ -71,4 +71,24 @@ public final class DcbDocumentMapper {
         CloudEvent cloudEvent = OccurrentCloudEventMongoDocumentMapper.convertToCloudEvent(timeRepresentation, stripped);
         return PositionDocumentMapper.reattachPosition(cloudEvent, storedPosition);
     }
+
+    /**
+     * Reapplies the position and DCB tag index fields from {@code originalCloudEvent} onto {@code updatedDocument},
+     * for an {@code updateEvent} write-back that rebuilt the document from the stream-only
+     * {@link OccurrentCloudEventMongoDocumentMapper#convertToDocument}. That mapper does not know about either field:
+     * it round-trips position through the general CloudEvent extension writer, which has no {@code Long} overload and
+     * so coerces it to a string, and it never writes the indexed tags array at all. Both fields are store-owned, the
+     * way {@link OccurrentCloudEventExtension#preserveAppendId} treats the append id, so an update reapplies them
+     * from the event read before the update rather than trusting that lossy round trip. A plain stream event without
+     * a position, or without DCB tags, is left as the stream-only mapper produced it.
+     */
+    public static void preservePositionAndDcbTags(CloudEvent originalCloudEvent, Document updatedDocument) {
+        long position = OccurrentCloudEventExtension.getPosition(originalCloudEvent);
+        if (position > 0) {
+            PositionDocumentMapper.addPosition(updatedDocument, position);
+        }
+        if (DcbCloudEvents.isDcbEvent(originalCloudEvent)) {
+            updatedDocument.put(DCB_TAGS_INDEX_FIELD, DcbCloudEvents.getTags(originalCloudEvent).stream().map(Tag::canonical).collect(Collectors.toCollection(ArrayList::new)));
+        }
+    }
 }
