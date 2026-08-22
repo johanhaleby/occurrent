@@ -1,9 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 35
-updated_at: '2026-08-22T17:30:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U15 delivered a held docs PR, held set
-  is now EIGHT)
+revision: 36
+updated_at: '2026-08-22T17:50:00+00:00'
+updated_by: 'orchestrator rel34: U10 held on a falsified adversarial pass, U16 delivered PR 928'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -24,8 +23,9 @@ pending_actions:
   target: rel34/U3 worker, ListAgents name peaceful-curran-e041e6-4a, relaying dec-0005
   expected: 'U3 acknowledges and resumes coding. Observable as a push to rel34/u3-never-replays-warning-identity
     touching OccurrentMongoAutoConfiguration.java, or a reply message. NOT safe to repeat: a second copy
-    of a ruling can read as a revised ruling.'
-  status: PENDING
+    of a ruling can read as a revised ruling. RESOLVED: the worker acknowledged and PR 902 merged as squash
+    4f12b2ffb, #871 CLOSED.'
+  status: VERIFIED
   attempts: 1
   safe_to_repeat: false
   issued_at: '2026-08-22T07:58:00+00:00'
@@ -720,7 +720,7 @@ units:
     issue: 867
     goal: The RabbitMQ bridge survives a transient broker outage at startup rather than failing the application
       context.
-    phase: PLANNED
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -735,8 +735,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T13:20:00+00:00'
+    next_action: worker fixes the non-terminating classifier, then the gate re-runs from the top
+    last_meaningful_progress_at: '2026-08-22T17:50:00+00:00'
     observed:
       gate_919:
         note: 'PR 919 opened, all ten dispatched units now have PRs. TWO FAILURES on test (example-projection)
@@ -745,6 +745,23 @@ units:
           from the change rather than infrastructure.'
         via: gh pr view, gh run list, graphql reviewThreads
         at: '2026-08-22T13:20:00+00:00'
+      adversarial_919_falsified:
+        note: 'FALSIFIED, and on the one hazard the brief named. RabbitMqBuildFailureClassifier.isTransient
+          never returns for a cause chain that loops, because shutdownSignalIn walks getCause() with no
+          visited set. Two exceptions that cause each other are constructible through Throwable.initCause
+          alone, no reflection. Confirmed empirically under a five second watchdog thread: HUNG, not slow.
+          retryIf calls the classifier synchronously inside the retry loop, so build() hangs with it and
+          neither the next attempt nor the rethrow ever happens, which is what breaks the total ''if and
+          only if'' claim. Everything else HELD with repro: five permanent codes refused at depth 1/2/3
+          under two wrapper types, CONNECTION_FORCED and REPLY_SUCCESS both transient so only the five
+          are special-cased, null reason transient, permanent beats a transient wrapper, an outermost
+          ShutdownSignalException''s own code decides since the walk returns at the first one, exhaustion
+          is exactly 10 attempts rethrowing the last attempt''s own exception object with backoff 0.1/0.2/0.4/0.8/1.6
+          then 2s, and openConfirmChannel closes its own half-open channel so 10 attempts leave no channels
+          behind. NOT run, both needing a broker: the Testcontainers outage test and the RabbitMQ example
+          smoke test. Held on PR 919 as a comment, outcome stated without prescribing the mechanism.'
+        via: adversarial verify subagent a713afbdeed49388d
+        at: '2026-08-22T17:50:00+00:00'
     assessment: 'Decided IN by derivation, not asked: AGENTS.md:120 requires every component to ship production
       ready including surviving a transient outage of the store it talks to, and the broker modules ship
       for the first time in 0.34.0. The earlier decline for PR 861 is one of the deferrals the triage
@@ -1298,7 +1315,7 @@ units:
     goal: ExecuteFilter and DcbCriteriaBuilder derive their type filters through EventTypeExpansion like
       every other derivation in the library. type and includeTypes REFUSE what they cannot expand; excludeTypes
       WIDENS to the subtypes instead.
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on:
@@ -1306,7 +1323,7 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 928
       met: false
       evidence: ''
     - check: issue_closed
@@ -1314,9 +1331,15 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch
-    last_meaningful_progress_at: '2026-08-22T11:15:00+00:00'
-    observed: {}
+    next_action: run the merge gate on PR 928, adversarial pass before merge
+    last_meaningful_progress_at: '2026-08-22T17:50:00+00:00'
+    observed:
+      pr_opened:
+        note: PR 928 on rel34/u16-type-filter-expansion, 8 files, touching ExecuteFilter, DcbCriteriaBuilder.kt,
+          both test classes, changelog, the 0.34.0 migration guide and the upgrade-0_34 rewrite recipe.
+          Not yet gated.
+        via: gh pr view
+        at: '2026-08-22T17:50:00+00:00'
     assessment: 'Johan adopted it OVERRIDING both the filing worker''s recommendation and the orchestrator''s,
       dec-0010. The override reason is the stronger one: a caller who fixes their declarations for the
       rest of the library would still find these two handing a decider nothing. THE TRAP, recorded so
