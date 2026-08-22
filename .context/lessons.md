@@ -2445,3 +2445,13 @@ The failure was invisible to everything the delivery did right. The tests were b
 than proxy-identity assertions, mutation-verified in both directions, and correct about the reactive
 transaction context. They ran on Boot's default subclass proxies, which is a configuration axis
 rather than a coverage gap, and no amount of care within that axis reaches it.
+
+## ADR 0127's counts are systematically stale, and every brief derived from it must measure instead
+
+Three briefs in this epic were sized from numbers written in ADR 0127, and all three were wrong in the same direction. The ADR's "four annotation registrars" is seven, totalling 3309 lines. Its "three new descriptor annotations" is seven pairs. Its decision 2 sizes the handle rename at "52 files importing the blocking type and 26 importing the reactor one", seventy eight in total, and the merged diff touched 146 source files.
+
+None of these were errors when written. The ADR described the codebase on the day it was authored and the codebase kept moving, which is what an accepted ADR is supposed to allow. The error is downstream: a brief that quotes the ADR's count inherits a measurement with an expiry date and presents it as current, and a worker sizes its sweep to the smaller number without ever learning there was a larger one.
+
+The cost is not symmetric, which is what makes it worth a rule rather than a caution. An overcount wastes a little time. An undercount ships: a brief saying three annotation pairs normalizes three and leaves four silently unread, which is the exact defect the unit existed to fix, and nothing in a green compile or a passing test would have said so.
+
+So an ADR is authoritative for the DECISION and never for the COUNT. Take the shape, the reasoning and the constraints from it, then measure the surface against the working tree at the moment the brief is written, and put the measurement and its timestamp in the brief so the worker can tell which numbers were checked. Where the two disagree, the tree wins and the divergence is worth recording, because a decision sized against a codebase half the current size may have had its cost-benefit computed against that smaller number too.
