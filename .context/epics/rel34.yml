@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 20
-updated_at: '2026-08-22T11:15:00+00:00'
-updated_by: 'orchestrator session rel34-epic-registration-8c2066 (dec-0009 and dec-0010: U15 docs, U16
-  for 912, 884 and 909 adopted)'
+revision: 21
+updated_at: '2026-08-22T11:30:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (changelog landing-zone collision with
+  sdi, two R1 gate items)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -601,7 +601,25 @@ units:
     blocking_on: []
     next_action: dispatch after plan approval
     last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    observed:
+      changelog_landing_zone:
+        note: 'CROSS-EPIC COLLISION found by sdi and verified here rather than taken. changelog.md has
+          ONE landing zone: AGENTS.md puts unreleased entries under `### Changelog next version` and the
+          cut RENAMES that heading in place, which 4c04880e5 did for 0.33.0 with exactly one insertion
+          and one deletion. So any sdi entry sitting there when 0.34.0 is cut would publish as a 0.34.0
+          release note describing an API not in 0.34.0. sdi has decided and recorded that NO sdi unit
+          writes to changelog.md until the occurrent-0.34.0 tag exists; each unit authors its entry text
+          in its delivery result and one unit lands the collected block afterwards. TWO GATE ITEMS FOR
+          R1. First, at cut time verify changelog.md contains nothing of sdi''s, and if an sdi-shaped
+          entry is under the next-version heading, TELL sdi rather than stripping it silently. Second,
+          a decision R1 owes rather than an accident: 4c04880e5 only renamed and did NOT seed a fresh
+          `### Changelog next version` below, so immediately after a cut the file has no next-version
+          heading and the current one exists because the first 0.34.0 contributor created it. R1 must
+          decide whether the cut seeds a fresh heading, and tell sdi either way, because it decides whether
+          sdi''s landing unit creates one or uses one. A worker told to add an entry under a heading that
+          is not there is exactly who invents a premature `### 0.35.0`, which AGENTS.md forbids by name.'
+        via: sdi cross-epic message, verified with git show 4c04880e5 and git ls-tree occurrent-0.33.0
+        at: '2026-08-22T11:30:00+00:00'
     assessment: 'AGENTS.md:71-73: cutting a release renames the heading, it does not restructure the section.
       Runs after the last gating merge and after C1 reaches fixpoint.'
   R2:
