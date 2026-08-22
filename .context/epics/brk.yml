@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 169
+revision: 170
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -322,10 +322,11 @@ units:
     depends_on: []
     session: null
     deliverables:
-      - {check: manual_approval, ref: "verdict with evidence chain and pass counts, and the fix merged if the verdict is race or fixture", met: false}
+      - {check: manual_approval, ref: "verdict with evidence chain and pass counts", met: true, evidence: "race in the recovery path, PR 895 fence drops the first post-recovery redelivery unacked, deterministic probe fails every run on main and passes with the fence neutralised, tags monotonic across recovery in every trace; dec-0025"}
+      - {check: pr_merged, ref: null, met: false}
     blocking_on: []
-    next_action: "Opus worktree subagent investigating on origin/main since 2026-08-22T13:4xZ, adopted under the epic's own authority (brk wrote the code), rel34 informed. Tracking issue #922 (filed by a rel34 worker, milestone 0.34.0 set by brk), #893 items 17 and 30 point at it"
-    last_meaningful_progress_at: 2026-08-22T13:45:00Z
+    next_action: "FIX in flight: Opus worktree subagent on brk/u17-recovery-fence, plan gate first (delete the fence, regression test from the probe), dispatched 2026-08-22T14:5xZ. Verdict posted on #922, rel34 told its tag waits"
+    last_meaningful_progress_at: 2026-08-22T14:50:00Z
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
