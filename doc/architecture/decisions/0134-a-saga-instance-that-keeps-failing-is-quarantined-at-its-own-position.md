@@ -315,10 +315,13 @@ instance deliberately instead of quietly.
 
 ### 8. The migration treatment for the shipped API this breaks
 
-`SagaStatus`, `SagaEnvelope` and `SagaInstance` all shipped in `occurrent-0.33.0`, verified with `git ls-tree`
-against the tag rather than inferred, so this decision breaks shipped API in four places. A new `SagaEnvelope`
-component changes its canonical constructor and record-pattern arity. A new `SagaInstance` accessor breaks anyone
-implementing that interface. And the new `SagaStatus` constant breaks in two further ways of its own.
+`SagaStatus`, `SagaEnvelope`, `SagaInstance` and `SagaRunnerConfig` all shipped in `occurrent-0.33.0`, verified with
+`git ls-tree` and `git show` against the tag rather than inferred, so this decision breaks shipped API in five places.
+A new `SagaEnvelope` component changes its canonical constructor and record-pattern arity. A new `SagaInstance`
+accessor breaks anyone implementing that interface. The budget in decision point 3 is a new `SagaRunnerConfig`
+component, which changes that record's canonical constructor and record-pattern arity the same way, and this break was
+missed when the decision was drafted and added during implementation after checking the tag. And the new `SagaStatus`
+constant breaks in two further ways of its own.
 
 The visible half is that an exhaustive Java `switch` or Kotlin `when` over `SagaStatus` stops compiling. Nothing in
 this repository does that, every reference here is an equality comparison or a `findByStatus` call, so the compile
@@ -372,8 +375,9 @@ quarantine has to be noticed rather than left alone.
 **The change is not additive for out-of-tree callers, and the first draft was wrong to say it was.** The
 `SagaStateStore` methods keep their signatures, but `SagaEnvelope` is a public record, so a new component changes its
 canonical constructor and the arity of any record pattern over it, and a store built outside this repository
-constructs envelopes. `SagaInstance` is a public interface, so a new accessor breaks anyone implementing it. Both are
-shipped API and both break at compile time.
+constructs envelopes. `SagaRunnerConfig` is a public record too, and the budget adds a component to it.
+`SagaInstance` is a public interface, so a new accessor breaks anyone implementing it. All three are shipped API and
+all three break at compile time.
 
 Where a delegating or default member can absorb the break it should, and where it cannot the break is real and
 belongs in the migration guide next to the enum constant.
@@ -407,9 +411,10 @@ derived from a gap, and nothing downstream can detect that.
 Three questions were left for the gate rather than decided in the drafting, and all three are now closed. The
 budget's default was never among them, it is decided at five minutes in Decision point 3.
 
-1. **Migration.** One section in `doc/migration/upgrading-to-0.34.0.md` covering all four shipped breaks, meaning the
-   `SagaEnvelope` component, the `SagaInstance` accessor, the exhaustive switch over `SagaStatus` and the silent
-   change to what `findByStatus(ACTIVE, ...)` returns. No OpenRewrite recipe. Decision point 8.
+1. **Migration.** One section in `doc/migration/upgrading-to-0.34.0.md` covering all five shipped breaks, meaning the
+   `SagaEnvelope` component, the `SagaRunnerConfig` component, the `SagaInstance` accessor, the exhaustive switch over
+   `SagaStatus` and the silent change to what `findByStatus(ACTIVE, ...)` returns. No OpenRewrite recipe.
+   Decision point 8.
 2. **Retrying.** The executor keeps rethrowing and depends on something else re-offering the input. Owning the
    retrying itself would hold the subscription thread for the whole budget, which is a shorter version of the block
    this decision removes. A transport that never re-offers the input therefore cannot reach the budget and keeps
