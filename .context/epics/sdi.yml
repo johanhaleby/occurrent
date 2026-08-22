@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 3
+revision: 5
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -91,7 +91,7 @@ units:
     phase: BLOCKED
     health: PROGRESSING
     swept: false
-    depends_on: [U1, U2, U3, U5]
+    depends_on: [U1, U2, U3, U5, U12]
     session: null
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
@@ -107,7 +107,7 @@ units:
     phase: BLOCKED
     health: PROGRESSING
     swept: false
-    depends_on: [U5]
+    depends_on: [U5, U12]
     session: null
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
@@ -162,6 +162,37 @@ units:
     last_meaningful_progress_at: 2026-08-22T08:20:00Z
     observed: {}
     assessment: "Design work, not a sweep, and the best available proof that the Java descriptor API is usable from Kotlin. Sonnet/high."
+  U12:
+    issue: 725
+    goal: "Amend ADR 0127 in place with the descriptor-execution decision (dec-0004): the runner is the single execution path, the registrar descriptor path calls the runner rather than StreamSubscriptions.subscribe, and the Kotlin Subscriptions and StreamSubscriptions classes are reshaped into an idiom layer over descriptor plus runner while keeping their class identity and their Spring bean."
+    phase: READY
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Dispatch on plan approval, alongside U5."
+    last_meaningful_progress_at: 2026-08-22T08:50:00Z
+    observed: {}
+    assessment: "UNFENCED prose, and it goes FIRST because every downstream unit reads it. ADR 0127 is unreleased so AGENTS.md permits amending in place rather than writing a successor. The hole it closes: decision 4 rewrites the two SubscriptionAnnotationRegistrar classes, which execute through applicationContext.getBean(StreamSubscriptions.class).subscribe(..) at six call sites across both stacks, and the ADR never says what the descriptor path executes through. ADR 0029 recorded that Spring-bean dependency in 2026-06 and ADR 0119 lines 71-76 already name the Extensions-over-a-class-based-API shape as the convention the Kotlin sugar follows. ADR 0029's binary-compatibility constraint still binds: Subscriptions has been released since 0.20.4 and callers inject it, so it stays a real class. Written through /johan-writing. Sonnet/high."
+  U13:
+    issue: 725
+    goal: "Reshape Subscriptions and StreamSubscriptions on both stacks into a Kotlin idiom layer that builds a descriptor and hands it to the runner, so the runner becomes the single execution path. Keep every public signature, the class identity and the Spring bean."
+    phase: BLOCKED
+    health: PROGRESSING
+    swept: false
+    depends_on: [U12, U2, U3, U4]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on:
+      - {what: "REGISTRAR FENCE: also touches the starter bean methods occurrentStreamSubscriptionDsl and occurrentStreamSubscriptions, on rel34 U3's extended ownership", since: 2026-08-22T08:50:00Z, recheck_after: 2026-08-22T11:00:00Z}
+    next_action: "Plan gate first."
+    last_meaningful_progress_at: 2026-08-22T08:50:00Z
+    observed: {}
+    assessment: "Signature-preserving by constraint: the inline/reified overloads and the @JvmName and @JvmOverloads surface are a released API since 0.20.4 and the starter exposes the type as a ConditionalOnMissingBean, so this changes bodies rather than shapes. waitUntilStarted and StartAt handling move to the runner, which is where ADR 0127 already puts them. Sonnet/high."
   U11:
     issue: 721
     goal: "Documentation site: pages/docs/docs.md plus seven _includes/macros/annotation/ files, one commit per held branch across seven branches. Historical news posts excluded."
