@@ -809,3 +809,7 @@ Checked against sdi rather than noted and filed. The state file contains no unre
 U1 already models the compliant shape: its diff carries `rewrite/src/main/resources/META-INF/rewrite/renames-subscription-handle-0_35.yml`, a wiring change to `upgrade-0_35.yml`, a recipe test, and a migration guide edit, alongside the rename itself.
 
 PR 932 touches only `AGENTS.md` and is disjoint from U1. No sdi action on the PR.
+
+**Resolved at 2026-08-22T14:06:43Z.** The worker took the correction, restored both javadoc lines to `{@code @Subscription}` and the comment to its annotation form, then began sweeping its own diff for the same shape rather than stopping at the three lines named. Verified by content, not by its report: zero occurrences of `@SubscriptionHandle` anywhere in the worktree across Java, Kotlin, Markdown and YAML.
+
+Worth recording what found it, because no gate would have. The defect surfaced from reading an in-flight worktree during a wait, and it is invisible to compilation (a javadoc `{@code}` reference to a nonexistent type is not a compile error), invisible to tests, and invisible to the fence check. CI would have gone green on it. The merge gate would have caught it only if a reviewer read those two lines, and a 149 file mechanical rename is exactly the diff a reviewer skims.
