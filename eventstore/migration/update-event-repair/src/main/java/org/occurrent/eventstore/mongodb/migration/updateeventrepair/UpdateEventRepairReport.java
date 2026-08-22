@@ -25,9 +25,11 @@ import org.jspecify.annotations.NullMarked;
  *
  * @param eventsNeedingRepair  How many stored events the repair would touch. {@code 0} means this collection was
  *                             never damaged by the old {@code updateEvent} write-back, or has already been repaired.
- * @param eventsWithLostPosition How many of those events carry DCB tags but no {@code position} at all. The repair
- *                             cannot restore their position, so this is the part of the damage that survives a run.
- *                             See {@link UnrecoverableEvent.Reason#POSITION_LOST}.
+ * @param eventsWithLostPosition How many stored events have DCB tags but no {@code position} at all. The repair
+ *                             cannot restore a position that was never stored, so this count is what survives a
+ *                             completed run and it is not a subset of {@code eventsNeedingRepair}. Once such an
+ *                             event has had its tag array rebuilt it no longer needs repair, and it is still
+ *                             counted here. See {@link UnrecoverableEvent.Reason#POSITION_LOST}.
  */
 @NullMarked
 public record UpdateEventRepairReport(long eventsNeedingRepair, long eventsWithLostPosition) {
