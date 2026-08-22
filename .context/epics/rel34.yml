@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 41
-updated_at: '2026-08-22T19:25:00+00:00'
-updated_by: 'orchestrator rel34: R2 checklist published for Johan''s approval'
+revision: 42
+updated_at: '2026-08-22T19:45:00+00:00'
+updated_by: 'orchestrator rel34: 901 held on a confirmed Copilot coverage finding, 914 rebased and mergeable'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -110,7 +110,7 @@ units:
     goal: 'updateEvent no longer rewrites the stored position as a BSON string and no longer drops dcbTags.
       Invariant: a document round-tripped through convertToDocument preserves position as int64 and preserves
       dcbTags, at all three write-back sites (SpringMongoEventStore:356, MongoEventStore:756, ReactorMongoEventStore:904).'
-    phase: RUNNING
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -126,9 +126,9 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: await Copilot's review of 39d9a6ef0, then read its body and any suppressed block, then
-      merge
-    last_meaningful_progress_at: '2026-08-22T18:25:00+00:00'
+    next_action: worker adds the forged-tags-on-a-non-DCB-original test, verifies it fails with preserveTags
+      reverted, then the gate re-runs
+    last_meaningful_progress_at: '2026-08-22T19:45:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -252,6 +252,20 @@ units:
           in reviewRequests afterwards, since a wrong id succeeds while requesting nobody.'
         via: gh api pulls/901/reviews + graphql reviewRequests
         at: '2026-08-22T18:25:00+00:00'
+      copilot_coverage_finding_confirmed:
+        note: 'Copilot reviewed 39d9a6ef0 after the re-review request and returned ''Changes recommended''
+          at Balanced effort (read from the review body, not assumed), one comment, no suppressed block.
+          CONFIRMED by reading the tests rather than taking the report: the three store tests cover a
+          stream event keeping position, a DCB event keeping position and tags, a fresh replacement keeping
+          original tags, a forged POSITION on an unpositioned event, and a second update. NONE covers
+          an original with no tags whose updater forges some, which is the CloudEventBuilder.v1(updated).withoutExtension(TAGS).build()
+          branch enforcing the ''cannot pick up tags it never had'' half of preserveTags'' javadoc guarantee.
+          NOTE ON MY OWN VERIFICATION, worth keeping: adversarial_verify_2 DID exercise this branch and
+          found the code correct, but it ran in a throwaway harness. Code-is-correct and the-shipped-suite-would-catch-a-regression
+          are DIFFERENT claims, and only the second one gates a merge. I conflated them. The harness disappears,
+          the suite is what remains. Said so on the PR.'
+        via: gh api pulls/901/reviews + reading the three test files at pr901
+        at: '2026-08-22T19:45:00+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
@@ -375,7 +389,7 @@ units:
       write paths' retry so a store outage cannot block delivery forever, gives the compound applied-append
       index the same conflict recovery the TTL index has, and honours the blocking wait's deadline on
       a stalled connection.
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -402,8 +416,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker fixing the reactive already-elapsed case and deciding the interface-contract question
-    last_meaningful_progress_at: '2026-08-22T17:05:00+00:00'
+    next_action: await CI on e2554fdc, then run the gate from the top including a fresh adversarial pass
+    last_meaningful_progress_at: '2026-08-22T19:45:00+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -451,6 +465,20 @@ units:
           an implementation does not meet is the exact drift moving it up there was meant to prevent.'
         via: orchestrator re-verify subagent, measured
         at: '2026-08-22T17:05:00+00:00'
+      rebased_and_mergeable:
+        note: 'Worker fixed the twice-falsified reactive defect and rebased. Head e2554fdc, MERGEABLE,
+          CI running. The fix makes readOnceBoundedBy retry against a deadline-aware wrapper rather than
+          the raw policy, so the deadline stops the retries as well as the reads, and the already-elapsed
+          case makes exactly one call on both stacks. The worker reproduced my measurement before and
+          after rather than trusting the fix: 9.017s with the deadline-aware retry removed, matching my
+          9.9s, and one read under two seconds with it. It also NARROWED the interface contract rather
+          than changing the reactive store, so the interface now promises only that a wait asks the store
+          at least once before honouring the timeout, and names the blocking-versus-reactive difference
+          explicitly with a characterization test on both halves. Declining to make the reactive store
+          wait for a slow read is correct: that would mean dropping block(Duration), which is the only
+          reason its wait honours the caller''s timeout, and #878 credits it with exactly that.'
+        via: worker message + gh pr view
+        at: '2026-08-22T19:45:00+00:00'
     assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:50Z after
       a scoping read, which is why #878 moved here from U5. The read found two collisions the original
       split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
