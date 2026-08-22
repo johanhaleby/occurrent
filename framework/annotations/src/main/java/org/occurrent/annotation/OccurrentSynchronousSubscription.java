@@ -41,7 +41,7 @@ import java.lang.annotation.*;
  * {@link OccurrentSubscription}, {@link OccurrentStreamSubscription} and {@link OccurrentDcbSubscription} start
  * background, resumable subscriptions off the event store's change stream. An
  * {@code @OccurrentSynchronousSubscription} handler runs in-process on the thread that produced the events, as part
- * of the write. There is therefore no start position, checkpoint, catch-up, or replay, so this annotation carries
+ * of the write. There is therefore no start position, checkpoint, catch-up, or replay, so this annotation has
  * none of the async-only attributes ({@code startAt}, {@code startAtGlobalPosition}, {@code resumeBehavior},
  * {@code startupMode}), only an {@link #id()}.
  * </p>

@@ -212,7 +212,7 @@ public @interface OccurrentProjection {
      * one written before this feature existed, or one delivered through a push feed whose producer supplied none.
      * <p>
      * Nothing is recorded while the projection is replaying. Whether that can be told apart from live delivery, and
-     * what happens to previously recorded appends after a replay, depends on the composition; see ADR 132 decisions
+     * what happens to previously recorded appends after a replay, depends on the composition, see ADR 132 decisions
      * 6 through 9. Configure the store's retention, the wait's poll pacing, and this feature's own replay-detection
      * poll under {@code occurrent.projection.applied-append}.
      * <p>
