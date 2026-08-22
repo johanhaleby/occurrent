@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 34
+revision: 35
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -14,7 +14,7 @@ pending_actions:
     status: VERIFIED
     attempts: 1
     safe_to_repeat: false
-    issued_at: 2026-08-22T11:55:00Z
+    issued_at: 2026-08-22T11:02:26Z
   - id: act-002
     type: dispatch-chip
     target: "U5, chip task_892b1fcb, title '⌁[sdi/U5#721] Prefix seven annotations · Sonnet/medium', brief inlined in the chip"
@@ -22,7 +22,7 @@ pending_actions:
     status: VERIFIED
     attempts: 1
     safe_to_repeat: false
-    issued_at: 2026-08-22T11:55:00Z
+    issued_at: 2026-08-22T11:02:26Z
   - id: act-003
     type: dispatch-chip
     target: "U1, chip task_421856cb, title ⌁[sdi/U1#725] Rename the handle type · Sonnet/medium"
@@ -30,7 +30,7 @@ pending_actions:
     status: PENDING
     attempts: 1
     safe_to_repeat: false
-    issued_at: 2026-08-22T15:20:00Z
+    issued_at: 2026-08-22T12:55:39Z
 units:
   U5:
     issue: 721
@@ -155,7 +155,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on:
-      - {what: "CHANGELOG GATE: no sdi unit writes changelog.md until the occurrent-0.34.0 tag exists, because a release cut RENAMES the 'Changelog next version' heading in place (4c04880e5 did exactly that for 0.33.0) and would publish sdi entries as 0.34.0 notes. U8 lands the collected block once the heading means 0.35.0. Units author their entries in their DELIVERY_RESULT meanwhile.", since: 2026-08-22T10:45:00Z, recheck_after: 2026-08-22T14:00:00Z}
+      - {what: "CHANGELOG GATE: no sdi unit writes changelog.md until the occurrent-0.34.0 tag exists, because a release cut RENAMES the 'Changelog next version' heading in place (4c04880e5 did exactly that for 0.33.0) and would publish sdi entries as 0.34.0 notes. U8 lands the collected block once the heading means 0.35.0. Units author their entries in their DELIVERY_RESULT meanwhile.", since: 2026-08-22T10:33:52Z, recheck_after: 2026-08-22T14:00:00Z}
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
@@ -217,7 +217,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on:
-      - {what: "REGISTRAR FENCE: also touches the starter bean methods occurrentStreamSubscriptionDsl and occurrentStreamSubscriptions, on rel34 U3's extended ownership", since: 2026-08-22T08:50:00Z, recheck_after: 2026-08-22T14:30:00Z}
+      - {what: "REGISTRAR FENCE: also touches the starter bean methods occurrentStreamSubscriptionDsl and occurrentStreamSubscriptions, on rel34 U3's extended ownership", since: 2026-08-22T08:35:15Z, recheck_after: 2026-08-22T14:30:00Z}
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
@@ -233,7 +233,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on:
-      - {what: "#912, now rel34/U16 and IN 0.34.0, so it lands BEFORE this epic rather than after. It changes DcbCriteriaBuilder in dsl/dcb-dsl/common, which U14 owns. DO NOT UNIFY the two derivations that will then sit adjacent in that module: buildDcbCriteria (which U3 extracts there) narrows uniformly, while post-#912 DcbCriteriaBuilder is DIRECTION-DEPENDENT, type and includeTypes expand and refuse while excludeTypes takes a lenient expandWhatCanBeFound walk because a narrowed exclusion silently reads events the caller excluded. Two similar-looking helpers with opposite policies in one module is exactly the mechanically-fits reuse trap. Verified on the issue.", since: 2026-08-22T10:55:00Z, recheck_after: 2026-08-22T14:00:00Z}
+      - {what: "#912, now rel34/U16 and IN 0.34.0, so it lands BEFORE this epic rather than after. It changes DcbCriteriaBuilder in dsl/dcb-dsl/common, which U14 owns. DO NOT UNIFY the two derivations that will then sit adjacent in that module: buildDcbCriteria (which U3 extracts there) narrows uniformly, while post-#912 DcbCriteriaBuilder is DIRECTION-DEPENDENT, type and includeTypes expand and refuse while excludeTypes takes a lenient expandWhatCanBeFound walk because a narrowed exclusion silently reads events the caller excluded. Two similar-looking helpers with opposite policies in one module is exactly the mechanically-fits reuse trap. Verified on the issue.", since: 2026-08-22T10:36:08Z, recheck_after: 2026-08-22T14:00:00Z}
     next_action: "Sequenced last. Nothing to do until U13 establishes the pattern."
     last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
