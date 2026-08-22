@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 154
+revision: 155
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -285,6 +285,20 @@ units:
     observed:
       main_red: {runs: "32169494047 (edd61341c) and 32170703373 (bf99724) both failure, misc shard both JDKs; 43af19f9f green before", via: "gh run list + run view, peer report from ayi verified", at: 2026-08-18T18:40:26Z}
     assessment: "Adopted under the epic's own authority: restoring green main is inside brk's definition of done, no scope widening. ayi merged its 851 under sibling-green leniency and holds an interest in this landing."
+  U14:
+    issue: null
+    goal: "Durable fence on the catch-up marker write on both stacks (dec-0018): a checkpoint save from a replay attempt that lost its subscription id must not be trusted after a process restart, closing the window PR 896 narrowed from always to across-a-restart. Plan gate first (CheckpointWriteCondition keyed by the attempt token, or a durable delete of a marker written after ownership was lost), then implement, ships in 0.34.0."
+    phase: READY
+    health: UNKNOWN
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: manual_approval, ref: "plan approved at the orchestrator plan gate before implementation", met: false}
+      - {check: pr_merged, ref: null, met: false}
+    blocking_on: []
+    next_action: "dispatch as a chip (Attended), plan-first brief, base origin/main at 65041b387 or later"
+    last_meaningful_progress_at: 2026-08-22T06:30:00Z
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
