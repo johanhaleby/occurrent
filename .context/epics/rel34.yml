@@ -1,8 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 62
-updated_at: '2026-08-22T16:35:34+00:00'
-updated_by: 'orchestrator rel34: U5 plan verified, core inference held, released to implement'
+revision: 63
+updated_at: '2026-08-22T16:43:44+00:00'
+updated_by: 'orchestrator rel34: U2 and U4 declared final and are re-verifying, main''s red is a known
+  flake'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -140,9 +141,8 @@ units:
         streamId and streamVersion, and the gate re-runs from the top on the new head.'
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: worker adds the forged-tags-on-a-non-DCB-original test, verifies it fails with preserveTags
-      reverted, then the gate re-runs
-    last_meaningful_progress_at: '2026-08-22T12:04:08+00:00'
+    next_action: await the adversarial verdict on a481bcbae and CI, then merge if both clear
+    last_meaningful_progress_at: '2026-08-22T16:43:44+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
@@ -480,8 +480,8 @@ units:
         either rejects values above it or honours them.
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: worker answers three grouped defects on 914, then the gate re-runs from the top
-    last_meaningful_progress_at: '2026-08-22T12:53:20+00:00'
+    next_action: await the adversarial verdict on 6bbcd4077 and CI, then merge if both clear
+    last_meaningful_progress_at: '2026-08-22T16:43:44+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -561,6 +561,25 @@ units:
           end of the ceiling defect U4 itself found.'
         via: gh api pulls/914/reviews + graphql reviewThreads
         at: '2026-08-22T13:44:39+00:00'
+      three_defects_answered:
+        note: 'Worker answered all three and, importantly, did the SWEEP FIRST rather than point-fixing
+          the three surfaces I named. It grepped every prose surface the PR ADDS for always, never, no
+          such setting, on time and guarantee, FLATTENED ACROSS LINE WRAPS so a sentence broken over two
+          javadoc lines still matches, which is the trap that hid one last round. 37 hits, the three named
+          were the only ones of this class. Chose NARROW over BOUND with a reason I accept: any finite
+          bound on the mandatory first read is arbitrary, or short enough to cut off a read Mongo answers
+          in milliseconds, which returns false for an append the store holds, which is the defect it fixed
+          in round one. So bounding would trade this defect for that one. The property is now stated ONCE
+          in AppliedAppendStore.waitUntilApplied with the other two surfaces pointing at it rather than
+          restating it, and there is a test showing the read outlasting a zero timeout so the exception
+          is measured rather than claimed. Defect 3 REJECTED rather than honoured, with an argument I
+          accept: the ceiling exists to stop a policy that never stops on its own, not to shorten one
+          that does, so a configured 2000 silently performing 1000 is the same class of quiet difference
+          as everything else in this PR, and raising the ceiling to match would mean it is not a ceiling.
+          It also found and repaired an orphaned javadoc its OWN earlier edit created, where neverRetryingAConflictingIndex''s
+          doc had drifted above retryUntil. Copilot did not flag it and it compiles either way.'
+        via: worker report
+        at: '2026-08-22T16:43:44+00:00'
     assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:30:57Z after
       a scoping read, which is why #878 moved here from U5. The read found two collisions the original
       split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
@@ -2054,3 +2073,15 @@ cross_epic:
       liveness whenever a unit is held on a worker, rather than inferring activity from the absence of
       a push.'
     at: '2026-08-22T16:23:11+00:00'
+  main_is_red_on_a_known_flake:
+    note: 'main''s last code commit d989dbfe6 (the U19 merge) shows Java CI FAILURE, and it is NOT that
+      merge. PR 937 was +39/-0 on one Java file, pure javadoc additions, plus one changelog line, which
+      cannot break a test shard. The failure is CompetingConsumerSubscriptionModelTest.consumption_is_resumed_after_prohibited_when_lease_time_is_low
+      in the subscription-util-blocking java-25 shard, 1 error of 28. It is a KNOWN flake with an issue
+      already open, #864, milestone 0.35.0, which records it failing twice on 2026-08-19 on two unrelated
+      PRs with two different symptoms. The same shard passed on the two main runs before mine and example-domain
+      has been green on main throughout. RELEASE RISK for R3 rather than a blocker: the tag run needs
+      green CI and this test can fail any run. If the tag run hits it, RE-RUN rather than investigate,
+      and do not let it be mistaken for a regression from the release commit. Left at 0.35.0 where Johan
+      already triaged it.'
+    at: '2026-08-22T16:43:44+00:00'
