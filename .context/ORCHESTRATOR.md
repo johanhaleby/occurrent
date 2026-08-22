@@ -733,3 +733,13 @@ The error is worth naming because it is the day's recurring shape rather than a 
 **The rule this settles.** Before asserting anything about a sibling fleet's state, read `.context/epics/<slug>.yml`. The tracker is downstream of it and lags it by the whole interval between dispatch and first claim, which is exactly the window in which one fleet is most tempted to conclude the other has stalled.
 
 One observation handed to rel34 without acting on it, since it is rel34's bookkeeping. `rel34/U6` carries `last_meaningful_progress_at: 2026-08-22T18:10:00+00:00`, which is roughly five hours ahead of the actual time as sdi reads it. `derive` computes health by subtracting that stamp from now, so a future stamp always yields PROGRESSING and the unit can never derive STALLED. If that came from stamping local time with a `+00:00` suffix, other rel34 units likely carry it too, and rel34's stall detection is off for all of them.
+
+### sdi checkpoint 2026-08-22T13:24Z: status projection was stale, and the session title was self closable
+
+rel34 announced five shared skill edits and asked every fleet to check its own status projection. sdi's was stale in exactly the way rel34 described its own: `epic_state_revision` 21 against an epic at 33, generated 11:53Z, with U5 rendered RUNNING after it had finished and U1 rendered BLOCKED while it was running. Refreshed through `decision-journal.py status`, read back rather than assumed (revision 33, journal_seq 12, 14 units, every phase agreeing with `derive`), then regenerated the viewer. `stale_after` is 14:45Z because that is a checkpoint sdi intends, not a round hour.
+
+The projection is now bound to the memory checkpoint, so a stale page means a missed checkpoint rather than a forgotten command.
+
+Separately, the session title ask that sdi had carried as an open pending action since registration is closed, and the reason it stayed open is worth recording. The skill asserted that rename tooling cannot retitle its own session and told every orchestrator to repeat the ask until the user acted. In this host that is false: `set_session_title` accepts the literal `self`, and the title was set in one call. The skill has been corrected (`706d2e13b`) to try the host affordance first. The report to Johan says renamed rather than verified, because both `ListAgents` and `list_sessions` exclude the calling session, so neither obvious check can see the thing being checked.
+
+U1 remains healthy at 13:24Z: 149 files, full-module compile passed, now running tests with the Colima environment exported per shell as the recorded lesson requires. No commit yet.
