@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 52
-updated_at: '2026-08-22T15:11:57+00:00'
-updated_by: 'orchestrator rel34: blocking_on entries given the documented {what, since, recheck_after}
-  shape'
+revision: 53
+updated_at: '2026-08-22T15:14:59+00:00'
+updated_by: 'orchestrator rel34: U11 implementation dispatched after stall detection caught it, R2 hold
+  made machine-readable'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -1094,9 +1094,15 @@ units:
       ref: null
       met: false
       evidence: ''
-    blocking_on: []
+    blocking_on:
+    - what: 'Awaiting Johan''s approval of the published held-docs merge checklist at https://claude.ai/code/artifact/8f365680-763a-4b73-8127-89c2f10adf2d
+        . Clears when he approves it, or asks for changes. Its own re-verification trigger is separate:
+        if docs/421-broker-modules has moved off 0ba67fd on release day, the trial merge is redone before
+        the checklist is trusted.'
+      since: '2026-08-22T15:14:59+00:00'
+      recheck_after: '2026-08-22T15:59:59+00:00'
     next_action: Johan approves the published checklist, then rebuild preview/0.34.0 from the merged result
-    last_meaningful_progress_at: '2026-08-22T12:50:59+00:00'
+    last_meaningful_progress_at: '2026-08-22T15:14:59+00:00'
     observed:
       preview_state:
         note: 'Checked 2026-08-22T09:13:10Z. preview/0.34.0 is behind TWO held branches by one commit
@@ -1357,7 +1363,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: chip task_9dddd2de, worktree determined-euclid-f4836e, Opus/high
+    session: null
     deliverables:
     - check: manual_approval
       ref: 911
@@ -1376,9 +1382,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: 'implementation is SEPARATE work and #818 stays open; dispatch as its own plan-approved
-      unit at Opus/high per the worker''s own derived recommendation'
-    last_meaningful_progress_at: '2026-08-22T11:10:09+00:00'
+    next_action: 'await the implementation worker''s claim on #818'
+    last_meaningful_progress_at: '2026-08-22T15:14:59+00:00'
     observed:
       design_gate:
         note: 'ADR 134 delivered as PR 911, Proposed, design only, no code. NOT merged on green: a plan-first
@@ -1419,6 +1424,22 @@ units:
           while the silent findByStatus(ACTIVE) half is real.'
         via: orchestrator premise-verification subagent
         at: '2026-08-22T09:16:02+00:00'
+      stall_caught_a_dropped_dispatch:
+        note: 'STALL DETECTION EARNED ITS KEEP THE FIRST TIME IT COULD FIRE. Once the fabricated timestamps
+          were repaired, derive immediately flagged U11 STALLED at 4 hours. The cause was a genuine dropped
+          thread: U11''s design phase finished when ADR 134 merged as e9360c959 and Johan closed the design
+          gate, its own next_action said the implementation was separate work needing its own plan-approved
+          dispatch at Opus/high, and I never dispatched it. #818 sat OPEN on milestone 0.34.0 with no
+          PR and no claim for four hours. This is exactly the failure the completion-triggers-dispatch
+          rule exists to prevent, and the reason it was invisible is that the check meant to catch it
+          was disabled all day by timestamps I had invented. Implementation dispatched as a chip, title
+          gated BEFORE the spawn: ''⌁[rel34/U11#818] Quarantine a failing saga · Opus/high'', 54 chars.
+          The brief points at the merged ADR as authoritative for all eight decisions rather than restating
+          them, and carries forward the premise correction the design round found, that only three blocking
+          subscription models wrap the handler in executeWithRetry, which is load-bearing for decision
+          3.'
+        via: epic-state.py derive after the timestamp repair
+        at: '2026-08-22T15:14:59+00:00'
     assessment: 'Johan ruled it IN 0.34.0 (dec-0002), overruling the recommendation to defer. Pre-existing:
       predates ADR 123 and ADR 126, both of which accepted the tradeoff deliberately, and PR 816''s review
       thread raised it against ADR 126. The event path has no equivalent of SagaExecution.pollTimers,
