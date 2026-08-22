@@ -1678,3 +1678,47 @@ the pass could NOT verify: this one surfaced that `suppliedBy` has no once-only 
 had not constructed the double-call scenario, which is a real gap nobody had named.
 - 2026-08-22 brk: a checkpoint merge commit without the `[ci skip]` prefix pushed to main triggers a workflow run and cancels main's in-flight run for the real merge (56c215729's Maven run was cancelled by 2c7079739). Merge main into the session branch with `git merge --no-edit -m "[ci skip] brk: merge main" origin/main` before every checkpoint push.
 - 2026-08-22 brk: four timing assertions on U15 PR 2 were green for reasons nobody chose (a quiet period asserting before the code reached the write, two equal ten second timeouts cancelling out, a handshake waiting for BLOCKED when the thread parks WAITING, a one second sleep the replay happened to finish inside). Each killed its mutation on one machine. A concurrency test waits on a signal from the code under test, never on a sleep or an equal timeout, and a verify re-runs every mutation itself and reads the test's wait mechanism, never the worker's kill record.
+
+## A green rollup over a partial matrix reads exactly like a green rollup (rel34, 2026-08-22)
+
+The check-context count on a pull request here goes from 6 to 26 when the shard matrix spawns,
+partway through the run. Read `statusCheckRollup` before that moment and it reports zero pending
+and zero failing over six contexts, which every gate condition passes. The merge gate then merges
+on a matrix that never ran.
+
+So the gate needs a fourth quantity beside pending, failing and mergeable: the context COUNT,
+compared against what a full matrix looks like on a sibling pull request of the same shape. On this
+repository that is 26, or 27 where an extra job applies. A rollup materially below that is not
+green, it is early.
+
+The `[ci skip]` prose case is the deliberate exception and is distinguishable: it reports zero
+contexts, not a partial set, and its verdict carries by compare from the last code-bearing green
+state.
+
+Found by a worker reporting it in its own delivery result rather than by the gate catching it. That
+is worth noting on its own: the gate had passed several merges without ever checking the count.
+## An exclusion list keyed by issue number cannot see a unit that has no issue (sdi, 2026-08-22)
+
+Three fleets ran concurrently and fenced each other by listing issue numbers: sdi's registration
+prompt excluded "#388, #421, #893 and #896" for brk. brk's U15 carries no issue number at all, and
+its PR 910 edits both `CatchupThenPushSubscriptionModel` files plus two tests, every one of which
+imports the type sdi's rename unit changes across the repository. Neither fleet could see it. The
+list was maintained correctly and the collision still could not appear in it, because the key does
+not exist for that unit.
+
+Diffing the open PRs by branch prefix found it in one pass:
+`gh pr list --state open --json number,headRefName` then `gh pr view <n> --json files`. That is the
+check to run, and issue-number exclusion lists are a starting filter rather than the coverage.
+
+The same sweep caught a second one the same way, in sdi's own recorded memory: sdi had written
+"every other rel34 issue was checked against the units' files and none overlap", a claim built from
+issue BODIES. rel34's PR 914 edits `OccurrentProperties.java` and both auto-configuration classes,
+which are two of sdi's three fence surfaces. An issue body describes intent; only the diff carries
+the files.
+
+This is the third form of one mistake seen in a single session, and the general rule is worth more
+than any of them: **verify against the artifact that carries the change, never against the thing
+that describes it.** rel34 drew a file fence from where a symbol is DECLARED rather than where it is
+CALLED. sdi measured a rename with a grep anchored on import syntax, missing fully qualified uses
+and every Kotlin import. sdi then read issue bodies in place of PR diffs. Declaration, syntax, and
+intent each stood in for the artifact, and each read as diligence while it happened.
