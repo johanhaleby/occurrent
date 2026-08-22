@@ -1097,3 +1097,15 @@ PR 934 failed `SubscriptionModelConformance$TheLifeCycle.a_paused_subscription_r
 The check sdi ran, main's recent runs being green, rules out a permanently broken shard and is blind to an intermittent one by construction, since an intermittent failure passes most of the time. The search that finds #781 is the TEST NAME. Searching the symptom, `ChangeStreamHistoryLost`, surfaced it only incidentally.
 
 **Offered rather than done, because the epic is held.** Today's occurrence is a fresh data point for #781, which is explicitly tracking rate: PR 934 head `d2a622f0e`, one failure, passed on rerun of the identical SHA, sixteen `ChangeStreamHistoryLost` errors in the job log, and the same shard green on java-21 in the same run. Posting it is an outward-facing write on an epic Johan has held, so it waits for his word.
+
+### sdi 2026-08-22T17:44:26Z: the finding-count check was incomplete, and sdi's merged PRs are clean
+
+rel34 tested sdi's `Comments generated` check instead of adopting it and found the hole: that number EXCLUDES suppressed comments. Its PR 914 reads `Suppressed comments (2)` and `Comments generated: 0 new` two lines apart, so the check aligns perfectly while two real findings sit unread.
+
+**The corrected check is two pairs.** `generated` against the inline comment count catches a finding living in body prose. `Suppressed comments (N)` catches findings that open no thread at all. Neither implies the other.
+
+Two refinements from reading seventeen Copilot reviews across five PRs, which settle rel34's open hypothesis. The `new` suffix appears ONLY as `0 new` and never with a positive count, so it is how Copilot phrases a review that generated nothing rather than a new-since-last counter. But rel34's underlying worry is right for a different reason: what surfaces a prior unfixed finding is `**Previously missed (N)**` INSIDE the suppressed block, so that block carries both the never-threaded findings and the carried-over ones.
+
+**Applied backwards over sdi's own merged work, and the result is reassuring while the method was not.** PR 923 (U12) carried one then four suppressed findings; PR 924 (U5) carried one then one. This orchestrator's gate read none of them. All four were addressed before merge by the workers, who did read them: the ADR's wrong 17/4 call-site split is corrected to sixteen and five on main, the catch-all decision does cover `ReactiveDcbSubscription.Builder`, the "last know position" typo reads "known", and the migration guide now says only `eventTypes` and `tags` break compilation rather than claiming an unconditional failure.
+
+So nothing is outstanding on sdi's merged PRs, and U1's rework wave inherits no hidden findings. What was missing was verification, not correctness, which is the third time today the right answer arrived by a route that could not have established it.
