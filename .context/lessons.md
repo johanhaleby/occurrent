@@ -2276,6 +2276,17 @@ PR 900's head at `08:49:51Z`. All three came from `gh` and all three still match
 while 60 timestamps typed in the same file across the same day were fabricated. Every completion
 claim held too, four merge SHAs and five issue states, because those were fetched.
 
+Two refinements from running the audit on two files rather than one.
+
+An audit anchored on the schema's timestamp format cannot see a time written inside a sentence.
+Both fleets' sweeps matched full ISO strings and both missed bare `HH:MM:SSZ` values in prose, which
+happened to verify in both cases and verified by luck rather than by the audit. Prose is where a
+fabricated time is least likely to be challenged, so sweep it explicitly.
+
+And say `unverified` in that word for the residue. Some values are owned by nothing external, a
+cross-fleet handoff time being the usual case, and the honest handling is to keep them and label
+them, because a reader cannot otherwise tell them apart from the values that did verify.
+
 So when a fact belongs to an external object, ask the system that owns it rather than recalling it.
 `opened_at`, `merged_at`, `closed_at`, a review time, a head SHA and a merge SHA are all one `gh`
 call away, and the call is cheaper than the audit that finds the invented version later. A value

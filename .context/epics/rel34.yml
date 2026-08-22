@@ -1129,7 +1129,7 @@ units:
         at: '2026-08-22T12:11:27+00:00'
     assessment: 'Johan''s manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
       The orchestrator hands him the checklist and verifies the observable results. The 1000-file allowance
-      is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z:
+      is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z (UNVERIFIED, a cross-fleet coordination event that no GitHub object owns, so nothing external can settle it):
       #721 and #725 were re-milestoned from 0.34.0 to 0.35.0, verified on both issues and in milestone
       3''s counts (open 19, closed 35). sdi brought the question back to Johan with a sizing measurement
       attached (eleven units, a 115-file rename, 138 source files) and recommended the move. dec-0001''s
