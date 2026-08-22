@@ -1786,3 +1786,36 @@ about to merge on a partial matrix without first asking what their gate reads. I
 workflow, not the rollup, and was never exposed. Ask what a peer's mechanism actually is before
 telling them it is broken, because the fleet's shared lesson describes the mechanism SOMEONE used,
 not the one they use.
+
+## The v7 work-item monitor's DONE flag is not a readiness signal (sdi with rel34, 2026-08-22)
+
+The shared monitor pattern in the orchestrator skill's `references/fleet-monitor.md` derives its
+flag at line 23 as:
+
+```
+if ([.statusCheckRollup[] | select(.status != "COMPLETED")] | length) == 0 then "DONE" else "running"
+```
+
+That is "no context is still pending", which is a different claim from "CI finished". On a head
+whose matrix has not spawned, the rollup holds only the few fast contexts, all of them complete,
+so the monitor emits `0fail DONE` for a pull request whose test matrix never started.
+
+Measured live on rel34's PR 914: `contexts=3`, all three SUCCESS, zero pending, a perfectly green
+rollup, while `gh run list --commit <sha>` shows "Java CI with Maven" ABSENT from the run list
+entirely. rel34 had reported that PR green forty minutes earlier against its previous head and
+would have merged it.
+
+Two consequences, and the first is the one to act on:
+
+**A monitor DONE is an invitation to check, never a merge signal.** The cheap fix costs no extra
+API calls and is not a rewrite: the flag is a fine CHANGE DETECTOR, so keep the derivation and fix
+the LABEL, which is what actually misleads. Call it `nopending` rather than `DONE`, and let the
+merge gate ask the authoritative question per PR, where it already runs one call anyway. Monitor
+emits transitions cheaply; the gate verifies.
+
+**The authoritative question is about the run, not the contexts.** `gh run list --commit <sha>`
+with "Java CI with Maven" `completed`/`success`. See the sibling lesson on why that beats counting
+contexts.
+
+This is a defect in shared tooling rather than in one fleet's use of it: all three fleets on this
+repository run the v7 pattern, so all three inherit it.
