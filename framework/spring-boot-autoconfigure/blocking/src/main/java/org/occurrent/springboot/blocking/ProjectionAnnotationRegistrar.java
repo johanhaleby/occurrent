@@ -273,15 +273,17 @@ class ProjectionAnnotationRegistrar {
     //   1. An explicit NOW, StartAt.now() is a documented, composition-independent contract every Subscribable
     //      must honor, true regardless of what the composition can do.
     //   2. DEFAULT, where the auto-configuration that composed this stack's default model registered, through
-    //      ComposedDefaultStartPosition, that its own DEFAULT bypasses catch-up. True for Occurrent's shipped Mongo
-    //      composition (issue 865), never assumed for an application-supplied one, whose own DEFAULT semantics are
-    //      its own to declare.
+    //      ComposedDefaultStartPosition, that its own DEFAULT bypasses catch-up, and capability is that exact
+    //      composition. True for Occurrent's shipped Mongo composition (issue 865), never assumed for an
+    //      application-supplied one, whose own DEFAULT semantics are its own to declare, and never assumed for a
+    //      projection running on a Subscriptions/StreamSubscriptions/DcbSubscriptions replacement that wraps a
+    //      different composition than the one the fact was registered for (issue 871).
     // Unlike the reactor stack, ReplayAwareSubscriptions.findIn already unwraps a wrapper chain here (ADR 132
     // decision 8), so there is no separate "structurally no catch-up layer" fact distinct from "unknown composition"
     // to draw on for this path, both collapse to the same empty capability lookup. DEFAULT on a composition with no
     // registered fact, and BEGINNING/a global position on a composition whose capability cannot be read, both stay
     // silent. This registrar cannot verify either one.
-    private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation) {
+    private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation, @Nullable SubscriptionModelCapability capability) {
         if (annotation.startAt() == org.occurrent.annotation.StartPosition.NOW) {
             return true;
         }
@@ -290,7 +292,7 @@ class ProjectionAnnotationRegistrar {
             // (generateAgnosticStartAt/generateDcbStartAt check it first), so it must be excluded here too, or a
             // projection that genuinely replays from an explicit position would get the never-replays warning.
             ComposedDefaultStartPosition holder = applicationContext.getBeanProvider(ComposedDefaultStartPosition.class).getIfAvailable();
-            return holder != null && holder.isDefaultKnownLiveOnly();
+            return holder != null && holder.isDefaultKnownLiveOnlyFor(capability);
         }
         return false;
     }
@@ -306,7 +308,7 @@ class ProjectionAnnotationRegistrar {
         if (!annotation.recordAppliedAppends()) {
             return materializedView;
         }
-        warnIfRecordingNeverResets(id, true, verifiedNeverReplays(annotation));
+        warnIfRecordingNeverResets(id, true, verifiedNeverReplays(annotation, capability));
         return wrapForRecording(annotation, id, materializedView, ReplayAwareSubscriptions.findIn(capability).orElse(null), true);
     }
 

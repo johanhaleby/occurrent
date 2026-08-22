@@ -253,11 +253,6 @@ public class OccurrentMongoAutoConfiguration<E> {
                                                                         OccurrentProperties occurrentProperties, EventStoreQueries eventStoreQueries, ObjectProvider<DcbEventStore> dcbEventStore,
                                                                         ObjectProvider<CompetingConsumerStrategy> competingConsumerStrategyProvider, Environment environment,
                                                                         ComposedDefaultStartPosition composedDefaultStartPosition) {
-        // A default StartAt resolves to StartAt.subscriptionModelDefault() (see StartPositionSupport), which every
-        // shape this method composes (durable alone, or wrapped in stream/DCB/dual catch-up) classifies as live, the
-        // same as a checkpoint that is neither global nor time-based, so a wiped checkpoint changes nothing for it
-        // either (ADR 132 decision 7, issue 865).
-        composedDefaultStartPosition.defaultBypassesCatchup();
         // Resolved through the provider rather than taken as a parameter of its own, so several strategy beans with no
         // @Primary fail with the message that names the remedy instead of Spring's report of an unsatisfied parameter.
         // The strategy is forced here either way, since this model holds one for the life of the bean.
@@ -299,14 +294,22 @@ public class OccurrentMongoAutoConfiguration<E> {
             subscriptionModel = durableSubscriptionModel;
         }
         CompetingConsumerSubscriptionModel competingConsumerSubscriptionModel = new CompetingConsumerSubscriptionModel(subscriptionModel, competingConsumerStrategy);
-        if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.MANUAL) {
-            return competingConsumerSubscriptionModel;
-        }
         // Registering must not reach the stack at all, rather than reach it and be stopped afterwards. A catch-up
         // replay reads the event store directly, so a subscription resuming from a stored checkpoint would deliver
         // history to a handler nobody started. The Mongo model supplies the position to pin, since it is the one
         // reading the feed.
-        return ManualStartSubscriptionModel.stoppedByDefault(competingConsumerSubscriptionModel, mongoSubscriptionModel, storage);
+        SubscriptionModel composedSubscriptionModel = occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.MANUAL
+                ? competingConsumerSubscriptionModel
+                : ManualStartSubscriptionModel.stoppedByDefault(competingConsumerSubscriptionModel, mongoSubscriptionModel, storage);
+        // Told the exact bean this method is about to return, not an inner layer, since that is what
+        // occurrentAsynchronousSubscribable and every DSL wrapping it actually resolve, and what a projection's own
+        // capability is compared against (issue 871). A default StartAt resolves to StartAt.subscriptionModelDefault()
+        // (see StartPositionSupport), which every shape this method composes (durable alone, or wrapped in
+        // stream/DCB/dual catch-up) classifies as live, the same as a checkpoint that is neither global nor
+        // time-based, so a wiped checkpoint changes nothing for it either (ADR 132 decision 7, issue 865).
+        composedDefaultStartPosition.suppliedBy(composedSubscriptionModel);
+        composedDefaultStartPosition.defaultBypassesCatchup();
+        return composedSubscriptionModel;
     }
 
     @Bean
