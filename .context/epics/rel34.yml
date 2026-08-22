@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 3
-updated_at: '2026-08-22T07:48:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (Wave 1 started by Johan, four sessions
-  resolved by brief path in their transcripts)
+revision: 4
+updated_at: '2026-08-22T07:58:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U3 blocked ruling dec-0005 relayed, ownership
+  extended to one starter call site)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -18,7 +18,17 @@ authority: 'see .context/orchestrator-policy.yml (standing merge auto_epic_prs, 
   round, cap 3 rounds, remainder returns as ONE structured ask and reaching the cap is reported as reaching
   the cap, never as convergence. Below major is filed as 0.35.0 issues. sdi (#721/#725) is a SIBLING epic,
   not a rel34 unit, and R3 gates on it. #884 re-milestoned to 0.35.0, verified.'
-pending_actions: []
+pending_actions:
+- id: act-001
+  type: message-session
+  target: rel34/U3 worker, ListAgents name peaceful-curran-e041e6-4a, relaying dec-0005
+  expected: 'U3 acknowledges and resumes coding. Observable as a push to rel34/u3-never-replays-warning-identity
+    touching OccurrentMongoAutoConfiguration.java, or a reply message. NOT safe to repeat: a second copy
+    of a ruling can read as a revised ruling.'
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-22T07:58:00+00:00'
 units:
   U1:
     issue: null
@@ -111,7 +121,7 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker running, orchestrator waits for its PR or DELIVERY_RESULT
+    next_action: worker resuming after dec-0005; verify the ack, then wait for its PR
     last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
     observed:
       dispatch:
@@ -119,8 +129,14 @@ units:
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
-    assessment: Warning-only defect, recording itself stays correct. Fix shape agreed in the issue body.
-      Touches the blocking registrar, so U6 follows this unit rather than running beside it.
+    assessment: 'Warning-only defect, recording itself stays correct. Fix shape agreed in the issue body.
+      Touches the blocking registrar, so U6 follows this unit rather than running beside it. OWNERSHIP
+      EXTENDED by dec-0005 (2026-08-22T07:58Z) to framework/spring-boot-starter-mongodb/.../OccurrentMongoAutoConfiguration.java,
+      scoped to occurrentComposedDefaultStartPosition() and the existing defaultBypassesCatchup() call
+      inside occurrentCompetingDurableSubscriptionModel(...), plus that module''s tests. The brief''s
+      original boundary was unreachable: the reactor pattern it names, ComposedCatchupModel.suppliedBy(Object),
+      is itself called from a starter module, so the fix is structurally cross-module. U6''s brief must
+      fence those two bean methods out.'
   U4:
     issue: 857
     goal: AppliedAppendStore refuses blank collection names, bounds inMemory() growth, bounds the applied-append
