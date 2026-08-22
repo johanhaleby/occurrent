@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 19
-updated_at: '2026-08-22T10:55:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (PR 902 falsified and blocked, ADR 134
-  premises checked)
+revision: 20
+updated_at: '2026-08-22T11:15:00+00:00'
+updated_by: 'orchestrator session rel34-epic-registration-8c2066 (dec-0009 and dec-0010: U15 docs, U16
+  for 912, 884 and 909 adopted)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -580,6 +580,10 @@ units:
     - U12
     - U13
     - U14
+    - U15
+    - U16
+    - U17
+    - U18
     - U2
     - U3
     - U4
@@ -613,6 +617,7 @@ units:
     swept: false
     depends_on:
     - U1
+    - U15
     session: null
     deliverables:
     - check: manual_approval
@@ -711,6 +716,10 @@ units:
     - U12
     - U13
     - U14
+    - U15
+    - U16
+    - U17
+    - U18
     - U2
     - U3
     - U4
@@ -931,3 +940,119 @@ units:
       tests against, so the gap is most visible exactly where users are trying to prove their code works.
       The TCK already has keeps_the_events_own_append_id_even_when_the_update_function_returns_a_fresh_event,
       which is the shape to mirror for position. Sonnet/medium.'
+  U15:
+    issue: null
+    goal: 'A new HELD docs branch in occurrent-org.github.io documents what 0.34.0 actually ships for
+      declared event types: ADR 126''s expansion across projections, DSL subscriptions, DomainEventQueries
+      and @Snapshot views, and U9''s refusal of a declared type that is not sealed or final all the way
+      down.'
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - U9
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch
+    last_meaningful_progress_at: '2026-08-22T11:15:00+00:00'
+    observed: {}
+    assessment: Found by the orchestrator while checking a question U9 raised, not reported by any worker.
+      changelog.md's FIRST highlight promises sealed supertypes now expand in projections, DSL subscriptions,
+      queries and snapshot views alike. docs main line 6984 says @Projection 'does not expand or refuse
+      a sealed type', which is true of 0.33.0 and false of 0.34.0. NO held docs branch touches that prose,
+      verified by diffing all seven against main. So without this unit the site ships actively wrong about
+      the release's marquee feature. Held for release day like the other seven; never merged by the fleet.
+      Johan adopted it as its own unit rather than folding it into U9, dec-0009.
+  U16:
+    issue: 912
+    goal: ExecuteFilter and DcbCriteriaBuilder derive their type filters through EventTypeExpansion like
+      every other derivation in the library. type and includeTypes REFUSE what they cannot expand; excludeTypes
+      WIDENS to the subtypes instead.
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - U9
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 912
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch
+    last_meaningful_progress_at: '2026-08-22T11:15:00+00:00'
+    observed: {}
+    assessment: 'Johan adopted it OVERRIDING both the filing worker''s recommendation and the orchestrator''s,
+      dec-0010. The override reason is the stronger one: a caller who fixes their declarations for the
+      rest of the library would still find these two handing a decider nothing. THE TRAP, recorded so
+      the unit does not rediscover it: this is NOT a mechanical repeat of U9''s refusal. excludeTypes
+      cannot refuse, because excluding a supertype must widen to its subtypes; a widened exclusion is
+      safe and a narrowed one silently reads events the caller asked to keep out. Two methods, opposite
+      treatments, one change. Both modules need their occurrent-filter dependency checked. Breaking, so
+      it owes a changelog entry and a migration section for the two refusals.'
+  U17:
+    issue: 884
+    goal: KafkaCloudEventBridgeTest stops failing under Testcontainers on the parking-topic metadata race.
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 884
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch
+    last_meaningful_progress_at: '2026-08-22T11:15:00+00:00'
+    observed: {}
+    assessment: 'Brought back into 0.34.0 by dec-0009 after failing three unrelated PRs in under three
+      hours across both JDKs in a module none of them touched (PR 902 java-25, PR 908 java-21, a main
+      run carrying a broker PR on java-21). Each cost a full matrix rerun and delayed a merge gate. brk
+      records a third sighting as its #893 item 21 and is asking Johan whether the fix lands inside brk
+      before it closes; COORDINATE rather than duplicating, since rel34''s tag reads main''s shards and
+      brk may already own the fix.'
+  U18:
+    issue: 909
+    goal: resolveCatchupModel compares the holder's model against the projection's actual capability instead
+      of substituting it unconditionally, closing the recording-side twin of the warning-side gap U3 and
+      U12 fixed.
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - U12
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 909
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch
+    last_meaningful_progress_at: '2026-08-22T11:15:00+00:00'
+    observed: {}
+    assessment: Adopted by dec-0009. Found and correctly DECLINED by the U12 worker, whose remit covered
+      the warning rather than recording, and routed instead of folded in. Confirmed by two independent
+      reviewers. It affects recording, which is the read-your-writes surface shipping in this release.
+      Same fix shape as U3 and U12, including the AopProxyUtils.getSingletonTarget unwrapping both of
+      those needed, so give it to whichever worker still holds that context.
