@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 78
-updated_at: '2026-08-22T17:42:39+00:00'
-updated_by: 'orchestrator rel34: the gate now counts findings against threads, two pairs not one'
+revision: 79
+updated_at: '2026-08-22T17:49:30+00:00'
+updated_by: 'orchestrator rel34: backward pass over merged PRs, no shipped defect but two incomplete gates'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -501,7 +501,7 @@ units:
       recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: await CI on 4986f8978, then re-gate with a fresh adversarial pass since production behaviour
       changed
-    last_meaningful_progress_at: '2026-08-22T17:23:15+00:00'
+    last_meaningful_progress_at: '2026-08-22T17:49:30+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -644,6 +644,19 @@ units:
           retryUntil test now bites, verified by reverting only that constructor.'
         via: worker report
         at: '2026-08-22T17:23:15+00:00'
+      live_suppressed_recovery_defect:
+        note: 'Fresh review on 4986f8978 is ''Needs a closer look'' with TWO suppressed comments, both
+          marked ''Previously missed, in code that hasn''t changed since the last review'', plus one thread.
+          The two-pair check reads zero generated, zero inline, two suppressed, so both the thread count
+          AND the generated count are blind to them at once. The finding is user-facing rather than wording:
+          ConflictingIndexException''s message at ReactiveMongoAppliedAppendStore:201 and MongoAppliedAppendStore:376
+          tells an operator to drop the conflicting index, but the exception is MEMOIZED, through remember
+          on the reactive side and indexConflict on the blocking side, so every later call in that process
+          rethrows the cached failure and dropping the index changes nothing until restart. The message
+          names a recovery that cannot succeed as described. The memoization itself is correct and stays,
+          since it stops the store retrying index creation on every call.'
+        via: gh api pulls/914/reviews on the current head
+        at: '2026-08-22T17:49:30+00:00'
     assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:30:57Z after
       a scoping read, which is why #878 moved here from U5. The read found two collisions the original
       split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
@@ -2457,3 +2470,21 @@ cross_epic:
       only what is new since the previous review, a re-review of a head carrying unaddressed prior findings
       could read zero while they stand.'
     at: '2026-08-22T17:42:39+00:00'
+  backward_pass_over_merged_prs:
+    note: 'Ran the two-pair finding check BACKWARD over all nine merged rel34 PRs, on sdi''s suggestion,
+      because 914 showed the suppressed block carrying the longest-unaddressed defect and a worker reading
+      it is luck rather than the gate working. RESULT: NO SHIPPED DEFECT, and TWO INCOMPLETE GATES. PR
+      913 (U9) last read ''Changes recommended'' with three suppressed and a Previously-missed block;
+      PR 916 (U7) last read ''Needs a closer look'' with two suppressed and a Previously-missed block.
+      Both verdicts were on STALE heads and neither PR had ANY review on the head I actually merged, so
+      I gated both without a current review. Both merged this morning, before that rule was established.
+      VERIFIED AGAINST MAIN rather than assumed, and both sets of findings were fixed before merge, by
+      the workers. 916''s cadence overclaim: main now reads ''This is a polling cadence, not a hard deadline.
+      A single Sleeper call can itself run longer than requested'', and the changelog reads ''That 50ms
+      figure is a polling cadence, not a guaranteed deadline''. 913''s mischaracterisation of custom CloudEventTypeMapper
+      callers: the changelog now scopes the claim to ''every CloudEventTypeMapper Occurrent ships'' and
+      names the custom-mapper caller as ''working rather than losing events'', and the migration guide
+      at line 216 says ''you were not losing anything, and you are the one caller here with a real regression''.
+      SAME RESULT SDI GOT on its own merges: the workers read the blocks the orchestrator did not. The
+      gate did not catch it and the workers'' diligence covered for it, which is not the gate working.'
+    at: '2026-08-22T17:49:30+00:00'
