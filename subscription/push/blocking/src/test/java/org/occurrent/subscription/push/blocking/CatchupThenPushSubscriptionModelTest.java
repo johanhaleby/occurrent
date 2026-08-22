@@ -32,7 +32,7 @@ import org.occurrent.subscription.DcbSubscriptionFilter;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.net.URI;
@@ -555,7 +555,7 @@ class CatchupThenPushSubscriptionModelTest {
         CountDownLatch replayReached = new CountDownLatch(1);
         CountDownLatch releaseReplay = new CountDownLatch(1);
 
-        SubscriptionHandle subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
             replayReached.countDown();
             try {
                 releaseReplay.await(10, TimeUnit.SECONDS);
@@ -648,7 +648,7 @@ class CatchupThenPushSubscriptionModelTest {
         // Gate the LAST fold rather than the first. The reactor twin's handover records that gating the first does not
         // reproduce the analogous bug, because a prefetch can let the pipeline advance while an early item is still
         // folding.
-        SubscriptionHandle subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
             delivered.add(ce.getId());
             if (ce.getId().equals("3")) {
                 reachedLast.countDown();
@@ -677,7 +677,7 @@ class CatchupThenPushSubscriptionModelTest {
         List<String> delivered = new CopyOnWriteArrayList<>();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
 
-        SubscriptionHandle subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
             delivered.add(ce.getId());
             if (ce.getId().equals("1")) {
                 replayStarted.countDown();
@@ -714,7 +714,7 @@ class CatchupThenPushSubscriptionModelTest {
         CatchupThenPushSubscriptionModel stopped = new CatchupThenPushSubscriptionModel(store, feed1, marker);
         // Park inside the first fold so stop() genuinely lands mid-replay. Without the park the three events replay
         // faster than the test can stop anything, and the assertions below would pass against a completed catch-up.
-        SubscriptionHandle subscription = stopped.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = stopped.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
             firstRun.add(ce.getId());
             firstFolded.countDown();
             awaitLatch(releaseFold);
@@ -756,7 +756,7 @@ class CatchupThenPushSubscriptionModelTest {
         List<String> folded = new CopyOnWriteArrayList<>();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
         // Park inside the first fold so stop() lands mid-replay rather than after it.
-        SubscriptionHandle subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
             folded.add(ce.getId());
             firstFolded.countDown();
             awaitLatch(releaseFold);
@@ -823,7 +823,7 @@ class CatchupThenPushSubscriptionModelTest {
         CountDownLatch newReplayParked = new CountDownLatch(1);
         CountDownLatch releaseNewReplay = new CountDownLatch(1);
         List<String> newReplayFolded = new CopyOnWriteArrayList<>();
-        SubscriptionHandle newSubscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription newSubscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
             newReplayFolded.add(ce.getId());
             newReplayParked.countDown();
             awaitLatch(releaseNewReplay);
@@ -895,7 +895,7 @@ class CatchupThenPushSubscriptionModelTest {
         CountDownLatch newReplayParked = new CountDownLatch(1);
         CountDownLatch releaseNewReplay = new CountDownLatch(1);
         List<String> newReplayFolded = new CopyOnWriteArrayList<>();
-        SubscriptionHandle newSubscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription newSubscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
             newReplayFolded.add(ce.getId());
             newReplayParked.countDown();
             awaitLatch(releaseNewReplay);
@@ -1268,7 +1268,7 @@ class CatchupThenPushSubscriptionModelTest {
         CountDownLatch newReplayParkedOnFirstEvent = new CountDownLatch(1);
         CountDownLatch releaseNewReplay = new CountDownLatch(1);
         List<String> newReplayFolded = new CopyOnWriteArrayList<>();
-        SubscriptionHandle newSubscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription newSubscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
             newReplayFolded.add(ce.getId());
             newReplayParkedOnFirstEvent.countDown();
             awaitLatch(releaseNewReplay);
@@ -1320,7 +1320,7 @@ class CatchupThenPushSubscriptionModelTest {
         CountDownLatch releaseFold = new CountDownLatch(1);
         List<String> folded = new CopyOnWriteArrayList<>();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
-        SubscriptionHandle subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
             folded.add(ce.getId());
             firstFolded.countDown();
             awaitLatch(releaseFold);
@@ -1353,7 +1353,7 @@ class CatchupThenPushSubscriptionModelTest {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), feed, null);
 
-        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
         });
         assertThat(catchThrowable(subscription::waitUntilStarted)).isInstanceOf(IllegalStateException.class);
 
@@ -1375,7 +1375,7 @@ class CatchupThenPushSubscriptionModelTest {
         }, 0);
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, liveFeed, null);
 
-        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
         });
         Throwable thrown = catchThrowable(subscription::waitUntilStarted);
 
@@ -1434,7 +1434,7 @@ class CatchupThenPushSubscriptionModelTest {
         CountDownLatch replayReached = new CountDownLatch(1);
         CountDownLatch releaseReplay = new CountDownLatch(1);
 
-        SubscriptionHandle subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
             replayReached.countDown();
             awaitLatch(releaseReplay);
         });
@@ -1468,7 +1468,7 @@ class CatchupThenPushSubscriptionModelTest {
         List<String> delivered = new CopyOnWriteArrayList<>();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
 
-        SubscriptionHandle subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
             delivered.add(ce.getId());
             replayStarted.countDown();
             awaitLatch(releaseReplay);
@@ -1498,7 +1498,7 @@ class CatchupThenPushSubscriptionModelTest {
         CountDownLatch releaseFold = new CountDownLatch(1);
         List<String> folded = new CopyOnWriteArrayList<>();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, marker);
-        SubscriptionHandle subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
             folded.add(ce.getId());
             firstFolded.countDown();
             awaitLatch(releaseFold);
@@ -1526,7 +1526,7 @@ class CatchupThenPushSubscriptionModelTest {
         PushSubscriptionModel feed = new PushSubscriptionModel();
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader(), feed, null);
 
-        SubscriptionHandle subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
         });
         assertThat(catchThrowable(subscription::waitUntilStarted)).isInstanceOf(IllegalStateException.class);
 

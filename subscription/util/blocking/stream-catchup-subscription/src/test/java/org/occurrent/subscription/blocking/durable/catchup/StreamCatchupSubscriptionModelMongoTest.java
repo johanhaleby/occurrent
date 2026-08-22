@@ -36,7 +36,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubscriptionModel;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -123,7 +123,7 @@ class StreamCatchupSubscriptionModelMongoTest {
 
         StreamCatchupSubscriptionModel catchup = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100));
         CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
-        SubscriptionHandle subscription = catchup.subscribe("subscription", StreamSubscriptionFilter.filter(Filter.data("userId", eq("keep"))),
+        Subscription subscription = catchup.subscribe("subscription", StreamSubscriptionFilter.filter(Filter.data("userId", eq("keep"))),
                 StartAt.checkpoint(GlobalCheckpoint.of(0)), toNames(received));
         subscription.waitUntilStarted();
 

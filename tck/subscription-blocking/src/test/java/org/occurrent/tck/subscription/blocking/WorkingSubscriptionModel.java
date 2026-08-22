@@ -21,7 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.time.Duration;
@@ -81,7 +81,7 @@ public class WorkingSubscriptionModel implements SubscriptionModel, Introspectab
     }
 
     @Override
-    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         // Built before the id is reserved, so a filter this model cannot apply is refused without leaving a half
         // registered subscription behind.
         Predicate<CloudEvent> matcher = SubscriptionFilterMatcher.matcherFor(filter);
@@ -191,7 +191,7 @@ public class WorkingSubscriptionModel implements SubscriptionModel, Introspectab
     }
 
     @Override
-    public SubscriptionHandle resumeSubscription(String subscriptionId) {
+    public Subscription resumeSubscription(String subscriptionId) {
         requireKnown(subscriptionId);
         if (!isPaused(subscriptionId)) {
             throw new SubscriptionAlreadyRunningException(subscriptionId);
@@ -235,7 +235,7 @@ public class WorkingSubscriptionModel implements SubscriptionModel, Introspectab
     private record Registration(Predicate<CloudEvent> matcher, Consumer<CloudEvent> action, ExecutorService dispatcher) {
     }
 
-    private record StartedSubscription(String id) implements SubscriptionHandle {
+    private record StartedSubscription(String id) implements Subscription {
 
         @Override
         public boolean waitUntilStarted(Duration timeout) {

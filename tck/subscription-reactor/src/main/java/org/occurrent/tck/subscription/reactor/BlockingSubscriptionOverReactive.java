@@ -24,7 +24,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import reactor.core.publisher.Mono;
 
@@ -136,9 +136,9 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
     // Subscribable
 
     @Override
-    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         requireNonNull(action, "action cannot be null");
-        org.occurrent.subscription.api.reactor.SubscriptionHandle subscription =
+        org.occurrent.subscription.api.reactor.Subscription subscription =
                 subscriptionModel.subscribe(subscriptionId, filter, startAt, cloudEvent -> Mono.fromRunnable(() -> action.accept(cloudEvent)));
         return new BlockingSubscriptionOverReactiveSubscription(subscription);
     }
@@ -171,7 +171,7 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
     }
 
     @Override
-    public SubscriptionHandle resumeSubscription(String subscriptionId) {
+    public Subscription resumeSubscription(String subscriptionId) {
         return new BlockingSubscriptionOverReactiveSubscription(subscriptionModel.resumeSubscription(subscriptionId));
     }
 
@@ -198,7 +198,7 @@ public class BlockingSubscriptionOverReactive implements SubscriptionModel, Intr
     }
 
     private record BlockingSubscriptionOverReactiveSubscription(
-            org.occurrent.subscription.api.reactor.SubscriptionHandle subscription) implements SubscriptionHandle {
+            org.occurrent.subscription.api.reactor.Subscription subscription) implements Subscription {
 
         private BlockingSubscriptionOverReactiveSubscription {
             requireNonNull(subscription, "Reactive subscription cannot be null");

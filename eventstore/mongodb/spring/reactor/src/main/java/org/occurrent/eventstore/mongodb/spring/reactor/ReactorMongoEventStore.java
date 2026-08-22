@@ -889,7 +889,6 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         Function<Function<CloudEvent, CloudEvent>, Mono<CloudEvent>> logic = (fn) -> {
             Query cloudEventQuery = cloudEventIdIs(cloudEventId, cloudEventSource);
             return mongoTemplate.findOne(cloudEventQuery, Document.class, eventStoreCollectionName)
-                    .log()
                     .flatMap(document -> {
                         CloudEvent currentCloudEvent = convertToCloudEvent(timeRepresentation, document);
                         CloudEvent updatedCloudEvent = fn.apply(currentCloudEvent);
@@ -897,11 +896,15 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                         if (updatedCloudEvent == null) {
                             result = Mono.error(UpdateEventFunctionValidator.updateFunctionReturnedNull());
                         } else {
-                            CloudEvent preservedUpdatedCloudEvent = OccurrentCloudEventExtension.preserveAppendId(currentCloudEvent, updatedCloudEvent);
+                            CloudEvent streamIdentityPreservedCloudEvent = OccurrentCloudEventExtension.preserveStreamIdentity(currentCloudEvent, updatedCloudEvent);
+                            CloudEvent appendIdPreservedCloudEvent = OccurrentCloudEventExtension.preserveAppendId(currentCloudEvent, streamIdentityPreservedCloudEvent);
+                            CloudEvent positionPreservedCloudEvent = OccurrentCloudEventExtension.preservePosition(currentCloudEvent, appendIdPreservedCloudEvent);
+                            CloudEvent preservedUpdatedCloudEvent = DcbCloudEvents.preserveTags(currentCloudEvent, positionPreservedCloudEvent);
                             if (!Objects.equals(preservedUpdatedCloudEvent, currentCloudEvent)) {
                                 String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                                 long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
                                 Document updatedDocument = OccurrentCloudEventMongoDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, preservedUpdatedCloudEvent);
+                                DcbDocumentMapper.preservePositionAndDcbTags(currentCloudEvent, updatedDocument);
                                 updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                                 result = mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName).thenReturn(preservedUpdatedCloudEvent);
                             } else {

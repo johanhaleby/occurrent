@@ -28,7 +28,7 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -180,7 +180,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
      * model. Requires the wrapped model to manage named subscriptions itself.
      */
     @Override
-    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
@@ -225,7 +225,7 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
     }
 
     @Override
-    public SubscriptionHandle resumeSubscription(String subscriptionId) {
+    public Subscription resumeSubscription(String subscriptionId) {
         return namedSubscriptions.resumeSubscription(subscriptionId);
     }
 

@@ -29,7 +29,7 @@ import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.api.reactor.DcbSubscriptionModel;
 import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
 import org.occurrent.subscription.api.reactor.Subscribable;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -54,9 +54,9 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * The {@link #subscribe(String, DcbCriteria, Function)} and {@link #subscribeWithMetadata(String, DcbCriteria, BiFunction)}
  * methods below are the named, lifecycle-managed counterpart to the {@link Flux}-returning methods above, mirroring
- * {@link Subscribable}: they return a {@link SubscriptionHandle} tracked by id, which can be cancelled with
+ * {@link Subscribable}: they return a {@link Subscription} tracked by id, which can be cancelled with
  * {@link #cancel(String)}. Like {@link Subscribable}, they return without waiting for the subscription to start; call
- * {@link SubscriptionHandle#waitUntilStarted()} on the returned subscription when you need it running before you continue.
+ * {@link Subscription#waitUntilStarted()} on the returned subscription when you need it running before you continue.
  *
  * @param <E> the domain event type
  */
@@ -124,7 +124,7 @@ public final class DcbSubscriptions<E> {
     /**
      * Subscribes to live DCB events that match {@code criteria}, tracked by {@code subscriptionId}.
      */
-    public SubscriptionHandle subscribe(String subscriptionId, DcbCriteria criteria, Function<E, Mono<Void>> fn) {
+    public Subscription subscribe(String subscriptionId, DcbCriteria criteria, Function<E, Mono<Void>> fn) {
         return subscribe(subscriptionId, criteria, null, fn);
     }
 
@@ -132,7 +132,7 @@ public final class DcbSubscriptions<E> {
      * Subscribes to live DCB events that match {@code criteria}, starting at {@code startAt}, tracked by
      * {@code subscriptionId}.
      */
-    public SubscriptionHandle subscribe(String subscriptionId, DcbCriteria criteria, @Nullable DcbStartAt startAt, Function<E, Mono<Void>> fn) {
+    public Subscription subscribe(String subscriptionId, DcbCriteria criteria, @Nullable DcbStartAt startAt, Function<E, Mono<Void>> fn) {
         requireNonNull(fn, "Subscription function cannot be null");
         return subscribeWithMetadata(subscriptionId, criteria, startAt, (metadata, event) -> fn.apply(event));
     }
@@ -144,7 +144,7 @@ public final class DcbSubscriptions<E> {
      * This is a distinct method rather than an overload of {@link #subscribe} so that a method reference stays
      * unambiguous on the {@link Function} overloads.
      */
-    public SubscriptionHandle subscribeWithMetadata(String subscriptionId, DcbCriteria criteria, BiFunction<DcbEventMetadata, E, Mono<Void>> fn) {
+    public Subscription subscribeWithMetadata(String subscriptionId, DcbCriteria criteria, BiFunction<DcbEventMetadata, E, Mono<Void>> fn) {
         return subscribeWithMetadata(subscriptionId, criteria, null, fn);
     }
 
@@ -153,7 +153,7 @@ public final class DcbSubscriptions<E> {
      * {@code subscriptionId}, exposing DCB metadata to the callback. Returns without waiting for the subscription to
      * start.
      */
-    public SubscriptionHandle subscribeWithMetadata(String subscriptionId, DcbCriteria criteria, @Nullable DcbStartAt startAt, BiFunction<DcbEventMetadata, E, Mono<Void>> fn) {
+    public Subscription subscribeWithMetadata(String subscriptionId, DcbCriteria criteria, @Nullable DcbStartAt startAt, BiFunction<DcbEventMetadata, E, Mono<Void>> fn) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(fn, "Subscription function cannot be null");

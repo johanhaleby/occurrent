@@ -21,7 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.occurrent.tck.ConformanceEvents;
 import org.occurrent.tck.FailureNamesTheTestClass;
@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Everything about what a model delivers, pauses, resumes and reports is asserted once, by the blocking suites running
  * over {@link BlockingSubscriptionOverReactive}, rather than described a second time in terms of {@code Mono}. What
  * that cannot reach is the reactor API's two publishers, the {@code Mono<Void>} an action returns, which the
- * <em>model</em> subscribes to, and {@link SubscriptionHandle#waitUntilStarted()}. A model can get both wrong and still
+ * <em>model</em> subscribes to, and {@link Subscription#waitUntilStarted()}. A model can get both wrong and still
  * pass every bridged suite, because the bridge's own action has already run by the time it hands back a {@code Mono},
  * whether or not anything subscribes to it, and the bridge blocks either way.
  * <p>
@@ -54,7 +54,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>An action whose {@code Mono} errors must fail through the model's own error path, the same path the blocking
  *       fixture declares as retry-or-propagate. A model that lets it detonate somewhere unrelated, or that stops
  *       itself, turns one failed delivery into an outage.</li>
- *   <li>{@link SubscriptionHandle#waitUntilStarted()} is promised to answer, and callers gate application startup on it. One
+ *   <li>{@link Subscription#waitUntilStarted()} is promised to answer, and callers gate application startup on it. One
  *       that never completes hangs the caller. One that consumes its answer on first use never answers a second
  *       caller.</li>
  *   <li>Disposing a wait is a caller giving up on waiting, not on the subscription. A model that tears anything down
@@ -115,7 +115,7 @@ public abstract class ReactiveSubscriptionModelConformance {
         @Test
         void the_work_inside_the_actions_mono_runs_for_a_delivered_event() {
             RecordedEvents recorded = new RecordedEvents();
-            SubscriptionHandle subscription = model().subscribe(SUBSCRIPTION,
+            Subscription subscription = model().subscribe(SUBSCRIPTION,
                     cloudEvent -> Mono.fromRunnable(() -> recorded.accept(cloudEvent)));
             awaitStarted(subscription);
 
@@ -130,7 +130,7 @@ public abstract class ReactiveSubscriptionModelConformance {
         @Test
         void subscribing_alone_runs_no_action() {
             AtomicBoolean ran = new AtomicBoolean();
-            SubscriptionHandle subscription = model().subscribe(SUBSCRIPTION,
+            Subscription subscription = model().subscribe(SUBSCRIPTION,
                     cloudEvent -> Mono.fromRunnable(() -> ran.set(true)));
             awaitStarted(subscription);
 
@@ -146,7 +146,7 @@ public abstract class ReactiveSubscriptionModelConformance {
         void an_action_whose_mono_errors_fails_through_the_model_and_leaves_it_running() {
             RecordedEvents recorded = new RecordedEvents();
             AtomicBoolean failedOnce = new AtomicBoolean();
-            SubscriptionHandle subscription = model().subscribe(SUBSCRIPTION, cloudEvent -> {
+            Subscription subscription = model().subscribe(SUBSCRIPTION, cloudEvent -> {
                 if (failedOnce.compareAndSet(false, true)) {
                     return Mono.error(new IllegalStateException("simulated action failure"));
                 }
@@ -185,7 +185,7 @@ public abstract class ReactiveSubscriptionModelConformance {
 
         @Test
         void wait_until_started_answers_within_its_timeout() {
-            SubscriptionHandle subscription = model().subscribe(SUBSCRIPTION, cloudEvent -> Mono.empty());
+            Subscription subscription = model().subscribe(SUBSCRIPTION, cloudEvent -> Mono.empty());
 
             assertThat(subscription.waitUntilStarted(timeout()).block())
                     .as("waitUntilStarted is promised to answer, and callers gate startup on it")
@@ -194,7 +194,7 @@ public abstract class ReactiveSubscriptionModelConformance {
 
         @Test
         void asking_twice_answers_twice() {
-            SubscriptionHandle subscription = model().subscribe(SUBSCRIPTION, cloudEvent -> Mono.empty());
+            Subscription subscription = model().subscribe(SUBSCRIPTION, cloudEvent -> Mono.empty());
             awaitStarted(subscription);
 
             assertThat(subscription.waitUntilStarted(timeout()).block())
@@ -205,7 +205,7 @@ public abstract class ReactiveSubscriptionModelConformance {
         @Test
         void disposing_a_wait_leaves_the_subscription_working() {
             RecordedEvents recorded = new RecordedEvents();
-            SubscriptionHandle subscription = model().subscribe(SUBSCRIPTION,
+            Subscription subscription = model().subscribe(SUBSCRIPTION,
                     cloudEvent -> Mono.fromRunnable(() -> recorded.accept(cloudEvent)));
 
             Disposable abandonedWait = subscription.waitUntilStarted().subscribe();
@@ -231,7 +231,7 @@ public abstract class ReactiveSubscriptionModelConformance {
         return requireNonNull(fixture, "fixture is not initialized");
     }
 
-    private void awaitStarted(SubscriptionHandle subscription) {
+    private void awaitStarted(Subscription subscription) {
         Boolean started = subscription.waitUntilStarted(timeout()).block();
         assertThat(started)
                 .as("the subscription must report started before the test can mean anything")

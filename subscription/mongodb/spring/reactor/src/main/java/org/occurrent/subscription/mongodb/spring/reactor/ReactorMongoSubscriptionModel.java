@@ -69,7 +69,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
 
 /**
  * This is a subscription that uses project reactor and Spring to listen to changes from an event store.
- * This subscription model doesn't maintain the checkpoint, you need to store it yourself
+ * This Subscription doesn't maintain the checkpoint, you need to store it yourself
  * (or use another pre-existing component in conjunction with this one) in order to continue the stream from where
  * it's left off on application restart/crash etc. It produces a {@link CloudEvent} implementation of type {@link CheckpointAwareCloudEvent}
  * that includes the checkpoint. Use {@link CheckpointAwareCloudEvent#getCheckpointOrThrowIAE(CloudEvent)}
@@ -138,7 +138,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
     }
 
     @Override
-    public synchronized SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+    public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
@@ -163,7 +163,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
         return startInternalSubscription(subscriptionId, filter, new AtomicReference<>(startAt), action);
     }
 
-    private SubscriptionHandle startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Function<CloudEvent, Mono<Void>> action) {
+    private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt, Function<CloudEvent, Mono<Void>> action) {
         if (!running) {
             // Model stopped: don't subscribe, so waitUntilStarted() doesn't complete for a subscription that
             // won't deliver anything until start(true)/resumeSubscription actually starts it.
@@ -345,7 +345,7 @@ public class ReactorMongoSubscriptionModel implements CheckpointAwareSubscriptio
      * @see #pauseSubscription(String)
      */
     @Override
-    public synchronized SubscriptionHandle resumeSubscription(String subscriptionId) {
+    public synchronized Subscription resumeSubscription(String subscriptionId) {
         if (shutdown) {
             throw new IllegalStateException(ReactorMongoSubscriptionModel.class.getSimpleName() + " is shutdown");
         }

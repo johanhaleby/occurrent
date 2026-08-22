@@ -67,14 +67,7 @@ import java.lang.annotation.*;
  * {@link #commandDispatcher()}/{@link #commandDispatcherName()} or the unique {@code CommandDispatcher} bean. There is no
  * default: a dispatcher is usually a lambda over an {@code ApplicationService}, with or without a decider.
  * </p>
- *
- * @deprecated Renamed to {@link OccurrentSaga}. Its attributes and the factory method it marks are unchanged, only
- * the annotation's own name moves, so it no longer takes the word a user needs for the {@code Saga} it marks. Run
- * {@code org.occurrent.UpgradeToOccurrent_0_35} to rewrite every use, or see
- * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md">the 0.35.0
- * migration guide</a>.
  */
-@Deprecated(forRemoval = true)
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented

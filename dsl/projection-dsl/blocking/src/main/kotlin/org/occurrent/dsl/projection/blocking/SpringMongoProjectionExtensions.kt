@@ -26,7 +26,7 @@ import org.occurrent.dsl.view.internal.requireMatchingDocumentId
 import org.occurrent.dsl.view.viewStateRepository
 import org.occurrent.subscription.DcbStartAt
 import org.occurrent.subscription.StartAt
-import org.occurrent.subscription.api.blocking.SubscriptionHandle
+import org.occurrent.subscription.api.blocking.Subscription
 import org.springframework.data.mongodb.core.MongoOperations
 import org.springframework.data.mongodb.core.findById
 
@@ -53,17 +53,17 @@ inline fun <reified S : Any, ID : Any> mongoViewStateRepository(mongoOperations:
  * example the stream id) is resolved and folded with that metadata, an id that resolves to `null` is skipped, and a
  * projection keyed by metadata that never arrived throws with an accurate message instead of silently dropping the event.
  */
-inline fun <reified S : Any, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, mongoOperations: MongoOperations, startAt: StartAt? = null): SubscriptionHandle =
+inline fun <reified S : Any, E : Any, ID : Any> Subscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, mongoOperations: MongoOperations, startAt: StartAt? = null): Subscription =
     project(subscriptionId, projection, mongoViewStateRepository<S, ID>(mongoOperations), startAt)
 
 /**
  * Convenience over [StreamSubscriptions.project] that materializes [projection] into MongoDB via [mongoOperations].
  */
-inline fun <reified S : Any, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, mongoOperations: MongoOperations, startAt: StartAt? = null): SubscriptionHandle =
+inline fun <reified S : Any, E : Any, ID : Any> StreamSubscriptions<E>.project(subscriptionId: String, projection: Projection<S, E, ID>, mongoOperations: MongoOperations, startAt: StartAt? = null): Subscription =
     project(subscriptionId, projection, mongoViewStateRepository<S, ID>(mongoOperations), startAt)
 
 /**
  * Convenience over [DcbSubscriptions.project] that materializes [dcbProjection] into MongoDB via [mongoOperations].
  */
-inline fun <reified S : Any, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<S, E, ID>, mongoOperations: MongoOperations, startAt: DcbStartAt? = null): SubscriptionHandle =
+inline fun <reified S : Any, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<S, E, ID>, mongoOperations: MongoOperations, startAt: DcbStartAt? = null): Subscription =
     project(subscriptionId, dcbProjection, mongoViewStateRepository<S, ID>(mongoOperations), startAt)

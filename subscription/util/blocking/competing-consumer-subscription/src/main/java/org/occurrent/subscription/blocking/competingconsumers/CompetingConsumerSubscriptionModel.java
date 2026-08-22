@@ -98,14 +98,14 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * @param action         This action will be invoked for each cloud event that is stored in the EventStore.
      * @throws DuplicateSubscriptionIdException If this subscription model instance already has a subscription with this id.
      */
-    public SubscriptionHandle subscribe(String subscriberId, String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriberId, String subscriptionId, SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(subscriberId, "SubscriberId cannot be null");
         Objects.requireNonNull(subscriptionId, "SubscriptionId cannot be null");
         if (isSubscriptionIdInUse(subscriptionId)) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
         }
 
-        final SubscriptionHandle subscription;
+        final Subscription subscription;
         if (startAt.get(new SubscriptionModelContext(CompetingConsumerSubscriptionModel.class)) == null) {
             // Not allowed to start the competing consumer subscription, delegate to parent instead. One case: a
             // non-durable in-memory subscription started on multiple nodes, where every node should receive every
@@ -125,7 +125,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * @see SubscriptionModel#subscribe(String, SubscriptionFilter, StartAt, Consumer)
      */
     @Override
-    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         return subscribe(UUID.randomUUID().toString(), subscriptionId, filter, startAt, action);
     }
 
@@ -243,7 +243,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * @see SubscriptionModelLifeCycle#resumeSubscription(String)
      */
     @Override
-    public synchronized SubscriptionHandle resumeSubscription(String subscriptionId) {
+    public synchronized Subscription resumeSubscription(String subscriptionId) {
         logDebug("Trying to resume CompetingConsumer subscription (subscriptionId={})", subscriptionId);
         requireKnown(subscriptionId);
         if (isRunning(subscriptionId)) {
@@ -268,7 +268,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
                         competingConsumer = competingConsumer.restoreWaiting();
                         competingConsumers.put(competingConsumer.subscriptionIdAndSubscriberId, competingConsumer);
                     }
-                    final SubscriptionHandle subscription;
+                    final Subscription subscription;
                     String subscriberId = competingConsumer.getSubscriberId();
                     boolean hasLock = hasLock(subscriptionId, subscriberId);
                     logDebug("Resuming CompetingConsumer (subscriberId={}, subscriptionId={}, state={}, hasLock={})", subscriberId, subscriptionId, competingConsumer.state.getClass().getSimpleName(), hasLock);
@@ -309,7 +309,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         final CompetingConsumerSubscription competingConsumerSubscription;
         if (competingConsumerStrategy.registerCompetingConsumer(subscriptionId, subscriberId)) {
             logDebug("Successfully registered CompetingConsumer subscription (subscriberId={}, subscriptionId={})", subscriberId, subscriptionId);
-            SubscriptionHandle subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
+            Subscription subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
             competingConsumerSubscription = new CompetingConsumerSubscription(subscriptionId, subscriberId, subscription);
             // Winning the lock while stopped records the consumer as paused rather than running, the same way every
             // other subscription model registers into its paused collection when it is not running. The delegate has
@@ -499,7 +499,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
     }
 
-    private SubscriptionHandle startWaitingConsumer(CompetingConsumer cc) {
+    private Subscription startWaitingConsumer(CompetingConsumer cc) {
         logDebug("Start CompetingConsumer that has previously been waiting (subscriberId={}, subscriptionId={})", cc.getSubscriberId(), cc.getSubscriptionId());
         String subscriptionId = cc.getSubscriptionId();
         competingConsumers.put(SubscriptionIdAndSubscriberId.from(subscriptionId, cc.getSubscriberId()), cc.registerRunning());
@@ -514,7 +514,7 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
      * callback, so the answer is read from the return value, and the state is re-read afterwards to see
      * whether the callback already acted on it.
      */
-    private SubscriptionHandle registerAndStartIfGranted(CompetingConsumer cc) {
+    private Subscription registerAndStartIfGranted(CompetingConsumer cc) {
         String subscriptionId = cc.getSubscriptionId();
         String subscriberId = cc.getSubscriberId();
         boolean acquiredLock = registerCompetingConsumer(subscriptionId, subscriberId);
@@ -609,13 +609,13 @@ public class CompetingConsumerSubscriptionModel implements SubscriptionModelWrap
         }
 
         final class Waiting implements CompetingConsumerState {
-            private final Supplier<SubscriptionHandle> supplier;
+            private final Supplier<Subscription> supplier;
 
-            Waiting(Supplier<SubscriptionHandle> supplier) {
+            Waiting(Supplier<Subscription> supplier) {
                 this.supplier = supplier;
             }
 
-            private SubscriptionHandle startSubscription() {
+            private Subscription startSubscription() {
                 return supplier.get();
             }
         }

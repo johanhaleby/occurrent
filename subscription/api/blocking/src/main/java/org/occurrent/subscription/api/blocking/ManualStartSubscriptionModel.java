@@ -229,7 +229,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
 
     /**
      * Register a subscription. While this model is withholding, nothing is passed to the wrapped model and the returned
-     * {@link SubscriptionHandle} is a placeholder standing for the registration. Its {@code waitUntilStarted} answers
+     * {@link Subscription} is a placeholder standing for the registration. Its {@code waitUntilStarted} answers
      * {@code false} straight away, since the subscription has not started and will not until you ask. Once the
      * subscription is started, {@link #resumeSubscription(String)} returns the wrapped model's own subscription, which
      * is the handle to wait on.
@@ -249,7 +249,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      *                                                   the source can answer is what a node does.
      */
     @Override
-    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         requireNonNull(action, "Action cannot be null");
@@ -271,7 +271,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
                     return new DeferredSubscription(subscriptionId);
                 }
             }
-            SubscriptionHandle subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
+            Subscription subscription = delegate.subscribe(subscriptionId, filter, startAt, action);
             registrations.put(subscriptionId, new Registration.Live(subscription));
             return subscription;
         } catch (RuntimeException e) {
@@ -294,7 +294,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
      *                                             thread started this registration first.
      */
     @Override
-    public SubscriptionHandle resumeSubscription(String subscriptionId) {
+    public Subscription resumeSubscription(String subscriptionId) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         Registration registration = registrations.get(subscriptionId);
         // Another thread is between claiming this registration and subscribing it, so the wrapped model does not have
@@ -304,7 +304,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
                     "Subscription " + subscriptionId + " is already being started by another thread.");
         }
         if (!(registration instanceof Registration.Deferred deferred)) {
-            SubscriptionHandle subscription = delegate.resumeSubscription(subscriptionId);
+            Subscription subscription = delegate.resumeSubscription(subscriptionId);
             reopenAfterStop();
             return subscription;
         }
@@ -315,7 +315,7 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         }
 
         try {
-            SubscriptionHandle subscription = delegate.subscribe(subscriptionId, deferred.filter(), deferred.startAt(), deferred.action());
+            Subscription subscription = delegate.subscribe(subscriptionId, deferred.filter(), deferred.startAt(), deferred.action());
             // Subscribing to a stopped model registers a paused subscription rather than a running one, so this is what
             // makes starting work after stop(). Without it the caller is handed a subscription that never delivers.
             if (delegate.isPaused(subscriptionId)) {
@@ -646,14 +646,14 @@ public final class ManualStartSubscriptionModel implements SubscriptionModel, Su
         record Starting() implements Registration {
         }
 
-        record Live(SubscriptionHandle subscription) implements Registration {
+        record Live(Subscription subscription) implements Registration {
         }
     }
 
     // Stands for a registration that has not been started. It answers at once instead of waiting out the timeout,
     // because nothing changes until the application starts the subscription, and waiting would hang every caller that
     // uses the no-argument waitUntilStarted().
-    private record DeferredSubscription(String id) implements SubscriptionHandle {
+    private record DeferredSubscription(String id) implements Subscription {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
             return false;

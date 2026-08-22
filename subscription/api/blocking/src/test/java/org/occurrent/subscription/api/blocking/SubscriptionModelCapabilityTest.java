@@ -78,7 +78,7 @@ class SubscriptionModelCapabilityTest {
 
     private static class PlainModel implements SubscriptionModel {
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             throw new UnsupportedOperationException();
         }
 
@@ -110,7 +110,7 @@ class SubscriptionModelCapabilityTest {
         }
 
         @Override
-        public SubscriptionHandle resumeSubscription(String subscriptionId) {
+        public Subscription resumeSubscription(String subscriptionId) {
             throw new UnsupportedOperationException();
         }
 

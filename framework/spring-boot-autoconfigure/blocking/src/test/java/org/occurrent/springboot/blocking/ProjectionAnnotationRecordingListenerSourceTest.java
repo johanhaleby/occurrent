@@ -34,7 +34,7 @@ import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
@@ -87,7 +87,7 @@ class ProjectionAnnotationRecordingListenerSourceTest {
             @SuppressWarnings("unchecked")
             Consumer<CloudEvent> action = invocation.getArgument(3);
             action.accept(cloudEvent(appendId));
-            return mock(SubscriptionHandle.class);
+            return mock(Subscription.class);
         });
 
         Subscribable distractorModel = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));

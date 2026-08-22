@@ -18,7 +18,7 @@ package org.occurrent.example.domain.uno.es.spring.blocking
 
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.example.domain.uno.*
-import org.occurrent.subscription.api.blocking.SubscriptionHandle
+import org.occurrent.subscription.api.blocking.Subscription
 import org.occurrent.subscription.api.blocking.SubscriptionModel
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -34,7 +34,7 @@ class ReportProgressWhenGameIsPlayed(
     private val log = loggerFor<ReportProgressWhenGameIsPlayed>()
 
     @Bean
-    fun reportGameProgressDuringGamePlaySubscription(): SubscriptionHandle {
+    fun reportGameProgressDuringGamePlaySubscription(): Subscription {
         return subscriptionModel.subscribe("reportGameProgressDuringGamePlay",
             cloudEventConverter::toDomainEvent andThen { e: Event ->
                 val turnCountForGame = if (e is CardPlayed) {

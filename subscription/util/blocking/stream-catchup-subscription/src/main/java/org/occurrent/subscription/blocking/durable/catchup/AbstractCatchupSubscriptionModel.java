@@ -27,7 +27,7 @@ import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
 
@@ -182,7 +182,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
     }
 
     @Override
-    public SubscriptionHandle resumeSubscription(String subscriptionId) {
+    public Subscription resumeSubscription(String subscriptionId) {
         pauseRequestedDuringCatchup.remove(subscriptionId);
         return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
     }
@@ -462,7 +462,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
      * {@link #endReplayIfStillCurrent} read the attempt's identity from {@link #CURRENT_ATTEMPT} instead of a
      * parameter. This is the only place that puts into {@link #runningCatchupSubscriptions}.
      */
-    protected Future<SubscriptionHandle> startCatchupAsync(String subscriptionId, Callable<SubscriptionHandle> catchup) {
+    protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
         CatchupAttempt attempt = new CatchupAttempt();
         // Locked so this registration cannot land inside a still-finishing earlier attempt's own lockHandover span
         // for the same id. Unlocked, this attempt could start, and its replay could reach a checkpoint save, before
@@ -484,7 +484,7 @@ abstract class AbstractCatchupSubscriptionModel implements SubscriptionModel, Su
         // mode-specific classes). Neither path throws, so catching here only ever means the replay itself failed,
         // and is the one place both modes share to stop such a failure from leaving the subscription looking like
         // it is still running or catching up forever.
-        FutureTask<SubscriptionHandle> task = new FutureTask<>(() -> {
+        FutureTask<Subscription> task = new FutureTask<>(() -> {
             CURRENT_ATTEMPT.set(attempt);
             try {
                 return catchup.call();

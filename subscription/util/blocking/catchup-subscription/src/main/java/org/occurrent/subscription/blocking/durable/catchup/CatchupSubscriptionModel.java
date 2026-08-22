@@ -29,7 +29,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
-import org.occurrent.subscription.api.blocking.SubscriptionHandle;
+import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.util.Objects;
@@ -211,7 +211,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * subscriptionModel.subscribe(&lt;subscriptionId&gt;, &lt;filter&gt;, StartAtTime.beginningOfTime(), &lt;action&gt;);
      * </pre>
      */
-    public SubscriptionHandle subscribeFromBeginningOfTime(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
+    public Subscription subscribeFromBeginningOfTime(String subscriptionId, SubscriptionFilter filter, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, filter, StartAtTime.beginningOfTime(), action);
     }
 
@@ -222,7 +222,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * subscriptionModel.subscribe(&lt;subscriptionId&gt;, StartAtTime.beginningOfTime(), &lt;action&gt;);
      * </pre>
      */
-    public SubscriptionHandle subscribeFromBeginningOfTime(String subscriptionId, Consumer<CloudEvent> action) {
+    public Subscription subscribeFromBeginningOfTime(String subscriptionId, Consumer<CloudEvent> action) {
         return subscribe(subscriptionId, StartAtTime.beginningOfTime(), action);
     }
 
@@ -230,7 +230,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     // every child is built with CatchupSubscriptionModel.class as its context type. This layer's answer is
     // therefore the one acted on, which is why decidesWhereTheSubscriptionStarts() stays true here.
     @Override
-    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
+    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, @Nullable StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
         return route(filter, startAt).subscribe(subscriptionId, filter, startAt, action);
     }
@@ -336,7 +336,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
     }
 
     @Override
-    public SubscriptionHandle resumeSubscription(String subscriptionId) {
+    public Subscription resumeSubscription(String subscriptionId) {
         return getWrappedSubscriptionModel().resumeSubscription(subscriptionId);
     }
 
@@ -350,7 +350,7 @@ public class CatchupSubscriptionModel implements SubscriptionModel, Subscription
      * @throws UnsupportedOperationException if the wrapped model is not itself repositionable.
      */
     @Override
-    public SubscriptionHandle resumeSubscription(String subscriptionId, StartAt startAt) {
+    public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
         return RepositionableSubscriptions.findIn(getWrappedSubscriptionModel())
                 .orElseThrow(() -> new UnsupportedOperationException(getWrappedSubscriptionModel().getClass().getSimpleName() + " is not repositionable"))
                 .resumeSubscription(subscriptionId, startAt);

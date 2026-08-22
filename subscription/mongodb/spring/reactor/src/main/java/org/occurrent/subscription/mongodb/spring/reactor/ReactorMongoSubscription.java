@@ -17,11 +17,11 @@
 package org.occurrent.subscription.mongodb.spring.reactor;
 
 import org.jspecify.annotations.NullMarked;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import reactor.core.publisher.Mono;
 
 @NullMarked
-public record ReactorMongoSubscription(String subscriptionId, Mono<Void> started) implements SubscriptionHandle {
+public record ReactorMongoSubscription(String subscriptionId, Mono<Void> started) implements Subscription {
 
     @Override
     public String id() {

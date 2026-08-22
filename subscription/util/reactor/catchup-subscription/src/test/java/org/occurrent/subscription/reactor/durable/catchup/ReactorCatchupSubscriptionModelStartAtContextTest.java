@@ -28,7 +28,7 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -140,7 +140,7 @@ class ReactorCatchupSubscriptionModelStartAtContextTest {
         }
 
         @Override
-        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
             return new StartedSubscription(subscriptionId);
         }
 
@@ -168,7 +168,7 @@ class ReactorCatchupSubscriptionModelStartAtContextTest {
         }
 
         @Override
-        public SubscriptionHandle resumeSubscription(String subscriptionId) {
+        public Subscription resumeSubscription(String subscriptionId) {
             return new StartedSubscription(subscriptionId);
         }
 
@@ -181,7 +181,7 @@ class ReactorCatchupSubscriptionModelStartAtContextTest {
         }
     }
 
-    private record StartedSubscription(String id) implements SubscriptionHandle {
+    private record StartedSubscription(String id) implements Subscription {
         @Override
         public Mono<Void> waitUntilStarted() {
             return Mono.empty();

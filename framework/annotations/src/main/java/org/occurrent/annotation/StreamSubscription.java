@@ -70,17 +70,7 @@ import java.lang.annotation.*;
  * </pre>
  * These may appear in any order alongside the event and an optional {@code EventMetadata} parameter.
  * </p>
- *
- * @deprecated Replaced by {@link OccurrentStreamSubscription}, which marks a factory method returning a
- * {@code Subscription} descriptor rather than a {@code void} handler method, and which is named so that all seven
- * Occurrent annotations share one prefix. The replacement has no {@code eventTypes}, because the descriptor's own
- * handlers say which events it wants. This annotation keeps behaving exactly as it does today until it is removed, so
- * nothing has to change at once. See
- * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md">the 0.35.0
- * migration guide</a> for how to move a handler over, and for what {@code org.occurrent.UpgradeToOccurrent_0_35} does
- * not rewrite for you.
  */
-@Deprecated(forRemoval = true)
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented

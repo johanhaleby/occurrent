@@ -24,7 +24,7 @@ import org.occurrent.subscription.SubscriptionAlreadyRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.IntrospectableSubscriptions;
-import org.occurrent.subscription.api.reactor.SubscriptionHandle;
+import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.api.reactor.SubscriptionModelLifeCycle;
 
 import java.time.Duration;
@@ -39,7 +39,7 @@ import java.util.*;
  * class started would otherwise still be running for the next.
  * <p>
  * <strong>Two differences from the blocking twin, both forced by the reactive types.</strong> Resuming a subscription
- * waits on {@link SubscriptionHandle#waitUntilStarted()}, and clearing a checkpoint waits on
+ * waits on {@link Subscription#waitUntilStarted()}, and clearing a checkpoint waits on
  * {@link CheckpointStorage#delete(String)}, both of which return a {@code Mono} rather than blocking the calling
  * thread. A JUnit {@code beforeEach} is synchronous, so this extension blocks on them itself, bounded by
  * {@link #withStartTimeout(Duration)} rather than waiting forever, instead of asking every test to. And there is no
@@ -243,12 +243,12 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
      * Start one subscription and block until it is actually listening, so a write that follows cannot outrun it.
      *
      * @param subscriptionId the id of a currently stopped subscription, must not be {@code null}
-     * @return the running {@link SubscriptionHandle}
+     * @return the running {@link Subscription}
      * @throws UnknownSubscriptionException        if no model has a subscription with that id
      * @throws SubscriptionAlreadyRunningException if the model that has it reports it is already running
      * @throws IllegalStateException               if it does not start within {@link #withStartTimeout(Duration)}
      */
-    public SubscriptionHandle start(String subscriptionId) {
+    public Subscription start(String subscriptionId) {
         Objects.requireNonNull(subscriptionId, "subscriptionId must not be null");
         return resumeAndWait(subscriptionId);
     }
@@ -276,11 +276,11 @@ public final class OccurrentSubscriptionsExtension implements BeforeEachCallback
     // A model that does not have the id says so with UnknownSubscriptionException, which is the one refusal worth
     // searching past. Every other refusal comes from the model that does own the id, so it is the answer rather than
     // something to keep looking behind.
-    private SubscriptionHandle resumeAndWait(String subscriptionId) {
+    private Subscription resumeAndWait(String subscriptionId) {
         List<UnknownSubscriptionException> notHere = new ArrayList<>();
         for (SubscriptionModelLifeCycle model : subscriptionModels) {
             try {
-                SubscriptionHandle subscription = model.resumeSubscription(subscriptionId);
+                Subscription subscription = model.resumeSubscription(subscriptionId);
                 knownIds.add(subscriptionId);
                 // waitUntilStarted(startTimeout) already resolves within startTimeout by its own internal timeout(),
                 // so block() here needs no separate deadline of its own; giving it one too would race the two clocks
