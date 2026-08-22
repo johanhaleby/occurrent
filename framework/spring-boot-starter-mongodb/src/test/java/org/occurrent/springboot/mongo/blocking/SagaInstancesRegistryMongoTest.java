@@ -29,6 +29,7 @@ import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMa
 import org.occurrent.application.service.blocking.ApplicationService;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaInstances;
+import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.dsl.saga.SagaInstancesRegistry;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -99,6 +100,21 @@ class SagaInstancesRegistryMongoTest {
                 () -> assertThat(sagaBInstances.find("a-1")).as("saga-b's store never saw saga-a's instance").isEmpty(),
                 () -> assertThat(applicationContext.getBean("sagaInstances-saga-a", SagaInstances.class)).isSameAs(sagaAInstances),
                 () -> assertThat(applicationContext.getBean("sagaInstances-saga-b", SagaInstances.class)).isSameAs(sagaBInstances)
+        );
+    }
+
+    @Test
+    void each_saga_also_publishes_its_running_subscription_under_its_own_name() {
+        SagaSubscription sagaA = applicationContext.getBean("sagaSubscription-saga-a", SagaSubscription.class);
+        SagaSubscription sagaB = applicationContext.getBean("sagaSubscription-saga-b", SagaSubscription.class);
+
+        assertAll(
+                () -> assertThat(sagaA.id()).isEqualTo("saga-a"),
+                () -> assertThat(sagaB.id()).isEqualTo("saga-b"),
+                // This bean is how an application on the annotation path reaches release(sagaId), which is the one
+                // saga operation the read-only SagaInstances cannot offer.
+                () -> assertThat(sagaA.instances()).isSameAs(sagaInstancesRegistry.get("saga-a")),
+                () -> assertThat(sagaB.instances()).isSameAs(sagaInstancesRegistry.get("saga-b"))
         );
     }
 
