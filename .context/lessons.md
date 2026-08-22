@@ -2276,6 +2276,24 @@ PR 900's head at `08:49:51Z`. All three came from `gh` and all three still match
 while 60 timestamps typed in the same file across the same day were fabricated. Every completion
 claim held too, four merge SHAs and five issue states, because those were fetched.
 
+A redacted-minute timestamp is the worst variant, because it borrows the credibility of care.
+Both fleets wrote times as `13:0xZ` or `07:4xZ`, hour known and minute not claimed, which reads as a
+deliberate statement about precision. rel34 had fourteen. Two things compound. No audit either fleet
+ran matched them, since every sweep was anchored on the full ISO shape, so they were never tested by
+anything. And the `x` signals that someone thought about the gap, so a reader challenges them less
+than a plainly wrong value. rel34's worst was `18:40Z` for an ADR ledger check that actually happened
+at `12:41:01Z`, almost six hours out, and `09:5xZ` for a merge `gh` puts at `08:51:37Z`.
+
+Minute precision with no seconds is the same family and evades the same sweeps. `T18:40Z` does not
+match a pattern expecting `T18:40:00`. Sweep for `HH:MMZ` and `HH:MxZ` explicitly, not only full ISO.
+
+The two recovery sources are not interchangeable and the order matters. The owning system yields the
+VALUE, reconstruction only ever yields a BOUND, so ask the owner first and reconstruct only for facts
+no system owns. `gh` settled a merge time outright. The journal settled a decision time outright,
+`dec-0005` at `07:55:05Z` against a written `07:58Z`. A cross-fleet handoff has no owner, so it keeps
+its reconstructed bound and the word `unverified`, and those are different claims about the same
+looking value.
+
 Two refinements from running the audit on two files rather than one.
 
 An audit anchored on the schema's timestamp format cannot see a time written inside a sentence.

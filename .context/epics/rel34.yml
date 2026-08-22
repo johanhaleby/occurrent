@@ -10,9 +10,9 @@ authority: 'see .context/orchestrator-policy.yml (standing merge auto_epic_prs, 
   green, allow_reasoned_declines threads, memory checkpoints with [ci skip]); no session-scoped deviations.
   Plan at /Users/johan/.claude/plans/rel34-0-34-0-release.md, PENDING Johan''s approval. Milestone 0.34.0
   is number 3, existing, not created. Mode ATTENDED. ADR reservation ledger opens at 0134 (max across
-  origin/main and every remote branch is 0133, audited 2026-08-22T07:0xZ). Cross-epic: rel34''s sweeps
+  origin/main and every remote branch is 0133, audited 2026-08-22T07:20:10Z). Cross-epic: rel34''s sweeps
   exclude #388, #421, #893, #896 (brk''s); brk''s sweeps exclude every rel34 unit; coordination only through
-  .context/ORCHESTRATOR.md. PLAN GATE CLOSED 2026-08-22T07:25Z by Johan''s four structured-ask rulings
+  .context/ORCHESTRATOR.md. PLAN GATE CLOSED 2026-08-22T07:33:33Z by Johan''s four structured-ask rulings
   (journal dec-0001 to dec-0004). C1 STOPPING RULE: MAJOR-AND-ABOVE reopens rel34''s scope after a clean
   round, cap 3 rounds, remainder returns as ONE structured ask and reaching the cap is reported as reaching
   the cap, never as convergence. Below major is filed as 0.35.0 issues. sdi (#721/#725) is a SIBLING epic,
@@ -48,7 +48,7 @@ units:
     - check: pr_merged
       ref: 900
       met: true
-      evidence: 'CAS-MERGED 2026-08-22T09:5xZ pinned to d4df542fdc93d8fa6d37f6afb5348f0c3ef628d5, squash
+      evidence: 'CAS-MERGED 2026-08-22T08:51:37Z pinned to d4df542fdc93d8fa6d37f6afb5348f0c3ef628d5, squash
         a45a17a08. Gate: Copilot reviewed the EXACT current head at 08:49:51Z (commit_id compared, not
         presence), Approval recommended, 0 new comments, Balanced, no suppressed block with the read confirmed
         to return rows; 0 unresolved threads by isResolved==false alone; mergeable; prose-only so no adversarial
@@ -67,7 +67,7 @@ units:
     last_meaningful_progress_at: '2026-08-22T08:53:11+00:00'
     observed:
       dispatch:
-        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+        note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
@@ -131,7 +131,7 @@ units:
     last_meaningful_progress_at: '2026-08-22T12:54:55+00:00'
     observed:
       dispatch:
-        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+        note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
@@ -200,7 +200,7 @@ units:
         via: orchestrator adversarial verify subagent, second pass
         at: '2026-08-22T08:49:26+00:00'
       blocked_on_suppressed_finding:
-        note: 'MERGE BLOCKED 2026-08-22T10:0xZ. Copilot''s verdict on d9589f867 was ''Needs a closer look'',
+        note: 'MERGE BLOCKED 2026-08-22T09:03:54Z. Copilot''s verdict on d9589f867 was ''Needs a closer look'',
           NOT approval, and its body carried a suppressed comment. Zero unresolved threads and a green
           26-check rollup were both true and both blind to it. CONFIRMED by reading the code, not taken
           from the report: preserveAppendId and preserveTags operate on the CloudEvent, preservePositionAndDcbTags
@@ -304,7 +304,7 @@ units:
     last_meaningful_progress_at: '2026-08-22T12:24:01+00:00'
     observed:
       dispatch:
-        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+        note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
@@ -377,7 +377,7 @@ units:
         at: '2026-08-22T12:24:01+00:00'
     assessment: 'Warning-only defect, recording itself stays correct. Fix shape agreed in the issue body.
       Touches the blocking registrar, so U6 follows this unit rather than running beside it. OWNERSHIP
-      EXTENDED by dec-0005 (2026-08-22T07:58Z) to framework/spring-boot-starter-mongodb/.../OccurrentMongoAutoConfiguration.java,
+      EXTENDED by dec-0005 (2026-08-22T07:55:05Z) to framework/spring-boot-starter-mongodb/.../OccurrentMongoAutoConfiguration.java,
       scoped to occurrentComposedDefaultStartPosition() and the existing defaultBypassesCatchup() call
       inside occurrentCompetingDurableSubscriptionModel(...), plus that module''s tests. The brief''s
       original boundary was unreachable: the reactor pattern it names, ComposedCatchupModel.suppliedBy(Object),
@@ -497,7 +497,7 @@ units:
           end of the ceiling defect U4 itself found.'
         via: gh api pulls/914/reviews + graphql reviewThreads
         at: '2026-08-22T13:44:39+00:00'
-    assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:50Z after
+    assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:30:57Z after
       a scoping read, which is why #878 moved here from U5. The read found two collisions the original
       split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
       and U5''s #891 needs the reactor ProjectionAnnotationRegistrar and ComposedCatchupModel, which are
@@ -723,7 +723,7 @@ units:
     last_meaningful_progress_at: '2026-08-22T08:30:57+00:00'
     observed:
       dispatch:
-        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+        note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
           for its brief path, never by title
         via: ListAgents plus transcript grep
         at: '2026-08-22T07:48:00+00:00'
@@ -774,7 +774,7 @@ units:
         via: gh pr view statusCheckRollup, .github/workflows/maven.yml:243-250
         at: '2026-08-22T08:23:49+00:00'
       hygiene:
-        note: Worktree removed and local branch johan/relaxed-bardeen-0a12f8 deleted 2026-08-22T09:2xZ
+        note: Worktree removed and local branch johan/relaxed-bardeen-0a12f8 deleted 2026-08-22T08:47:06Z
           after confirming the worktree was clean, its head equalled the merged pin, and the remote branch
           was already gone (deleted by the merge). Session archiving batches at epic closeout.
         via: git worktree remove, git branch -D
@@ -835,7 +835,7 @@ units:
       sweep, derivation recorded in ORCHESTRATOR.md. Do not re-ask. Reachability is low (records and Kotlin
       data classes are implicitly final) but the failure is silent event loss with no log or exception,
       and deferring only adds another release of undetectable loss before the same break arrives. SEMANTIC
-      GATE REPORTED BY sdi 2026-08-22T08:0xZ, record #753''s merge in ORCHESTRATOR.md when it lands: #753
+      GATE REPORTED BY sdi 2026-08-22T08:15:54Z (UNVERIFIED, a cross-fleet report no external system owns), record #753''s merge in ORCHESTRATOR.md when it lands: #753
       changes EventTypeExpansion in common/filter, whose deriveFilter is what dsl/subscription-dsl/common/.../SubscriptionFilters.kt
       calls today and what sdi''s new descriptor selector must call, and one of #753''s own remedies (refusing
       a non-final concrete declared event type) changes what a descriptor accepts. So sdi''s descriptor
@@ -987,7 +987,7 @@ units:
     last_meaningful_progress_at: '2026-08-22T12:50:59+00:00'
     observed:
       preview_state:
-        note: 'Checked 2026-08-22T10:3xZ. preview/0.34.0 is behind TWO held branches by one commit each:
+        note: 'Checked 2026-08-22T09:13:10Z. preview/0.34.0 is behind TWO held branches by one commit each:
           docs/802-push-observation-hook (U1''s six-outcome rewrite) and docs/421-broker-modules (brk''s).
           The other five are behind=0. So preview does NOT currently show the merged result, which is
           a definition-of-done item. REBUILD DELIBERATELY DEFERRED, not overlooked: those two branches
@@ -1102,7 +1102,7 @@ units:
         via: brk orchestrator messages, cross-checked against the merge commit
         at: '2026-08-22T11:15:31+00:00'
       gate_widened:
-        note: 'R3''s gate widened 2026-08-22T14:4xZ and the tag date moved with it. RabbitMqCloudEventBridgeConnectionRecoveryTest.a_held_deferred_delivery_tag_across_a_forced_connection_recovery
+        note: 'R3''s gate widened 2026-08-22T11:36:28Z and the tag date moved with it. RabbitMqCloudEventBridgeConnectionRecoveryTest.a_held_deferred_delivery_tag_across_a_forced_connection_recovery
           failed on rel34''s PR 914 in a module 914 does not touch. rel34 routed it to brk rather than
           filing it as a flake, on the reasoning that a connection-recovery test timing out while waiting
           for a held deferred delivery tag pins the EXACT guarantee brk''s merged PR 895 was written to
@@ -1374,7 +1374,7 @@ units:
       it found the gap while reviewing its own PR 902. Reactor twin of U3''s fix, similar size. Pre-granted
       the OccurrentReactiveMongoAutoConfiguration bean-method extension up front, because dec-0005 already
       established this fix shape is structurally cross-module and rediscovering that costs a round trip.
-      U6 (#837) must be fenced out of the two reactor files U12 owns. WITHDRAWN 2026-08-22T15:0xZ, not
+      U6 (#837) must be fenced out of the two reactor files U12 owns. WITHDRAWN 2026-08-22T11:45:54Z, not
       reproducible. The reactor starter''s durable-model bean carries ONE shared @ConditionalOnMissingBean
       over both FluxSubscriptionModel and Subscribable, so the method that fills the holder runs only
       when no replacement exists and the divergence both issues describe cannot occur; the RegisteringSubscribable
@@ -1583,7 +1583,7 @@ units:
       run carrying a broker PR on java-21). Each cost a full matrix rerun and delayed a merge gate. brk
       records a third sighting as its #893 item 21 and is asking Johan whether the fix lands inside brk
       before it closes; COORDINATE rather than duplicating, since rel34''s tag reads main''s shards and
-      brk may already own the fix. RETIRED 2026-08-22T12:2xZ. Johan ruled #884 into brk (brk dec-0024,
+      brk may already own the fix. RETIRED 2026-08-22T10:47:53Z. Johan ruled #884 into brk (brk dec-0024,
       unit U16) an hour after ruling it into 0.34.0 here, and a brk worker is already on it investigate-then-fix,
       test-only unless it proves a readiness gap in pattern subscriptions. Retired rather than run in
       parallel: #884 and #893 item 21 are the same test, and two epics fixing one flake is the duplication
@@ -1619,7 +1619,7 @@ units:
       the warning rather than recording, and routed instead of folded in. Confirmed by two independent
       reviewers. It affects recording, which is the read-your-writes surface shipping in this release.
       Same fix shape as U3 and U12, including the AopProxyUtils.getSingletonTarget unwrapping both of
-      those needed, so give it to whichever worker still holds that context. WITHDRAWN 2026-08-22T15:0xZ,
+      those needed, so give it to whichever worker still holds that context. WITHDRAWN 2026-08-22T11:45:54Z,
       not reproducible. The reactor starter''s durable-model bean carries ONE shared @ConditionalOnMissingBean
       over both FluxSubscriptionModel and Subscribable, so the method that fills the holder runs only
       when no replacement exists and the divergence both issues describe cannot occur; the RegisteringSubscribable
@@ -1634,7 +1634,7 @@ units:
 cross_epic:
   adr_number_ledger:
     note: sdi's U12 merged as squash 5ba3b9bfa, amending ADR 0127 in place rather than taking a new number,
-      so 0135 remains FREE as of 2026-08-22T18:40Z. rel34 has no unit currently holding an ADR number.
+      so 0135 remains FREE as of 2026-08-22T12:41:01Z. rel34 has no unit currently holding an ADR number.
       If a rel34 unit returns BLOCKED needing one, claim it and tell sdi before writing, since sdi said
       it will take a number above 0135 and tell rel34 first if its descriptor-factory question needs a
       record.
