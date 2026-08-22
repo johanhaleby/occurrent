@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 61
-updated_at: '2026-08-22T16:32:31+00:00'
-updated_by: 'orchestrator rel34: U10 settled and re-verifying, R2 checklist confirmed still true'
+revision: 62
+updated_at: '2026-08-22T16:35:34+00:00'
+updated_by: 'orchestrator rel34: U5 plan verified, core inference held, released to implement'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -590,8 +590,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: await the plan at the plan gate, do not expect code
-    last_meaningful_progress_at: '2026-08-22T15:30:25+00:00'
+    next_action: write ADR 0135 and implement, carrying the four additions from the verdict
+    last_meaningful_progress_at: '2026-08-22T16:35:34+00:00'
     observed:
       dispatched_plan_first:
         note: 'Dispatched PLAN FIRST rather than as an implementation, because #891''s own filer recorded
@@ -605,6 +605,33 @@ units:
           shared across three fleets, so a claim goes through the orchestrator.'
         via: orchestrator
         at: '2026-08-22T15:30:25+00:00'
+      adversarial_verdict_on_the_nominated_claim:
+        note: 'The worker nominated its own load-bearing claim for attack. Verdict FALSIFIED overall,
+          but the CORE INFERENCE HELD under real empirical attack, which is the part the cost analysis
+          rests on. HELD: the verifier stood up a mongo:8 replica set rather than reading code. 300 rounds
+          of insert A, capture operationTime, build the checkpoint at increment+1, insert B, watch from
+          it: zero already-committed A redelivered, zero later B missed. A second run with a concurrent
+          writer so events share a second and increments collide, snapshotting committed ids before each
+          capture: 12,000 events across 40 rounds, zero pre-checkpoint redeliveries. startAtOperationTime
+          is inclusive, so the guarantee rests entirely on the plus one, and it holds on a single primary.
+          FALSIFIER 1, already self-corrected by the worker BEFORE the pass returned: the blocking TIME
+          path captures AFTER the bulk read (AbstractCatchupSubscriptionModel:325-327, StreamCatchupSubscriptionModel:269/273/287).
+          The verifier agrees the consequence does not move, since capturing after makes the live range
+          narrower. FALSIFIER 2, REAL AND NEW: the plan''s empirical support is misdescribed and does
+          not reach the case it is offered for. ONE test per reactor path sets the cache to 1, not two,
+          and in both, all five history events are committed BEFORE subscribe with nothing written during
+          the replay, so they exercise the case already claimed safe. The tests that DO commit during
+          a replay use the DEFAULT cache of 100,000. Nothing combines a small cache with a late commit,
+          which is exactly what the shrunken cache must handle. A test for that is now required. TWO ADDITIONS:
+          all three Mongo models return null or empty when the server prohibits hostInfo (shared Atlas),
+          so the plus-one claim is not unconditional; and PositionCatchupPipeline:104-105 carries a WRITTEN
+          rationale for caching the bulk tail that this change reverses, so ADR 0135 must quote and answer
+          it as it does ADR 38. STATED UNKNOWN to carry rather than settle: the repro was single-node,
+          and under a secondary read preference or a sharded mongos, operationTime can lag committed oplog
+          entries. Nothing in the repo tests the exclusivity direction either, since the TCK conformance
+          test asserts presence and never absence.'
+        via: adversarial verify subagent, empirical on mongo:8
+        at: '2026-08-22T16:35:34+00:00'
     assessment: '#891 ALONE now; #878 moved to U4. Sequenced behind U12 rather than run beside it: #891''s
       fix path runs through framework/spring-boot-autoconfigure/reactor ProjectionAnnotationRegistrar.java
       and ComposedCatchupModel.java, the two files U12 owns. Give it to the U12 worker when U12 merges,
