@@ -1,25 +1,41 @@
 schema_version: 1
 epic: sdi
-revision: 17
+revision: 18
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
 authority: "Standing grants in .context/orchestrator-policy.yml (auto_epic_prs merge, allow_one_equivalent_sibling green, allow_reasoned_declines threads, memory checkpoint commit and push to default). No session-scoped deviation."
 milestone: 4
-pending_actions: []
+pending_actions:
+  - id: act-001
+    type: dispatch-chip
+    target: "U12, chip task_c9ada93f, title '⌁[sdi/U12#725] Amend ADR 0127 · Sonnet/high', brief inlined in the chip"
+    expected: "a session appears carrying the marker ⌁[sdi/U12], and a branch off 02bd5c6c5 touching only ADR 0127"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-22T11:55:00Z
+  - id: act-002
+    type: dispatch-chip
+    target: "U5, chip task_892b1fcb, title '⌁[sdi/U5#721] Prefix seven annotations · Sonnet/medium', brief inlined in the chip"
+    expected: "a session appears carrying the marker ⌁[sdi/U5], and a branch off 02bd5c6c5 adding seven annotation types in framework/annotations"
+    status: PENDING
+    attempts: 1
+    safe_to_repeat: false
+    issued_at: 2026-08-22T11:55:00Z
 units:
   U5:
     issue: 721
     goal: "Seven Occurrent-prefixed annotation types in framework/annotations, seven deprecations forRemoval, and the declarative ChangeType recipes for all seven renames. Selector attributes (eventTypes, tags) omitted from the new subscription annotations."
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: task_892b1fcb
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch on plan approval."
+    next_action: "Dispatched as chip task_892b1fcb, Sonnet/medium. Awaiting the user click that starts it."
     last_meaningful_progress_at: 2026-08-22T11:35:00Z
     observed: {}
     assessment: "Owns framework/annotations/** and rewrite/.../renames-annotations-0_34.yml. Carries its own changelog and migration-guide entries. UNFENCED: the only unit dispatchable at the gate. Sonnet/medium. Recipe precedent annotation-enums.yml:33-46."
@@ -168,15 +184,15 @@ units:
   U12:
     issue: 725
     goal: "Amend ADR 0127 in place with the descriptor-execution decision (dec-0004): the runner is the single execution path across all 21 call sites within 0.35.0 (U13 for the seventeen stream, agnostic and synchronous ones, U14 for the four DCB ones), the descriptor gains a PUBLIC type-free catch-all handler paired with an explicit selector, waitUntilStarted is forwarded rather than moved, and the registrar descriptor path calls the runner rather than StreamSubscriptions.subscribe, and the Kotlin Subscriptions and StreamSubscriptions classes are reshaped into an idiom layer over descriptor plus runner while keeping their class identity and their Spring bean."
-    phase: READY
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: task_c9ada93f
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatch on plan approval, alongside U5."
+    next_action: "Dispatched as chip task_c9ada93f, Sonnet/high. Awaiting the user click that starts it."
     last_meaningful_progress_at: 2026-08-22T11:35:00Z
     observed: {}
     assessment: "UNFENCED prose, and it goes FIRST because every downstream unit reads it. ADR 0127 is unreleased so AGENTS.md permits amending in place rather than writing a successor. The hole it closes: decision 4 rewrites the two SubscriptionAnnotationRegistrar classes, which execute through applicationContext.getBean(StreamSubscriptions.class).subscribe(..) at six call sites across both stacks, and the ADR never says what the descriptor path executes through. ADR 0029 recorded that Spring-bean dependency in 2026-06 and ADR 0119 lines 71-76 already name the Extensions-over-a-class-based-API shape as the convention the Kotlin sugar follows. ADR 0029's binary-compatibility constraint still binds: Subscriptions has been released since 0.20.4 and callers inject it, so it stays a real class. Written through /johan-writing. Sonnet/high."
