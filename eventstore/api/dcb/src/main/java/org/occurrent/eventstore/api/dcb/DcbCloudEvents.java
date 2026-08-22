@@ -98,6 +98,24 @@ public final class DcbCloudEvents {
     }
 
     /**
+     * Returns a copy of {@code updated} with {@code original}'s exact DCB tag state, present or absent, the way
+     * {@link org.occurrent.cloudevents.OccurrentCloudEventExtension#preserveAppendId} treats the append id. An
+     * event store's {@code updateEvent} calls this so a replacement event an updater builds from scratch cannot
+     * silently drop the tags an original DCB event carried, and cannot pick up tags it never had. Either mistake
+     * would move the event across the consistency boundary its tags define. The store owns this value the same
+     * way it owns {@code streamId}, {@code streamVersion} and the append id, so it is reapplied rather than left
+     * to the updater.
+     */
+    public static CloudEvent preserveTags(CloudEvent original, CloudEvent updated) {
+        requireNonNull(original, "Original CloudEvent cannot be null");
+        requireNonNull(updated, "Updated CloudEvent cannot be null");
+        if (isDcbEvent(original)) {
+            return withTags(updated, getTags(original));
+        }
+        return CloudEventBuilder.v1(updated).withoutExtension(TAGS).build();
+    }
+
+    /**
      * Returns whether {@code cloudEvent} matches the supplied DCB criteria.
      */
     public static boolean matches(CloudEvent cloudEvent, DcbCriteria criteria) {

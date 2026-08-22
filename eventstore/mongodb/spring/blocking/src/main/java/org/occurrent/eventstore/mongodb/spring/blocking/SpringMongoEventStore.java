@@ -349,11 +349,15 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             if (updatedCloudEvent == null) {
                 throw UpdateEventFunctionValidator.updateFunctionReturnedNull();
             }
+            updatedCloudEvent = OccurrentCloudEventExtension.preserveStreamIdentity(currentCloudEvent, updatedCloudEvent);
             updatedCloudEvent = OccurrentCloudEventExtension.preserveAppendId(currentCloudEvent, updatedCloudEvent);
+            updatedCloudEvent = OccurrentCloudEventExtension.preservePosition(currentCloudEvent, updatedCloudEvent);
+            updatedCloudEvent = DcbCloudEvents.preserveTags(currentCloudEvent, updatedCloudEvent);
             if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
                 String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                 long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
                 Document updatedDocument = convertToDocument(timeRepresentation, streamId, streamVersion, updatedCloudEvent);
+                DcbDocumentMapper.preservePositionAndDcbTags(currentCloudEvent, updatedDocument);
                 updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                 mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName);
             }
