@@ -124,9 +124,6 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // catch-up completes, and for a non-empty one after, so the completion below would be guarded by an entry that
     // is sometimes already gone. Written only under this model's monitor, or removed by identity.
     private final ConcurrentMap<String, Sinks.One<Boolean>> catchupOwners = new ConcurrentHashMap<>();
-    // The attempt currently writing each id's catch-up-complete marker, so a later attempt for the same id can tell
-    // that the marker it reads may have been written for a history that attempt never read.
-    private final ConcurrentMap<String, Sinks.One<Boolean>> markerWritesInFlight = new ConcurrentHashMap<>();
     // Runs at the start of a successful catch-up's completion, where the replaying entry is already released and
     // the launcher is not yet. Exists so a test can stand in that window, which nothing else can reach.
     private volatile Runnable beforeCompletingCatchup = () -> {
@@ -213,14 +210,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // and a fresh subscribe cannot slip between taking the id and sending. An attempt that no longer owns the
         // id sends nothing, or its start would arrive after its replacement's and the recorder would adopt a
         // catch-up that is already over. The replay itself is the episode, so a later attempt starts its own.
-        final boolean trustMarker;
         synchronized (this) {
             replayingSubscriptions.put(subscriptionId, replayDone);
             catchupOwners.put(subscriptionId, replayDone);
-            // A previous attempt losing this id part way through its own marker write can still finish that write
-            // afterwards, and the position it records describes a history this attempt has not read. Taken here,
-            // where the id changes hands, so the answer cannot move once this attempt is running.
-            trustMarker = markerWritesInFlight.get(subscriptionId) == null;
             CatchupListener startListener = catchupListeners.get(subscriptionId);
             if (startListener != null) {
                 startListener.catchupStarted(replayDone);
@@ -230,9 +222,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         Mono<Boolean> catchupDone = handover.catchUp(new ReactiveHandover.Source<>() {
             @Override
             public Mono<Boolean> isAlreadyCaughtUp() {
-                // A marker another attempt was still writing when this one launched says nothing about this
-                // attempt's own history, so this attempt reads that history rather than trusting it.
-                return trustMarker ? CatchupThenPushSubscriptionModel.this.alreadyCaughtUp(subscriptionId) : Mono.just(false);
+                // A marker is only ever written by an attempt that read this id's whole history and still owned
+                // the id when the write began, so one that is there says the history has been read and this
+                // attempt does not read it again. That answer is the same for a replacement subscribing in this
+                // process as it is for the first subscription after a restart.
+                return CatchupThenPushSubscriptionModel.this.alreadyCaughtUp(subscriptionId);
             }
 
             @Override
@@ -247,15 +241,12 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public Mono<Void> markCaughtUp() {
-                // Released on the way out of this step, never in a doFinally. A doFinally runs after the terminal
-                // signal has gone downstream, and downstream is the engine completing the catch-up, which hands
-                // this attempt's own subscriber the id back and takes its ownership away. The release would then
-                // find no owner and keep the record, so a marker this attempt wrote and finished would be
-                // distrusted by every later attempt for the id.
-                return Mono.defer(() -> claimMarkerWrite(subscriptionId, replayDone)
+                // Asked here rather than upstream, so an attempt that lost the id between the last replayed event
+                // and this step writes nothing at all. Only an attempt that owned the id when the write began can
+                // leave a marker behind, and it had read the whole history by then, which is what makes a marker
+                // worth trusting later.
+                return Mono.defer(() -> stillOwnsCatchup(subscriptionId, replayDone)
                         ? CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId)
-                        .doOnSuccess(ignored -> releaseMarkerWrite(subscriptionId, replayDone))
-                        .doOnError(error -> releaseMarkerWrite(subscriptionId, replayDone))
                         : Mono.empty());
             }
 
@@ -392,25 +383,16 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         }
     }
 
-    // Whether this attempt still owns the id, and if it does, that it is about to write the marker. The write
-    // itself runs outside the monitor, because a checkpoint store is someone else's code and can take as long as
-    // it likes, and every lifecycle call on this model takes the same monitor. What the record buys instead is
-    // that a later attempt for this id knows the marker it can see may describe a history it never read.
-    private synchronized boolean claimMarkerWrite(String subscriptionId, Sinks.One<Boolean> replay) {
-        if (catchupOwners.get(subscriptionId) != replay) {
-            return false;
-        }
-        markerWritesInFlight.put(subscriptionId, replay);
-        return true;
-    }
-
-    // Cleared only when this attempt still owns the id. A cancel that lands while the write is in flight leaves
-    // the record in place on purpose, because the position that write recorded describes a history the id's next
-    // owner never read. That owner reads the record, replays its whole history, and clears it with its own write.
-    private synchronized void releaseMarkerWrite(String subscriptionId, Sinks.One<Boolean> replay) {
-        if (catchupOwners.get(subscriptionId) == replay) {
-            markerWritesInFlight.remove(subscriptionId, replay);
-        }
+    // Whether this attempt owned the id at the moment of asking. A sample, not a hold. The monitor is released
+    // when this returns, so a cancel can take the id away while the write this answer allowed is still running.
+    //
+    // Taken on the same monitor as the puts in launchReplay and the removes in cancelSubscription, so the answer
+    // is never read part way through one of those. The write itself stays outside the monitor, because a
+    // checkpoint store is someone else's code and can take as long as it likes while every lifecycle call on this
+    // model takes the same monitor. A cancel arriving mid-write does not stop it and does not need to, since the
+    // attempt had read the whole history and owned the id when the write began, which is all a marker claims.
+    private synchronized boolean stillOwnsCatchup(String subscriptionId, Sinks.One<Boolean> replay) {
+        return catchupOwners.get(subscriptionId) == replay;
     }
 
     // Checked against the live feed rather than applied blindly. A stop landing between the last replayed event and
@@ -579,7 +561,6 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         awaitReplays(SHUTDOWN_REPLAY_TIMEOUT);
         replayingSubscriptions.clear();
         catchupOwners.clear();
-        markerWritesInFlight.clear();
         catchupListeners.clear();
         pauseRequestedDuringReplay.clear();
         // Unlike stop(), a shutdown keeps nothing to launch again: it drops the registrations too.
