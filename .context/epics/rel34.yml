@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 47
-updated_at: '2026-08-22T14:08:17+00:00'
-updated_by: 'orchestrator rel34: U6 delivered PR 933'
+revision: 48
+updated_at: '2026-08-22T14:26:58+00:00'
+updated_by: 'orchestrator rel34: 933 held, my own brief propagated a JDK-proxy defect'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -557,7 +557,7 @@ units:
     issue: 837
     goal: Transaction advice on subscription handler methods is no longer silently bypassed. Invariant
       stated over the registrar's proxying path, then checked against every registrar surface in one pass.
-    phase: RUNNING
+    phase: BLOCKED
     health: PROGRESSING
     swept: false
     depends_on:
@@ -574,9 +574,9 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: await the worker's settled report, then run the gate and an adversarial pass on the declared
-      head
-    last_meaningful_progress_at: '2026-08-22T14:08:17+00:00'
+    next_action: worker resolves an invocable method against the proxy class at all four sites per file,
+      adds proxy-target-class=false coverage
+    last_meaningful_progress_at: '2026-08-22T14:26:58+00:00'
     observed:
       scope_derived_by_orchestrator:
         note: 'Enumerated the invocation sites myself rather than trusting the issue text. The defect
@@ -659,6 +659,27 @@ units:
           the orchestrator.'
         via: gh pr view 933
         at: '2026-08-22T14:08:17+00:00'
+      jdk_proxy_defect_from_my_brief:
+        note: 'HELD, and the cause traces to MY BRIEF. Copilot at Balanced effort: with spring.aop.proxy-target-class=false,
+          getBean(beanName) returns a JDK INTERFACE proxy which is not an instance of the concrete class
+          declaring the Method the registrar holds from registration, so Method.invoke rejects the receiver
+          and the handler NEVER RUNS AT ALL. That is WORSE than #837 itself: before the fix the handler
+          ran without advice, after it the handler does not run, which is a regression for anyone setting
+          proxy-target-class=false. Two threads plus FOUR MORE instances in the SUPPRESSED block, which
+          opens no threads, so a green rollup with both threads answered would have shipped most of it.
+          MY ERROR: the brief told the worker the correct path was already in the file and to follow processSynchronousSubscribeAnnotation.
+          Verified against origin/main: that path does getBean then invoke with NO AOP-aware method resolution
+          anywhere in either file. It is correct about proxy-versus-raw-target, which is what #837 is
+          about, and wrong about JDK proxies. Following it faithfully propagated the defect to three more
+          sites per file. SCOPE GREW to EIGHT sites, four per file: @SynchronousSubscription has carried
+          this since it shipped, on both stacks, and it is in the same method of the same file the worker
+          is already editing. Routed as one property checked across every invocation site in one pass
+          rather than six point fixes. NOT A CRITICISM OF THE DELIVERY: the six existing tests are behavioural
+          rather than proxy-identity assertions, mutation-verified in both directions, and correctly use
+          forCurrentTransaction() on the reactor side. What is missing is a configuration axis, proxy-target-class=false,
+          which Boot''s default subclass proxies hide.'
+        via: gh api pulls/933/reviews, verified against origin/main
+        at: '2026-08-22T14:26:58+00:00'
     assessment: 'Dispatched 2026-08-22 as a chip after U3 merged. The 2026-08-17 deferral to the ADR 127
       epic and my own 2026-08-22 supersede were BOTH argued on premises that did not survive. The deferral
       assumed a large fix that the epic would rewrite immediately; the supersede assumed the epic had
