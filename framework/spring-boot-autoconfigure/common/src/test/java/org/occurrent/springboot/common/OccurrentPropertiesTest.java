@@ -371,7 +371,7 @@ class OccurrentPropertiesTest {
         }
 
         @Test
-        void allows_exactly_the_number_of_attempts_the_store_will_make() {
+        void allows_exactly_the_ceiling_the_store_stops_an_unstopping_policy_at() {
             OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =
                     new OccurrentProperties().getProjection().getAppliedAppend();
             int ceiling = OccurrentProperties.ProjectionProperties.AppliedAppendProperties.MAX_ATTEMPTS_CEILING;

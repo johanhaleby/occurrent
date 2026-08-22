@@ -64,9 +64,10 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * <p>
  * Two different mechanisms pace two different things here, and they do not overlap. The {@link RetryStrategy}
  * retries a read or a write that failed, so a transient store error neither fails {@link #recordApplied(String, AppendId)}
- * nor a plain {@link #hasApplied(String, AppendId)} call. It gives up after {@link #DEFAULT_MAX_ATTEMPTS} attempts
- * and throws, so a store that stays unreachable stops a projection's delivery thread rather than holding it for as
- * long as the outage lasts, which is what lets a clear that keeps failing stop its recorder (ADR 132 decision 7).
+ * nor a plain {@link #hasApplied(String, AppendId)} call. It gives up after however many attempts it was built
+ * with, {@link #DEFAULT_MAX_ATTEMPTS} for the store's own default, and throws, so a store that stays unreachable
+ * stops a projection's delivery thread rather than holding it for as long as the outage lasts, which is what lets
+ * a clear that keeps failing stop its recorder (ADR 132 decision 7).
  * {@link #waitUntilApplied(String, AppendId, Duration)} is the one exception. Its own reads retry on the same
  * {@link RetryStrategy}, but only until the wait's own deadline, and a read still failing when the deadline arrives
  * answers {@code false}, so a sustained store outage ends a wait as a timeout rather than as a failure. The
@@ -96,13 +97,13 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
     public static final int DEFAULT_MAX_ATTEMPTS = 10;
 
     /**
-     * The most attempts this store will ever make for one read or write, 1000, whatever {@link RetryStrategy} it
-     * was given. No public API on {@link RetryStrategy} reports whether a policy stops on its own, so a store
-     * handed one built by {@code RetryStrategy.retry()} or {@code exponentialBackoff(..)} without
-     * {@code maxAttempts(..)} cannot reject it at construction and would otherwise call MongoDB for as long as an
-     * outage lasted. This is two orders of magnitude above {@link #DEFAULT_MAX_ATTEMPTS}, so no configured value
-     * reaches it and it never quietly shortens a policy a caller chose. It exists so that a policy which never
-     * stops still stops.
+     * The number of attempts after which this store stops a policy that has not stopped itself, 1000, whatever
+     * {@link RetryStrategy} it was given. No public API on {@link RetryStrategy} reports whether a policy stops on its own,
+     * so a store handed one that never gives up cannot reject it at construction and would otherwise call MongoDB
+     * for as long as an outage lasted. The store makes at most one attempt beyond this number, because a policy
+     * that stops at or before it is left to stop on its own, including how it maps an exhausted retry. Two orders
+     * of magnitude above {@link #DEFAULT_MAX_ATTEMPTS}, and {@code occurrent.projection.applied-append.max-attempts}
+     * is rejected above it, so a configured policy is never shortened here.
      */
     public static final int MAX_ATTEMPTS_CEILING = 1000;
 
@@ -348,7 +349,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      * operation counts instead, since that is the thing that actually reaches MongoDB.
      */
     private Predicate<Throwable> retryableWhileUnder(AtomicInteger attempts) {
-        return e -> attempts.get() < MAX_ATTEMPTS_CEILING && isRetryable(e);
+        return e -> attempts.get() <= MAX_ATTEMPTS_CEILING && isRetryable(e);
     }
 
     /**

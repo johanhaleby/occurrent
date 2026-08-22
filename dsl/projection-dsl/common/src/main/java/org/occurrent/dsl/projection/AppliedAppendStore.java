@@ -139,25 +139,20 @@ public interface AppliedAppendStore {
      * computed from a budget that has already run out, still asks the store rather than answering {@code false}
      * without looking. That much every implementation owes.
      * <p>
-     * What an implementation does with a read slower than the time left is its own choice, and the two Mongo stores
-     * choose differently. The blocking one cannot cancel a read it has started, so it lets that read finish and can
-     * return after {@code timeout} has passed. The reactive one stops waiting at the deadline on every poll that
-     * has time left, so it returns within {@code timeout} and answers {@code false} for an append it would have
-     * found had it waited longer. Neither is free, and a caller who needs the answer more than the deadline reads
+     * What an implementation does with a read slower than the time left is its own choice, and the three in this
+     * repository choose differently. This default loop checks the deadline between polls and never during one, so
+     * it returns after {@code timeout} plus however long the {@link #hasApplied(String, AppendId)} already running
+     * takes to answer, which for {@link #inMemory()} is a map lookup and no difference at all. The blocking Mongo
+     * store does the same, because it cannot cancel a read it has started. The reactive Mongo store can cancel one,
+     * and does, so it returns within {@code timeout} and answers {@code false} for an append it would have found
+     * had it waited longer. Neither answer is free, and a caller who needs the answer more than the deadline reads
      * {@link #hasApplied(String, AppendId)} directly, which has no deadline to cut it short.
      * <p>
-     * The read this method must make is the exception, on either store, because a {@code timeout} of zero or one
-     * that has already elapsed leaves no remaining time to bound that read with. It runs with the same absence of a
-     * deadline {@link #hasApplied(String, AppendId)} runs with, so it ends when the store's client gives up, and
-     * against a connection that has stopped responding with no client timeout configured it does not end. Bounding
-     * the wall clock is the client's job on every path here, and this is the path where it is the only one.
-     * <p>
-     * The deadline is checked between polls, never during one, so this method returns after {@code timeout} plus
-     * however long the {@link #hasApplied(String, AppendId)} call already in flight takes to answer. For
-     * {@link #inMemory()} that is a map lookup and the difference is nothing. For an implementation that calls a
-     * remote store, it is whatever that store's client waits before it gives up on a connection that has stopped
-     * responding, so an implementation that wants {@code timeout} to hold needs its client configured with a
-     * timeout of its own.
+     * The read this method must make is the exception to all of that, on every implementation, because a
+     * {@code timeout} of zero or one that has already elapsed leaves no remaining time to cut it short with. It
+     * runs with the same absence of a deadline {@link #hasApplied(String, AppendId)} runs with, so it ends when the
+     * store's client gives up, and against a connection that has stopped responding with no client timeout
+     * configured it does not end. Limiting the wall clock is the client's job on that path, and only the client's.
      *
      * @param appendId the append to wait for, never {@code null}. An append that persisted no events has no
      *                 identity to wait for in the first place, see {@code WriteResult}/{@code DcbAppendResult}.

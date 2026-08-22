@@ -290,7 +290,7 @@ class MongoAppliedAppendStoreBoundsTest {
         assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
                 .isInstanceOf(RuntimeException.class);
 
-        verify(mongoOperations, times(MongoAppliedAppendStore.MAX_ATTEMPTS_CEILING))
+        verify(mongoOperations, times(MongoAppliedAppendStore.MAX_ATTEMPTS_CEILING + 1))
                 .upsert(any(Query.class), any(UpdateDefinition.class), anyString());
     }
 
@@ -356,5 +356,27 @@ class MongoAppliedAppendStoreBoundsTest {
     void the_largest_attempt_limit_an_application_can_configure_is_the_one_this_store_will_actually_make() {
         assertThat(OccurrentProperties.ProjectionProperties.AppliedAppendProperties.MAX_ATTEMPTS_CEILING)
                 .isEqualTo(MongoAppliedAppendStore.MAX_ATTEMPTS_CEILING);
+    }
+
+    /**
+     * A policy that stops at exactly the ceiling stops on its own terms. The store's guard is for a policy that
+     * does not stop, so at the boundary it must not be what ends the call.
+     */
+    @Test
+    void a_policy_that_stops_at_the_ceiling_ends_the_call_itself() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
+        when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
+                .thenThrow(new RuntimeException("store outage"));
+        RetryStrategy stopsExactlyAtTheCeiling = RetryStrategy.retry()
+                .backoff(Backoff.fixed(1))
+                .maxAttempts(MongoAppliedAppendStore.MAX_ATTEMPTS_CEILING);
+        AppliedAppendStore store = storeWith(mongoOperations, stopsExactlyAtTheCeiling);
+
+        assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
+                .isInstanceOf(RuntimeException.class);
+
+        verify(mongoOperations, times(MongoAppliedAppendStore.MAX_ATTEMPTS_CEILING))
+                .upsert(any(Query.class), any(UpdateDefinition.class), anyString());
     }
 }

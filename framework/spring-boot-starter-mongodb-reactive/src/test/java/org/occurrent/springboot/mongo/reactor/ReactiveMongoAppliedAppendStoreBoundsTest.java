@@ -362,7 +362,7 @@ class ReactiveMongoAppliedAppendStoreBoundsTest {
         assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
                 .isInstanceOf(RuntimeException.class);
 
-        assertThat(attempts).hasValue(ReactiveMongoAppliedAppendStore.MAX_ATTEMPTS_CEILING);
+        assertThat(attempts).hasValue(ReactiveMongoAppliedAppendStore.MAX_ATTEMPTS_CEILING + 1);
     }
 
     @Test
@@ -490,5 +490,49 @@ class ReactiveMongoAppliedAppendStoreBoundsTest {
     void the_largest_attempt_limit_an_application_can_configure_is_the_one_this_store_will_actually_make() {
         assertThat(OccurrentProperties.ProjectionProperties.AppliedAppendProperties.MAX_ATTEMPTS_CEILING)
                 .isEqualTo(ReactiveMongoAppliedAppendStore.MAX_ATTEMPTS_CEILING);
+    }
+
+    /**
+     * The wait path's wrapper, which the earlier context test does not reach because it goes through
+     * `recordApplied`. `retryUntil` is the wrapper the suppressed comment named, so it needs its own test.
+     */
+    @Test
+    void a_callers_retry_context_survives_the_wrapper_a_wait_puts_around_their_policy() {
+        AtomicReference<String> seenByTheCallersHook = new AtomicReference<>("absent");
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.exists(any(Query.class), anyString()))
+                .thenReturn(Mono.defer(() -> Mono.error(new RuntimeException("store outage"))));
+        Retry callersRetry = Retry.fixedDelay(2, Duration.ofMillis(5))
+                .withRetryContext(Context.of("marker", "supplied by the caller"))
+                .doBeforeRetry(signal -> seenByTheCallersHook.set(
+                        signal.retryContextView().getOrDefault("marker", "absent")))
+                .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+        AppliedAppendStore store = storeWith(mongoOperations, callersRetry);
+
+        store.waitUntilApplied("orders", AppendId.mint(), Duration.ofMillis(300), Backoff.fixed(20));
+
+        assertThat(seenByTheCallersHook).hasValue("supplied by the caller");
+    }
+
+    /**
+     * A policy that stops at exactly the ceiling stops on its own terms, including how it maps an exhausted retry.
+     * The store's guard is for a policy that does not stop, so at the boundary it must not be what ends the call.
+     */
+    @Test
+    void a_policy_that_stops_at_the_ceiling_still_maps_its_own_exhaustion() {
+        AtomicInteger attempts = new AtomicInteger();
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
+                .thenReturn(failingAfterCounting(attempts));
+        Retry stopsExactlyAtTheCeiling = Retry
+                .fixedDelay(ReactiveMongoAppliedAppendStore.MAX_ATTEMPTS_CEILING - 1L, Duration.ZERO)
+                .onRetryExhaustedThrow((spec, signal) -> new IllegalStateException("the caller's own mapping"));
+        AppliedAppendStore store = storeWith(mongoOperations, stopsExactlyAtTheCeiling);
+
+        assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("the caller's own mapping");
+
+        assertThat(attempts).hasValue(ReactiveMongoAppliedAppendStore.MAX_ATTEMPTS_CEILING);
     }
 }

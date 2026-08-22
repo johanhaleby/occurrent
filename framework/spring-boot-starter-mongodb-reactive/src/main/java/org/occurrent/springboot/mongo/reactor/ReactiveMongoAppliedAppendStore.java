@@ -107,13 +107,13 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     public static final int DEFAULT_MAX_ATTEMPTS = 10;
 
     /**
-     * The most attempts this store will ever make for one read or write, 1000, whatever {@link Retry} it was given.
-     * A {@link Retry} is an abstract class with no accessor reporting whether it stops on its own, so a store handed
-     * {@code Retry.indefinitely()} or a {@code Retry.backoff(Long.MAX_VALUE, ..)} cannot reject it at construction
-     * and would otherwise call MongoDB for as long as an outage lasted. This is two orders of magnitude above
-     * {@link #DEFAULT_MAX_ATTEMPTS}, so no configured value reaches it and it never quietly shortens a policy a
-     * caller chose. It exists so that a policy which never stops still stops. The same number the blocking store
-     * uses.
+     * The number of attempts after which this store stops a policy that has not stopped itself, 1000, whatever
+     * {@link Retry} it was given. A {@link Retry} is an abstract class with no accessor reporting whether it stops on its own,
+     * so a store handed one that never gives up cannot reject it at construction and would otherwise call MongoDB
+     * for as long as an outage lasted. The store makes at most one attempt beyond this number, because a policy
+     * that stops at or before it is left to stop on its own, including how it maps an exhausted retry. Two orders
+     * of magnitude above {@link #DEFAULT_MAX_ATTEMPTS}, and {@code occurrent.projection.applied-append.max-attempts}
+     * is rejected above it, so a configured policy is never shortened here. The same number the blocking store uses.
      */
     public static final int MAX_ATTEMPTS_CEILING = 1000;
 
@@ -397,7 +397,7 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
             public Publisher<?> generateCompanion(Flux<RetrySignal> retrySignals) {
                 return delegate.generateCompanion(retrySignals.handle((signal, sink) -> {
                     if (signal.failure() instanceof ConflictingIndexException
-                            || signal.totalRetries() >= MAX_ATTEMPTS_CEILING - 1L) {
+                            || signal.totalRetries() >= MAX_ATTEMPTS_CEILING) {
                         sink.error(signal.failure());
                     } else {
                         sink.next(signal);

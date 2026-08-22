@@ -257,8 +257,9 @@ time. Both stacks apply that limit here.
 
 Two separate things end that read and they do different work. The wait's own deadline stops a read from starting,
 and the store's attempt limit, `occurrent.projection.applied-append.max-attempts`, stops a failed one from being
-tried again. Neither ends a read already running, because a blocking Mongo call cannot be interrupted from inside
-a store that was handed a `MongoOperations` and does not own the client. The timeout a caller asked for therefore
+tried again. Whether either ends a read already running is where the two stacks differ. The blocking one cannot, because a
+Mongo call it has started cannot be interrupted from inside a store that was handed a `MongoOperations` and does
+not own the client. The reactive one can, and cancels that read at the deadline. The timeout a caller asked for therefore
 holds as far as that client's own timeout holds, and an application that needs it exact configures one there. The
 reactive stack blocks its wait on the time it has left, which the blocking driver has no equivalent of.
 
@@ -268,8 +269,10 @@ recorder can only stop if the retry behind that clear ends.
 
 An application can also construct either store directly and hand it a retry policy of its own, and neither
 `RetryStrategy` nor reactor's `Retry` reports whether a policy stops on its own, so the store cannot reject one that
-does not the way it rejects a blank collection name. Each store therefore stops the call itself after a ceiling far
-above any configured value. The number of times a store reaches MongoDB for one read or write is decided before the
+does not the way it rejects a blank collection name. Each store therefore stops the call itself once a policy is still
+retrying after a ceiling two orders of magnitude above the default, leaving a policy that stops at or before that
+ceiling to stop on its own. `occurrent.projection.applied-append.max-attempts` is rejected above the ceiling rather
+than accepted and then not performed. The number of times a store reaches MongoDB for one read or write is decided before the
 call starts on every path, which is the property this decision needs, and the configured limit is what decides it
 wherever the starters or the store's own defaults built the policy.
 
