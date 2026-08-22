@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 44
+revision: 45
 updated_at: 2026-08-22T13:43:22Z
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -60,7 +60,7 @@ units:
       - {check: pr_merged, ref: 934, met: true, evidence: "merged 2026-08-22T14:40:17Z as a714f8d32, squash, CAS-pinned to d2a622f0e. Gate: Java CI with Maven completed/success on that exact head, 24 jobs 24 success matching main's known-good runs, rollup 26 contexts 0 non-success; unresolved threads 0 by isResolved==false alone; reviewDecision empty which is non-blocking here by measured precedent; Copilot review body read, 4 findings all fixed and verified. Landed content verified on origin/main: SubscriptionHandle.java present, old api Subscription.java gone, recipe wired into UpgradeToOccurrent_0_35, and org.occurrent.annotation.Subscription INTACT."}
     blocking_on: []
     next_action: "DONE and stays DONE, PR 934 merged and reviewed. Its code was REVERTED OUT OF MAIN by PR 936 at 2026-08-22T14:54:04Z so it does not ship inside 0.34.0. That is release sequencing, not a defect and not a rejection, so the phase is not reversed and the deliverable stays met. RE-LAND OBLIGATION: merge again once the occurrent-0.34.0 tag exists, with the changelog entry from its DELIVERY_RESULT written under the then-fresh next-version heading."
-    last_meaningful_progress_at: 2026-08-22T14:54:04Z
+    last_meaningful_progress_at: 2026-08-22T15:05:25Z
     observed:
       fence_2026_08_22T13_0xZ: {issue_753: "CLOSED, PR 913 merged a86909f5d, U2 gate cleared", issue_871: "STILL OPEN. PR 908 was CLOSED WITHOUT MERGING at 2026-08-22T11:41:19Z, no merge commit, so the reactor half went away rather than landing. PR 902 (blocking half) still OPEN and green. Fence NOT advanced by this event.", issue_837: "STILL OPEN, no PR, not dispatched, the long pole", lesson: "the monitor event is named CLOSED-OR-MERGED for exactly this reason and the two must be distinguished by reading mergedAt, never assumed from the event", via: "gh pr view --json state,mergedAt,mergeCommit", at: 2026-08-22T11:42:11Z}
       fence_2026_08_22T11_35Z: {method: "run conclusion, not context rollup", pr_902: "OPEN, JavaCI completed/success", pr_908: "OPEN, JavaCI completed/success", pr_913_issue_753: "OPEN, JavaCI completed/success", pr_914: "OPEN, Java CI with Maven ABSENT from the run list, rollup reads 3 contexts all SUCCESS", issue_871: OPEN, issue_837: "OPEN, no PR, not dispatched", issue_753: OPEN, brk_pr_910: "MERGED cacdc25b9, on main, brk clear of every sdi path", via: "gh pr view + gh run list per head", at: 2026-08-22T10:55:39Z}

@@ -968,3 +968,11 @@ Johan pointed at the viewer's stale banner. It was correct and understated the p
 **The fix is mechanical rather than a promise.** Each refresh had been a thirty line inline block at a checkpoint whose real work was two git commands, so it lost every time to whatever the checkpoint was actually about. It is now `.context/bin/sdi-status-refresh.sh <stale_after>`, one command that rebuilds the payload from the state file, writes through the ownership fence, regenerates the viewer, reads the projection back and exits nonzero if it disagrees with `sdi.yml`. The script is local only, since `.gitignore:40` excludes `.context/*` and that rule stays unnegated.
 
 Refreshed and read back at revision 44, `stale_after` 15:30Z, which is a checkpoint sdi actually intends rather than a round hour.
+
+### sdi 2026-08-22T15:05:25Z: revert PR 936 green, handed to rel34 rather than merged
+
+All four gate facts met on head `8ce4e8e4b`. `Java CI with Maven` completed/success with 24 jobs and 24 successes, matching main's known-good runs. Zero unresolved threads. `reviewDecision` empty, non-blocking here. MERGEABLE.
+
+Not merged, despite sdi holding epic-PR merge authority, because rel34 claimed this one as release-affecting. Handing it over costs nothing and the alternative would be taking a merge a sibling fleet said it gates.
+
+**Copilot did not review 936.** It auto-triggered on 934 and did not run here, so the PR carries no reviews at all. sdi did not request one, and the reasoning is recorded rather than left implicit: a review would delay a revert whose entire purpose is being out of main before the cut, and for the specific risk that matters here, a revert reaching past its two commits, the diff check is stronger evidence than a review. `git diff --name-only 5ba3b9bfa origin/sdi/revert-0_35-work-for-0_34-tag` outside `.context/` returns only PR 930's eight files, and rel34 was given that command so it can verify without trusting sdi's word.
