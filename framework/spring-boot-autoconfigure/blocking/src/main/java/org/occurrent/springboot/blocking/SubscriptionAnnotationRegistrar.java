@@ -68,15 +68,18 @@ class SubscriptionAnnotationRegistrar {
     // whenever the proxy isn't something the handler can safely run on. Three such cases, and each one ran fine on
     // the raw bean before this class started resolving the proxy at all, so falling back here never regresses that.
     //
-    // A startupMode = WAIT_UNTIL_STARTED subscription replays its history synchronously inside this
-    // BeanPostProcessor, on the thread that is still creating beanName. Looking that bean up during the replay
-    // deadlocks Spring Boot startup, because the bean factory's lenient singleton locking re-enters bean creation on
-    // this delivering thread instead of blocking it. Falling back to the raw bean here is a deliberate, permanent
-    // exception, not a gap to close later: every event this subscription delivers during that startup replay runs
-    // with no advice applied, including @Transactional, for as long as the subscription is still starting. Do not
-    // remove this branch to make the advice apply there too, since the only way to do that is to defer the lookup
-    // until after the bean has finished creating, which is the afterSingletonsInstantiated move this class is
-    // fenced out of. Once the subscription has started, every later delivery resolves the proxy as usual.
+    // Any event delivered while beanName is still being created falls back to the raw bean, not just a
+    // WAIT_UNTIL_STARTED replay. A subscription waits for its own registration to finish starting by default,
+    // unless startupMode = BACKGROUND, so even a plain subscription with no explicit startup configuration can
+    // occasionally receive a live event in that window. Looking the bean up there deadlocks Spring Boot startup,
+    // because the bean factory's lenient singleton locking re-enters bean creation on this delivering thread
+    // instead of blocking it. This fallback is a deliberate, permanent exception, not a gap to close later. Every
+    // event delivered while the bean is still being created runs with no advice applied, including @Transactional,
+    // and startAt = BEGINNING with startupMode = WAIT_UNTIL_STARTED is the deterministic case, since its whole
+    // history replay runs synchronously in that window. Do not remove this branch to make the advice apply there
+    // too. The only way to do that is to defer the lookup until after the bean has finished creating, which is the
+    // afterSingletonsInstantiated move this class is fenced out of. Once a subscription has started, every later
+    // delivery resolves the proxy as usual.
     //
     // A JDK interface proxy (spring.aop.proxy-target-class=false) may not implement the handler method at all,
     // since method was captured from the concrete pre-proxy class, and invoking it on such a proxy throws.
