@@ -21,8 +21,10 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
 import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.aop.support.DelegatingIntroductionInterceptor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 
@@ -36,6 +38,9 @@ import static org.mockito.Mockito.mock;
 class ComposedDefaultStartPositionTest {
 
     interface TestModel extends SubscriptionModelCapability {
+    }
+
+    interface Unrelated {
     }
 
     @Test
@@ -79,6 +84,26 @@ class ComposedDefaultStartPositionTest {
         holder.suppliedBy(target);
 
         assertThat(holder.isDefaultKnownLiveOnlyFor(target)).isFalse();
+    }
+
+    @Test
+    void isDefaultKnownLiveOnlyFor_does_not_throw_when_a_proxys_target_does_not_implement_the_capability() {
+        // A valid AOP shape: the proxy implements TestModel through an introduction, but its own target class does
+        // not. Unwrapping past that target would try to cast a plain Object to TestModel, so ultimateTarget must
+        // stop one layer short instead of throwing ClassCastException.
+        Unrelated target = mock(Unrelated.class);
+        TestModel delegate = mock(TestModel.class);
+        ProxyFactory factory = new ProxyFactory(target);
+        factory.setProxyTargetClass(false);
+        factory.addAdvice(new DelegatingIntroductionInterceptor(delegate));
+        factory.addInterface(TestModel.class);
+        TestModel proxy = (TestModel) factory.getProxy();
+
+        ComposedDefaultStartPosition holder = new ComposedDefaultStartPosition();
+        assertThatCode(() -> holder.suppliedBy(proxy)).doesNotThrowAnyException();
+        holder.defaultBypassesCatchup();
+
+        assertThat(holder.isDefaultKnownLiveOnlyFor(proxy)).isTrue();
     }
 
     @Test
