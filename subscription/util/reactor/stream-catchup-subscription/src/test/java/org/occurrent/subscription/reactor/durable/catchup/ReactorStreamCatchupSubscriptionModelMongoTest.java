@@ -167,6 +167,31 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
     }
 
     @Test
+    void a_small_cache_still_re_delivers_a_write_a_history_window_read_after_the_head() {
+        // The #891 shape against a real store, with the handover cache at 1 so nothing survives in it by accident.
+        // The reader reports a head one above what is committed, which ADR 84 allows since currentPosition is a
+        // high-watermark rather than a fence, and that is exactly what a position reserved by an uncommitted write
+        // looks like. The event written during the delayed first window read then lands at or below that head, so a
+        // history window reads it. Nothing a history window delivers is recorded, so the live stream has to deliver
+        // it again. Feed the cache from the history windows again and the second delivery disappears.
+        appendToStream("stream-1", name("h1"));
+
+        AtomicBoolean firstReadStarted = new AtomicBoolean(false);
+        PositionOrderedReader reader = new HeadAheadOfCommittedPositionOrderedReader(asReader(), 1, Duration.ofSeconds(2), firstReadStarted);
+
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(subscriptionModel, reader, null, 1000, 1);
+        CopyOnWriteArrayList<String> received = new CopyOnWriteArrayList<>();
+        subscribe(catchup.subscribe(Filter.streamId("stream-1"), StartAt.checkpoint(GlobalCheckpoint.of(0))), received);
+
+        await().atMost(Duration.ofSeconds(40)).untilTrue(firstReadStarted);
+        appendToStream("stream-1", name("committedAfterTheHeadRead"));
+
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() ->
+                assertThat(received).filteredOn("committedAfterTheHeadRead"::equals).hasSizeGreaterThanOrEqualTo(2));
+        assertThat(received).contains("h1");
+    }
+
+    @Test
     void only_events_matching_the_filter_are_delivered_during_catchup_and_live() {
         appendToStream("stream-1", name("matchHistoric"));
         appendToStream("stream-2", name("ignoredHistoric"));
@@ -289,6 +314,33 @@ class ReactorStreamCatchupSubscriptionModelMongoTest {
 
     // Delays the first bulk window read so an event can commit while the replay is in flight. currentPosition is the
     // head probe, so the delay is applied to the first window read after it.
+    // Reports a head above the highest committed position, which is what a position reserved by a write that has not
+    // committed yet looks like to a reader. ADR 84 allows it, currentPosition is a high-watermark. The first window
+    // read is held back until after the delay, rather than having its results delayed, so the query runs once the
+    // test has written and actually sees that write inside the window the head already covers.
+    private record HeadAheadOfCommittedPositionOrderedReader(PositionOrderedReader delegate, long ahead, Duration holdFirstRead,
+                                                             AtomicBoolean firstReadStarted) implements PositionOrderedReader {
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            return Flux.defer(() -> {
+                if (!firstReadStarted.compareAndSet(false, true)) {
+                    return delegate.readInPositionOrder(filter, range);
+                }
+                return Mono.delay(holdFirstRead).thenMany(delegate.readInPositionOrder(filter, range));
+            });
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return delegate.currentPosition().map(position -> position + ahead);
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return delegate.writesPosition();
+        }
+    }
+
     private static final class DelayFirstReadPositionOrderedReader implements PositionOrderedReader {
         private final PositionOrderedReader delegate;
         private final Duration delay;
