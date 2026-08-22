@@ -100,7 +100,7 @@ public @interface OccurrentStreamSubscription {
     String startAtISO8601() default "";
 
     /**
-     * Specify if the resume behavior for the subscription should differ from when its started.
+     * Specify if the resume behavior for the subscription should differ from when it's started.
      * For example, if you specify {@code startAt=BEGINNING_OF_TIME}, the {@code resumeBehavior}
      * defines how the subscription should behave on restart of the application. By default, if you've
      * specified {@code startAt} (or epoch/iso date), then the subscription will be resumed from the last
@@ -131,7 +131,7 @@ public @interface OccurrentStreamSubscription {
         /**
          * Start this subscription using the default behavior of the subscription model.
          * Typically, this means that it'll start from "NOW", unless the subscription has already been
-         * started before, in which case the subscription will be started from its last know position.
+         * started before, in which case the subscription will be started from its last known position.
          */
         DEFAULT
     }

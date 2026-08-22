@@ -107,4 +107,64 @@ class OccurrentAnnotationPrefixKotlinRename_0_35Test implements RewriteTest {
                 )
         );
     }
+
+    @Test
+    void streamSubscriptionAndItsNestedStartPositionGetTheOccurrentPrefixInKotlin() {
+        rewriteRun(
+                // ChangeType cannot tell the renamed nested enum from the declaration it was told to leave alone,
+                // so the stub's own kinds no longer match its type information. Same stubbing artifact the Java
+                // test relaxes.
+                spec -> spec.typeValidationOptions(TypeValidation.builder()
+                        .identifiers(false)
+                        .methodInvocations(false)
+                        .classDeclarations(false)
+                        .build()),
+                // The stub stands in for the 0.34.0 annotation, and it is the one file that also references the
+                // nested enum from inside the declaration being renamed. An application never has that file, the
+                // call site below is what a reader of this test should compare against.
+                kotlin(
+                        """
+                        package org.occurrent.annotation
+                        annotation class StreamSubscription(val id: String, val startAt: StartPosition = StartPosition.DEFAULT) {
+                            enum class StartPosition {
+                                BEGINNING_OF_TIME, NOW, DEFAULT
+                            }
+                        }
+                        """,
+                        """
+                        package org.occurrent.annotation
+                        annotation class StreamSubscription(val id: String, val startAt: OccurrentStreamSubscription.StartPosition = StartPosition.DEFAULT) {
+                            enum class StartPosition {
+                                BEGINNING_OF_TIME, NOW, DEFAULT
+                            }
+                        }
+                        """
+                ),
+                kotlin(
+                        """
+                        package com.example
+
+                        import org.occurrent.annotation.StreamSubscription
+
+                        class Notifications {
+                            @StreamSubscription(id = "notifyCustomer", startAt = StreamSubscription.StartPosition.BEGINNING_OF_TIME)
+                            fun notifyCustomer(event: Any) {
+                            }
+                        }
+                        """,
+                        """
+                        package com.example
+
+                        import org.occurrent.annotation.OccurrentStreamSubscription
+                        import org.occurrent.annotation.OccurrentStreamSubscription.StartPosition
+
+                        class Notifications {
+                            @OccurrentStreamSubscription(id = "notifyCustomer", startAt = OccurrentStreamSubscription.StartPosition.BEGINNING_OF_TIME)
+                            fun notifyCustomer(event: Any) {
+                            }
+                        }
+                        """
+                )
+        );
+    }
 }
