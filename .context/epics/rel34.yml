@@ -1,9 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 29
-updated_at: '2026-08-22T15:10:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U12 and U18 withdrawn as not reproducible,
-  brk 920 merged)
+revision: 30
+updated_at: '2026-08-22T15:35:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U7 merged, five units done)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -441,7 +440,7 @@ units:
     issue: 866
     goal: RetryExecution's shutdown predicate is checked during the backoff sleep, not only before it,
       so a shutdown during a long backoff is honoured.
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -449,16 +448,25 @@ units:
     deliverables:
     - check: pr_merged
       ref: 916
-      met: false
-      evidence: ''
+      met: true
+      evidence: 'CAS-MERGED pinned to c60a9dc1c, squash 29afaed32, closing #866 AND #917, the javadoc
+        this change invalidated, folded into the same PR rather than left as a follow-up. Gate: Java CI
+        completed/success, 0 unresolved threads, mergeable. Copilot''s latest review was on the PREVIOUS
+        head and the delta was a test rename, one added test and the corrected wording; merged because
+        the orchestrator verified the correction directly against the adversarial pass''s specific finding
+        rather than requiring another prose round. FOUR independent checks on this unit, three real findings:
+        the worker''s own review caught over-invoking a possibly stateful retryIf and double-firing onAfterRetryListener
+        BEFORE the PR opened; Copilot independently found the same two, one inline and one SUPPRESSED;
+        the adversarial pass falsified the exactly-once claim, which the worker narrowed rather than changing
+        shipped behaviour outside its remit, routing the underlying Predicate.and short-circuit as #921
+        for 0.35.0.'
     - check: issue_closed
       ref: 866
-      met: false
-      evidence: ''
+      met: true
+      evidence: '#866 CLOSED, and #917 closed by the same PR.'
     blocking_on: []
-    next_action: 'worker folding in the #917 javadoc correction, then pr-fix; gate needs the workflow-run
-      check'
-    last_meaningful_progress_at: '2026-08-22T14:20:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T15:35:00+00:00'
     observed:
       self_review:
         note: The worker's own local review found TWO real design issues in its first pass, both fixed
