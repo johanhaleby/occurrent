@@ -73,12 +73,12 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
      */
     public static final long DEFAULT_POSITION_WINDOW_SIZE = 1000;
     /**
-     * Default ceiling on the number of event ids kept to dedupe the replay-to-live handover. Grows to cover the
-     * replay-to-live overlap (bounded by write volume during replay, not total history) and evicts oldest-first
-     * past this ceiling. Exceeding it causes extra duplicate deliveries, never loss (at-least-once); raise it to
-     * cut duplicates on a large rebuild or lower it to cap memory (each id is a short string). Well above the
-     * previous {@code 1000} so a rebuild under heavy concurrent writes no longer evicts the overlap before live
-     * re-delivers it.
+     * Default ceiling on the number of event ids kept to dedupe the replay-to-live handover. Only the reconciliation
+     * pass fills it, so it grows with what was written during the replay rather than with total history, and it
+     * evicts oldest-first past this ceiling. Exceeding it causes extra duplicate deliveries, never loss
+     * (at-least-once). Raise it to cut duplicates on a large rebuild, or lower it to cap memory, since each id is a
+     * short string. Well above the previous {@code 1000} so a rebuild under heavy concurrent writes no longer evicts
+     * the overlap before live re-delivers it.
      */
     public static final int DEFAULT_HANDOVER_CACHE_SIZE = 100_000;
 
