@@ -27,6 +27,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
+import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStateStoreQueries;
 import org.occurrent.dsl.saga.SagaStatus;
@@ -85,6 +86,16 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String CREATED_AT = "createdAt";
     private static final String UPDATED_AT = "updatedAt";
     private static final String COMPLETED_AT = "completedAt";
+    private static final String STARTED = "started";
+    // The failure record is flattened into top-level fields rather than a sub-document, for the same reason currentStep
+    // is one: both enumeration queries project the SagaInstance members and neither may decode the state, and a
+    // quarantined instance whose state no longer decodes is exactly the instance somebody is looking for.
+    private static final String FAILURE_INPUT = "failureInput";
+    private static final String FAILURE_POSITION = "failurePosition";
+    private static final String FAILURE_FIRST_FAILED_AT = "failureFirstFailedAt";
+    private static final String FAILURE_TYPE = "failureType";
+    private static final String FAILURE_MESSAGE = "failureMessage";
+    private static final String FAILURE_RELEASED_AT = "failureReleasedAt";
 
     // Field names inside a persisted FlowState document.
     private static final String FLOW_CURRENT_STEP = "currentStep";
@@ -257,7 +268,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     // queries and deliberately excluding the state, whose decode is the expensive and failure-prone part.
     private static void projectEverySagaInstanceMember(Query query) {
         query.fields().include(ID).include(STATUS).include(VERSION).include(TIMERS).include(NEXT_TIMER_FIRES_AT)
-                .include(CURRENT_STEP).include(CREATED_AT).include(UPDATED_AT).include(COMPLETED_AT);
+                .include(CURRENT_STEP).include(CREATED_AT).include(UPDATED_AT).include(COMPLETED_AT).include(STARTED)
+                .include(FAILURE_INPUT).include(FAILURE_POSITION).include(FAILURE_FIRST_FAILED_AT).include(FAILURE_TYPE)
+                .include(FAILURE_MESSAGE).include(FAILURE_RELEASED_AT);
     }
 
     @Override
@@ -295,6 +308,23 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         appendInstant(document, CREATED_AT, envelope.createdAt());
         appendInstant(document, UPDATED_AT, envelope.updatedAt());
         appendInstant(document, COMPLETED_AT, envelope.completedAt());
+        // Written only when false, which is the rare case: an instance that failed before it ever started. A document
+        // written before 0.34.0 has no such field, and a missing field reads back as true, which is what every one of
+        // them is.
+        if (!envelope.started()) {
+            document.append(STARTED, false);
+        }
+        SagaFailure failure = envelope.failure();
+        if (failure != null) {
+            document.append(FAILURE_INPUT, failure.input())
+                    .append(FAILURE_POSITION, failure.position())
+                    .append(FAILURE_FIRST_FAILED_AT, failure.firstFailedAt().toEpochMilli())
+                    .append(FAILURE_TYPE, failure.failureType());
+            if (failure.failureMessage() != null) {
+                document.append(FAILURE_MESSAGE, failure.failureMessage());
+            }
+            appendInstant(document, FAILURE_RELEASED_AT, failure.releasedAt());
+        }
         return document;
     }
 
@@ -407,10 +437,27 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         }
         Long positionWatermark = document.containsKey(POSITION_WATERMARK) ? document.getLong(POSITION_WATERMARK) : null;
 
+        // A document written before 0.34.0 carries no started flag, and every instance in one had started, so a missing
+        // field means true rather than false.
+        boolean started = !document.containsKey(STARTED) || document.getBoolean(STARTED);
+
         // currentStep is only honoured when the state was projected away; with a state present the envelope re-derives it.
         return new SagaEnvelope<>(sagaId, state, status, version, timers, streamWatermarks, positionWatermark,
                 readInstant(document, CREATED_AT), readInstant(document, UPDATED_AT), readInstant(document, COMPLETED_AT),
-                document.getString(CURRENT_STEP));
+                document.getString(CURRENT_STEP), started, toFailure(document));
+    }
+
+    private static @Nullable SagaFailure toFailure(Document document) {
+        String input = document.getString(FAILURE_INPUT);
+        if (input == null) {
+            return null;
+        }
+        return new SagaFailure(input,
+                ((Number) Objects.requireNonNull(document.get(FAILURE_POSITION), "failurePosition")).longValue(),
+                Objects.requireNonNull(readInstant(document, FAILURE_FIRST_FAILED_AT), "failureFirstFailedAt"),
+                Objects.requireNonNull(document.getString(FAILURE_TYPE), "failureType"),
+                document.getString(FAILURE_MESSAGE),
+                readInstant(document, FAILURE_RELEASED_AT));
     }
 
     @SuppressWarnings("unchecked")
