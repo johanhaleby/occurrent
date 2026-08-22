@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 157
+revision: 158
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -294,8 +294,9 @@ units:
     depends_on: []
     session: "sharp-mirzakhani-1aa911-14 (local_d141f048)"
     deliverables:
-      - {check: manual_approval, ref: "plan approved at the orchestrator plan gate before implementation", met: false}
+      - {check: manual_approval, ref: "plan approved at the orchestrator plan gate before implementation", met: true, evidence: "dec-0020 approve with amendments: contract (a), D2 split, D3 second PR in unit, D4 bundled"}
       - {check: pr_merged, ref: null, met: false}
+      - {check: pr_merged, ref: null, met: false, note: "second PR, blocking per-id ReentrantLock replacing the monitor held across the marker save"}
     blocking_on: []
     next_action: "dispatch as a chip (Attended), plan-first brief, base origin/main at 65041b387 or later"
     last_meaningful_progress_at: 2026-08-22T06:30:00Z
