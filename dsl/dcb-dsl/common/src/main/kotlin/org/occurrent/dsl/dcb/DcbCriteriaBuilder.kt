@@ -61,12 +61,13 @@ class DcbCriteriaBuilder<E : Any> private constructor(
     /** Creates a builder that refines the given boundary criterion, backed by a [CloudEventConverter]. */
     constructor(cloudEventConverter: CloudEventConverter<E>, boundary: DcbCriterion) : this(CloudEventTypeGetter { cloudEventConverter.getCloudEventType(it) }, boundary)
 
-    // Do not unify type/types below with a future buildDcbCriteria helper landing in this same module from a
-    // different epic. buildDcbCriteria narrows uniformly, using a declared type's own CloudEvent type string with no
-    // expansion, which is a different policy from the refusal type/types apply here. Two type-derivation helpers that
-    // look alike is not a reason to share an implementation: doing so picks one policy for both, and whichever one
-    // loses either starts refusing a caller that was fine, or starts silently missing concrete subtypes it used to
-    // find.
+    // Do not unify type/types below with a future buildDcbCriteria helper a separate epic is moving into this same
+    // module. By that epic's own plan the incoming helper narrows uniformly rather than applying the refuse policy
+    // type/types use here. This is not a claim about today's buildDcbCriteria (in SubscriptionAnnotations), which
+    // takes pre-resolved CloudEvent type strings rather than classes and expands nothing itself, it is about the
+    // version landing here. Two type-derivation helpers that look alike is not a reason to share an implementation:
+    // doing so picks one policy for both, and whichever one loses either starts refusing a caller that was fine, or
+    // starts silently missing concrete subtypes it used to find.
 
     /**
      * A criterion matching events whose CloudEvent type is any of the CloudEvent types [type] expands into.

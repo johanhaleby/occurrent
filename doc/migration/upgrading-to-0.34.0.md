@@ -134,11 +134,30 @@ sealed, which is the last row of the table below. That part changes a saga and a
 subscription too, so read it even if the six places above are not what you use. See
 [#753](https://github.com/johanhaleby/occurrent/issues/753) and [#912](https://github.com/johanhaleby/occurrent/issues/912).
 
-`ExecuteFilter.excludeTypes` is not part of this refusal. A declared type it cannot fully expand is widened to
-every concrete subtype that can be found instead, since excluding a supertype has to exclude everything under
-it and a wider exclusion is always safe. Nothing here needs a migration step: `excludeTypes` now excludes more
-than it used to, never less, and never refuses a declaration `type`/`includeTypes` would. See the changelog
+`ExecuteFilter.excludeTypes` mostly sits outside this refusal. A declared type it cannot fully expand is
+widened to every concrete subtype that can be found instead, since excluding a supertype has to exclude
+everything under it and a wider exclusion is always safe. That widening needs no migration step: `excludeTypes`
+now excludes at least as much as it used to, never less. It still refuses an array or a primitive declared
+type, the same two shapes `type`/`includeTypes` refuse, since no event is ever an instance of either. Declaring
+one to `excludeTypes` was accepted up to 0.33.0, whatever your `CloudEventTypeGetter` happened to return for it,
+so that one shape is new. Nobody sensibly excludes by array or primitive type, so in practice this affects
+close to nobody, but it is still a behavior change worth naming rather than folding into "no migration step."
+Widening also does not reach a concrete class that is declared directly and is itself neither final nor sealed:
+reflection cannot discover a subclass stored under its own name, so `excludeTypes(OrderPlaced.class)` on such a
+class still only excludes events of `OrderPlaced`'s own CloudEvent type, exactly as before. See the changelog
 entry under `#### Changes` for [#912](https://github.com/johanhaleby/occurrent/issues/912).
+
+Widening on a boundary-seeded `DcbCriteriaBuilder` and DCB append conditions built from a `DcbCriteriaBuilder`
+also change, worth calling out even though `DcbCriteriaBuilder` has no `excludeTypes`. `type`/`types` now name
+every concrete subtype a declared supertype permits, so a `DcbCriterion` built from `type(OrderEvent.class)`
+matches more events than it used to whenever `OrderEvent` is sealed. Two consequences follow from that. A
+`DcbCriteriaBuilder` seeded with a boundary carrying `excludingTypes(...)` (`DcbCriterion.excludingTypes`) now
+throws `IllegalArgumentException("Types and excluded types cannot overlap")` if the newly expanded types include
+one already excluded on the boundary, where before expansion that overlap was unreachable unless you named the
+excluded type directly. And `DcbCriteriaBuilder`'s constructors build `DcbAppendCondition` boundaries as well as
+read criteria (`DcbAppendCondition#failIfEventsMatch`), so an append boundary built from a sealed supertype now
+conflicts with more concurrent writes than before, the same correctness fix as the read side, applied to
+optimistic concurrency checks instead of a query.
 
 **Read this as a report about a projection, subscription, query, or snapshot that was already missing
 events, not as a regression.** Under every type mapper Occurrent ships, a handler or a query keyed on a

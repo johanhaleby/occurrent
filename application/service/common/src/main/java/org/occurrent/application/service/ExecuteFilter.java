@@ -87,13 +87,18 @@ public interface ExecuteFilter<E> {
     /**
      * Create a filter that excludes events whose CloudEvent type matches any of the supplied domain event types.
      * <p>
-     * A declared type is WIDENED to every concrete type it covers rather than refused when it cannot all be
+     * A declared type is WIDENED to every concrete type that can be found rather than refused when it cannot all be
      * enumerated, which is the opposite of what {@link #type(Class)} and {@link #includeTypes} do, and on purpose.
      * Excluding a supertype has to exclude everything under it, or the exclusion silently lets the excluded family of
-     * events through, which is the defect this widening closes. A widened exclusion is safe, since it excludes more
-     * than the concrete types found and never fewer, so a type whose full hierarchy cannot be enumerated contributes
-     * the concrete types that can be found instead of being refused; only an array or a primitive is refused, since
-     * neither is ever an instance excluded from anything. See {@link EventTypeExpansion#expandWhatCanBeFound}.
+     * events through. A widened exclusion is always safe, since it excludes at least the concrete types found and
+     * never fewer, so a type whose full hierarchy cannot be enumerated contributes the concrete types that can be
+     * found instead of being refused. That closes the gap for a sealed hierarchy reopened partway down, where the
+     * levels above the reopening are still found. A concrete class that is declared directly and is itself neither
+     * final nor sealed contributes only itself, the same as before this method went through {@link EventTypeExpansion},
+     * since no reflection can find a subclass stored under its own name. An array and a primitive are refused, for
+     * two different reasons kept apart the way {@link EventTypeExpansion#expandWhatCanBeFound} keeps them apart: no
+     * event is ever an instance of a primitive class, while an array is refused for consistency with {@link #type} and
+     * {@link #includeTypes}, not because excluding one is impossible.
      */
     @SafeVarargs
     static <E> ExecuteFilter<E> excludeTypes(Class<? extends E> first, Class<? extends E>... more) {
@@ -116,10 +121,18 @@ public interface ExecuteFilter<E> {
 
     private static <E> List<String> resolveCloudEventTypes(Set<Class<? extends E>> eventTypes, CloudEventTypeGetter<? super E> cloudEventTypeGetter) {
         Objects.requireNonNull(cloudEventTypeGetter, "cloudEventTypeGetter cannot be null");
-        return eventTypes.stream().map(cloudEventTypeGetter::getCloudEventType).toList();
+        return eventTypes.stream().map(cloudEventTypeGetter::getCloudEventType).distinct().toList();
     }
 
     private static IllegalArgumentException cannotFilterOn(Class<?> eventType) {
+        if (eventType.isArray()) {
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be filtered on by type, since this expansion does not support an array. Filter on the concrete event types instead.");
+        }
+        if (eventType.isPrimitive()) {
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be filtered on by type, since no event is ever an instance of a primitive type. Filter on the concrete event types instead.");
+        }
         return new IllegalArgumentException("the concrete event types dispatch would accept for " + eventType.getName()
                 + " cannot all be enumerated, so a filter derived from it would miss some of them. Filter on the "
                 + "concrete event types instead, make " + eventType.getSimpleName() + " and every level below it "

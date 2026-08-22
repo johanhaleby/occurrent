@@ -127,7 +127,8 @@ class ExecuteFilterTest {
 
         @Test
         void exclude_types_still_refuses_an_array_declared_type() {
-            // Given: widening never reaches an array, since no event is ever an instance of one.
+            // Given: widening never reaches an array, refused for consistency with type/includeTypes rather than
+            // because excluding one would be impossible.
             ExecuteFilter<Object[]> executeFilter = ExecuteFilter.excludeTypes(Object[].class);
 
             // When / Then
@@ -135,6 +136,67 @@ class ExecuteFilterTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining(Object[].class.getTypeName());
         }
+
+        @Test
+        void exclude_types_still_refuses_a_primitive_declared_type() {
+            // Given: no event is ever an instance of a primitive type, so nothing here can ever be excluded either.
+            ExecuteFilter<Object> executeFilter = ExecuteFilter.excludeTypes(int.class);
+
+            // When / Then
+            assertThatThrownBy(() -> executeFilter.resolve(nameGetter()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("primitive type");
+        }
+
+        @Test
+        void type_class_refuses_an_array_declared_type() {
+            ExecuteFilter<Object[]> executeFilter = ExecuteFilter.type(Object[].class);
+
+            assertThatThrownBy(() -> executeFilter.resolve(nameGetter()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining(Object[].class.getTypeName());
+        }
+
+        @Test
+        void type_class_refuses_a_primitive_declared_type() {
+            ExecuteFilter<Object> executeFilter = ExecuteFilter.type(int.class);
+
+            assertThatThrownBy(() -> executeFilter.resolve(nameGetter()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("primitive type");
+        }
+
+        @Test
+        void exclude_types_on_a_directly_declared_non_final_non_sealed_concrete_class_widens_to_only_itself() {
+            // Given: unlike a sealed hierarchy reopened partway down, a concrete class declared directly has no
+            // level above it for widening to still find. Reflection cannot discover a subclass stored under its
+            // own name, so this is the one shape widening cannot close, the exclusion still only removes events of
+            // OpenEvent's own CloudEvent type, and a caller relying on it to keep out a subclass is still exposed.
+            ExecuteFilter<OpenEvent> executeFilter = ExecuteFilter.excludeTypes(OpenEvent.class);
+
+            // When
+            StreamReadFilter filter = executeFilter.resolve(nameGetter());
+
+            // Then
+            assertThat(filter).isEqualTo(StreamReadFilter.type(Condition.not(Condition.in(OpenEvent.class.getName()))));
+        }
+
+        @Test
+        void include_types_deduplicates_cloud_event_types_a_collapsing_mapper_maps_several_declared_types_onto() {
+            // Given: a CloudEventTypeMapper of the caller's own can map a whole hierarchy onto one CloudEvent type
+            // string. The expanded classes still differ, but the condition should not repeat the same string.
+            ExecuteFilter<DomainEvent> executeFilter = ExecuteFilter.includeTypes(NameDefined.class, NameWasChanged.class);
+
+            // When
+            StreamReadFilter filter = executeFilter.resolve(collapsingGetter());
+
+            // Then
+            assertThat(filter).isEqualTo(StreamReadFilter.type("collapsed"));
+        }
+    }
+
+    // Concrete, but neither final nor sealed, so nothing extending it can be found by reflection.
+    static class OpenEvent {
     }
 
     sealed interface ReopenedEvent permits ReopenedBase {
@@ -158,5 +220,10 @@ class ExecuteFilterTest {
     /** Maps every type to its own name, only used where the mapped value does not matter to the assertion. */
     private static <E> CloudEventTypeGetter<E> nameGetter() {
         return Class::getName;
+    }
+
+    /** Maps every type to the same CloudEvent type string, the way a caller's own collapsing mapper would. */
+    private static CloudEventTypeGetter<DomainEvent> collapsingGetter() {
+        return eventType -> "collapsed";
     }
 }

@@ -25,6 +25,8 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores
 import org.junit.jupiter.api.Test
 import org.occurrent.application.converter.CloudEventConverter
 import org.occurrent.eventstore.api.dcb.DcbCriteria
+import org.occurrent.eventstore.api.dcb.DcbCriterion
+import org.occurrent.eventstore.api.dcb.Tag
 
 // #912: type and types now go through EventTypeExpansion, the same as every other type-filter derivation in the
 // library, and refuse a declared type they cannot fully expand.
@@ -78,6 +80,30 @@ class DcbCriteriaBuilderTypeExpansionTest {
         assertThatThrownBy { builder.types(ReopenedEvent::class.java) }
             .isInstanceOf(IllegalArgumentException::class.java)
             .hasMessageContaining(ReopenedEvent::class.java.name)
+    }
+
+    @Test
+    fun type_on_a_boundary_seeded_builder_refines_it_with_the_expanded_types_and_keeps_its_tags() {
+        val boundary = DcbCriteria.tags(Tag.of("k", "v"))
+        val builder = DcbCriteriaBuilder(simpleNameConverter<OrderEvent>(), boundary)
+
+        val criterion = builder.type(OrderEvent::class.java)
+
+        assertThat(criterion).isEqualTo(DcbCriterion(setOf("OrderEvent", "OrderPlaced", "OrderCancelled"), setOf(Tag.of("k", "v"))))
+    }
+
+    @Test
+    fun type_on_a_boundary_that_already_excludes_one_of_the_expanded_concrete_types_throws() {
+        // Given: excludingTypes("OrderCancelled") on the boundary, and OrderEvent expands to include OrderCancelled.
+        // A criterion cannot both include and exclude the same type, so DcbCriterion refuses to build one, the same
+        // way it always has. Expansion just makes this overlap reachable from a supertype declaration that never
+        // named OrderCancelled itself.
+        val boundary = DcbCriteria.tags(Tag.of("k", "v")).excludingTypes("OrderCancelled")
+        val builder = DcbCriteriaBuilder(simpleNameConverter<OrderEvent>(), boundary)
+
+        assertThatThrownBy { builder.type(OrderEvent::class.java) }
+            .isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining("cannot overlap")
     }
 }
 
