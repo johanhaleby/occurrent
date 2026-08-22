@@ -2530,3 +2530,25 @@ because the decision being recorded is that no next checkpoint is scheduled.
 
 The general shape is worth separating from the instance. When a rule has been broken twice by
 someone who knows it, stop restating the rule and change what it costs to follow.
+
+## A hold posted to a PR reaches nobody if the worker has already stopped
+
+rel34 held five PRs on confirmed defects and then waited. A liveness check, run only because a
+sibling orchestrator argued for preferring mechanisms over memory, showed all five worker sessions
+were `isRunning: false`, last active between two and four hours earlier. Every hold had been posted
+to its PR AFTER its worker stopped, so none had been read and no work was in progress on any of
+them. The orchestrator had been reading "no push" as "working" when it meant "ended".
+
+The finding-routing protocol's own reasoning is what makes this easy to miss. It says to leave a
+durable trace because a message can fail silently, which is true. The durable trace cannot forget,
+and it also cannot act. A PR comment is a place for an actor to look, not an actor.
+
+So when a unit is held on a worker, check that the worker is alive at the moment the hold is
+posted, not later. It is one call. Waking all five took one message each and every one resumed
+within the minute, so the cost of the check is trivial against a fleet that was doing nothing for
+hours.
+
+The slower mechanism is worth keeping as the backstop rather than the primary. Once
+`last_meaningful_progress_at` tracks the blocked unit's PR rather than the orchestrator's own
+writes, a stopped worker eventually surfaces as STALLED. That is how the dropped U11 dispatch was
+finally caught, but it took four hours, and a held release unit cannot afford that.
