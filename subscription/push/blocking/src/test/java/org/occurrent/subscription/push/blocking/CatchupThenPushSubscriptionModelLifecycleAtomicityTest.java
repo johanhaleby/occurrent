@@ -368,7 +368,7 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
      * finds, in this process and after a restart alike.
      * <p>
      * Asserted as an ordering rather than as a duration, so it says which of the two finished first rather than how
-     * long either took. The cancel is released only once it is genuinely waiting on the monitor, which is what
+     * long either took. The cancel is released only once it is genuinely queued behind the write, which is what
      * keeps the ordering from being decided by the cancel simply not having started yet.
      */
     @Test

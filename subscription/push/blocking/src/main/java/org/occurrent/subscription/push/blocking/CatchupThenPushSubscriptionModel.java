@@ -588,9 +588,18 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     /**
      * Stops the live feed and any catch-up replay still in flight. Reversible: a stopped replay keeps its registration
-     * on the live feed and is replayed from the beginning by {@link #start(boolean)}, because a stop is not a failure
-     * and nothing was marked. That is the decision {@code CatchupProjectionFeed.stopCatchUp()} already records, ported
-     * here rather than re-derived (ADR 104).
+     * on the live feed and is replayed from the beginning by {@link #start(boolean)}, because a stop is not a failure.
+     * That is the decision {@code CatchupProjectionFeed.stopCatchUp()} already records, ported here rather than
+     * re-derived (ADR 104).
+     * <p>
+     * A replay this interrupts marks nothing, and neither does one that had already read its last event, since the
+     * marker step asks whether this model is stopped before it writes. What a stop cannot do is call off a write
+     * that has already begun, because that would mean waiting for a checkpoint store here. Such a marker stands,
+     * and the subscription it belongs to is caught up rather than replayed again, since the attempt that wrote it
+     * had read the whole history and held the id when the write began.
+     * <p>
+     * The events buffered during the replay are delivered before the marker is written, so a stop arriving while
+     * they are being delivered is still early enough to be refused.
      * <p>
      * Live events fed while stopped are dropped rather than refused, the dropped-not-deferred contract every stopped
      * subscription model has (ADR 85). That is bounded here only because the stop is reversible: the window closes at
