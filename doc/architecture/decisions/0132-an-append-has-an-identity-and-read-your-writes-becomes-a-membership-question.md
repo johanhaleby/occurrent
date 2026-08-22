@@ -249,12 +249,22 @@ Mongo implementations on both stacks live in the starters and take a `RetryStrat
 `NativeMongoCheckpointStorage` established, so a transient outage of the store does not turn into a failed wait.
 
 Each poll's read is limited to the time the wait has left, and that is part of this decision rather than an
-implementation detail. A default `RetryStrategy` retries without a limit, since `RetryImpl`'s no-argument
-constructor builds itself with `infinite()` attempts, so a poll that inherits it can go on retrying straight
-through the caller's timeout and then throw instead of answering `false`. The withdrawn machinery shipped that
-defect and fixed it in [#730](https://github.com/johanhaleby/occurrent/issues/730) by limiting each poll's read to
-the wait's remaining time. Both stacks apply that limit here, so the timeout the caller asked for is the one they
-get.
+implementation detail. A `RetryStrategy` built from `RetryImpl`'s no-argument constructor retries with
+`infinite()` attempts, so a poll that inherited one could go on retrying straight through the caller's timeout and
+then throw instead of answering `false`. The withdrawn machinery shipped that defect and fixed it in
+[#730](https://github.com/johanhaleby/occurrent/issues/730) by limiting each poll's read to the wait's remaining
+time. Both stacks apply that limit here.
+
+Two separate things end that read and they do different work. The wait's own deadline stops a read from starting,
+and the store's attempt limit, `occurrent.projection.applied-append.max-attempts`, stops a failed one from being
+tried again. Neither ends a read already running, because a blocking Mongo call cannot be interrupted from inside
+a store that was handed a `MongoOperations` and does not own the client. The timeout a caller asked for therefore
+holds as far as that client's own timeout holds, and an application that needs it exact configures one there. The
+reactive stack blocks its wait on the time it has left, which the blocking driver has no equivalent of.
+
+That attempt limit applies outside a wait too, where `recordApplied`, `hasApplied` and `clear` give up rather than
+calling a store for as long as an outage lasts. Decision 7 depends on it, since the clear it expects to stop a
+recorder can only stop if the retry behind that clear ends.
 
 ### 6. Nothing is recorded while a projection is reading history
 
@@ -542,7 +552,8 @@ configuration cannot work and nothing at runtime would explain why.
 
 The Spring Boot starters auto-configure a Mongo-backed store with `@ConditionalOnMissingBean`, so an application
 that sets the attribute gets a working store without wiring one. Properties live under `occurrent.projection.*`,
-covering the retention time, the wait's backoff, and the poll's schedule from decision 7.
+covering the retention time, the wait's backoff, the store's attempt limit, and the poll's schedule from
+decision 7.
 
 Where a projection identifier and a subscription identifier can differ, the programmatic API takes both explicitly.
 They are the same string by construction on the annotation path and on `ProjectionRunner.project(subscriptionId,
@@ -569,7 +580,7 @@ separately.
   having applied all of it, and decision 10 states the delay and why it is intended. An identifier that was never
   recorded, or was cleared, or has been evicted, all produce a timeout instead. A store that cannot be read keeps
   the wait polling until its timeout expires, which is true only because decision 5 limits each read to the time
-  the wait has left.
+  the wait has left, and holds as far as the MongoDB client's own timeout holds.
 - That guarantee depends on the clear having finished, so it is not true in the window before it does. A wait
   between a rebuild starting and its clear completing can be told `true` about an append whose read model is being
   discarded. Decision 7 states how long that window is in each case. This design narrows the untrue answer to that
