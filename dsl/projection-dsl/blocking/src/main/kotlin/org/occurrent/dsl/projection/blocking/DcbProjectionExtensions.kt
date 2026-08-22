@@ -22,11 +22,11 @@ import org.occurrent.dsl.projection.DcbProjection
 import org.occurrent.dsl.view.MaterializedView
 import org.occurrent.dsl.view.ViewStateRepository
 import org.occurrent.subscription.DcbStartAt
-import org.occurrent.subscription.api.blocking.Subscription
+import org.occurrent.subscription.api.blocking.SubscriptionHandle
 
 /**
  * Runs [dcbProjection] as an asynchronous, subscription-fed read model over its DCB consistency boundary: subscribes to
- * the events matching [DcbProjection.criteria] and updates [materializedView] from each. The returned [Subscription] is
+ * the events matching [DcbProjection.criteria] and updates [materializedView] from each. The returned [SubscriptionHandle] is
  * already started.
  *
  * Whether this catches up and resumes durably, or is live-only, depends on the `SubscriptionModel` behind this
@@ -34,7 +34,7 @@ import org.occurrent.subscription.api.blocking.Subscription
  * replays history and resumes across restarts, a plain live model does neither. For a strongly consistent read, fold on
  * demand with the pull [DcbDomainEventQueries.project]. For a declarative read model use the `@Projection` annotation.
  */
-fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, materializedView: MaterializedView<E>, startAt: DcbStartAt? = null): Subscription =
+fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<*, E, *>, materializedView: MaterializedView<E>, startAt: DcbStartAt? = null): SubscriptionHandle =
     subscribeWithMetadata(subscriptionId, dcbProjection.criteria(), startAt) { dcbMetadata, e -> materializedView.update(dcbMetadata.eventMetadata(), e) }.also { it.waitUntilStarted() }
 
 /**
@@ -42,7 +42,7 @@ fun <E : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection:
  * events whose id resolves to `null`. See the [MaterializedView] overload above for the live-only versus catch-up
  * and durability details, which depend on the subscription model the same way.
  */
-fun <S, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: DcbStartAt? = null): Subscription =
+fun <S, E : Any, ID : Any> DcbSubscriptions<E>.project(subscriptionId: String, dcbProjection: DcbProjection<S, E, ID>, repository: ViewStateRepository<S, ID>, startAt: DcbStartAt? = null): SubscriptionHandle =
     project(subscriptionId, dcbProjection, Projections.materializedView(dcbProjection.projection(), repository, subscriptionId), startAt)
 
 /**

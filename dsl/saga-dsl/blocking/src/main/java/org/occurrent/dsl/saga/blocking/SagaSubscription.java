@@ -19,7 +19,7 @@ package org.occurrent.dsl.saga.blocking;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.dsl.saga.SagaInstances;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,21 +31,21 @@ import java.util.concurrent.TimeUnit;
 import static java.util.Objects.requireNonNull;
 
 /**
- * A running saga: the underlying event {@link Subscription} plus the timer poller. Closing it stops the poller and, when
+ * A running saga: the underlying event {@link SubscriptionHandle} plus the timer poller. Closing it stops the poller and, when
  * the poller was lease-gated, releases the timer lease so another instance can take over. The event subscription is
  * cancelled through the subscription model the way any subscription is (this handle only owns the poller it started).
  */
 public final class SagaSubscription implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(SagaSubscription.class);
 
-    private final Subscription subscription;
+    private final SubscriptionHandle subscription;
     private final ExecutorService timerPoller;
     private final SagaInstances instances;
     private final @Nullable CompetingConsumerStrategy competingConsumerStrategy;
     private final @Nullable String leaseKey;
     private final @Nullable String holderId;
 
-    SagaSubscription(Subscription subscription, ExecutorService timerPoller, SagaInstances instances,
+    SagaSubscription(SubscriptionHandle subscription, ExecutorService timerPoller, SagaInstances instances,
                      @Nullable CompetingConsumerStrategy competingConsumerStrategy,
                      @Nullable String leaseKey, @Nullable String holderId) {
         this.subscription = requireNonNull(subscription, "subscription cannot be null");
@@ -71,7 +71,7 @@ public final class SagaSubscription implements AutoCloseable {
     }
 
     /** The underlying event subscription. */
-    public Subscription subscription() {
+    public SubscriptionHandle subscription() {
         return subscription;
     }
 

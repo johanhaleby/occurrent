@@ -26,7 +26,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.reactor.Pushable;
 import org.occurrent.subscription.api.reactor.RegisteringSubscribable;
 import org.occurrent.subscription.api.reactor.Subscribable;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
@@ -139,7 +139,7 @@ public class PushSubscriptionModel extends RegisteringSubscribable implements Pu
     // same-package but not a subclass, so it cannot reach the protected RegisteringSubscribable method directly.
     // Lets it register an action that reports whether an event genuinely landed, instead of the plain
     // Function<CloudEvent, Mono<Void>> subscribe(..) takes.
-    Subscription subscribeCatchupThenPush(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RegisteringSubscribable.RoutingAction action) {
+    SubscriptionHandle subscribeCatchupThenPush(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, RegisteringSubscribable.RoutingAction action) {
         return super.subscribeReportingDelivery(subscriptionId, filter, startAt, action);
     }
 

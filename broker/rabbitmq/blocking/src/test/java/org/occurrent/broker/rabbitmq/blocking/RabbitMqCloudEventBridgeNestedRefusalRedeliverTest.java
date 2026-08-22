@@ -24,7 +24,7 @@ import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
@@ -63,7 +63,7 @@ class RabbitMqCloudEventBridgeNestedRefusalRedeliverTest extends RabbitMqTestSup
         InMemoryEventStore otherStore = new InMemoryEventStore();
         otherStore.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
         CatchupThenPushSubscriptionModel otherWrapper = new CatchupThenPushSubscriptionModel(otherStore, otherLiveFeed, null);
-        Subscription otherSubscription = otherWrapper.subscribe("other", null, StartAt.subscriptionModelDefault(), ce -> {
+        SubscriptionHandle otherSubscription = otherWrapper.subscribe("other", null, StartAt.subscriptionModelDefault(), ce -> {
             throw new RuntimeException("simulated permanent catch-up failure for the unrelated model");
         });
         assertThatThrownBy(() -> otherSubscription.waitUntilStarted(Duration.ofSeconds(5)))

@@ -59,7 +59,7 @@ abstract class AbstractSubscriptionModelAdapter implements SubscriptionModelLife
     }
 
     @Override
-    public Subscription resumeSubscription(String subscriptionId) {
+    public SubscriptionHandle resumeSubscription(String subscriptionId) {
         return delegate.resumeSubscription(subscriptionId);
     }
 

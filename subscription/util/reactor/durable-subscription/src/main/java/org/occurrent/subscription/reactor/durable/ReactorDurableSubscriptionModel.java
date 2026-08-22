@@ -90,7 +90,7 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * already stored when this model read for it is taken without a word, as before, so a node joining a subscription
  * another has been running is untouched. The refusal reaches the caller wherever that registration path already
  * reports a start it could not make. It is thrown from {@link #subscribe(String, SubscriptionFilter, StartAt, Function)}
- * when the wrapped model manages named subscriptions, and signalled on {@link Subscription#waitUntilStarted()},
+ * when the wrapped model manages named subscriptions, and signalled on {@link SubscriptionHandle#waitUntilStarted()},
  * with an {@code ERROR} logged, when this model drives the cold primitive itself. A storage that answers {@code false}
  * from {@link CheckpointStorage#evaluatesWriteConditionsFor(String)} cannot be written to conditionally, so that
  * write stays unconditional and is logged at {@code WARN} instead. See ADR 89. A {@code save(..)} for that first
@@ -113,7 +113,7 @@ import static org.occurrent.subscription.CheckpointAwareCloudEvent.getCheckpoint
  * The refusal is thrown from {@link #subscribe(String, SubscriptionFilter, StartAt, Function)} when the wrapped model
  * manages named subscriptions of its own, which is the caller's own call and needs no log to reach anybody. When this
  * model drives the cold primitive itself it cannot throw there, so the refusal is signalled on
- * {@link Subscription#waitUntilStarted()}, on the handle {@link #resumeSubscription(String)} returns and on the
+ * {@link SubscriptionHandle#waitUntilStarted()}, on the handle {@link #resumeSubscription(String)} returns and on the
  * registration handle as well once that registration asked for the model default and storage has confirmed it holds
  * nothing. A read that fails on the way there is logged at {@code WARN}, since a subscription with a checkpoint
  * already stored, or a start position of its own, still starts fine despite it.
@@ -209,7 +209,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
@@ -238,12 +238,12 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * subscription, which is what makes an unsupported filter refused here in {@code subscribe(..)} and a failing
      * action retried rather than fatal.
      */
-    private Subscription subscribeByDelegating(SubscriptionModel delegate, String subscriptionId, @Nullable SubscriptionFilter filter,
+    private SubscriptionHandle subscribeByDelegating(SubscriptionModel delegate, String subscriptionId, @Nullable SubscriptionFilter filter,
                                                StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         StartAt startAtToUse = durableStartAt(subscriptionId, startAt, delegate);
         // A null startAtToUse means a dynamic StartAt opted out of starting, so the wrapped model gets the original
         // position and the untouched action, and this model stays out of the way, exactly as the blocking twin does.
-        Subscription delegated = startAtToUse == null
+        SubscriptionHandle delegated = startAtToUse == null
                 ? delegate.subscribe(subscriptionId, filter, startAt, action)
                 : delegate.subscribe(subscriptionId, filter, startAtToUse, persistingAction(subscriptionId, action));
         delegatedSubscriptionIds.add(subscriptionId);
@@ -331,7 +331,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
                                          "when using the Spring Boot starter.");
     }
 
-    private Subscription startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt,
+    private SubscriptionHandle startInternalSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, AtomicReference<StartAt> currentStartAt,
                                                    Function<CloudEvent, Mono<Void>> action, @Nullable Mono<Checkpoint> positionAtRegistration) {
         if (!running) {
             // The model is stopped: don't subscribe at all, so waitUntilStarted() doesn't complete for a subscription
@@ -555,7 +555,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * Start a subscription that was registered while this model was stopped, or resume one that was paused.
      * <p>
      * A subscription whose position could not be read when it was registered is refused here rather than started, and
-     * the refusal is signalled on the returned {@link Subscription#waitUntilStarted()}. Such a subscription is dropped
+     * the refusal is signalled on the returned {@link SubscriptionHandle#waitUntilStarted()}. Such a subscription is dropped
      * from this model, so asking again answers with {@link UnknownSubscriptionException} and getting it back means
      * registering it again.
      *
@@ -563,7 +563,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * @throws SubscriptionAlreadyRunningException If the subscription is already running.
      */
     @Override
-    public synchronized Subscription resumeSubscription(String subscriptionId) {
+    public synchronized SubscriptionHandle resumeSubscription(String subscriptionId) {
         if (delegate != null) {
             return delegate.resumeSubscription(subscriptionId);
         }
@@ -654,7 +654,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
      * <p>
      * A subscription whose position could not be read when it was registered is refused, and the rest are started all
      * the same, so one broken subscription does not withhold the others. Each refusal is signalled on that
-     * subscription's own {@link Subscription#waitUntilStarted()}, so this call does not report it.
+     * subscription's own {@link SubscriptionHandle#waitUntilStarted()}, so this call does not report it.
      *
      * @see SubscriptionModelLifeCycle#start(boolean)
      */
@@ -750,7 +750,7 @@ public class ReactorDurableSubscriptionModel implements CheckpointAwareSubscript
         }
     }
 
-    private static final class ReactorDurableSubscription implements Subscription {
+    private static final class ReactorDurableSubscription implements SubscriptionHandle {
         private final String subscriptionId;
         private final Mono<Void> started;
 

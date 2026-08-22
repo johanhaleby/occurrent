@@ -40,7 +40,7 @@ import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.internal.ExecutorShutdown;
 import org.occurrent.subscription.mongodb.MongoFilterSpecification;
@@ -71,7 +71,7 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
 
 /**
  * This is a subscription that uses the "native" MongoDB Java driver (sync) to listen to changes from the event store.
- * This Subscription doesn't maintain the checkpoint, you need to store it in order to continue the stream
+ * This subscription model doesn't maintain the checkpoint, you need to store it in order to continue the stream
  * from where it's left off on application restart/crash etc. You can do this yourself or use a
  * <a href="https://occurrent.org/documentation#blocking-subscription-checkpoint-storage">checkpoint storage implementation</a>
  * or use the {@code DurableSubscriptionModel} utility from the {@code org.occurrent:durable-subscription}
@@ -186,7 +186,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     }
 
     @Override
-    public synchronized Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public synchronized SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
@@ -456,7 +456,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * @see #resumeSubscription(String, StartAt)
      */
     @Override
-    public synchronized Subscription resumeSubscription(String subscriptionId) {
+    public synchronized SubscriptionHandle resumeSubscription(String subscriptionId) {
         return doResumeSubscription(subscriptionId, null);
     }
 
@@ -466,7 +466,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
      * @see RepositionableSubscriptions#resumeSubscription(String, StartAt)
      */
     @Override
-    public synchronized Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+    public synchronized SubscriptionHandle resumeSubscription(String subscriptionId, StartAt startAt) {
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
         MongoCommons.checkStartPosition(startAt, new SubscriptionModelContext(NativeMongoSubscriptionModel.class));
         return doResumeSubscription(subscriptionId, startAt);
@@ -475,7 +475,7 @@ public class NativeMongoSubscriptionModel implements CheckpointAwareSubscription
     // The shared resume path. repositionTo is the caller's explicit position from the two-arg overload, or null
     // from the one-arg overload, in which case the subscription's own currentStartAt reference is left untouched
     // and the resume continues from whatever it already holds.
-    private Subscription doResumeSubscription(String subscriptionId, @Nullable StartAt repositionTo) {
+    private SubscriptionHandle doResumeSubscription(String subscriptionId, @Nullable StartAt repositionTo) {
         if (shutdown) {
             throw new IllegalStateException(SubscriptionModel.class.getSimpleName() + " is shutdown");
         }

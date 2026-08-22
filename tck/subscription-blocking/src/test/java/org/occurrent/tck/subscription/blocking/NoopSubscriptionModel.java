@@ -23,7 +23,7 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.util.Set;
@@ -45,7 +45,7 @@ class NoopSubscriptionModel implements SubscriptionModel, IntrospectableSubscrip
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         throw new UnsupportedOperationException("NoopSubscriptionModel implements nothing on purpose");
     }
 
@@ -87,7 +87,7 @@ class NoopSubscriptionModel implements SubscriptionModel, IntrospectableSubscrip
     }
 
     @Override
-    public Subscription resumeSubscription(String subscriptionId) {
+    public SubscriptionHandle resumeSubscription(String subscriptionId) {
         throw new UnsupportedOperationException("NoopSubscriptionModel implements nothing on purpose");
     }
 

@@ -23,7 +23,7 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.tck.ConformanceEvents;
 
 import java.util.ArrayList;
@@ -72,7 +72,7 @@ public abstract class InProcessDeliveryConformance extends SubscriptionModelSuit
      * it is the same wait shape the rest of the leaf uses and a second number for it would be the inconsistency the
      * declared budget exists to remove.
      */
-    private void awaitStarted(Subscription subscription) {
+    private void awaitStarted(SubscriptionHandle subscription) {
         assertThat(subscription.waitUntilStarted(deliveryTimeout()))
                 .as("the subscription did not start within " + deliveryTimeout())
                 .isTrue();

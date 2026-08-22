@@ -28,7 +28,7 @@ import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StringBasedCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Mono;
 
@@ -81,7 +81,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         storage.whenTheFirstReadFindsNothing = () -> storage.writeWithoutScripting("landed-during-registration");
         ReactorDurableSubscriptionModel model = coldModel(new RecordingSubscriptionModel("this-nodes-own-position"), storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .as("the position stored is not the one this registration read, so starting from it would skip whatever lies between them")
@@ -94,7 +94,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         storage.whenTheFirstReadFindsNothing = () -> storage.writeWithoutScripting("landed-during-registration");
         ReactorDurableSubscriptionModel model = coldModel(new RecordingSubscriptionModel("this-nodes-own-position"), storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class, refusal -> {
@@ -118,7 +118,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         delegate.globalCheckpoint = new OrderedCheckpoint(10);
         ReactorDurableSubscriptionModel model = coldModel(delegate, storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThat(subscription.waitUntilStarted().block(TIMEOUT)).isNull();
         assertThat(storage.read(SUBSCRIPTION_ID).block(TIMEOUT).asString())
@@ -134,7 +134,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         CheckpointStorage storage = alwaysRefusingStorage(() -> Mono.error(unreachable));
         ReactorDurableSubscriptionModel model = coldModel(new RecordingSubscriptionModel("this-nodes-own-position"), storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class, refusal -> {
@@ -151,7 +151,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         CheckpointStorage storage = alwaysRefusingStorage(Mono::empty);
         ReactorDurableSubscriptionModel model = coldModel(new RecordingSubscriptionModel("this-nodes-own-position"), storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOfSatisfying(StartPositionAlreadyPinnedException.class, refusal -> {
@@ -176,7 +176,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         };
         ReactorDurableSubscriptionModel model = coldModel(new RecordingSubscriptionModel("this-nodes-own-position"), storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isNotInstanceOf(StartPositionAlreadyPinnedException.class)
@@ -192,7 +192,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("this-nodes-own-position");
         ReactorDurableSubscriptionModel model = coldModel(delegate, storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         subscription.waitUntilStarted().block(TIMEOUT);
         assertThat(startedAtCheckpoint(delegate)).isEqualTo("this-nodes-own-position");
@@ -209,7 +209,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         ReactorDurableSubscriptionModel model = coldModel(delegate, storage);
         storage.hideWhatIsStoredFromTheNextRead();
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         subscription.waitUntilStarted().block(TIMEOUT);
         assertThat(storage.readsAfterTheWrite).hasValue(0);
@@ -223,7 +223,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         ReactorDurableSubscriptionModel model = coldModel(new RecordingSubscriptionModel("this-nodes-own-position"), storage);
         storage.hideWhatIsStoredFromTheNextRead();
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(StartPositionAlreadyPinnedException.class);
@@ -239,7 +239,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("wherever-the-feed-is-now");
         ReactorDurableSubscriptionModel model = coldModel(delegate, storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         subscription.waitUntilStarted().block(TIMEOUT);
         assertThat(storage.conditions).isEmpty();
@@ -271,7 +271,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         storage.whenTheFirstReadFindsNothing = () -> storage.writeWithoutScripting("landed-during-registration");
         ReactorDurableSubscriptionModel model = coldModel(new RecordingSubscriptionModel("this-nodes-own-position"), storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
         assertThat(model.isRunning(SUBSCRIPTION_ID)).isFalse();
 
         assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
@@ -288,7 +288,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         // Nothing is stored until the subscription starts, so the race is run at the point it is resumed.
         storage.whenTheFirstReadFindsNothing = () -> storage.writeWithoutScripting("landed-while-it-waited");
 
-        Subscription resumed = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle resumed = model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThatThrownBy(() -> resumed.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(StartPositionAlreadyPinnedException.class);
@@ -304,7 +304,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
         ReactorDurableSubscriptionModel model = coldModel(delegate, storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         subscription.waitUntilStarted().block(TIMEOUT);
         assertThat(storage.conditions).containsExactly(CheckpointWriteCondition.any());
@@ -324,7 +324,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
         ReactorDurableSubscriptionModel model = coldModel(delegate, storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(IllegalStateException.class)
@@ -352,7 +352,7 @@ class ReactorDurableSubscriptionModelPinRefusalTest {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel("at-registration");
         ReactorDurableSubscriptionModel model = coldModel(delegate, storage);
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
 
         assertThatThrownBy(() -> subscription.waitUntilStarted().block(TIMEOUT))
                 .isInstanceOf(IllegalStateException.class)

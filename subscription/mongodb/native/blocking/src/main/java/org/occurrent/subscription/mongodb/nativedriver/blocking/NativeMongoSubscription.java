@@ -19,13 +19,13 @@ package org.occurrent.subscription.mongodb.nativedriver.blocking;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 
 @NullMarked
-public record NativeMongoSubscription(String subscriptionId, CountDownLatch subscriptionStartedLatch) implements Subscription {
+public record NativeMongoSubscription(String subscriptionId, CountDownLatch subscriptionStartedLatch) implements SubscriptionHandle {
 
     @Override
     public String id() {

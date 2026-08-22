@@ -29,7 +29,7 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 
 import java.net.URI;
 import java.time.Duration;
@@ -195,7 +195,7 @@ class StreamCatchupHandoverTest {
         }
 
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             live.forEach(action);
             return new StartedSubscription(subscriptionId);
         }
@@ -229,7 +229,7 @@ class StreamCatchupHandoverTest {
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             return new StartedSubscription(subscriptionId);
         }
 
@@ -242,7 +242,7 @@ class StreamCatchupHandoverTest {
         }
     }
 
-    private record StartedSubscription(String id) implements Subscription {
+    private record StartedSubscription(String id) implements SubscriptionHandle {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
             return true;

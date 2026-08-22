@@ -19,7 +19,7 @@ package org.occurrent.dsl.dcb.blocking
 import org.occurrent.dsl.dcb.DcbEventMetadata
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.subscription.DcbStartAt
-import org.occurrent.subscription.api.blocking.Subscription
+import org.occurrent.subscription.api.blocking.SubscriptionHandle
 
 /**
  * Kotlin-idiomatic sugar over [DcbSubscriptions], the canonical class-based DCB subscription entry-point. This is a
@@ -34,7 +34,7 @@ fun <E : Any> DcbSubscriptions<E>.subscribeDcb(
     startAt: DcbStartAt? = null,
     waitUntilStarted: Boolean = true,
     fn: (E) -> Unit
-): Subscription = subscribeWithMetadata(subscriptionId, criteria, startAt, waitUntilStarted) { _, event -> fn(event) }
+): SubscriptionHandle = subscribeWithMetadata(subscriptionId, criteria, startAt, waitUntilStarted) { _, event -> fn(event) }
 
 /**
  * Kotlin-idiomatic sugar over [DcbSubscriptions], including DCB metadata in the callback. See [subscribeDcb] for the
@@ -47,4 +47,4 @@ fun <E : Any> DcbSubscriptions<E>.subscribeDcbWithMetadata(
     startAt: DcbStartAt? = null,
     waitUntilStarted: Boolean = true,
     fn: (DcbEventMetadata, E) -> Unit
-): Subscription = subscribeWithMetadata(subscriptionId, criteria, startAt, waitUntilStarted, fn)
+): SubscriptionHandle = subscribeWithMetadata(subscriptionId, criteria, startAt, waitUntilStarted, fn)

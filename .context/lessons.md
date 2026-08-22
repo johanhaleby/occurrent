@@ -2002,6 +2002,7 @@ than diagnosing it, because a wrong owner would have concluded "flake" faster. I
 that narrowed it (JDK asymmetry, main green) as evidence rather than as a conclusion. And it said
 plainly which reading it could not rule out, so the receiving fleet knew what it was being asked to
 settle rather than to confirm.
+- 2026-08-22 brk: timestamps are read from a clock or from the system that owns the fact, never written from memory. brk's state file carried stamps an hour in the future (the clock read 13:55Z while U16 said 14:10 and U17 said 14:50) and one malformed `06:5x`, which disables stall detection since a future stamp yields a negative age, and the validator does not parse times. Repaired from `gh pr view --json mergedAt` and the journal's `at`. Rule: `date -u` for now, `mergedAt` for a merge, the journal for a ruling, and a commit author time as an at-or-before bound for anything nothing owns. Never write `HH:Mx` as a precision claim.
 
 ## A known production defect becomes a fleet-wide CI tax until its fix lands (rel34, 2026-08-22)
 
@@ -2146,3 +2147,311 @@ shape had already produced a masked rebase failure earlier in this session.
 Any command whose exit code is the actual result gets run on its own line with `RC=$?` captured
 immediately, never piped into a formatter and never chained behind `&&`. Piping a verifier into `head`
 or `tail` destroys the one thing being verified.
+
+## Never edit a multi-unit YAML file with a regex that spans unit blocks (sdi, 2026-08-22)
+
+Clearing ONE unit's `blocking_on` after a fence was lifted, I matched the unit with a non-greedy
+block regex ending in `(?=\n  [A-Z0-9]+:|\Z)` and then ran `re.sub` for `blocking_on:` inside it.
+The lookahead did not bound where I assumed, the substitution applied across the whole tail of the
+file, and **six units silently lost their fence blockers**. Durable state, committed and pushed.
+
+What caught it was `epic-state.py derive` reporting DRIFT on six units in the same command. Nothing
+else would have: the file was still valid YAML, still passed `validate`, and the units still read
+plausibly. Running derive after every write is the only reason this was a near-miss rather than a
+fleet dispatching into a live fence.
+
+The fix is not a better regex. Bound the edit structurally: find the unit's start line by exact
+match on `  <NAME>:`, find its end by the next line matching `^  [A-Za-z0-9_]+:$`, and edit only
+between those indices. Verify afterwards by parsing the YAML and printing phase plus blocker COUNT
+per unit, which is the assertion that would have failed immediately.
+
+**A second failure hid inside the first, and it is the worse one.** An earlier edit marking a unit
+DONE never reached the commit at all. `validate` reported the new revision from the working tree, I
+read that as success, committed, saw a clean push, and told the user the unit was done. The state
+file's history shows the commit never touched it. So: a passing validate proves the FILE is good,
+never that the CHANGE was committed. After any state write, confirm the field actually landed in
+the commit, with `git show HEAD:<path>` and not from the working tree.
+
+## The chip title gate fails at the call site, not in the generator
+
+rel34 sent nine chips. The eight composed by the brief generator all carried
+`⌁[rel34/<unit>#<issue>] <summary> · <Model>/<effort>`. The ninth, written by hand directly in the
+spawn call, went out as "Fix #837: @Transactional silently bypassed on subscription handlers". No
+sigil, no epic, no unit, no model suffix.
+
+The cause is not forgetfulness about the rule. The spawn tool's own parameter description asks for
+"an imperative action phrase (start with a verb), under 60 chars" and gives an example in exactly
+that shape, so a title composed while reading the tool's schema satisfies the tool and fails the
+fleet. SKILL.md:383 already says compose from the fleet rule first and check the length hint second,
+never the other way round, and it already records two brk chips failing the same way hours earlier.
+
+The practical fix is to keep chip titles out of hand-composition entirely. When a brief comes from a
+generator, take the title from the generator too. When a chip is one-off, run the two greps before
+the spawn call rather than after, because the after-the-fact remedy repairs the session list but
+cannot repair a model the user already picked.
+
+Worth knowing for the repair: the length cap counts characters, and `${#TITLE}` in a non-UTF-8 shell
+locale counts bytes, so a 59-character title reports as 62 and looks like a failure. Measure it in
+python, and trim the summary rather than the model suffix, since the suffix is the only part that
+reaches the person choosing the model.
+## Hold your own questions to the bar you set for other people's (sdi, 2026-08-22)
+
+The orchestrator skill's routing rule for questions arriving FROM workers already required two
+things: answer directly when `AGENTS.md`, an ADR, the approved plan or a prior ruling settles it,
+and otherwise bring it to the user with a recommendation attached. Bucket C, which governs the
+orchestrator's OWN questions, required neither. It listed code, `ORCHESTRATOR.md` and a graph query
+as the things to check first and never mentioned the repository's conventions document at all.
+
+So a relayed question got more scrutiny than one I raised myself. The tell arrived when a design
+question I put to Johan came straight back as "investigate what the best solution is according to
+the principles of `AGENTS.md`". That is the user paying for a lookup I owed, and it is the same
+question I would have bounced had a worker sent it to me.
+
+The asymmetry has a cause worth naming, because it is not laziness. A relayed question arrives
+visibly as somebody else's and gets examined as an artefact. Your own arrives as the obvious next
+step in your own reasoning, already feeling like a decision that needs a human, and nothing marks
+it as a thing to check first.
+
+Fixed in the skill itself rather than here, since it generalises to any repository with a
+conventions document (`orchestrator` commit `e0c3eea93`). Standing practice from Johan, recorded
+because it binds this fleet immediately: **read the conventions document before asking, never
+after, and put every question through `AskUserQuestion` with a recommendation and the
+three-sentence preamble.**
+
+## Never suppress rebase output, and never verify a push by ancestry alone (sdi, 2026-08-22)
+
+Three times in one session `git rebase origin/main >/dev/null 2>&1 && git push` reported success
+while the rebase had actually stopped on a conflict. The pipeline exits 0 because `tail` does, or
+because the redirect swallows the failure, and the `&&` chain sails on. The push then pushes HEAD,
+which mid-rebase is somebody ELSE's commit, so it succeeds and pushes nothing of mine.
+
+The verification made it worse rather than catching it. `git merge-base --is-ancestor HEAD
+origin/main` returns TRUE trivially in that state, because HEAD really is an ancestor: it is another
+fleet's commit that is already on main. The test I adopted to replace equality has its own blind
+spot, and it is exactly the state a failed rebase leaves behind.
+
+Two rules, and the second is the one that actually catches it:
+
+Never redirect or pipe `git rebase` output. Read it, and check `git rev-parse --git-path
+rebase-merge` for a directory afterwards, which is the unambiguous signal that one is still running.
+
+**Verify a push by CONTENT, not by ancestry or equality.** Grep `git show origin/main:<path>` for a
+string unique to the change just made. That is the only check that distinguishes "my work is on
+main" from "some commit is on main", and it costs one command. Every ancestry or equality check
+answers a question adjacent to the one that matters.
+
+
+## A standing ask to the user is worth retesting against the host before you repeat it again
+
+The orchestrator skill instructed every epic session to hand the user its own session title and then REPEAT the ask in every report until the host's session list showed it set, on the stated grounds that rename tooling cannot retitle its own session. In CCD that ground is false. `set_session_title` takes the literal string `self` and documents it, so the ask that sdi had been carrying as an open pending action for the life of the epic was closable in one call, and it closed in one call.
+
+What made this survive so long is that the ask is cheap to repeat and expensive to question. Repeating it costs one line per report and looks diligent. Questioning it means reading a tool schema that the skill has already told you will not help. So the false premise never gets tested, and the user gets nagged for the life of every epic instead.
+
+The verification has its own trap, and it points the same way as the rest of today. The rename returned a success message, which is not evidence the title is visible, and it cannot be self checked: `ListAgents` returns peers and `list_sessions` excludes the calling session, so both of the obvious checks are blind to exactly the thing being checked. This is the same shape as the three near misses earlier today, a check answering the question next to the one that matters. The honest report until another session confirms it is renamed, not verified.
+
+Generalise it past titles. When a skill explains WHY the user has to do something, that explanation is a factual claim about the host, it was true of some host at some time, and it is the part most likely to have rotted. Test it before repeating the ask a second time.
+
+## A sibling fleet's dispatch state lives in its epic state file, and the tracker lags it
+
+sdi concluded that rel34 had not started #837, the single issue holding six sdi units, and wrote that into shared memory as a priority signal. The evidence looked thorough: the issue was OPEN, with no assignee, no in-progress label, no PR, and no branch matching `rel34/u6`. Every one of those observations was correct. The conclusion was still wrong. rel34's `.context/epics/rel34.yml` had the unit at `phase: RUNNING` with a resolved session id, worktree and model, dispatched about twenty minutes earlier.
+
+The tracker cannot answer this question, because it only learns of a dispatch when the worker claims the issue, and the worker claims after it has oriented. That gap is exactly the window where a waiting fleet is most tempted to conclude the other has stalled, so the tracker is at its most misleading precisely when the question is being asked. The branch check was blind for a second, independent reason: this worker ran on `johan/amazing-shannon-db71fe`, a session branch off main, so no `<epic>/<unit>` naming convention would have surfaced it either.
+
+The correction is cheap and unconditional. Before asserting anything about a sibling fleet's state, read `.context/epics/<slug>.yml`. It is the same shared memory the cross-epic coordination protocol already names, so this costs one file read and no negotiation.
+
+Two things make it worth writing down rather than filing as a slip. The first is that the wrong conclusion was already published: it went into `ORCHESTRATOR.md`, which rel34 reads, so sdi had told a sibling fleet it appeared to have forgotten its own work. Retracting in the same file is the only fix, and the retraction has to name the sibling's session id so the sibling can confirm it rather than take sdi's word. The second is the shape, which recurred all day: a check that answers the question adjacent to the one that matters. Valid YAML for correct YAML, working tree for commit, some commit on main for my commit, and now tracker state for dispatch state.
+## Prefer a field a tool stamps to a field you fill in, and ask the system that owns the fact
+
+This is the stronger form of "read the clock", and it came from sdi after both fleets had already
+written the weaker one. Read the clock explains what to do about times. It does not explain why the
+decision journal was clean while both epic state files were riddled.
+
+The journal is clean because `decision-journal.py` stamps `at` itself through `now_iso()` and refuses
+a payload that arrives carrying its own `generated_at`. No model is allowed near the field. Once you
+look for that pattern it holds everywhere. In rel34's state, every value produced by a program is
+correct and every value typed by the model was wrong, with no exceptions in either direction.
+
+The check is worth running because it is exact rather than approximate. rel34's file quoted three
+external times in prose: PR 899 opened `08:00:55Z`, PR 899 merged `08:27:37Z`, and Copilot reviewing
+PR 900's head at `08:49:51Z`. All three came from `gh` and all three still match `gh` to the second,
+while 60 timestamps typed in the same file across the same day were fabricated. Every completion
+claim held too, four merge SHAs and five issue states, because those were fetched.
+
+Sweep the prose file, not only the schema file, and scope the repair to what you wrote. rel34 swept
+its epic state four times and never touched `ORCHESTRATOR.md`, where the same three shapes turned up
+41 redacted values, 11 without seconds and one in the future. Prose is where these accumulate,
+because a schema field invites a format and a sentence invites a guess.
+
+That file is shared, which makes the repair a different problem from the audit. Classify every hit by
+the section that owns it before changing anything. rel34's first attempt repaired 17 values, three of
+which were sdi's writing sitting under a rel34 heading, and two of those were quotations sdi had
+deliberately left because it was describing the defect rather than asserting the value. Reverted and
+redone at 9, scoped to rel34's own claims.
+
+Two rules came out of that. Never splice a bare time-of-day into a line whose date came from
+somewhere else, since reconstruction gives you a whole instant and a bare `17:1xZ` on a line dated
+four days earlier cannot take its time from today's commit. And a value that trips the sweep while
+being a quotation, or a measured value written to the minute, is not repaired: widen the sweep to
+stop flagging it, because padding a measured `13:11Z` to `13:11:00Z` invents a second in order to
+look verifiable, which is this whole defect wearing the costume of the fix.
+
+A redacted-minute timestamp is the worst variant, because it borrows the credibility of care.
+Both fleets wrote times as `13:0xZ` or `07:4xZ`, hour known and minute not claimed, which reads as a
+deliberate statement about precision. rel34 had fourteen. Two things compound. No audit either fleet
+ran matched them, since every sweep was anchored on the full ISO shape, so they were never tested by
+anything. And the `x` signals that someone thought about the gap, so a reader challenges them less
+than a plainly wrong value. rel34's worst was `18:40Z` for an ADR ledger check that actually happened
+at `12:41:01Z`, almost six hours out, and `09:5xZ` for a merge `gh` puts at `08:51:37Z`.
+
+Minute precision with no seconds is the same family and evades the same sweeps. `T18:40Z` does not
+match a pattern expecting `T18:40:00`. Sweep for `HH:MMZ` and `HH:MxZ` explicitly, not only full ISO.
+
+The two recovery sources are not interchangeable and the order matters. The owning system yields the
+VALUE, reconstruction only ever yields a BOUND, so ask the owner first and reconstruct only for facts
+no system owns. `gh` settled a merge time outright. The journal settled a decision time outright,
+`dec-0005` at `07:55:05Z` against a written `07:58Z`. A cross-fleet handoff has no owner, so it keeps
+its reconstructed bound and the word `unverified`, and those are different claims about the same
+looking value.
+
+Two refinements from running the audit on two files rather than one.
+
+An audit anchored on the schema's timestamp format cannot see a time written inside a sentence.
+Both fleets' sweeps matched full ISO strings and both missed bare `HH:MM:SSZ` values in prose, which
+happened to verify in both cases and verified by luck rather than by the audit. Prose is where a
+fabricated time is least likely to be challenged, so sweep it explicitly.
+
+And say `unverified` in that word for the residue. Some values are owned by nothing external, a
+cross-fleet handoff time being the usual case, and the honest handling is to keep them and label
+them, because a reader cannot otherwise tell them apart from the values that did verify.
+
+So when a fact belongs to an external object, ask the system that owns it rather than recalling it.
+`opened_at`, `merged_at`, `closed_at`, a review time, a head SHA and a merge SHA are all one `gh`
+call away, and the call is cheaper than the audit that finds the invented version later. A value
+recalled while the authoritative answer was one call away is the same failure as an invented
+timestamp, not a lesser one.
+
+## Read the clock, because a fabricated timestamp disables stall detection silently
+
+rel34 wrote 43 timestamps into its epic state across a day without ever running `date`. They looked
+plausible and they were monotonic, but they drifted ahead of real time as the session went on, ending
+6.6 hours in the future. A sibling orchestrator found it, not this one.
+
+The consequence is not cosmetic. `derive` computes health by subtracting
+`last_meaningful_progress_at` from the current time, so a future stamp yields a negative age and can
+never cross a stall threshold. Every unit reported PROGRESSING all day and STALLED was unreachable.
+The one check that exists to notice a unit going quiet was disabled by the bookkeeping meant to feed
+it, and nothing about the file looked wrong.
+
+Take every timestamp from the clock. `date -u` costs nothing, and a value written from a sense of
+how much time has passed is a guess wearing the shape of an observation.
+
+The future scan is the WEAK test and stopping at it leaves most of the damage in place. It only
+catches fabrications that overshot far enough to cross the present. rel34's first repair swept 43
+future values, declared the file clean, and left 17 more that were invented and still in the past.
+sdi ran the same check on its own file and found thirteen of fourteen values fabricated while ZERO
+were in the future, so a future scan would have passed it completely.
+
+The stronger test asks whether a value was ever measured rather than whether it is impossible. For
+each distinct timestamp, find the first commit whose version of the file contains it and compare.
+A value recorded AFTER that commit cannot be a measurement, since the observation would have to
+postdate the record of it. Sweep every timestamp field, not only the one the tooling reads, because
+fabrication is a property of how a value was produced and not of which field it landed in. Exclude
+deadline fields such as `stale_after` and `recheck_after` deliberately, since those are future by
+design and flagging them trains you to ignore the audit.
+
+Recovery is usually available and worth doing rather than clamping to now. Each checkpoint commit
+carries the real time the observation was recorded, so `git log --format=%aI` on the state file, plus
+`git show <commit>:<file>` to find the first commit containing each fabricated value, reconstructs
+the true times exactly. All 18 distinct values here mapped cleanly, so nothing had to be invented a
+second time to repair the first.
+
+## Attribution between agent sessions is not recoverable from git, so cite the diff
+
+An announcement naming which session made a shared-skill edit cannot be checked by whoever reads it,
+because every commit in that repository is authored with the human's name whichever session wrote it.
+Two orchestrators claimed the same commit and neither could prove it, which cost a round of messages
+and settled nothing.
+
+Cite the commit hash and what behaviour it changes. That is checkable by anyone, and it is the part
+the reader actually needs. Drop the authorship claim.
+
+## sdi had the same defect, and scanning for future timestamps would not have found it
+
+The lesson above is rel34's. sdi checked its own file on rel34's prompting and found thirteen of fourteen `last_meaningful_progress_at` values fabricated, drifting 39 to 90 minutes ahead of the moment they claimed to record. The single accurate value was `U1`'s, and it is accurate for exactly one reason, that `date -u` was run immediately before writing it. One measurement, one correct value, thirteen guesses, thirteen wrong.
+
+The two fleets were damaged differently, and that difference is the part worth keeping. rel34's values ran ahead of the present, so `derive` produced a negative age and STALLED was unreachable. sdi's ran ahead of the truth but stayed behind the present, so STALLED still worked and six blocked units did derive it. The only cost was that every age was understated by 40 to 90 minutes, meaning a unit going quiet would be flagged that much later than it should be. Nothing about the health column looked wrong, and nothing would have.
+
+So the obvious check is the wrong one. Scanning the file for timestamps ahead of now finds only fabrications that overshot far enough to cross the present. It is blind to a value that merely drifts, blind to one that undershoots, and it would have passed sdi's file cleanly while thirteen of fourteen values were invented. Use rel34's reconstruction instead, because it compares each value against something the repository recorded rather than against the clock. It answers a different and better question: not is this value impossible, but was this value ever measured.
+
+The first sweep of that repair was also too narrow, in a way worth naming because it is the same mistake one level down. sdi repaired `last_meaningful_progress_at` because that is the field `derive` reads, declared the file clean, and pushed. A second pass over every timestamp in the file found five more fabricated values in `issued_at` and `since`, including a pending action recorded as issued two hours in the future. Fabrication is a property of how a value was produced, not of which field it landed in, so the audit has to cover every timestamp the file contains rather than the one the current consumer happens to read. Deadlines are the exception and must be excluded deliberately: `recheck_after` and `stale_after` are future by design, and an audit that flags them teaches the reader to ignore its own output.
+
+Auditing the rest of the fleet's durable state settled where the defect actually comes from, and the answer is cleaner than either incident report suggested. `decisions.jsonl` is clean: twelve envelope timestamps, monotonic, none in the future, none unmeasurable. It is clean for a structural reason rather than a lucky one, because `decision-journal.py` stamps `at` itself through `now_iso()` and refuses a payload that supplies its own `generated_at`. The same holds everywhere else the audit looked. Values written by a program were right, whether stamped by the journal, returned by `gh`, or recorded as git author time. Every value a model typed was wrong.
+
+So the rule is narrower and more useful than read the clock. Prefer a field a tool stamps to a field you fill in, and when a fact belongs to an external object, ask the system that owns it. sdi's state claimed PR 923 opened at 13:3x. `gh pr view 923` gives 12:04:52Z, and it would have given it at any point that day. That value was not recalled imprecisely, it was invented while the authoritative answer was one call away, which is the same failure as the timestamps and not a lesser one.
+
+One thing was deliberately left unrepaired, because silently leaving it would repeat the error the entry is about. Two observation keys, `fence_2026_08_22T11_35Z` and `fence_2026_08_22T13_0xZ`, still embed fabricated times in their names. The values inside those records were corrected, the keys were not, since a key is a label with no consumer and renaming it is churn that risks breaking a reference for no gain. It is recorded here rather than fixed so that nobody later reads those names as measurements.
+
+Both fleets then audited every machine-checkable claim in their state files against `gh`, and the split held with no exception in either direction. On sdi: two merged-PR deliverables (924 at `12:48:17Z` as `6f47516c6`, 923 at `12:38:27Z` as `5ba3b9bfa`), four merge SHAs, three issue states, and a bare `12:23:30Z` issue-close time. Every value matches to the second and to the SHA. On rel34 independently: nine deliverables, four merge SHAs, five issue states, three external times quoted in prose, all verifying, against sixty fabricated timestamps typed into the same file on the same day.
+
+Two datasets, one rule, no counterexample. Every value a program produced was correct, every value a model typed was wrong. Neither fleet went looking for that framing and it is stronger than either incident report that produced it, because it names the mechanism rather than the symptom: the defect is not carelessness about time, it is that a model filling a field cannot distinguish recalling from inventing, and a program filling the same field never faces the choice.
+
+The practical form is a checklist, not a warning. Any field a tool can stamp, let it. Any fact about an external object, fetch it from the system that owns it, at the moment you record it. Anything left over is a value you typed, so treat it as unverified until something independent confirms it, and say so in that word rather than stating it flatly.
+
+One scoping note found the hard way. rel34's repair sweep missed three external times because it matched full ISO strings and those were written bare as `HH:MM:SSZ` in prose. sdi's file carried one of the same shape. An audit regex anchored on the format the schema uses will not see the values a human-readable sentence carries, and prose is exactly where a fabricated time is least likely to be challenged.
+
+Sweeping sdi's prose afterwards found a worse variant, and it is worth separating from ordinary fabrication. sdi had been writing times in a redacted-minute style, `13:0xZ` and `14:0xZ` and `13:5xZ`, which reads as a deliberate statement about precision: the writer knows the hour, declines to claim the minute, and marks the gap with an `x`. Five of those were checked. Two were fabricated, one of them pointing into the future, and one was the file's own `updated_at` sitting five hours stale.
+
+The redaction made them harder to catch twice over. Every audit either fleet ran matched full ISO strings, so none of these were ever tested, and the `x` actively signalled care where none had been taken. A plainly wrong timestamp at least looks like a claim that can be checked. A redacted one looks like a claim that has already been thought about. Precision markers are a claim about method, and inventing the digits around one is worse than inventing a digit, because it borrows the credibility of having been careful.
+
+Repairing them also showed the two recovery sources are not interchangeable, and which to reach for depends on who owns the fact. `PR 908 was CLOSED WITHOUT MERGING at 13:0xZ` is a claim about a GitHub object, so `gh` settles it: `11:41:19Z`, an hour and twenty minutes off. The neighbouring claim about when rel34 flagged #912 is a cross-fleet event that no external system owns, so only commit reconstruction can bound it. Reach for the owning system first and fall back to reconstruction, rather than treating reconstruction as the general answer, because reconstruction only ever yields a bound while the owning system yields the value.
+
+rel34 found a third shape and it is the one that hides best: minute precision with no seconds, `2026-08-22T18:40Z`. It drops the marker instead of blurring it, so it looks like an ordinary ISO timestamp while matching none of the patterns that expect `T18:40:00`. It evaded rel34's full-ISO sweep, its future scan and its first-containing-commit audit alike, and it hid a value almost six hours out. sdi's own sweep for the redacted shape had a smaller version of the same defect: the regex was anchored with `\b`, and since `T` is a word character there is no boundary between it and the digits that follow, so every `T09:30Z` in the file was invisible to it. Sweep with all three shapes and no leading `\b`.
+
+Two of the values that survived that sweep should stay exactly as they are, and saying why matters more than the repairs. Two redacted times remain in `ORCHESTRATOR.md` inside the paragraph that explains this defect, because quoting a wrong value while describing it is not asserting it. And two measured times are written to the minute without seconds. They are honest, since the clock was read for both, and padding them to `:00` to satisfy a sweep would invent a second in order to look verifiable, which is the failure this whole entry is about wearing the costume of the fix. A sweep exists to find claims nobody checked, so the correct response to a checked claim that trips it is to widen the sweep, never to reshape the value.
+
+Where a value genuinely cannot be recovered, say which kind of unknown it is. A reconstructed bound reads `at or before <time>`, a value nothing owns reads `unverified` in that word with the reason, and a fetched value stands plainly. All three look identical once written as a bare timestamp, and a reader cannot tell them apart unless the text does it for them.
+
+## An expired premise and a defect in the work look identical at the level of a file list
+
+A decision the user had approved rested on a measured `comm -12`: U1's fourteen framework files were disjoint from every open sibling PR. Mid flight, U1's set was observed at sixteen, and the two new files intersected a sibling's open PR where the decision had claimed zero intersection. That was recorded as a premise which had expired harmlessly, since the overlapping hunks were far apart and would auto merge.
+
+The observation was right and the framing was wrong. Those two files had entered the diff only because of a defect: a mechanical rename had renamed a javadoc reference to a same-named annotation, so the files contained no reference to the renamed type at all and their correct diff was empty. Fixing the defect dropped both, restoring the set to fourteen and the intersection to zero. The premise had never expired.
+
+The defect was found afterwards, separately, by reading the hunks for an unrelated reason. It should have been found by the intersection itself, because the intersection was its fingerprint. Two files appearing in a mechanical rename's diff without containing the renamed type is not scope growth, it is a wrong edit. The question that reaches it is "why did these files enter the set". The question actually asked was "does this intersection still conflict", which is answerable, was answered correctly, and led nowhere.
+
+So when a measured premise appears to have expired, investigate the cause before re-deriving the consequence. Legitimate scope growth and a defect in the work are indistinguishable from a file list alone, and only one of them is safe to note and move past. The re-derivation is the tempting move because it is quick and it resolves the immediate question, which is exactly what makes it a way to walk past a bug while writing a correct sentence about it.
+
+## Pointing a worker at an in-file precedent transmits that precedent's defects
+
+rel34's U6 brief told the worker the correct path was already in the file, named
+`processSynchronousSubscribeAnnotation`, and quoted the comment beside it explaining exactly why it
+looks the bean up by name. The worker followed it faithfully at three sites per file. Copilot then
+found that the pattern fails outright under `spring.aop.proxy-target-class=false`, because a JDK
+interface proxy is not an instance of the concrete class that declared the method object the
+registrar holds, so `Method.invoke` rejects the receiver and the handler never runs at all.
+
+The precedent was correct about the question the unit was asking, invoking the proxy rather than the
+raw target, and wrong about an adjacent question nobody was asking. A precedent is evidence that
+someone solved one problem here before, not that the code is correct, and a brief that says follow
+this hands over both properties without distinguishing them.
+
+Two consequences worth carrying. When a brief cites an in-file precedent, say which property it is
+evidence for and that the rest of it is unverified, so the worker knows where it stops being an
+authority. And when a precedent turns out to be defective, the scope grows to include it: the
+original site had shipped the same defect, so the unit went from six sites to eight, and leaving the
+precedent unfixed would have meant knowingly shipping a defect in the path next to the corrected one.
+
+The failure was invisible to everything the delivery did right. The tests were behavioural rather
+than proxy-identity assertions, mutation-verified in both directions, and correct about the reactive
+transaction context. They ran on Boot's default subclass proxies, which is a configuration axis
+rather than a coverage gap, and no amount of care within that axis reaches it.
+
+## ADR 0127's counts are systematically stale, and every brief derived from it must measure instead
+
+Three briefs in this epic were sized from numbers written in ADR 0127, and all three were wrong in the same direction. The ADR's "four annotation registrars" is seven, totalling 3309 lines. Its "three new descriptor annotations" is seven pairs. Its decision 2 sizes the handle rename at "52 files importing the blocking type and 26 importing the reactor one", seventy eight in total, and the merged diff touched 146 source files.
+
+None of these were errors when written. The ADR described the codebase on the day it was authored and the codebase kept moving, which is what an accepted ADR is supposed to allow. The error is downstream: a brief that quotes the ADR's count inherits a measurement with an expiry date and presents it as current, and a worker sizes its sweep to the smaller number without ever learning there was a larger one.
+
+The cost is not symmetric, which is what makes it worth a rule rather than a caution. An overcount wastes a little time. An undercount ships: a brief saying three annotation pairs normalizes three and leaves four silently unread, which is the exact defect the unit existed to fix, and nothing in a green compile or a passing test would have said so.
+
+So an ADR is authoritative for the DECISION and never for the COUNT. Take the shape, the reasoning and the constraints from it, then measure the surface against the working tree at the moment the brief is written, and put the measurement and its timestamp in the brief so the worker can tell which numbers were checked. Where the two disagree, the tree wins and the divergence is worth recording, because a decision sized against a codebase half the current size may have had its cost-benefit computed against that smaller number too.

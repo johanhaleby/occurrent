@@ -60,7 +60,7 @@ class ManualStartSubscriptionModelTest {
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
         List<CloudEvent> received = new CopyOnWriteArrayList<>();
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), received::add);
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), received::add);
         delegate.feed(cloudEvent("1"));
 
         assertThat(delegate.subscribeCalls).isEmpty();
@@ -76,11 +76,11 @@ class ManualStartSubscriptionModelTest {
         RecordingSubscriptionModel delegate = new RecordingSubscriptionModel();
         ManualStartSubscriptionModel model = ManualStartSubscriptionModel.stoppedByDefault(delegate);
 
-        Subscription deferred = model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
+        SubscriptionHandle deferred = model.subscribe(SUBSCRIPTION_ID, null, StartAt.now(), __ -> {
         });
         assertThat(deferred.waitUntilStarted(ofSeconds(1))).isFalse();
 
-        Subscription started = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle started = model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(started.waitUntilStarted(ofSeconds(1))).isTrue();
     }
@@ -120,7 +120,7 @@ class ManualStartSubscriptionModelTest {
         };
 
         model.subscribe(SUBSCRIPTION_ID, filter, startAt, action);
-        Subscription subscription = model.resumeSubscription(SUBSCRIPTION_ID);
+        SubscriptionHandle subscription = model.resumeSubscription(SUBSCRIPTION_ID);
 
         assertThat(delegate.subscribeCalls).hasSize(1);
         SubscribeCall call = delegate.subscribeCalls.getFirst();
@@ -410,7 +410,7 @@ class ManualStartSubscriptionModelTest {
 
         ExecutorService pool = Executors.newSingleThreadExecutor();
         try {
-            Future<Subscription> registering = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+            Future<SubscriptionHandle> registering = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             }));
             assertThat(registrationInProgress.await(10, TimeUnit.SECONDS)).isTrue();
             model.start(true);
@@ -442,7 +442,7 @@ class ManualStartSubscriptionModelTest {
 
         ExecutorService pool = Executors.newSingleThreadExecutor();
         try {
-            Future<Subscription> registering = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
+            Future<SubscriptionHandle> registering = pool.submit(() -> model.subscribe(SUBSCRIPTION_ID, null, StartAt.subscriptionModelDefault(), __ -> {
             }));
             assertThat(registrationInProgress.await(10, TimeUnit.SECONDS))
                     .as("this registration asks for the model default, so its position is read whatever the state "
@@ -1144,7 +1144,7 @@ class ManualStartSubscriptionModelTest {
         model.start(true);
         StartAt callersOwnStartAt = StartAt.subscriptionModelDefault();
 
-        Subscription subscription = model.subscribe(SUBSCRIPTION_ID, null, callersOwnStartAt, __ -> {
+        SubscriptionHandle subscription = model.subscribe(SUBSCRIPTION_ID, null, callersOwnStartAt, __ -> {
         });
 
         assertThat(delegate.subscribeCalls).hasSize(1);
@@ -1484,7 +1484,7 @@ class ManualStartSubscriptionModelTest {
     // subscription instead of a running one.
     private static class RecordingSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions {
         final List<SubscribeCall> subscribeCalls = new CopyOnWriteArrayList<>();
-        final Map<String, Subscription> subscriptions = new HashMap<>();
+        final Map<String, SubscriptionHandle> subscriptions = new HashMap<>();
         final List<String> resumeCalls = new CopyOnWriteArrayList<>();
         final List<String> cancelCalls = new CopyOnWriteArrayList<>();
         final Set<String> paused = new LinkedHashSet<>();
@@ -1505,7 +1505,7 @@ class ManualStartSubscriptionModelTest {
         }
 
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             if (subscribeEntered != null) {
                 subscribeEntered.countDown();
             }
@@ -1520,7 +1520,7 @@ class ManualStartSubscriptionModelTest {
                 throw new IllegalStateException("Cannot subscribe " + subscriptionId);
             }
             subscribeCalls.add(new SubscribeCall(subscriptionId, filter, startAt, action));
-            Subscription subscription = new RecordedSubscription(subscriptionId);
+            SubscriptionHandle subscription = new RecordedSubscription(subscriptionId);
             subscriptions.put(subscriptionId, subscription);
             if (parkOnSubscribe) {
                 paused.add(subscriptionId);
@@ -1531,7 +1531,7 @@ class ManualStartSubscriptionModelTest {
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             if (!paused.remove(subscriptionId)) {
                 throw new IllegalArgumentException("Subscription " + subscriptionId + " is not paused");
             }
@@ -1629,12 +1629,12 @@ class ManualStartSubscriptionModelTest {
         }
 
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             return wrapped.subscribe(subscriptionId, filter, startAt, action);
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             return wrapped.resumeSubscription(subscriptionId);
         }
 
@@ -1689,12 +1689,12 @@ class ManualStartSubscriptionModelTest {
         }
 
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             return wrapped.subscribe(subscriptionId, filter, startAt, action);
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             return wrapped.resumeSubscription(subscriptionId);
         }
 
@@ -1739,7 +1739,7 @@ class ManualStartSubscriptionModelTest {
         }
     }
 
-    private record RecordedSubscription(String id) implements Subscription {
+    private record RecordedSubscription(String id) implements SubscriptionHandle {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
             return true;

@@ -20,7 +20,7 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.SortBy;
 import org.occurrent.eventstore.api.blocking.EventStoreQueries;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 
 import java.util.Objects;
 
@@ -65,7 +65,7 @@ public class CatchupSubscriptionModelConfig {
      * during the catchup phase. You can change this by calling {@link #catchupPhaseSortBy(SortBy)}.
      *
      * @param cacheSize The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
-     *                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
+     *                  and "subscription" mode ({@link SubscriptionHandle}). The cache is needed to reduce the number of duplicate events the occurs when switching.
      */
     public CatchupSubscriptionModelConfig(int cacheSize) {
         this(cacheSize, CheckpointStorageConfig.dontUseCheckpointStorage());
@@ -86,7 +86,7 @@ public class CatchupSubscriptionModelConfig {
      * during the catchup phase. You can change this by calling {@link #catchupPhaseSortBy(SortBy)}.
      *
      * @param cacheSize                 The number of cloud events id's to store in-memory when switching from "catch-up" mode (i.e. querying the {@link EventStoreQueries} API)
-     *                                  and "subscription" mode ({@link Subscription}). The cache is needed to reduce the number of duplicate events the occurs when switching.
+     *                                  and "subscription" mode ({@link SubscriptionHandle}). The cache is needed to reduce the number of duplicate events the occurs when switching.
      * @param subscriptionStorageConfig Configures if and how checkpoint persistence should be handled during the catch-up phase.
      */
     public CatchupSubscriptionModelConfig(int cacheSize, CheckpointStorageConfig subscriptionStorageConfig) {

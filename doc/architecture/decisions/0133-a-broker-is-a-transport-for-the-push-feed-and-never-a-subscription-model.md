@@ -1123,3 +1123,50 @@ already written and there is nothing left to refuse. Neither is wrong under the 
 the same answer, and the reactive ordering is recorded on [#893](https://github.com/johanhaleby/occurrent/issues/893)
 rather than changed here, since moving that write past the drain rearranges the pipeline rather than
 changing this one step.
+
+## Amendment (2026-08-22): the RabbitMQ channel-generation fence is removed, because the client already refuses to act on a stale delivery tag
+
+The fence the first 2026-08-22 amendment above describes is gone from `RabbitMqCloudEventBridge` and
+`RabbitMqDomainEventBridge`. That paragraph stays as the record of what was built and why it looked right at the
+time. This amendment records why it had to go.
+
+**It caused the failure it was written to prevent.** amqp-client re-issues `basic.consume` inside its own
+`recoverTopology`, which runs before `notifyRecoveryListenersComplete`. The broker therefore hands the recovered
+consumer the requeued message before any `RecoveryListener` has run, `handleDelivery` reads the generation from
+before the bump, and the bump happens while that delivery is still being processed. Both drop sites then abandoned
+the delivery unacknowledged, `handleDelivery` with a `warn` and `releaseHeldDeferredDelivery` with nothing at all.
+At the default `prefetchCount` of 1 the broker sends nothing more on that consumer, so the bridge stopped consuming
+and stayed stopped until someone closed it. That is
+[#922](https://github.com/johanhaleby/occurrent/issues/922), seen four times in CI before it was understood.
+
+**The premise it rested on was false.** The class javadoc claimed delivery tags restart at 1 on a fresh channel.
+They do not, on the only kind of connection the fence was ever registered for.
+`RecoveryAwareChannelN.inheritOffsetFrom` gives a recovered channel an offset equal to the dead channel's highest
+seen tag, and `basicAck`, `basicNack` and `basicReject` return without transmitting anything when a tag minus that
+offset is zero or below. Every channel an `AutorecoveringConnection` hands out is one of those, behind an
+`AutorecoveringChannel` that delegates the three calls straight through. Acting on a tag from the dead channel was
+already a no-op inside the client, decided by the one component that knows the offsets. A connection with automatic
+recovery turned off gets a plain `ChannelN` that nothing ever replaces, so no delivery can arrive on it once it
+dies and there is no stale tag there either.
+
+**What the bridges do now.** A held or in-flight delivery tag is acknowledged or negatively acknowledged like any
+other, whatever happened to the connection underneath it, and no delivery is ever abandoned unacknowledged. The
+generation counter, the `RecoveryListener` registration, the consumer shutdown callback, `isStaleGeneration`,
+`logStaleGeneration` and the generation field of `HeldDelivery` are all gone, and both held-tag deques hold plain
+tags again.
+
+**One duplicate is the price, under `PARK` only.** A delivery that fails while the connection is recovering is
+published to the parking destination, and the acknowledgement that normally follows the park does nothing, so
+RabbitMQ requeues the message as well. The result is a parked copy plus a copy still on the source queue. That sits
+inside the at-least-once delivery these bridges promise everywhere else, and the alternative was keeping the whole
+counter, its listener and its lock coupling alive for one branch, to remove a duplicate nothing else here offers.
+
+The unit tests that asserted the drop,
+`a_tag_from_a_generation_that_has_since_moved_on_is_dropped_rather_than_redelivered` in both
+`RabbitMqCloudEventBridgeReleaseHeldDeferredDeliveryTest` and its domain twin, are deleted rather than replaced.
+Nothing in this repository decides whether a stale tag is safe any more, the client does, so no test with a stubbed
+release call can check it. `RabbitMqCloudEventBridgeConnectionRecoveryTest` and the new
+`RabbitMqDomainEventBridgeConnectionRecoveryTest` are what cover the behaviour now. Each has a test that delays
+every recovery listener on the connection past the first delivery after the recovery, against a real broker. Both
+fail against the fence and pass without it, and the domain one is there so that restoring the fence in one bridge
+alone cannot leave the suite green.
