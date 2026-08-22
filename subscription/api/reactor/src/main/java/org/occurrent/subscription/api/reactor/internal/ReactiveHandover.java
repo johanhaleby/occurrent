@@ -25,12 +25,15 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.MonoSink;
 import reactor.core.publisher.Sinks;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
@@ -160,12 +163,27 @@ public final class ReactiveHandover<T> {
      * {@code BlockingHandover.PreDispatchRefusalException}.
      */
     public static final class PreDispatchRefusalException extends IllegalStateException {
-        PreDispatchRefusalException(String message) {
+        private final ReactiveHandover<?> owner;
+
+        PreDispatchRefusalException(ReactiveHandover<?> owner, String message) {
             super(message);
+            this.owner = owner;
         }
 
-        PreDispatchRefusalException(String message, Throwable cause) {
+        PreDispatchRefusalException(ReactiveHandover<?> owner, String message, Throwable cause) {
             super(message, cause);
+            this.owner = owner;
+        }
+
+        /**
+         * Whether {@code handover} is the engine that raised this. A handler that reenters a second handover lets
+         * that one's refusal escape unwrapped through the first, so a caller that means "my own engine refused"
+         * has to compare identity rather than match the type.
+         *
+         * @param handover The engine to compare against.
+         */
+        public boolean thrownBy(ReactiveHandover<?> handover) {
+            return owner == handover;
         }
     }
 
@@ -188,6 +206,35 @@ public final class ReactiveHandover<T> {
     // delivered, not just whether the ack completed without error, see acceptReportingDelivery(..).
     private final Set<MonoSink<Boolean>> pendingLiveAcks = ConcurrentHashMap.newKeySet();
     private final AtomicReference<@Nullable Throwable> terminalError = new AtomicReference<>();
+    private static final Logger log = LoggerFactory.getLogger(ReactiveHandover.class);
+    // Long enough that a producer holding the serialization claim finishes its own offer and releases it, short
+    // enough that a caller's accept does not wait on it for long. Waiting happens on a scheduler, not on the
+    // offering thread, so the window costs a timer rather than a thread.
+    private static final java.time.Duration CONCURRENT_EMISSION_RETRY_WINDOW = java.time.Duration.ofMillis(100);
+    // How long to wait before offering again. The claim is released by one queue write, so this only has to be
+    // long enough not to retry into the same instant.
+    private static final java.time.Duration CONCURRENT_EMISSION_RETRY_DELAY = java.time.Duration.ofMillis(1);
+    // Offers waiting their turn at the sink, oldest first, so the order they were made is the order they reach it.
+    private final java.util.Queue<PendingOffer> pendingOffers = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final AtomicBoolean offerDrainRunning = new AtomicBoolean();
+    // Live payloads taken in and not yet delivered, wherever they are sitting. An offer waits in pendingOffers
+    // until the drain hands it to the sink, and then in the sink's own queue until its handler runs, so counting
+    // only one of the two would leave the other unbounded. maxBufferedEvents caps this, not either queue.
+    private final java.util.concurrent.atomic.AtomicInteger liveBacklog = new java.util.concurrent.atomic.AtomicInteger();
+    // Guards taking a place, stamping a payload with its turn, and queueing it, so the three cannot interleave.
+    private final Object admission = new Object();
+    // How many live payloads have been taken in, ever. A payload's own number is its turn, and the drain boundary
+    // is the last turn taken in while the history was still being read.
+    private final java.util.concurrent.atomic.AtomicLong admitted = new java.util.concurrent.atomic.AtomicLong();
+    // The last turn that belongs to the drain. A payload taken in after this one is live delivery, not part of
+    // what was buffered while the history was read, however early it happens to be delivered.
+    //
+    // This and the admission guard are two guards on one property, on purpose. The guard makes the queue order and
+    // the turn order agree, which is what keeps deliveries in step with the count. The turn check makes the count
+    // right whatever the order turns out to be. Either alone holds the property today, so neither can be
+    // falsified by a test while the other is in place, and the pair is what keeps a later change to one of them
+    // from quietly ending the drain early.
+    private final java.util.concurrent.atomic.AtomicLong drainBoundaryTurn = new java.util.concurrent.atomic.AtomicLong(-1L);
     private volatile boolean stopped = false;
     // Set once, right before the buffered live payloads are drained on a successful catch-up, and never cleared
     // afterwards, mirroring BlockingHandover's live field. acceptIfLive(..) reads this to refuse a payload outright,
@@ -335,10 +382,125 @@ public final class ReactiveHandover<T> {
             return;
         }
         Item item = new Item(() -> deliver.apply(payload), key, ackSink);
-        Sinks.EmitResult result = liveSink.tryEmitNext(item);
-        if (result.isFailure()) {
-            ackSink.error(new PreDispatchRefusalException(HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
+        offerToLiveSink(item, ackSink);
+    }
+
+    // The unicast sink comes from the safe spec, so it rejects a second concurrent producer with
+    // FAIL_NON_SERIALIZED instead of corrupting its queue. That rejection clears as soon as the producer holding
+    // the claim finishes its own offer, so offering again is the whole fix.
+    //
+    // Every offer goes through one queue, in the order the offers were made, and one thread at a time takes that
+    // queue to the sink. Two reasons for the queue rather than each offer retrying for itself. Retries that run
+    // independently can reach the sink in a different order than the offers were made, which for one caller
+    // offering two events in order means the second can be delivered first. And tryEmitNext delivers inline when
+    // it wins, so a caller that waited for its own turn would be held for as long as somebody else's handler
+    // takes to run, on a carrier or event-loop thread that has other work.
+    //
+    // One drain at a time also means this engine is the sink's only producer, so FAIL_NON_SERIALIZED cannot happen
+    // any more. The handling below stays as defence, not as a path anything reaches today, which is why no test
+    // drives it.
+    private void offerToLiveSink(Item item, MonoSink<Boolean> ackSink) {
+        // Taking a place, stamping the payload with its turn and queueing it are one step. Apart, a payload could
+        // take a place and be queued behind one that took its place later, and the drain boundary below counts by
+        // turn, so the two have to agree.
+        synchronized (admission) {
+            if (liveBacklog.get() >= maxBufferedEvents) {
+                ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents)));
+                return;
+            }
+            liveBacklog.incrementAndGet();
+            Item stamped = item.withTurn(admitted.incrementAndGet());
+            pendingOffers.add(new PendingOffer(stamped, ackSink, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
         }
+        drainPendingOffers();
+    }
+
+    private void drainPendingOffers() {
+        while (true) {
+            // One drain at a time. A caller that finds one already running has left its own offer on the queue,
+            // and the drain that is running re-checks the queue after it releases, below, so that offer is never
+            // left with nobody to take it.
+            if (!offerDrainRunning.compareAndSet(false, true)) {
+                return;
+            }
+            boolean headWaitingOnSink;
+            try {
+                headWaitingOnSink = takeQueuedOffersToTheSink();
+            } finally {
+                offerDrainRunning.set(false);
+            }
+            if (headWaitingOnSink) {
+                // Scheduled after releasing, never before. Scheduling first leaves a window where the retry runs,
+                // finds this drain still holding, and returns, with this drain about to release and go home.
+                Schedulers.parallel().schedule(this::drainPendingOffers,
+                        CONCURRENT_EMISSION_RETRY_DELAY.toNanos(), TimeUnit.NANOSECONDS);
+                return;
+            }
+            // An offer that arrived while this drain held the flag saw it set and returned, so look again before
+            // leaving rather than letting its acknowledgement wait for a caller that never comes.
+            if (pendingOffers.isEmpty()) {
+                return;
+            }
+        }
+    }
+
+    // Takes the queue to the sink in order, oldest first. Returns true when it stopped because the head could not
+    // be handed over yet and is waiting for another attempt, false when it emptied the queue.
+    private boolean takeQueuedOffersToTheSink() {
+        while (true) {
+            PendingOffer pending = pendingOffers.peek();
+            if (pending == null) {
+                return false;
+            }
+            Sinks.EmitResult result = liveSink.tryEmitNext(pending.item());
+            if (!result.isFailure()) {
+                pendingOffers.poll();
+                continue;
+            }
+            switch (result) {
+                case FAIL_NON_SERIALIZED -> {
+                    if (System.nanoTime() >= pending.deadline()) {
+                        pendingOffers.poll();
+                        liveBacklog.decrementAndGet();
+                        pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
+                        continue;
+                    }
+                    // Left at the head, so whatever runs next starts with it and the order holds.
+                    return true;
+                }
+                // The pipeline is gone, so nothing is coming to deliver this payload. Dropped rather than
+                // refused, the same answer the stopped check above gives. Also defence rather than a reachable
+                // path, since that check runs first and catches every way the pipeline ends today.
+                case FAIL_TERMINATED, FAIL_CANCELLED -> {
+                    pendingOffers.poll();
+                    liveBacklog.decrementAndGet();
+                    pending.ack().success(false);
+                }
+                default -> {
+                    pendingOffers.poll();
+                    liveBacklog.decrementAndGet();
+                    pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
+                }
+            }
+        }
+    }
+
+    // An offer waiting its turn at the sink, with the point in time after which this engine stops offering it and
+    // reports contention instead.
+    private record PendingOffer(Item item, MonoSink<Boolean> ack, long deadline) {
+    }
+
+    /**
+     * Whether this engine refuses every live payload from now on and will go on refusing. True once a
+     * {@link #catchUp(Source)} attempt has errored, and never false again after that. False while replaying, while
+     * buffering, and once live.
+     * <p>
+     * Distinct from a replay that is still running, which also cannot deliver but is going to succeed. A caller
+     * deciding whether to stop for good needs to tell those two apart, and reading this after the fact is safe
+     * precisely because it only ever goes from false to true.
+     */
+    public boolean refusesPermanently() {
+        return terminalError.get() != null;
     }
 
     /**
@@ -394,8 +556,14 @@ public final class ReactiveHandover<T> {
                 .then(Mono.fromRunnable(() -> {
                     drainedSource.set(source);
                     source.historyDone();
-                    // Taken after historyDone, so nothing that arrives from here on is counted as part of the drain.
-                    remainingInDrain.compareAndSet(-1L, liveBuffer.size());
+                    // Taken after historyDone, under the same guard admission uses, so every payload already
+                    // taken in has a turn at or below the boundary and every later one is above it. Counting
+                    // deliveries alone was not enough: a payload taken in after the boundary, delivered before one
+                    // taken in before it, would count against the drain and end it early.
+                    synchronized (admission) {
+                        drainBoundaryTurn.compareAndSet(-1L, admitted.get());
+                        remainingInDrain.compareAndSet(-1L, liveBacklog.get());
+                    }
                 }))
                 .then(recordMarker)
                 .doOnSuccess(ignored -> {
@@ -431,13 +599,17 @@ public final class ReactiveHandover<T> {
                     }
                     // A catch-up-phase failure terminates the pipeline before the buffered live payloads are drained.
                     // Fail their acks and reject later ones, so the caller sees the error instead of hanging.
-                    // Known gap: catchupDone has already emitted by the time the live phase runs, so a failure from
-                    // that phase cannot be reported through it and reaches no caller. This module has no logger to
-                    // fall back on either. Live folds are guarded by onErrorResume, so the reachable triggers are
-                    // narrow, and closing it means moving the completion signal off the marker phase.
                     abandonReplayWithoutMasking(source, replayOpen);
                     terminalError.set(error);
-                    catchupDone.tryEmitError(error);
+                    // Logged only when the signal cannot carry the failure, which is the live phase, where
+                    // catchupDone has already emitted and nothing else tells anyone. Logging unconditionally would
+                    // repeat what the caller this signal reaches already logs for itself.
+                    if (catchupDone.tryEmitError(error).isFailure()) {
+                        log.error("The catch-up-then-live handover for this {} failed after it had already reported "
+                                + "its catch-up done, so nothing was waiting to be told. It now refuses every live "
+                                + "event. Fix the cause, then replace it, a subscription by cancelling it and "
+                                + "subscribing again, a projection feed by building a new one.", noun, error);
+                    }
                     // Wrapped like the later refusals in accept(..): the caller sees the same "this is terminal, and
                     // here is what to do" message whichever side of the failure its payload arrived on. The catch-up
                     // signal above still carries the raw cause, since that caller asked about the catch-up itself.
@@ -478,9 +650,13 @@ public final class ReactiveHandover<T> {
     // Counts one delivered payload against the buffered set, and tells the source once that set is exhausted. Only
     // ever counts down from a taken count, so a delivery before the history read finished, or after the drain is
     // over, changes nothing.
-    private void countTowardsDrain() {
+    private void countTowardsDrain(Item item) {
         long remaining = remainingInDrain.get();
         if (remaining <= 0L) {
+            return;
+        }
+        long boundary = drainBoundaryTurn.get();
+        if (boundary < 0L || item.turn() > boundary) {
             return;
         }
         if (remainingInDrain.decrementAndGet() == 0L) {
@@ -491,7 +667,12 @@ public final class ReactiveHandover<T> {
     // Counted after the payload has been delivered rather than before it, so the last buffered one is still part of
     // the drain while it is being handled.
     private Mono<Void> deliver(Item item) {
-        return deliverItem(item).doFinally(signal -> countTowardsDrain());
+        return deliverItem(item).doFinally(signal -> {
+            if (item.ack() != null) {
+                liveBacklog.decrementAndGet();
+            }
+            countTowardsDrain(item);
+        });
     }
 
     private Mono<Void> deliverItem(Item item) {
@@ -525,14 +706,14 @@ public final class ReactiveHandover<T> {
     // the same refusal read as a transient handler error on one stack and as a terminal one on the other. The recovery
     // differs (retry versus release and set up again), which is exactly what the message says, so both stacks say it.
     private PreDispatchRefusalException catchUpFailed(Throwable cause) {
-        return new PreDispatchRefusalException(HandoverMessages.catchUpFailed(noun), cause);
+        return new PreDispatchRefusalException(this, HandoverMessages.catchUpFailed(noun), cause);
     }
 
     @SuppressWarnings("ConstantValue") // The function is declared non-null, but it is caller-supplied and unenforced.
     private String dedupKey(T payload) {
         String key = dedupId.apply(payload);
         if (key == null) {
-            throw new PreDispatchRefusalException(HandoverMessages.dedupKeyRequired());
+            throw new PreDispatchRefusalException(this, HandoverMessages.dedupKeyRequired());
         }
         return key;
     }
@@ -540,6 +721,13 @@ public final class ReactiveHandover<T> {
     // A replayed payload has a null ack; a live payload carries the MonoSink whose completion (with whether it was
     // genuinely delivered) lets the caller acknowledge. The deliver supplier is bound at creation time, so Item
     // needs no type parameter of its own.
-    private record Item(Supplier<Mono<Void>> deliver, String dedupKey, @Nullable MonoSink<Boolean> ack) {
+    private record Item(Supplier<Mono<Void>> deliver, String dedupKey, @Nullable MonoSink<Boolean> ack, long turn) {
+        private Item(Supplier<Mono<Void>> deliver, String dedupKey, @Nullable MonoSink<Boolean> ack) {
+            this(deliver, dedupKey, ack, Long.MAX_VALUE);
+        }
+
+        private Item withTurn(long turn) {
+            return new Item(deliver, dedupKey, ack, turn);
+        }
     }
 }

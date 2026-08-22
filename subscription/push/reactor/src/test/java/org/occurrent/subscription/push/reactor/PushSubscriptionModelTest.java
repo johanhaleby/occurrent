@@ -46,6 +46,7 @@ import static org.occurrent.condition.Condition.eq;
 import static org.occurrent.subscription.RoutingOutcome.DELIVERED;
 import static org.occurrent.subscription.RoutingOutcome.FILTERED;
 import static org.occurrent.subscription.RoutingOutcome.NOT_DELIVERABLE;
+import static org.occurrent.subscription.RoutingOutcome.UNAVAILABLE;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class PushSubscriptionModelTest {
@@ -212,7 +213,7 @@ class PushSubscriptionModelTest {
     void the_observer_call_is_deferred_until_subscribe_not_when_the_mono_is_assembled() {
         // Registers only after accept(..) has already built the Mono, and before it is subscribed. Proves the
         // observer and the match check both run on subscribe, not on assembly, since an eager implementation would
-        // see no registration yet and record NOT_DELIVERABLE.
+        // see no registration yet and record UNAVAILABLE.
         List<RoutingOutcome> outcomes = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
                 (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
@@ -244,18 +245,18 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void the_observer_is_told_not_deliverable_when_nothing_is_registered() {
+    void the_observer_is_told_unavailable_when_nothing_is_registered() {
         List<RoutingOutcome> outcomes = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
                 (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
 
         StepVerifier.create(model.accept(cloudEvent("1", "NameDefined"))).verifyComplete();
 
-        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
+        assertThat(outcomes).containsExactly(UNAVAILABLE);
     }
 
     @Test
-    void the_observer_is_told_not_deliverable_while_the_model_is_stopped() {
+    void the_observer_is_told_unavailable_while_the_model_is_stopped() {
         // A stopped model drops live events by design (ADR 85), and the observer contract mirrors that: the
         // outcome reflects what would actually be delivered, not merely what the filter would have accepted.
         List<RoutingOutcome> outcomes = new ArrayList<>();
@@ -266,11 +267,11 @@ class PushSubscriptionModelTest {
 
         StepVerifier.create(model.accept(cloudEvent("1", "NameDefined"))).verifyComplete();
 
-        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
+        assertThat(outcomes).containsExactly(UNAVAILABLE);
     }
 
     @Test
-    void the_observer_is_told_not_deliverable_while_the_subscription_is_paused_on_a_running_model() {
+    void the_observer_is_told_unavailable_while_the_subscription_is_paused_on_a_running_model() {
         // Distinct from the stopped case above, and distinct from FILTERED: a paused subscription's filter is never
         // consulted, so reporting FILTERED here would tell a caller the event was this subscription's and it was
         // declined, when in truth nothing decided that.
@@ -282,7 +283,7 @@ class PushSubscriptionModelTest {
 
         StepVerifier.create(model.accept(cloudEvent("1", "NameDefined"))).verifyComplete();
 
-        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
+        assertThat(outcomes).containsExactly(UNAVAILABLE);
     }
 
     @Test
@@ -441,7 +442,7 @@ class PushSubscriptionModelTest {
         // The race #848 names: a caller that checked isRunning(subscriptionId) *after* accept() completes, instead
         // of reading the outcome the observer was told *during* the one routing evaluation, could see a concurrent
         // resume make isRunning() answer true for an event that was actually dropped while paused. The observer
-        // callback runs synchronously inside the same evaluation that decided NOT_DELIVERABLE, so triggering the
+        // callback runs synchronously inside the same evaluation that decided UNAVAILABLE, so triggering the
         // resume from inside it is the earliest a "concurrent" resume could possibly land relative to accept()
         // completing, and the already-reported outcome must not be retroactively correct about a state that didn't
         // hold at evaluation time.
@@ -459,7 +460,7 @@ class PushSubscriptionModelTest {
         StepVerifier.create(model.accept(cloudEvent("1", "NameDefined"))).verifyComplete();
 
         assertThat(outcomes).as("the outcome reported during evaluation reflects the paused state at that moment")
-                .containsExactly(NOT_DELIVERABLE);
+                .containsExactly(UNAVAILABLE);
         assertThat(handled).as("the event was genuinely dropped, never handed to the handler")
                 .isEmpty();
         assertThat(model.isRunning("sub")).as("a caller checking isRunning(..) *after* accept() completes would now "
@@ -473,7 +474,7 @@ class PushSubscriptionModelTest {
         // A broader, genuinely multi-threaded version of the race above: one thread hammers accept() (subscribing
         // to each returned Mono synchronously) while another toggles pause/resume on the same subscription. Every
         // event pushed is one of two types, only one of which matches the subscription's filter, so a run exercises
-        // FILTERED as well as DELIVERED and NOT_DELIVERABLE, not just the two outcomes a filter that always matches
+        // FILTERED as well as DELIVERED and UNAVAILABLE, not just the two outcomes a filter that always matches
         // would produce. Whatever RoutingOutcome the observer is told for a given event must agree both with
         // whether that event actually reached the handler and with whether its type was one the filter accepts,
         // for every one of many interleavings, not just the hand-picked one above.
@@ -495,7 +496,7 @@ class PushSubscriptionModelTest {
         // A deterministic warm-up, run unpaused before the race starts, so DELIVERED and FILTERED are proven to
         // occur regardless of how the toggler and pusher threads happen to interleave below. Left to the race
         // alone, an unlucky schedule (the toggler pauses once and is never rescheduled before the pusher finishes)
-        // could leave the subscription paused for the whole run and report every event NOT_DELIVERABLE, which
+        // could leave the subscription paused for the whole run and report every event UNAVAILABLE, which
         // would fail the two-outcome assertion further down despite nothing being wrong.
         model.accept(cloudEvent("warmup-match", matchingType)).block();
         model.accept(cloudEvent("warmup-no-match", nonMatchingType)).block();
@@ -546,10 +547,10 @@ class PushSubscriptionModelTest {
             boolean wasDelivered = deliveredIds.contains(String.valueOf(i));
             if (typeMatches) {
                 assertThat(outcome).as("event %d has the matching type, so its filter is never the reason it is not delivered", i)
-                        .isIn(DELIVERED, NOT_DELIVERABLE);
+                        .isIn(DELIVERED, UNAVAILABLE);
             } else {
                 assertThat(outcome).as("event %d has the non-matching type, so a running subscription always declines it", i)
-                        .isIn(FILTERED, NOT_DELIVERABLE);
+                        .isIn(FILTERED, UNAVAILABLE);
             }
             assertThat(wasDelivered).as("event %d: whether the handler actually ran must agree with a reported outcome of DELIVERED", i)
                     .isEqualTo(outcome == DELIVERED);

@@ -211,16 +211,16 @@ class RegisteringSubscribableRouteReportingMatchTest {
      * {@code CatchupThenPushSubscriptionModel}'s registered action.
      */
     @Test
-    void a_routing_action_refusal_reports_not_deliverable_and_the_wrapped_cause_still_propagates() {
+    void a_permanent_routing_action_refusal_reports_refused_and_the_wrapped_cause_still_propagates() {
         RuntimeException refusalCause = new IllegalStateException("catch-up has failed");
         RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
-        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(new RegisteringSubscribable.RoutingAction.Refusal(refusalCause)));
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(new RegisteringSubscribable.RoutingAction.Refusal(refusalCause, true)));
 
         List<RoutingOutcome> observed = new ArrayList<>();
         StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
                 .verifyErrorSatisfies(error -> assertThat(error).isSameAs(refusalCause));
 
-        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
     }
 
     /**
@@ -233,7 +233,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
         RuntimeException refusalCause = new IllegalStateException("catch-up has failed");
         Error observerFailure = new Error("matchObserver failed too");
         RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
-        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(new RegisteringSubscribable.RoutingAction.Refusal(refusalCause)));
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(new RegisteringSubscribable.RoutingAction.Refusal(refusalCause, true)));
 
         StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> {
                     throw observerFailure;
@@ -248,7 +248,7 @@ class RegisteringSubscribableRouteReportingMatchTest {
     void a_shared_exception_instance_thrown_by_the_refusals_wrapped_cause_and_the_matchObserver_is_not_self_suppressed() {
         RuntimeException shared = new IllegalStateException("catch-up has failed");
         RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
-        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(new RegisteringSubscribable.RoutingAction.Refusal(shared)));
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(new RegisteringSubscribable.RoutingAction.Refusal(shared, true)));
 
         StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> {
                     throw shared;
@@ -279,6 +279,86 @@ class RegisteringSubscribableRouteReportingMatchTest {
                 .withSource(URI.create("urn:occurrent:test"))
                 .withType("NameDefined")
                 .build();
+    }
+
+    /**
+     * Nothing covered the three lifecycle states before this. They are the only outcomes a caller can see without
+     * an error coming with them, which is what lets a broker bridge hold and pace them instead of sending them
+     * through a failure policy, so each one is asserted on its own rather than through a shared helper.
+     */
+    @Test
+    void nothing_registered_reports_unavailable_and_errors_with_nothing() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyComplete();
+
+        assertThat(observed).containsExactly(RoutingOutcome.UNAVAILABLE);
+    }
+
+    @Test
+    void a_stopped_model_reports_unavailable_and_errors_with_nothing() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(new IllegalStateException("the handler must never run")));
+        model.stop();
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyComplete();
+
+        assertThat(observed).containsExactly(RoutingOutcome.UNAVAILABLE);
+    }
+
+    @Test
+    void a_paused_subscription_reports_unavailable_and_errors_with_nothing() {
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(new IllegalStateException("the handler must never run")));
+        model.pauseSubscription("sub");
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyComplete();
+
+        assertThat(observed).containsExactly(RoutingOutcome.UNAVAILABLE);
+    }
+
+    /**
+     * The matcher throwing is the one case that reports NOT_DELIVERABLE, and it always comes with the matcher's own
+     * exception. A caller telling a lifecycle state from a broken filter reads exactly that difference.
+     */
+    @Test
+    void a_matcher_that_throws_reports_not_deliverable_and_its_exception_propagates() {
+        RuntimeException matcherFailure = new IllegalStateException("the filter cannot answer");
+        DataFieldReader throwingReader = (cloudEvent, path) -> {
+            throw matcherFailure;
+        };
+        RawConsumersOneModel model = new RawConsumersOneModel(throwingReader);
+        model.subscribeRaw("sub", StreamSubscriptionFilter.filter(Filter.data("amount", eq(42))), cloudEvent -> Mono.just(true));
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(matcherFailure));
+
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+    }
+
+    /**
+     * A refusal the action does not promise is permanent, a full live buffer while a replay is still running, say.
+     * It reports NOT_DELIVERABLE rather than REFUSED, so a caller sends it through its failure policy instead of
+     * stopping for good.
+     */
+    @Test
+    void a_transient_routing_action_refusal_reports_not_deliverable_and_the_wrapped_cause_still_propagates() {
+        RuntimeException refusalCause = new IllegalStateException("the live buffer is full");
+        RawConsumersOneModel model = new RawConsumersOneModel(DataFieldReader.refusing());
+        model.subscribeRaw("sub", null, cloudEvent -> Mono.error(new RegisteringSubscribable.RoutingAction.Refusal(refusalCause, false)));
+
+        List<RoutingOutcome> observed = new ArrayList<>();
+        StepVerifier.create(model.acceptRaw(cloudEvent("1"), (cloudEvent, outcome) -> observed.add(outcome)))
+                .verifyErrorSatisfies(error -> assertThat(error).isSameAs(refusalCause));
+
+        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
     }
 
     private static final class RawConsumersOneModel extends RegisteringSubscribable {

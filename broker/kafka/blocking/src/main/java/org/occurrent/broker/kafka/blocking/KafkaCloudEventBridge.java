@@ -33,7 +33,6 @@ import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.SubscriptionFilter;
-import org.occurrent.subscription.api.blocking.internal.BlockingHandover;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.Logger;
@@ -62,8 +61,10 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <strong>Acknowledgement.</strong> {@code acceptRedeliverable(...)} throwing (a handler exception, or a
  * subscription filter that failed to evaluate) never commits. A normal return with {@link RoutingOutcome#DELIVERED}
  * or {@link RoutingOutcome#FILTERED} stages this record's offset for the next commit. A normal return with
- * {@link RoutingOutcome#NOT_DELIVERABLE} never does, and this bridge's configured {@link DeliveryFailurePolicy}
- * applies: {@link DeliveryFailurePolicy#REDELIVER} (the default) seeks the consumer back to this record's offset,
+ * {@link RoutingOutcome#UNAVAILABLE} never does either, and is seeked back and paced rather than sent through a
+ * failure policy, see below. A normal return with {@link RoutingOutcome#NOT_DELIVERABLE} cannot happen, since that
+ * outcome always comes with the filter's own exception. A {@link RoutingOutcome#REFUSED} stops this bridge for
+ * good, also below. For every other failure this bridge's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) seeks the consumer back to this record's offset,
  * {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only once that publish is confirmed
  * treats this record as resolved, exactly as a delivered one. A normal return with {@link RoutingOutcome#DEFERRED},
  * a {@link CatchupThenPushSubscriptionModel} wrapping {@code model} still replaying or draining, say, also never
@@ -136,29 +137,29 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * assignment instead, the same as the running check above. See {@link Builder#readinessSource(Predicate)} for how
  * to wire it.
  * <p>
- * <strong>A lifecycle {@link RoutingOutcome#NOT_DELIVERABLE} is paced like {@code DEFERRED}, never sent through
- * {@link DeliveryFailurePolicy}.</strong> {@code NOT_DELIVERABLE} with no exception attached is always a lifecycle
- * state, never a failure: the sole subscription paused, or the model not running at all (see
- * {@code RegisteringSubscribable.routeReportingMatch}, which reports it for both without ever throwing). An earlier
- * revision of this bridge re-read {@link PushSubscriptionModel#subscriptionIds()} and
+ * <strong>{@link RoutingOutcome#UNAVAILABLE} is paced like {@code DEFERRED}, never sent through
+ * {@link DeliveryFailurePolicy}.</strong> That outcome says nothing was in a position to be asked, the sole
+ * subscription paused, the model not running, or nothing registered at all, and it never comes with an exception.
+ * An earlier revision of this bridge re-read {@link PushSubscriptionModel#subscriptionIds()} and
  * {@link PushSubscriptionModel#isRunning(String)} at this point to tell that state apart from a genuine failure
- * reported the same way, since {@link #shouldConsume()} is only read once before each {@code poll()}, not per
+ * reported the same way. Since {@link #shouldConsume()} is only read once before each {@code poll()}, not per
  * record, that re-read could answer differently than the outcome it was meant to explain, a subscription resumed or
  * paused again from inside a handler mid-batch landing between the two. Paced identically to {@code DEFERRED}
- * unconditionally instead, with no re-read: this bridge seeks back and throttles the partition, rather than
+ * unconditionally instead, with no re-read. This bridge seeks back and throttles the partition, rather than
  * applying {@code PARK} or {@code REDELIVER} to a record nothing is actually wrong with.
  * <p>
  * <strong>A permanently failed catch-up stops this bridge, it does not commit or redeliver into it.</strong> A
  * {@link CatchupThenPushSubscriptionModel} wrapping {@code model} whose replay has permanently failed refuses every
- * later live event with {@code BlockingHandover.PreDispatchRefusalException} rather than reporting
- * {@code NOT_DELIVERABLE} through the normal routing path, since the underlying handover already knows that refusal
- * is permanent. This bridge catches that exception by type ahead of the generic failure branch, logs at error once,
- * and stops the poll loop for good, leaving the triggering record's offset uncommitted so it is refetched by the
- * next consumer in this group once the wrapper's catch-up is fixed and restarted, rather than being parked or
- * redelivered forever into the same permanent refusal. {@code BlockingHandover} is an internal type. This bridge
- * imports it anyway, narrowly, for this one {@code catch}, since the alternative (matching on the exception's
- * message, or treating every {@code NOT_DELIVERABLE}-shaped failure as potentially permanent) is both more fragile
- * and slower to notice than catching the type the engine itself already throws for exactly this.
+ * later live event before attempting any dispatch, and promises that refusing is permanent, which
+ * {@code RegisteringSubscribable.routeReportingMatch} reports as {@link RoutingOutcome#REFUSED}. That outcome is
+ * reported for nothing else, so this bridge decides on it alone rather than on the type of whatever exception came
+ * with it. A handler that reached into some other permanently failed engine reports
+ * {@link RoutingOutcome#DELIVERED} instead and goes through {@link DeliveryFailurePolicy} like any other handler
+ * failure.
+ * <p>
+ * On {@link RoutingOutcome#REFUSED} this bridge logs at error once and stops the poll loop for good, leaving the
+ * triggering record's offset uncommitted so it is refetched by the next consumer in this group once the wrapper's
+ * catch-up is fixed and restarted, rather than being parked or redelivered forever into the same permanent refusal.
  * <p>
  * <strong>Ordering.</strong> A partitioned topic gives no global order. Two events on different partitions can be
  * processed in either order by this bridge, whatever their publish order was. Events for one stream stay in order
@@ -483,38 +484,30 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         try {
             model.acceptRedeliverable(cloudEvent);
             outcome = outcomeChannel.takeLastOutcome();
-        } catch (BlockingHandover.PreDispatchRefusalException e) {
-            // Not proof by itself that THIS bridge's own model has a permanently failed catch-up: the matched
-            // handler can call a different CatchupThenPushSubscriptionModel whose own catch-up has failed, and that
-            // exception type escapes unwrapped from inside the handler too. routeReportingMatch tells them apart
-            // already: NOT_DELIVERABLE is only ever reported for a refusal decided before this model's own dispatch
-            // was attempted. Any other outcome, DELIVERED above all, means the matched handler here genuinely ran,
-            // and whatever it threw calling something else is that handler's own ordinary failure.
-            outcome = outcomeChannel.takeLastOutcome();
-            if (outcome != RoutingOutcome.NOT_DELIVERABLE) {
-                log.debug("A filter or handler failed for a record on topic \"{}\" partition {} offset {}, with a " +
-                        "PreDispatchRefusalException from a different handover than this bridge's own model.",
+        } catch (RuntimeException | AssertionError e) {
+            // Catches AssertionError too, since a filter or the handler can throw one, and an uncaught Error here
+            // would leave the loop thread dead with the partition never advancing past this record. Which of the
+            // two things went wrong is read off the reported outcome rather than off the exception type. REFUSED
+            // is reported only when this bridge's own model refused before attempting dispatch and promised that
+            // refusing is permanent, so a handler that reached into some other permanently failed engine reports
+            // DELIVERED and goes through the failure policy below where it belongs.
+            RoutingOutcome refusedOutcome = outcomeChannel.takeLastOutcome();
+            if (refusedOutcome != RoutingOutcome.REFUSED) {
+                log.debug("A filter or handler failed for a record on topic \"{}\" partition {} offset {}.",
                         record.topic(), record.partition(), record.offset(), e);
                 return resolve(record, toCommit, failureAction.apply(record));
             }
             // A CatchupThenPushSubscriptionModel wrapping this bridge's model has a permanently failed catch-up.
-            // Permanent, exactly like an unreadable live filter would be: stop the whole loop rather than commit or
-            // redeliver into the same refusal forever. See the class javadoc.
-            log.error("A catch-up wrapping this bridge's model has permanently failed for topic \"{}\" partition " +
-                    "{}. Stopping this bridge rather than committing or redelivering into the same refusal. " +
-                    "Record at offset {} is left uncommitted so it is refetched by the next consumer in this " +
-                    "group once the wrapper's catch-up is fixed and restarted.",
+            // Permanent, exactly like an unreadable live filter would be, so stop the whole loop rather than
+            // commit or redeliver into the same refusal forever. See the class javadoc.
+            log.error("A catch-up wrapping this bridge's model has permanently failed for topic \"{}\" partition "
+                    + "{}. Stopping this bridge rather than committing or redelivering into the same refusal. "
+                    + "Record at offset {} is left uncommitted so it is refetched by the next consumer in this "
+                    + "group once the wrapper's catch-up is fixed and restarted.",
                     record.topic(), record.partition(), record.offset(), e);
             permanentlyStopped = true;
             running = false;
             return false;
-        } catch (RuntimeException | AssertionError e) {
-            // Catches AssertionError too, since a filter or the handler can throw one, and an uncaught Error here
-            // would leave the loop thread dead with the partition never advancing past this record.
-            outcomeChannel.takeLastOutcome();
-            log.debug("A filter or handler failed for a record on topic \"{}\" partition {} offset {}.",
-                    record.topic(), record.partition(), record.offset(), e);
-            return resolve(record, toCommit, failureAction.apply(record));
         }
         if (outcome == null) {
             // Only reachable when model was constructed with a different RoutingOutcomeChannel than the one this
@@ -531,18 +524,18 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             stage(record, toCommit);
             return true;
         }
-        if (outcome == RoutingOutcome.DEFERRED || outcome == RoutingOutcome.NOT_DELIVERABLE) {
-            // DEFERRED and a lifecycle NOT_DELIVERABLE are paced identically, unconditionally, with no re-read of
-            // the model's own running state: see the class javadoc for why an earlier revision's re-read was
-            // removed. Bypasses DeliveryFailurePolicy (and any parking) entirely: nothing here is broken, only not
+        if (outcome == RoutingOutcome.DEFERRED || outcome == RoutingOutcome.UNAVAILABLE) {
+            // DEFERRED and UNAVAILABLE are paced identically, unconditionally, with no re-read of the model's own
+            // running state. See the class javadoc for why an earlier revision's re-read was removed. Bypasses DeliveryFailurePolicy (and any parking) entirely: nothing here is broken, only not
             // ready yet, or paced behind the model's own lifecycle state. Returning false, without ever calling
             // failureAction.apply(record), reuses the same seek-back and throttledUntilNanos pacing processBatch(..)
             // already applies for a partition it stops early, exactly the mechanism the pre-existing
             // readinessSource-gated path already relied on.
             return false;
         }
-        // Defensive: RoutingOutcome is exhaustively DELIVERED, FILTERED, DEFERRED or NOT_DELIVERABLE today, so this
-        // is unreachable, kept only against a future outcome this bridge has not been taught yet.
+        // NOT_DELIVERABLE, the filter itself having failed to answer. It always arrives with the filter's own
+        // exception, which the catch above already routed, so reaching here means a future outcome this bridge has
+        // not been taught yet. Routed as a failure either way.
         log.debug("A record on topic \"{}\" partition {} offset {} reported an outcome this bridge does not " +
                 "recognize. Routing it as a failure.", record.topic(), record.partition(), record.offset());
         return resolve(record, toCommit, failureAction.apply(record));

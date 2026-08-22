@@ -332,12 +332,13 @@ class CatchupThenPushSubscriptionModelTest {
 
     /**
      * The broker-path counterpart to the test above, and the regression guard for a Copilot review finding: a
-     * refusal decided before any dispatch was attempted must report {@link RoutingOutcome#NOT_DELIVERABLE}, never
-     * {@link RoutingOutcome#DELIVERED}, so a bridge applies its configured failure policy instead of acknowledging
-     * a message nothing consumed.
+     * refusal decided before any dispatch was attempted must report {@link RoutingOutcome#REFUSED}, never
+     * {@link RoutingOutcome#DELIVERED}, so a bridge stops instead of acknowledging a message nothing consumed. A
+     * failed catch-up never clears, which is what makes the refusal permanent and the outcome REFUSED rather than
+     * {@link RoutingOutcome#NOT_DELIVERABLE}.
      */
     @Test
-    void a_catch_up_failure_reports_not_deliverable_rather_than_delivered_on_the_broker_path() {
+    void a_catch_up_failure_reports_refused_rather_than_delivered_on_the_broker_path() {
         List<RoutingOutcome> observed = new ArrayList<>();
         PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
                 (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
@@ -352,18 +353,18 @@ class CatchupThenPushSubscriptionModelTest {
         Throwable thrown = catchThrowable(() -> liveFeed.acceptRedeliverable(cloudEvent("1", "Created")));
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
-        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
     }
 
     /**
      * The write-path counterpart to the two tests above, and a second Copilot review finding on the same PR: the
-     * write path (bufferIfNotLive true) wraps a catchUpFailure IllegalStateException as a Refusal exactly like the
-     * broker path does, so an observer configured on the write path also sees NOT_DELIVERABLE rather than
+     * write path (bufferIfNotLive true) wraps a catchUpFailure IllegalStateException as a permanent Refusal
+     * exactly like the broker path does, so an observer configured on the write path also sees REFUSED rather than
      * DELIVERED for a refusal decided before any dispatch was attempted, and {@code route(CloudEvent)} unwraps the
      * Refusal back to the plain IllegalStateException before it reaches this call's own caller.
      */
     @Test
-    void a_catch_up_failure_reports_not_deliverable_rather_than_delivered_on_the_write_path_with_an_observer() {
+    void a_catch_up_failure_reports_refused_rather_than_delivered_on_the_write_path_with_an_observer() {
         List<RoutingOutcome> observed = new ArrayList<>();
         PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
                 (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
@@ -378,7 +379,7 @@ class CatchupThenPushSubscriptionModelTest {
         Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")));
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
-        assertThat(observed).containsExactly(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
     }
 
     /**
@@ -423,6 +424,40 @@ class CatchupThenPushSubscriptionModelTest {
 
         assertThat(thrown).isSameAs(handlerFailure);
         assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    /**
+     * A handler that reaches into a second catch-up-then-live model whose own catch-up has failed lets that
+     * model's refusal out through this one. This handler genuinely ran, so its own outcome is DELIVERED, and the
+     * refusal propagates as any other handler failure would. Reporting it as this registration's own refusal is
+     * what #893 item 5 describes, and it would tell a broker bridge to stop for a failure that is not its own.
+     */
+    @Test
+    void a_refusal_from_a_handover_the_handler_reached_into_reports_delivered_for_this_registration() throws Exception {
+        List<RoutingOutcome> observed = new ArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+
+        // A second model, with its own live feed, whose catch-up fails and which therefore refuses everything.
+        PushSubscriptionModel otherFeed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel otherModel = new CatchupThenPushSubscriptionModel(failingReader(), otherFeed, null);
+        var otherSubscription = otherModel.subscribe("other", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        });
+        assertThat(catchThrowable(otherSubscription::waitUntilStarted))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Stream::empty, 0), liveFeed, null);
+        var subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+                cloudEvent -> otherFeed.accept(cloudEvent));
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5))).isTrue();
+
+        Throwable thrown = catchThrowable(() -> liveFeed.acceptRedeliverable(cloudEvent("1", "Created")));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(observed)
+                .as("this registration's handler ran, so its own outcome is DELIVERED even though what it called "
+                        + "into refused")
+                .containsExactly(RoutingOutcome.DELIVERED);
     }
 
     @Test

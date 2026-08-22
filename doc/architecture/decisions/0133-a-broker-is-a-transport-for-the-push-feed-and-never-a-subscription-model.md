@@ -121,7 +121,8 @@ A lifecycle check afterwards cannot separate them. A pause reports `false`, a co
 race one paragraph up, just moved after the push, so it has to be answered in the routing evaluation itself.
 
 So the push module gains an outcome reported from that one evaluation, `DELIVERED`, `FILTERED` and `NOT_DELIVERABLE`
-at the time this decision was written (a fourth value, `DEFERRED`, was added by the 2026-08-21 amendment below), and
+at the time this decision was written (`DEFERRED` was added by the 2026-08-21 amendment below, and `UNAVAILABLE`
+and `REFUSED` by the 2026-08-22 one, which also narrows what `NOT_DELIVERABLE` means), and
 the bridge acknowledges on `DELIVERED`, and on `FILTERED`, where redelivering would loop forever because the event
 is simply not this consumer's. It does not acknowledge on `NOT_DELIVERABLE`, on `DEFERRED`, or when the matched
 action throws. (Originally worded around `accept(...)` returning normally. The amendment below changes which method
@@ -808,7 +809,8 @@ between the match and the report, is still what a caller relies on to acknowledg
 unchanged. `PushObserver`/`RoutingOutcome` remain one exception decision 1 already names, and the readiness
 accessor and bean publication the amendment above added remain the other, both still additive rather than
 touching the class's existing contract. Decision 1's own prose above, describing a three-valued outcome reported
-before the matched action ran, describes the mechanism this amendment replaces. Read it as history, not as what
+before the matched action ran, describes the mechanism this amendment replaces. The outcome is six-valued as of the
+2026-08-22 amendment below. Read it as history, not as what
 ships. What changes is how `routeReportingMatch` decides what to report.
 
 `RegisteringSubscribable.routeReportingMatch` used to report `RoutingOutcome.DELIVERED` before the matched
@@ -901,7 +903,8 @@ immediate consumer cancel, is superseded by the amendment below. This sentence i
 of what shipped first.)* The domain bridges need no equivalent change: `DomainEventFeed.acceptCloudEvent` has no
 pause concept and never returns `NOT_DELIVERABLE` at all (see the amendment above).
 
-**The cleaner long-term shape is a distinct `RoutingOutcome` value for a lifecycle refusal**, the same reasoning
+*(Done by the 2026-08-22 amendment below, which adds `UNAVAILABLE` and `REFUSED`. The paragraph is kept as the
+record of why it was deferred at the time.)* **The cleaner long-term shape is a distinct `RoutingOutcome` value for a lifecycle refusal**, the same reasoning
 that gave `DEFERRED` its own value rather than overloading it onto `NOT_DELIVERABLE` in the first amendment above:
 one value, one meaning, and a bridge that does not have to re-derive a state `routeReportingMatch` already decided
 and then discarded. That was not done here. It is a wider, three-module change (a new public `RoutingOutcome`
@@ -963,3 +966,69 @@ its own log line here too, under `REDELIVER` as well. The bridge-side cause logs
 `park`/`redeliver` log is the one `warn` line an operator sees, in all four bridges and both actions. A permanent
 stop stays logged at `error`, unaffected, since it is a distinct, more serious event than an ordinary delivery
 failure.
+
+## Amendment (2026-08-22): a routing outcome says which of six things happened, and a stale catch-up cannot act on the id it lost
+
+The follow-up the 2026-08-21 amendment above named as "the cleaner long-term shape", a distinct `RoutingOutcome`
+value for a lifecycle refusal, is done here, along with a second value that the same review round showed was needed
+for the split to be worth anything. The epic's own fixpoint round found three more defects on the shared
+catch-up-then-live files, which are in the same change because they are the same code paths.
+
+**`NOT_DELIVERABLE` meant three different things, and a bridge told them apart by whether an exception came with
+the outcome.** That rule was true, but it was written down in two bridge class javadocs and in the amendment above,
+describing another module's control flow, and nothing in the type said it. The enum now has six values.
+`UNAVAILABLE` is the lifecycle answer, nothing registered, the model not running, or the sole subscription paused,
+and it never comes with an exception. `NOT_DELIVERABLE` narrows to two things, both of which do come with one.
+The filter itself failing to answer is one. A registered action refusing before it attempted any dispatch, without
+promising that refusing is permanent, is the other, which is what a full live buffer during a replay gets.
+`REFUSED` is the same kind of refusal with that promise attached.
+
+**A bridge cannot decide on `REFUSED` alone unless the action says whether refusing is permanent.** A
+catch-up-then-live engine refuses for two reasons. Its catch-up has failed, which never clears, and its live buffer
+is full while a replay is still running, which clears when the replay drains. Both used to arrive as the same
+exception type. `RoutingAction.Refusal` now records the action's own promise, and the two push models set it from
+their engine, so a full buffer reports `NOT_DELIVERABLE` and goes through `DeliveryFailurePolicy` while a failed
+catch-up reports `REFUSED` and stops the bridge.
+
+That is what lets all four bridges stop importing `BlockingHandover` from its `internal` package. The amendment
+above judged that import acceptable for one `catch`. It is no longer needed. The two CloudEvent bridges read the
+outcome, and the two domain bridges ask their feed, since `DomainEventFeed.acceptCloudEvent` delivers inline and
+reports no routing outcome of its own. `DomainEventFeed.refusesPermanently()` is the accessor for that, and it only
+ever goes from false to true, which is what makes it safe to read after catching a refusal rather than at the
+moment the refusal was thrown.
+
+**A refusal that escaped a handler stopped a healthy bridge.** A handler that reaches into a second engine whose
+catch-up has failed lets that engine's refusal out through the first. Both throw the same type, so the first
+engine wrapped it as its own refusal and reported a handler that genuinely ran as not having run. The refusal now
+records the engine that threw it, and each engine compares identity before claiming it.
+
+**A cancelled catch-up could still act on the id it lost, on the reactor stack.** The blocking model has compared
+each attempt against the id's current owner since ADR 104's own follow-ups. The reactor model compared by key, so
+after a cancel and a fresh subscribe the old attempt kept working through a history nobody was listening to, wrote
+the marker that makes the next catch-up skip its history, evicted the replacement's launcher, and handed the live
+feed a pause meant for the replacement.
+
+It cannot reuse the record that says a replay is running. `ReactiveHandover` releases that at the drain so
+`isCatchingUp` stays true while the events buffered during the history read are delivered (ADR 132 decision 6), and
+for a catch-up with nothing buffered the release happens before the catch-up reports done. A check against that
+record would be true for a catch-up that buffered something and false for one that did not. The reactor model keeps a separate record
+of which attempt owns each id, written only under its own monitor.
+
+The relaunch check reads that record too. It used to read the running one, which is already gone in the window
+between the drain and the launcher being dropped, so a resume landing there took a catch-up that had just succeeded
+for one a stop had interrupted, and replayed its whole history again over a handover that was already live.
+
+**Subscribing was not one step against cancelling.** Registering on the live feed, keeping the handover, keeping the
+launcher and starting the replay happened one after another with nothing holding them together, so a cancel
+arriving part way through left some of them behind for a subscription that no longer existed. Both models hold
+their monitor across the whole of it, and cancelling takes the same monitor. Pausing and resuming take it too, so a
+pause can no longer be recorded and ignored at once.
+
+The relaunch a stopped replay owes itself runs after that monitor is released. Deciding under it and acting outside
+it is what keeps the replay it starts free to take the monitor for its own completion.
+
+**A concurrent producer was told the live buffer had overflowed.** `ReactiveHandover`'s sink comes from the safe
+spec, so a second thread offering at the same time is rejected rather than corrupting the queue. That rejection was
+reported as an overflow, with the advice to rebuild the read model offline. It is retried briefly instead, since
+the claim clears as soon as the thread holding it finishes its own offer. A failure in the live phase also logs at
+error now, because the catch-up signal has already completed by then and nothing else tells anyone.

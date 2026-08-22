@@ -117,20 +117,38 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
 
         /**
          * Thrown or emitted by {@link #route(CloudEvent)} to report a refusal decided before any dispatch was
-         * attempted, wrapping the real failure as {@link #getCause()}. {@code routeReportingMatch} reports
-         * {@link RoutingOutcome#NOT_DELIVERABLE} for one of these, never {@link RoutingOutcome#DELIVERED}, and
-         * propagates the wrapped cause unchanged, exactly as it would have propagated without this wrapper.
+         * attempted, wrapping the real failure as {@link #getCause()}. {@code routeReportingMatch} never reports
+         * {@link RoutingOutcome#DELIVERED} for one of these, and propagates the wrapped cause unchanged, exactly as
+         * it would have propagated without this wrapper.
+         * <p>
+         * {@code permanent} is the action's promise about its own refusal, and it decides which outcome is
+         * reported. Pass {@code true} only when offering the same event to this same registration again is certain
+         * to be refused the same way, which reports {@link RoutingOutcome#REFUSED} and tells a caller to stop.
+         * A refusal that clears on its own, a catch-up-then-live engine whose live buffer is full while its replay
+         * is still running, say, passes {@code false} and reports {@link RoutingOutcome#NOT_DELIVERABLE}, which
+         * sends the event through the caller's failure policy instead.
          */
         final class Refusal extends RuntimeException {
             private final RuntimeException refusal;
+            private final boolean permanent;
 
-            public Refusal(RuntimeException refusal) {
+            /**
+             * @param refusal   The real failure, propagated unchanged once the outcome has been reported.
+             * @param permanent Whether offering the same event to this same registration again is certain to be
+             *                  refused the same way.
+             */
+            public Refusal(RuntimeException refusal, boolean permanent) {
                 super(refusal);
                 this.refusal = refusal;
+                this.permanent = permanent;
             }
 
             RuntimeException unwrap() {
                 return refusal;
+            }
+
+            RoutingOutcome outcome() {
+                return permanent ? RoutingOutcome.REFUSED : RoutingOutcome.NOT_DELIVERABLE;
             }
         }
     }
@@ -348,9 +366,10 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * {@link #route(CloudEvent)}, means the two can never disagree about whether the event matched, even for a
      * matcher that is not a deterministic pure function of the event, and means no lifecycle transition (a
      * concurrent {@code stop()}, a {@code pauseSubscription} or a {@code resumeSubscription}) can land between the
-     * decision and the report. The model not running and the sole subscription being paused both report
-     * {@link RoutingOutcome#NOT_DELIVERABLE}, the same way {@link #route(CloudEvent)} already treats them for
-     * dispatch. A filter that declines the event reports {@link RoutingOutcome#FILTERED}. The matcher itself
+     * decision and the report. Nothing registered, the model not running and the sole subscription being paused all
+     * report {@link RoutingOutcome#UNAVAILABLE} and throw nothing, the same three states
+     * {@link #route(CloudEvent)} already skips for dispatch. A filter that declines the event reports
+     * {@link RoutingOutcome#FILTERED}. The matcher itself
      * throwing reports {@link RoutingOutcome#NOT_DELIVERABLE}, never {@link RoutingOutcome#FILTERED}, since a
      * filter that failed to answer did not decline the event, and that throwing matcher's exception still
      * propagates once {@code matchObserver} has been told. If {@code matchObserver} itself then throws a
@@ -362,9 +381,13 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
      * errors: {@code matchObserver} is told {@link RoutingOutcome#DELIVERED}, since the action was genuinely
      * invoked, which is what {@link RoutingOutcome#DELIVERED} has always meant regardless of what the action does
      * with the event afterward, and the original error then still propagates once {@code matchObserver} has been
-     * told. An engine-level refusal a {@link RoutingAction} makes deliberately, by erroring with {@link
-     * RoutingAction.Refusal}, is a different thing entirely and is what decides {@link RoutingOutcome#NOT_DELIVERABLE}
-     * instead, propagating the wrapped cause rather than the refusal itself.
+     * told.
+     * <p>
+     * A {@link RoutingAction.Refusal} is a different thing again. The action was reached but refused before
+     * attempting any dispatch, so it is never {@link RoutingOutcome#DELIVERED}, and the wrapped cause propagates
+     * rather than the refusal itself. Which outcome is reported comes from the refusal,
+     * {@link RoutingOutcome#REFUSED} when the action promises refusing is permanent for that registration and
+     * {@link RoutingOutcome#NOT_DELIVERABLE} when it does not.
      * <p>
      * Restricted to {@link Consumers#ONE} because sharing one evaluation across more than one registration would
      * mean deciding every registration's eligibility before dispatching any of them, changing which registration's
@@ -390,7 +413,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                     // all. Reporting FILTERED here would tell the caller the event was this subscription's and it
                     // declined it, when in truth the filter was never asked.
                     if (pausedSubscriptions.contains(registration.id())) {
-                        matchObserver.accept(cloudEvent, RoutingOutcome.NOT_DELIVERABLE);
+                        matchObserver.accept(cloudEvent, RoutingOutcome.UNAVAILABLE);
                         return Mono.<Void>empty();
                     }
                     boolean eligible;
@@ -431,7 +454,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                                 RoutingOutcome outcome;
                                 Throwable propagate;
                                 if (error instanceof RoutingAction.Refusal refusal) {
-                                    outcome = RoutingOutcome.NOT_DELIVERABLE;
+                                    outcome = refusal.outcome();
                                     propagate = refusal.unwrap();
                                 } else {
                                     outcome = RoutingOutcome.DELIVERED;
@@ -457,7 +480,7 @@ public abstract class RegisteringSubscribable implements SubscriptionModel, Intr
                             });
                 }
             }
-            matchObserver.accept(cloudEvent, RoutingOutcome.NOT_DELIVERABLE);
+            matchObserver.accept(cloudEvent, RoutingOutcome.UNAVAILABLE);
             return Mono.<Void>empty();
         });
     }

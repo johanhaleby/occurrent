@@ -31,14 +31,15 @@ import org.occurrent.subscription.RoutingOutcome;
  * only when the model is running, a currently registered, unpaused subscription's filter accepted the event, and
  * the registration's action genuinely ran, independent of whether that action goes on to succeed or throw. It is
  * {@link RoutingOutcome#FILTERED} when that same subscription evaluated the event and declined it, and
- * {@link RoutingOutcome#NOT_DELIVERABLE} when there was no running, unpaused subscription for the event to reach at
+ * {@link RoutingOutcome#UNAVAILABLE} when there was no running, unpaused subscription for the event to reach at
  * all, whether because nothing is registered, the model is stopped, or the subscription is paused. A caller
  * acknowledging an externally sourced event may acknowledge on {@link RoutingOutcome#DELIVERED} once
  * {@code accept(...)} has returned normally, and on {@link RoutingOutcome#FILTERED}, where redelivering would loop
  * forever against this same registration, since the event is not this consumer's under the filter currently
- * registered for it. It must never acknowledge on {@link RoutingOutcome#NOT_DELIVERABLE}, or on
- * {@link RoutingOutcome#DEFERRED} (see below), which is why {@link RoutingOutcome}'s values are kept apart rather
- * than collapsed back into a single flag. It shares the same filter evaluation the actual
+ * registered for it. It must never acknowledge on any of the other four, which is why {@link RoutingOutcome}'s
+ * values are kept apart rather than collapsed back into a single flag. Read that enum for what each of them asks a
+ * caller to do next, since offering the event again, applying a failure policy and stopping for good are three
+ * different answers. It shares the same filter evaluation the actual
  * dispatch decision is made from, so the two can never disagree, and no lifecycle transition landing between the
  * evaluation and this call can change which outcome is reported.
  * <p>
