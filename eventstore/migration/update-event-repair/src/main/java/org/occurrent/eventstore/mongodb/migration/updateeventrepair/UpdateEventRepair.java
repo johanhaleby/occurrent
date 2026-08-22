@@ -77,9 +77,15 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * the same as one a running store writes.
  * <p>
  * It is not a general recovery. Where the old write-back destroyed the only copy of a value, that value is gone.
- * Each {@link UnrecoverableEvent.Reason} says which case it is. One kind of damage cannot even be seen. An update
- * function that returned a replacement event without the {@code dcbtags} extension left a document that no longer
- * looks like a DCB event, and nothing distinguishes it from an ordinary stream event.
+ * Each {@link UnrecoverableEvent.Reason} says which case it is.
+ * <p>
+ * Two kinds of damage cannot be seen at all, both from an update function that returned a replacement event built
+ * from scratch. One drops the {@code dcbtags} extension, leaving a document that no longer looks like a DCB event
+ * and that nothing distinguishes from an ordinary stream event. The other drops the {@code position} of a plain
+ * stream event, which never had {@code dcbtags} to begin with, leaving a document that nothing distinguishes from
+ * history written before position existed. Neither matches this tool's filter, so neither is counted or repaired,
+ * and the second one reaches a store that writes position as an ordinary un-backfilled event. Backfilling it would
+ * give it a position it never had, which is why both position-backfill startup messages point here.
  *
  * <h2>Running it</h2>
  * {@link #report()} counts the damage and writes nothing. {@link #run()} repairs, walking the collection in

@@ -95,11 +95,18 @@ none of the original's extensions, so no position was stored. The tool will not 
   is left exactly as it was found.
 - **A `position` string that is not a number.** No known path produces this. Reported as `POSITION_NOT_A_NUMBER`.
 
-One kind of damage is invisible to the tool. An update function that returned a
-replacement event without the `dcbtags` extension left a document that no longer looks like a DCB event at all.
-Nothing distinguishes it from an ordinary stream event, so it is neither counted nor repaired. If the extension was
-replaced rather than dropped, the tool rebuilds the tag array from the replacement tags, since that is all the
-document has.
+Two kinds of damage are invisible to the tool, both from an update function that returned a replacement event built
+from scratch.
+
+- It dropped the `dcbtags` extension, so the document no longer looks like a DCB event and nothing distinguishes it
+  from an ordinary stream event.
+- It dropped the `position` of a plain stream event, which never had `dcbtags` to begin with, so the document is
+  indistinguishable from history written before position existed. A store that writes position warns about it as an
+  un-backfilled event, and running the position backfill on it would give it a position it never had. That is why
+  both backfill messages point at the repair runbook.
+
+Neither is counted or repaired. If the `dcbtags` extension was replaced rather than dropped, the tool rebuilds the
+tag array from the replacement tags, since that is all the document has.
 
 ## How to run the module
 

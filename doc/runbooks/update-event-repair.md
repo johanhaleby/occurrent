@@ -149,11 +149,19 @@ startup warning is gone.
 
 ## The damage this cannot find
 
-One kind of damage is invisible to both the tool and the queries above. If an update function returned a replacement event
-built from scratch, without the `dcbtags` extension, the stored document no longer looks like a DCB event at all.
-Nothing distinguishes it from an ordinary stream event, so nothing counts it and nothing repairs it. If the
-extension was replaced rather than dropped, the tool rebuilds the tag array from the replacement tags, because that
-is all the document has left.
+Two kinds of damage are invisible to both the tool and the queries above, and both come from an update function
+that returned a replacement event built from scratch.
+
+If it dropped the `dcbtags` extension, the stored document no longer looks like a DCB event. Nothing distinguishes
+it from an ordinary stream event, so nothing counts it and nothing repairs it. If the extension was replaced rather
+than dropped, the tool rebuilds the tag array from the replacement tags, because that is all the document has left.
+
+If the event was a plain stream event and the replacement dropped its `position`, the document has neither a
+`position` nor `dcbtags`, so it looks exactly like history written before position existed. This case reaches a store
+that never used DCB. Your store warns about it as an un-backfilled event, and running the position backfill on it
+assigns a position it never had, which nothing undoes. Both backfill messages point at this runbook for that reason.
+If you called `updateEvent` on 0.33.0 or earlier and you also have events without a position, decide from your own
+records which is which before you backfill.
 
 If you know you ran an update function that built replacement events from scratch over DCB events, compare against
 an external record of what those events should be. The store cannot tell you.
