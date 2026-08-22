@@ -1,8 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 54
-updated_at: '2026-08-22T15:20:02+00:00'
-updated_by: 'orchestrator rel34: cancelled units removed from depends_on, they made R1 and C1 unreachable'
+revision: 56
+updated_at: '2026-08-22T15:24:12+00:00'
+updated_by: 'orchestrator rel34: held units'' progress timestamps now track their PR''s last push, not
+  my writes'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -129,6 +130,10 @@ units:
       ref: 927
       met: false
       evidence: ''
+    - check: issue_closed
+      ref: 907
+      met: false
+      evidence: ''
     blocking_on:
     - what: 'PR 901 held by the orchestrator gate. Clears when the worker pushes a test for an original
         with no tags whose updater forges some, proving the withoutExtension(TAGS) branch, plus #927''s
@@ -137,7 +142,7 @@ units:
       recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker adds the forged-tags-on-a-non-DCB-original test, verifies it fails with preserveTags
       reverted, then the gate re-runs
-    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:04:08+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
@@ -299,6 +304,26 @@ units:
           event rather than as a description of the problem, so a restart can tell whether it still holds.
         via: self-audit against epic-state.py's phase derivation
         at: '2026-08-22T15:11:32+00:00'
+      907_folded_in:
+        note: '#907 adopted into U2 on Johan''s ruling. ReactorMongoEventStore.updateEvent calls .log()
+          on the reactive pipeline that reads the event to update, so the full found document INCLUDING
+          ITS DATA PAYLOAD is logged at INFO. Filed by this unit''s own worker while working on #876.
+          Folded here rather than dispatched because it is one line on the same method PR 901 already
+          changes, and 901 must push again for its coverage test regardless. U2''s gate now covers four
+          issues: #876, #904, #927 and #907.'
+        via: Johan's structured-ask ruling
+        at: '2026-08-22T15:23:44+00:00'
+      timestamps_track_the_blocker:
+        note: 'sdi flagged the signature and it was present here: five BLOCKED units all shared last_meaningful_progress_at
+          2026-08-22T15:11:32 to the second, which is one write of mine adding blocking_on. On a BLOCKED
+          unit that field was therefore reporting MY attention rather than the blocker moving, so STALLED
+          would have been a claim about the orchestrator and not about the work. Repaired by setting each
+          held unit''s timestamp from its PR''s last commit date, read from gh. STALLED now means the
+          worker has not pushed, which is the signal worth having. The rule generalises: for a unit blocked
+          on someone else''s artifact, the progress timestamp comes from that artifact, never from the
+          orchestrator''s own bookkeeping write.'
+        via: sdi's shared-timestamp signature check + gh pr view commits
+        at: '2026-08-22T15:24:12+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
@@ -456,7 +481,7 @@ units:
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker answers three grouped defects on 914, then the gate re-runs from the top
-    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:53:20+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -602,7 +627,7 @@ units:
       recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker adds the no-regression floor to its resolve helper and routes the fourth call
       site through it
-    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
+    last_meaningful_progress_at: '2026-08-22T14:50:03+00:00'
     observed:
       scope_derived_by_orchestrator:
         note: 'Enumerated the invocation sites myself rather than trusting the issue text. The defect
@@ -972,7 +997,7 @@ units:
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker fixes the non-terminating classifier, then the gate re-runs from the top
-    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:12:49+00:00'
     observed:
       gate_919:
         note: 'PR 919 opened, all ten dispatched units now have PRs. TWO FAILURES on test (example-projection)
@@ -1103,6 +1128,10 @@ units:
       ref: null
       met: false
       evidence: ''
+    - check: issue_closed
+      ref: 421
+      met: false
+      evidence: ''
     blocking_on:
     - what: 'Awaiting Johan''s approval of the published held-docs merge checklist at https://claude.ai/code/artifact/8f365680-763a-4b73-8127-89c2f10adf2d
         . Clears when he approves it, or asks for changes. Its own re-verification trigger is separate:
@@ -1194,6 +1223,14 @@ units:
           deliverable is met when Johan approves it.
         via: orchestrator
         at: '2026-08-22T12:50:59+00:00'
+      421_is_r2s:
+        note: '#421 (document broker-backed subscriptions on occurrent.org) was showing as a 0.34.0 milestone
+          item owned by no unit. It is R2''s: the work is the held docs branch docs/421-broker-modules,
+          tip 0ba67fd, which is PR 74 and one of the eight branches in R2''s verified merge order. It
+          closes when the docs merge on release day. Attached rather than asked, since the branch is already
+          in R2''s checklist.'
+        via: gh issue view 421 + the held docs branch
+        at: '2026-08-22T15:23:44+00:00'
     assessment: 'Seven PRs, not eight branches: docs/saga-step-conditions-added-tag adds a line docs main
       already carries. preview/0.34.0 was behind docs/421-broker-modules by one commit at registration,
       so preview is verified per branch rather than assumed current.'
@@ -1677,7 +1714,7 @@ units:
       recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker restates the invariant's walk, corrects the excludeTypes javadoc, fixes the Kotlin
       enum advice
-    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
+    last_meaningful_progress_at: '2026-08-22T13:00:03+00:00'
     observed:
       pr_opened:
         note: PR 928 on rel34/u16-type-filter-expansion, 8 files, touching ExecuteFilter, DcbCriteriaBuilder.kt,
@@ -1885,3 +1922,10 @@ cross_epic:
       name (the only remaining hits are in .context bookkeeping YAML), df0548bfa still an ancestor so
       brk''s fix survives, and upgrade-0_35.yml gone so the #929 hazard is off main.'
     at: '2026-08-22T15:01:48+00:00'
+  893_stays_with_johan:
+    note: '#893 (broker epic review round 2, roughly 35 follow-up items) STAYS on milestone 0.34.0 by
+      Johan''s ruling. He triages the items himself rather than re-milestoning on brk''s summary or spending
+      a rel34 dispatch on reading them. So it is NOT a rel34 unit and NOT an orchestrator action, but
+      it IS a milestone item, which means the milestone cannot reach zero open until he has ruled on it.
+      R4 must not treat that as a rel34 blocker.'
+    at: '2026-08-22T15:23:44+00:00'
