@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 17
-updated_at: '2026-08-22T10:25:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U11 design gate on PR 911, U9 delivered
-  PR 913)
+revision: 18
+updated_at: '2026-08-22T10:35:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (preview freshness checked, rebuild deliberately
+  deferred to R2)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -603,9 +603,22 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after plan approval
+    next_action: hold until brk closes and the PR 69 versus PR 74 docs.md conflict is ruled, then rebuild
+      preview and produce the verified merge checklist
     last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    observed:
+      preview_state:
+        note: 'Checked 2026-08-22T10:3xZ. preview/0.34.0 is behind TWO held branches by one commit each:
+          docs/802-push-observation-hook (U1''s six-outcome rewrite) and docs/421-broker-modules (brk''s).
+          The other five are behind=0. So preview does NOT currently show the merged result, which is
+          a definition-of-done item. REBUILD DELIBERATELY DEFERRED, not overlooked: those two branches
+          are exactly the pair carrying the unresolved conflict U1 surfaced, where both independently
+          rewrote the same ''Observing pushed events'' section and both versions are independently correct.
+          Rebuilding now would bake in a resolution that would have to be redone, and 421 is still moving
+          under brk. Rebuild once brk closes and the 69-versus-74 conflict is ruled on. docs/saga-step-conditions-added-tag
+          still exists and is still the superseded no-op branch to DELETE rather than merge.'
+        via: gh api compare per branch tip against preview
+        at: '2026-08-22T10:35:00+00:00'
     assessment: 'Seven PRs, not eight branches: docs/saga-step-conditions-added-tag adds a line docs main
       already carries. preview/0.34.0 was behind docs/421-broker-modules by one commit at registration,
       so preview is verified per branch rather than assumed current.'
