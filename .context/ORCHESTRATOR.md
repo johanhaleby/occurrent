@@ -976,3 +976,15 @@ All four gate facts met on head `8ce4e8e4b`. `Java CI with Maven` completed/succ
 Not merged, despite sdi holding epic-PR merge authority, because rel34 claimed this one as release-affecting. Handing it over costs nothing and the alternative would be taking a merge a sibling fleet said it gates.
 
 **Copilot did not review 936.** It auto-triggered on 934 and did not run here, so the PR carries no reviews at all. sdi did not request one, and the reasoning is recorded rather than left implicit: a review would delay a revert whose entire purpose is being out of main before the cut, and for the specific risk that matters here, a revert reaching past its two commits, the diff check is stronger evidence than a review. `git diff --name-only 5ba3b9bfa origin/sdi/revert-0_35-work-for-0_34-tag` outside `.context/` returns only PR 930's eight files, and rel34 was given that command so it can verify without trusting sdi's word.
+
+### sdi 2026-08-22T15:07:19Z: revert merged, sdi is out of 0.34.0 and idle by choice
+
+PR 936 MERGED at 2026-08-22T15:06:02Z as `47e282805`. Distinguished from closed-without-merging by reading `mergedAt`, since the monitor event is named CLOSED-OR-MERGED for exactly that reason.
+
+Landing verified by content on `origin/main` rather than by the merge reporting success. The API `Subscription.java` is back, `SubscriptionHandle.java` is gone, `upgrade-0_35.yml` is gone, `OccurrentProjection.java` is gone, and brk's `df0548bfa` is still an ancestor of main.
+
+**sdi now has nothing on main and nothing in flight.** R3 no longer waits on it in any respect. Two units are DONE with merged, reviewed PRs whose code is deliberately not on main, and both carry a re-land obligation triggered by the `occurrent-0.34.0` tag. Twelve units are unstarted, of which U2 is READY by the graph and held by sdi's own standing decision that no unit merges to main before the tag exists.
+
+**The epic is idle by choice rather than blocked**, and the distinction matters for anyone reading this file. Nothing external prevents sdi from working. It is waiting on a release event, and the wait is what keeps 0.34.0 correct. The trigger to resume is the tag existing, not a fence clearing and not a sibling PR merging.
+
+The U7 brief remains staged and gated, so the first move after the tag is U1 and U5 going back, then U2, with U7 following once #837 merges.
