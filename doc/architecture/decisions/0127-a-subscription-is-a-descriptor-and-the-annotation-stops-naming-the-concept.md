@@ -420,22 +420,24 @@ event) -> ..)` call says today, which keeps the descriptor able to express every
 Five of the framework's annotation registrars reach the subscription DSL to run their handlers: `SubscriptionAnnotationRegistrar`
 on both stacks, the two files Decision 6 names, `ProjectionAnnotationRegistrar` on the blocking stack, and
 `SnapshotAnnotationRegistrar` on both stacks. The reactor `ProjectionAnnotationRegistrar` is not among them. It calls
-`ReactiveProjectionRunner` directly and never reaches the subscription DSL. Between the five there are 21 lookups, four
-per registrar, one stream against `StreamSubscriptions`, one agnostic against `Subscriptions`, one synchronous against a
-name-qualified `Subscriptions` bean over a `SynchronousSubscriptionModel`, and one DCB against `DcbSubscriptions` in
-`dsl/dcb-dsl`. All seventeen non-DCB calls share one shape, `subscribe(id, <Filter>, startAt,
-[waitUntilStarted], (metadata, event) -> ..)`, and not one of the 21 passes an event `Class`. The registrar derives its
-selector from the annotation before it ever reaches the DSL and hands over a finished filter and one handler, exactly
-the shape the catch-all handler above now lets a hand-built descriptor express too.
+`ReactiveProjectionRunner` directly and never reaches the subscription DSL. Between the five there are 21 lookups, five
+stream against `StreamSubscriptions`, five agnostic against `Subscriptions`, six synchronous against a name-qualified
+`Subscriptions` bean over a `SynchronousSubscriptionModel`, and five DCB against `DcbSubscriptions` in `dsl/dcb-dsl`.
+That is not four per registrar throughout, because the blocking `ProjectionAnnotationRegistrar` dispatches a
+`Projection` and a `DcbProjection` as two separate cases, and each case has its own synchronous fallback, which is
+where the sixth synchronous lookup comes from. All sixteen non-DCB calls share one shape, `subscribe(id, <Filter>,
+startAt, [waitUntilStarted], (metadata, event) -> ..)`, and not one of the 21 passes an event `Class`. The registrar
+derives its selector from the annotation before it ever reaches the DSL and hands over a finished filter and one
+handler, exactly the shape the catch-all handler above now lets a hand-built descriptor express too.
 
 ### The runner is the single execution path, within 0.35.0
 
 Every one of those 21 lookups calls the runner instead of `StreamSubscriptions.subscribe`, `Subscriptions.subscribe`,
 or `DcbSubscriptions.subscribeWithMetadata`. `Subscriptions` and `StreamSubscriptions` are reshaped into a thin idiom
-layer that builds a `Subscription<E>` and hands it to the matching runner, covering the seventeen stream, agnostic, and
+layer that builds a `Subscription<E>` and hands it to the matching runner, covering the sixteen stream, agnostic, and
 synchronous sites, the synchronous ones for free since they are the same class reached through a different bean name.
 That reshape is unit U13 of the implementation epic this ADR scopes. `DcbSubscriptions` is reshaped the same way onto
-the two DCB runners, covering the remaining four sites, as unit U14. Both ship inside 0.35.0, so the runner becomes the
+the two DCB runners, covering the remaining five sites, as unit U14. Both ship inside 0.35.0, so the runner becomes the
 one execution path across all 21 call sites within a single release rather than as a goal spread across two.
 
 ### `waitUntilStarted` is forwarded, never moved
