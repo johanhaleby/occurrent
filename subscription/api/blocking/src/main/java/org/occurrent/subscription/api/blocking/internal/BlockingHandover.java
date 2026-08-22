@@ -488,8 +488,27 @@ public final class BlockingHandover<T> {
         // markCaughtUp() call after this method returns is still ordered after every one of these deliveries, and a
         // delivery that throws here still reaches catchUp's own catch block exactly as it did before this method
         // stopped holding the lock for the delivery itself.
-        for (int i = 0; i < toDeliver.size(); i++) {
-            deliverOutsideLock(toDeliver.get(i), keysToDeliver.get(i));
+        int delivered = 0;
+        try {
+            for (; delivered < toDeliver.size(); delivered++) {
+                deliverOutsideLock(toDeliver.get(delivered), keysToDeliver.get(delivered));
+            }
+        } finally {
+            // Every key was reserved above, before any of them was delivered. A delivery that throws leaves the
+            // rest of them reserved and never delivered, and a reserved key is skipped by every later attempt, so
+            // a redelivery of one of those payloads would be dropped without ever being handled. Releasing them
+            // here is what keeps the failure recoverable: the catch-up records the failure, the caller sees it,
+            // and the payloads are still eligible when the source offers them again.
+            releaseReservations(keysToDeliver.subList(Math.min(delivered + 1, keysToDeliver.size()), keysToDeliver.size()));
+        }
+    }
+
+    private void releaseReservations(List<String> keys) {
+        if (keys.isEmpty()) {
+            return;
+        }
+        synchronized (lock) {
+            inFlight.removeAll(keys);
         }
     }
 

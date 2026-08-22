@@ -19,6 +19,7 @@ package org.occurrent.subscription.api.reactor.internal;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.internal.HandoverMessages;
 import reactor.core.publisher.Flux;
@@ -31,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
@@ -39,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
+@Timeout(30)
 class ReactiveHandoverTest {
 
     @Test
@@ -167,6 +170,54 @@ class ReactiveHandoverTest {
                         .hasMessageStartingWith(HandoverMessages.bufferOverflow(1))
                         .hasMessageContaining("(cap 1)")
                         .hasMessageContaining("Emit result:"));
+    }
+
+    /**
+     * The live sink comes from the safe spec, so it rejects a second concurrent producer rather than corrupting
+     * its queue. That rejection used to be reported as a buffer overflow, telling an operator to rebuild a read
+     * model offline for what is a moment of contention. The engine retries within a bounded window instead, so
+     * concurrent producers all get through and nobody sees an overflow message.
+     */
+    @Test
+    void concurrent_producers_are_never_told_the_buffer_overflowed() throws Exception {
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String> handover = ReactiveHandover.create(
+                payload -> Mono.fromRunnable(() -> delivered.add(payload)), payload -> payload,
+                CatchupThenLiveOptions.defaults(), "test payload");
+
+        int producers = 8;
+        int perProducer = 40;
+        List<Throwable> failures = new CopyOnWriteArrayList<>();
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(producers);
+        for (int producer = 0; producer < producers; producer++) {
+            int id = producer;
+            Thread.ofVirtual().start(() -> {
+                try {
+                    start.await();
+                    for (int i = 0; i < perProducer; i++) {
+                        handover.accept(id + ":" + i).subscribe(ignored -> {
+                        }, failures::add);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+        start.countDown();
+        assertThat(done.await(20, TimeUnit.SECONDS)).isTrue();
+
+        assertThat(failures).as("no producer was refused, and none was told the buffer overflowed").isEmpty();
+
+        StepVerifier.create(handover.catchUp(source(List.of(), false))).expectNext(true).verifyComplete();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (delivered.size() < producers * perProducer && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(delivered).as("every payload every producer offered was delivered")
+                .hasSize(producers * perProducer);
     }
 
     @Test
