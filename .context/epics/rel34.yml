@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 60
-updated_at: '2026-08-22T16:23:55+00:00'
-updated_by: 'orchestrator rel34: name the docs-repo identities the new validator requires'
+revision: 61
+updated_at: '2026-08-22T16:32:31+00:00'
+updated_by: 'orchestrator rel34: U10 settled and re-verifying, R2 checklist confirmed still true'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -1008,8 +1008,8 @@ units:
         with a test carrying a timeout.
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: worker fixes the non-terminating classifier, then the gate re-runs from the top
-    last_meaningful_progress_at: '2026-08-22T12:12:49+00:00'
+    next_action: await the fresh adversarial verdict on 7434393a and CI, then merge if both clear
+    last_meaningful_progress_at: '2026-08-22T16:32:31+00:00'
     observed:
       gate_919:
         note: 'PR 919 opened, all ten dispatched units now have PRs. TWO FAILURES on test (example-projection)
@@ -1035,6 +1035,23 @@ units:
           smoke test. Held on PR 919 as a comment, outcome stated without prescribing the mechanism.'
         via: adversarial verify subagent a713afbdeed49388d
         at: '2026-08-22T12:31:11+00:00'
+      fix_and_settled_declaration:
+        note: 'Worker fixed the non-terminating classifier with an identity-based visited set (IdentityHashMap-backed),
+          the technique Throwable.printStackTrace uses, and added a test with the exact falsifying repro
+          under assertTimeoutPreemptively(5s). MUTATION VERIFIED BEFORE PUSHING, with the timing and the
+          stack trace quoted: reverted the fix, the new test timed out at 5000ms pointing at shutdownSignalIn;
+          restored, it passes in under a second and the 12-test classifier suite stays green. Documented
+          the always-returns guarantee in the class javadoc, which is the property the invariant claims.
+          Then rebased onto 3e66afc76 for a changelog-only conflict, which was the SAME-ENTRY case rather
+          than two entries: main''s df0548bfa had added its own sentence and #922 to the same paragraph.
+          Kept main''s version as the base, re-inserted its own sentence at the same position, added #867
+          to the existing Resolves list rather than keeping two competing lists, and verified both sentences
+          and all three issue links appear exactly once before pushing. That is the resolution shape U4
+          had to discover the hard way and my brief originally got wrong. 26 unit tests green, force-pushed
+          with --force-with-lease, head 7434393a. Fresh adversarial pass dispatched, since the head moved
+          past the one the falsifying verdict covered and the earlier HELD findings do not carry forward.'
+        via: worker report + gh pr view
+        at: '2026-08-22T16:32:31+00:00'
     assessment: 'Decided IN by derivation, not asked: AGENTS.md:120 requires every component to ship production
       ready including surviving a transient outage of the store it talks to, and the broker modules ship
       for the first time in 0.34.0. The earlier decline for PR 861 is one of the deferrals the triage
@@ -1243,6 +1260,17 @@ units:
           in R2''s checklist.'
         via: gh issue view 421 + the held docs branch
         at: '2026-08-22T15:23:44+00:00'
+      checklist_still_true:
+        note: 'Re-verified the published checklist''s own invalidation trigger rather than waiting for
+          release day. All EIGHT held branch tips still match what the artifact names: 802-push-observation-hook
+          7b4d224, 421-broker-modules 0ba67fd, append-identity 4510fe5, 439-store-neutral-mongodb-config-keys
+          b00ade3, 773-764-flow-saga-stepwindow-declared-events 436b76c, remove-saga-join e535a2c, 0.34.0-declared-event-types
+          0b9a7f7, 0.34.0-release-notes 3b8b561. Zero drift, so the trial-merge result and the corrected
+          main.js comma rule still hold. docs/saga-step-conditions-added-tag is still present at e7165c9
+          and still to be DELETED rather than merged. Worth re-running on the day, but brk finishing means
+          421 is now stable rather than moving.'
+        via: git rev-parse against the docs remote
+        at: '2026-08-22T16:32:31+00:00'
     assessment: 'Seven PRs, not eight branches: docs/saga-step-conditions-added-tag adds a line docs main
       already carries. preview/0.34.0 was behind docs/421-broker-modules by one commit at registration,
       so preview is verified per branch rather than assumed current.'
