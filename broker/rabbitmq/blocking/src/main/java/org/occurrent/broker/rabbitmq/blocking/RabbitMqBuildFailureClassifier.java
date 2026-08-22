@@ -51,10 +51,13 @@ import java.util.Set;
  * outright and retries everything else, including a hard close this classification does not specifically
  * recognise, since an unrecognised one is far more likely to be transient than a silent new permanent failure mode.
  * <p>
- * {@link #isTransient(Throwable)} always returns, for any {@code throwable} a caller can construct, including one
- * whose cause chain loops back on itself through {@link Throwable#initCause(Throwable)}. This is called from
- * inside a retry loop, so a classification that never returns hangs {@code build()} with it, worse than either
- * answer it could have given instead.
+ * {@link #isTransient(Throwable)} returns for any cause chain that eventually revisits a throwable it has already
+ * seen, including one built to loop back on itself through {@link Throwable#initCause(Throwable)}. This is called
+ * from inside a retry loop, so a classification that never returns hangs {@code build()} with it, worse than
+ * either answer it could have given instead. {@code Throwable.getCause()} is not {@code final}, so an override
+ * that hands back a distinct object on every call defeats this the same way it defeats
+ * {@link Throwable#printStackTrace()} itself, which walks a cause chain the identical way for the identical
+ * reason. Every {@code getCause()} this module or its dependencies actually construct returns a stable object.
  */
 public final class RabbitMqBuildFailureClassifier {
 
