@@ -123,7 +123,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on:
-      - {what: "REGISTRAR FENCE, NARROWED 2026-08-22T14:0xZ to ONE issue. #753 CLEARED (PR 913, a86909f5d). #871 CLEARED (PR 902, 4f12b2ffb, issue closed 12:23:30Z; note PR 908 was CLOSED UNMERGED so 902 carried it alone). **Only #837 remains**: OPEN, no assignee, no label, no branch, no PR, not dispatched, so it is the long pole and its start is not visible yet. Surfaces still fenced: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T14:30:00Z}
+      - {what: "REGISTRAR FENCE, NARROWED 2026-08-22T14:0xZ to ONE issue. #753 CLEARED (PR 913, a86909f5d). #871 CLEARED (PR 902, 4f12b2ffb, issue closed 12:23:30Z; note PR 908 was CLOSED UNMERGED so 902 carried it alone). **Only #837 remains**: OPEN on the tracker but RUNNING per rel34's own state file, unit rel34/U6, session local_53811444-7045-4edd-afdb-ec20a97a4ee1, worktree amazing-shannon-db71fe, branch johan/amazing-shannon-db71fe off main, sonnet-5 at high, awaiting the worker's claim and first push. An earlier sdi reading of not dispatched was wrong: it came from tracker signals, which lag dispatch until a worker claims. Read the sibling epic state file, never the tracker, for a sibling fleet's dispatch state. Surfaces still fenced: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T14:30:00Z}
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T11:35:00Z
     observed: {}
@@ -139,7 +139,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on:
-      - {what: "REGISTRAR FENCE, NARROWED 2026-08-22T14:0xZ to ONE issue. #753 CLEARED (PR 913, a86909f5d). #871 CLEARED (PR 902, 4f12b2ffb, issue closed 12:23:30Z; note PR 908 was CLOSED UNMERGED so 902 carried it alone). **Only #837 remains**: OPEN, no assignee, no label, no branch, no PR, not dispatched, so it is the long pole and its start is not visible yet. Surfaces still fenced: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T14:30:00Z}
+      - {what: "REGISTRAR FENCE, NARROWED 2026-08-22T14:0xZ to ONE issue. #753 CLEARED (PR 913, a86909f5d). #871 CLEARED (PR 902, 4f12b2ffb, issue closed 12:23:30Z; note PR 908 was CLOSED UNMERGED so 902 carried it alone). **Only #837 remains**: OPEN on the tracker but RUNNING per rel34's own state file, unit rel34/U6, session local_53811444-7045-4edd-afdb-ec20a97a4ee1, worktree amazing-shannon-db71fe, branch johan/amazing-shannon-db71fe off main, sonnet-5 at high, awaiting the worker's claim and first push. An earlier sdi reading of not dispatched was wrong: it came from tracker signals, which lag dispatch until a worker claims. Read the sibling epic state file, never the tracker, for a sibling fleet's dispatch state. Surfaces still fenced: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T14:30:00Z}
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T11:35:00Z
     observed: {}
