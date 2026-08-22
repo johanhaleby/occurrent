@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 153
+revision: 154
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -296,7 +296,7 @@ units:
     deliverables:
       - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
     blocking_on: []
-    next_action: "PR 896 ROUND 6 (FINAL, BOUNDED) 2026-08-22T~16:4xZ: 1e824fa01 green, round-5 re-verify MERGE-SAFE. Copilot found three mechanical defects of the round-5 fixes (stale start-mode check before relaunch on both stacks, unstable drain boundary letting liveDrained fire early) plus two prose items, routed as round six; the process-local marker record versus the durable marker across a restart is a remaining loss window routed to Johan as dec-0018 (recommend merge on a clean round six, durable fence as its own unit). After round six: merge on MERGE-SAFE regardless of non-loss findings, a further loss finding holds. Monitor bkc4p3e8e active"
-    last_meaningful_progress_at: 2026-08-21T05:50:00Z
+    next_action: "PR 896 MERGED 2026-08-22T06:2xZ as 65041b387 (CAS pin b5c94732d, branch deleted) after round six bounded to four items, re-verify MERGE-SAFE on the delta, 28/28 green, one thread left open by reasoned reply (reactor marker window, #893). Johan ruled dec-0018 in Attended: merge, durable marker fence as its own unit in this epic. Copilot non-loss finding on the head (NOT_DELIVERABLE described as filter-only in seven comments) recorded as #893 item 24. Docs branch docs/421-broker-modules updated at bfe02e0b (lines 3261, 3267, 3508). NEXT: register the durable marker fence unit (plan gate first, both stacks, CheckpointWriteCondition keyed by the attempt token or a durable delete) and dispatch round-3 fixpoint review over main at 65041b387 with #893 as the carry list. Monitor bkc4p3e8e active"
+    last_meaningful_progress_at: 2026-08-22T06:25:00Z
     observed: {}
     assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."
