@@ -91,6 +91,24 @@ class PositionCatchupPipelineTest {
     }
 
     @Test
+    void the_named_catch_up_path_keeps_the_history_ids_out_of_the_cache() {
+        // replayApplying is what every named subscription runs through, so it is what a recording projection runs
+        // through, and the test above only covers the cold catchup(..) entry point. Cache a history id here and the
+        // live delivery of a write that was still in flight when the head was read is dropped, which is #891.
+        FakeReader reader = FakeReader.withEventsInRange(1, 4).headSupplier(headsOf(2, 4));
+        BoundedIdCache cache = new BoundedIdCache(1000);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.replayApplying(0, cache, () -> true, event -> Mono.empty(), () -> {
+        })).verifyComplete();
+
+        assertThat(cache.contains("e1")).as("read by a history window").isFalse();
+        assertThat(cache.contains("e2")).as("read by a history window").isFalse();
+        assertThat(cache.contains("e3")).as("read by the reconciliation window").isTrue();
+        assertThat(cache.contains("e4")).as("read by the reconciliation window").isTrue();
+    }
+
+    @Test
     void an_overlap_larger_than_the_old_1000_cap_delivers_each_event_exactly_once_when_the_ceiling_covers_it() {
         // The head is 500 when the replay starts and 2000 when reconcile snapshots it, so 1500 events were written
         // during the replay and the reconciliation pass reads them. Those are the events the live stream re-delivers,

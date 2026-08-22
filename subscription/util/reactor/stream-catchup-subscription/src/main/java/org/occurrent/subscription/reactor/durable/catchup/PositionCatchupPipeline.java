@@ -109,8 +109,8 @@ final class PositionCatchupPipeline {
      * ids in {@code cache}. The history windows record nothing, matching the blocking pipeline, because a position is
      * reserved before its write commits, so a write in flight when the head was read can be read by a history window
      * and needs the live delivery that the cache would otherwise suppress. Dedup by id, not position, so an in-flight
-     * event never seen during the replay is still delivered once, live. Shared by the cold pipeline above and the
-     * named catch-up path in {@code NamedCatchupSupport}.
+     * event never seen during the replay is still delivered once, live. Used by the cold pipeline above. The named
+     * catch-up path in {@code NamedCatchupSupport} uses {@link #replayApplying} instead, which applies the same rule.
      */
     Flux<CloudEvent> replay(long startPosition, BoundedIdCache cache) {
         if (startPosition < 0) {
