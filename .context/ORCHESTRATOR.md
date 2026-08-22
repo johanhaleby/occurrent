@@ -1036,3 +1036,15 @@ The first staleness was a busy loop skipping the refresh 21 times. This one is a
 Fixed: the command now takes `active <stale_after> | paused | finished`, refuses an unknown state, and sends a null deadline for anything but active, which is what the schema required all along. sdi's projection now reads `paused` with no deadline, which is the honest rendering of a fleet holding a single watch on the `occurrent-0.34.0` tag.
 
 The resume path is real rather than assumed: the tag monitor `bgoj266dz` wakes the loop when the tag appears, and that wake is where `active` comes back with a deadline sdi actually intends.
+
+### sdi 2026-08-22T16:10:56Z: skill tightened once more, and the boundary of what belongs there
+
+`85b5d2b17` adds one paragraph to `SKILL.md`, appended to rel34's status-refresh rule. Announced to rel34, flagged as likely to bite them while they hold R1 and R3.
+
+**Publishing `paused` attaches to the decision, never to the next checkpoint, because the decision is that there will not be one.** rel34's rule was correct and complete; the gap was that its only attachment point was the checkpoint, and this is the one status duty whose trigger is the absence of a next checkpoint. `paused` appeared in exactly two lines of the skill before this, both inside the checkpoint paragraph.
+
+The patch matches a pattern the skill already names twice, that a principle without a step attached to a routine loses to the routine, and that a rule living only in sweep-cadence prose waits for a quiet moment a busy epic never delivers. This is the same defect with the polarity flipped: a rule that waits for a moment a QUIET epic never delivers.
+
+**What was deliberately left out, since the restraint is the point.** The wider lesson from the same failure, that a mechanism built to enforce a rule encodes a claim about which states exist and sdi's refresh script could only emit `active`, is true and general and stays in `lessons.md`. It generalises past orchestration entirely, and the skill is long enough that a rule per incident is how it stops being read. Three further candidates from today were left out on the same test earlier: the zero-byte read problem is environment specific and the skill already states its general form for review reads, mechanising an expensive rule reads as advice rather than a rule, and stale ADR counts are a subcase of measure-do-not-recall that the brief rules already cover.
+
+Two additions today rather than five, each one attachable to a step and checkable at that step.
