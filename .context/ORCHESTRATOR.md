@@ -909,3 +909,21 @@ The brief leads with the release-blocker evidence rather than the task, carries 
 **U1's rerun is still `in_progress` and nothing will be concluded until it finishes.** One supporting observation while it runs: `test (subscription-mongodb-spring, java-21)` passed on this same head. The same fixtures on a different JDK agreeing points further away from a code regression, since a real defect in pause and hold semantics would not select a JDK. It is corroboration, not the verdict, and the rerun remains the thing that decides.
 
 No further polling. The monitor wakes on the transitions that matter.
+
+### sdi 2026-08-22T14:45:49Z: the changelog gate I wrote would have shipped 0.35.0 work inside 0.34.0
+
+rel34 found this and it is correct. Every step verified rather than accepted.
+
+`changelog.md` on main mentions `SubscriptionHandle` zero times and the `@Occurrent*` annotations zero times. It opens with `### Changelog next version`, and AGENTS.md line 72 assigns a version only at release time by renaming that heading. So a 0.34.0 cut from main's tip ships U1 and U5 inside 0.34.0, undocumented, while `upgrading-to-0.35.0.md` sits on main opening with "Each section describes one 0.35.0 change that requires action from a caller on 0.34.0", a sentence the release containing those changes would falsify.
+
+**The cause was sdi's changelog gate and it was mine.** The rule was that no sdi unit writes to `changelog.md` until the 0.35.0 tag exists, because a cut renames the heading in place and rel34 was cutting concurrently. The collision analysis was correct and is still correct. The consequence was never derived: keeping entries out of the file to dodge a merge conflict is precisely what makes the code invisible to the release, and the heading rename then assigns it to the wrong version. The entries exist in each unit's DELIVERY_RESULT so nothing is lost, but the cut reads the file, not the delivery reports.
+
+**The severe half is #929, not the missing notes.** `upgrade-0_35.yml` is on main and wires `MigrateOccurrentAnnotationRenames_0_35`, which rewrites all seven annotations onto names no registrar reads. A 0.34.0 cut from the tip therefore ships a working upgrade recipe that silently unregisters every projection, saga, snapshot and subscription of any user who runs it. The undocumented rename is wrong release notes; this breaks running applications.
+
+**rel34's first option is blocked and the correction is load bearing.** Main reads, oldest first, `4f12b2ffb`, `5ba3b9bfa` (923, ADR text), `6f47516c6` (924, U5), `df0548bfa` (930, brk's RabbitMQ recovery fix), `a714f8d32` (934, U1). brk's fix sits between the two sdi commits, so no cut point includes 930 and excludes 924. Cutting before both drops brk's fix from 0.34.0 unless it is cherry-picked, which is brk's call and not rel34's to make alone.
+
+sdi's position, sent to rel34: no objection to being reverted, and it prefers that to shipping #929 inside 0.34.0. U1's revert is clean since 934 squashed with no auto-close keyword, and 924 is the same shape.
+
+**Deliberately NOT asking Johan in parallel.** rel34 owns release mechanics and is carrying the ask with the #929 escalation and the option-1 correction folded in. Two fleets putting one question to him is how a worker ends up holding two rulings. sdi implements whatever he rules.
+
+U2's dispatch is HELD pending that ruling. It is READY by the graph, U1 being DONE, but dispatching more 0.35.0 code onto main is the exact thing under question, and a unit started now would deepen whatever has to be undone.
