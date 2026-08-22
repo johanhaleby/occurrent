@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 5
+revision: 6
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -100,7 +100,7 @@ units:
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T08:20:00Z
     observed: {}
-    assessment: "Split out of revision 1's oversized single registrar unit. The phase move is the same change as the descriptor path, not a follow-up. Opus/high."
+    assessment: "Split out of revision 1's oversized single registrar unit. The phase move is the same change as the descriptor path, not a follow-up. EXPLICITLY DOES NOT rewire ProjectionAnnotationRegistrar or SnapshotAnnotationRegistrar: those reach the runner transitively once U13 makes StreamSubscriptions.subscribe delegate to it, so touching them would be roughly 2300 lines of rewrite for no user-visible gain. Opus/high."
   U7:
     issue: 721
     goal: "Annotation-set normalization across the other five registrars and both bean post processors, so the three new descriptor annotations are read beside the deprecated ones."
@@ -192,7 +192,7 @@ units:
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T08:50:00Z
     observed: {}
-    assessment: "Signature-preserving by constraint: the inline/reified overloads and the @JvmName and @JvmOverloads surface are a released API since 0.20.4 and the starter exposes the type as a ConditionalOnMissingBean, so this changes bodies rather than shapes. waitUntilStarted and StartAt handling move to the runner, which is where ADR 0127 already puts them. Sonnet/high."
+    assessment: "Signature-preserving by constraint: the inline/reified overloads and the @JvmName and @JvmOverloads surface are a released API since 0.20.4 and the starter exposes the type as a ConditionalOnMissingBean, so this changes bodies rather than shapes. waitUntilStarted and StartAt handling move to the runner, which is where ADR 0127 already puts them. MUST PRESERVE getSubscriptionModel(), which the census did not list and which ProjectionAnnotationRegistrar:525 depends on to resolve the recording phase from the exact model the subscription runs on. This unit is what puts @Projection and @Snapshot on the runner without touching their registrars. Sonnet/high."
   U11:
     issue: 721
     goal: "Documentation site: pages/docs/docs.md plus seven _includes/macros/annotation/ files, one commit per held branch across seven branches. Historical news posts excluded."
@@ -208,4 +208,4 @@ units:
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T08:20:00Z
     observed: {}
-    assessment: "The 0.34.0 news post lives on branches rel34 owns (docs/0.34.0-release-notes, docs/append-identity), so U11 hands rel34 the text rather than writing it. HELD for release day, never merged by this epic. Sonnet/medium."
+    assessment: "CORRECTED after dec-0001. ONE new branch off docs main, held for 0.35.0, and it must NOT touch the seven branches held for 0.34.0: those merge on 0.34.0 release day, so editing them would publish 0.35.0 API docs a release early against the AGENTS.md held-branch rule. The pages/docs/docs.md conflict against them is real and is resolved AFTER they merge. No 0.34.0 news post, this epic is not in that release. Sonnet/medium."
