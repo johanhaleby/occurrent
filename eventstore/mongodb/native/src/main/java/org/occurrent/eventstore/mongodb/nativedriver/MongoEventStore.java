@@ -754,6 +754,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
                 String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                 long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
                 Document updatedDocument = convertToDocument(timeRepresentation, streamId, streamVersion, updatedCloudEvent);
+                DcbDocumentMapper.preservePositionAndDcbTags(currentCloudEvent, updatedDocument);
                 updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                 cloudEventUpdater.apply(updatedDocument);
             }

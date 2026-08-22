@@ -902,6 +902,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                                 String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                                 long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
                                 Document updatedDocument = OccurrentCloudEventMongoDocumentMapper.convertToDocument(timeRepresentation, streamId, streamVersion, preservedUpdatedCloudEvent);
+                                DcbDocumentMapper.preservePositionAndDcbTags(currentCloudEvent, updatedDocument);
                                 updatedDocument.put(ID, document.get(ID)); // Insert the Mongo ObjectID
                                 result = mongoTemplate.findAndReplace(cloudEventQuery, updatedDocument, eventStoreCollectionName).thenReturn(preservedUpdatedCloudEvent);
                             } else {
