@@ -78,9 +78,14 @@ import static java.util.Objects.requireNonNull;
  * <ul>
  *   <li><strong>Event path.</strong> An exception (including a {@link SagaConcurrencyException} once the retries are
  *       exhausted) propagates to the subscription model, which redelivers the event and retries the whole step. The
- *       event is not lost. But the subscription is a single ordered channel shared by every instance this saga handles,
- *       so an input that keeps failing blocks the events queued behind it until it succeeds or someone intervenes. One
- *       poisoned instance can stall the others on the same subscription.</li>
+ *       event is not lost. The subscription is a single ordered channel shared by every instance this saga handles, so
+ *       while one event keeps failing the events queued behind it wait. That wait is bounded by
+ *       {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. Once one event has kept failing for one
+ *       instance that long, the instance becomes {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED}, the executor
+ *       stops rethrowing, and the subscription moves past the event so the saga's other instances carry on. The
+ *       quarantined instance stops there, and {@link SagaSubscription#release(String)} brings it back once the cause is
+ *       fixed. Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of blocking indefinitely
+ *       instead.</li>
  *   <li><strong>Timer path.</strong> A failing timeout is caught per instance, logged, and left due, so the next poll
  *       retries it while the other instances keep going. A timeout failure does not block the poller and does not
  *       propagate anywhere else, so only the poller ever retries it, never a subscription redelivery.</li>
