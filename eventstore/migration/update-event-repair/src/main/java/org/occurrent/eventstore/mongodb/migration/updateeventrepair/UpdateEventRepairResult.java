@@ -27,7 +27,9 @@ import java.util.List;
  * An event can be counted in {@code eventsRepaired} and still appear in {@code unrecoverableEvents}. An event whose
  * position was dropped entirely, for instance, gets its {@code dcbTags} array rebuilt, which is counted as a repair,
  * while its position stays gone and is reported. A run where {@code unrecoverableEventCount} is {@code 0} restored
- * everything the old write-back damaged in this collection.
+ * everything it could detect, which is not the same as everything the old write-back damaged. An update that dropped
+ * the {@code dcbtags} extension outright leaves a document nothing can pick out from an ordinary stream event, so it
+ * is neither counted nor repaired. See {@link UpdateEventRepair} for that case.
  *
  * @param eventsRepaired          How many stored events this call modified. A re-run after a completed run reports
  *                                {@code 0}, since the repair only touches events that still look damaged.

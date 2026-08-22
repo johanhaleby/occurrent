@@ -47,8 +47,11 @@ and has no `position` field, so also run:
 db.events.countDocuments({ dcbtags: { $exists: true }, dcbTags: { $exists: false } })
 ```
 
-That second query is a collection scan, so run it during a quiet period on a large collection. If both return `0`, you are
-not affected and the rest of this runbook does not apply.
+That second query is a collection scan, so run it during a quiet period on a large collection. If both return `0`, no damage this tool can find is in the
+collection. That is not quite the same as not being affected. An update function that returned a replacement event
+built from scratch, without the `dcbtags` extension, left a document that matches neither query and that nothing
+can tell apart from an ordinary stream event. If you know you ran one of those over DCB events, read "The damage
+this cannot find" below before you stop. Otherwise the rest of this runbook does not apply to you.
 
 From 0.34.0 the store also runs the first of these itself when it starts, and logs a warning naming this runbook
 when it finds something. It runs only the first, because that is the one that costs nothing, so a silent startup

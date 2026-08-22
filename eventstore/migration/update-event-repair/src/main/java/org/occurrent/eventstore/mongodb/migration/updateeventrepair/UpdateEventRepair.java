@@ -77,7 +77,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * the same as one a running store writes.
  * <p>
  * It is not a general recovery. Where the old write-back destroyed the only copy of a value, that value is gone.
- * Each {@link UnrecoverableEvent.Reason} says which case it is. One kind of damage cannot even be seen: an update
+ * Each {@link UnrecoverableEvent.Reason} says which case it is. One kind of damage cannot even be seen. An update
  * function that returned a replacement event without the {@code dcbtags} extension left a document that no longer
  * looks like a DCB event, and nothing distinguishes it from an ordinary stream event.
  *
@@ -212,7 +212,7 @@ public final class UpdateEventRepair {
     /**
      * An event is damaged when its {@code position} is a string, which is what the old write-back's coercion left
      * behind, or when it carries the {@code dcbtags} extension without the indexed array derived from it. The two are
-     * separate because one update can produce either alone: an event with no DCB tags only ever loses its position,
+     * separate because one update can produce either alone. An event with no DCB tags only ever loses its position,
      * and a second update of an already repaired event would restore neither on its own.
      */
     private static Bson damagedEventFilter() {
@@ -223,8 +223,12 @@ public final class UpdateEventRepair {
     }
 
     /**
-     * Repairs one event in a single update, so it is never left with a restored position and a missing tag array or
-     * the other way round. Anything that cannot be restored is added to {@code unrecoverable} instead.
+     * Repairs one event in a single update, so the fields it can restore are written together or not at all.
+     * <p>
+     * That is atomicity across the recoverable fields, not a promise that both always come back. When one field is
+     * beyond saving and the other is not, the recoverable one is still restored and the other is reported. An
+     * unreadable position leaves the tag array repairable, and an unreadable tag encoding leaves the position
+     * repairable. Only a rejected write keeps both exactly as they were found.
      *
      * @return whether the event was modified.
      */
@@ -232,12 +236,16 @@ public final class UpdateEventRepair {
         Object eventId = event.get(ID);
         Object storedPosition = event.get(POSITION);
         Object rawTags = event.get(DcbCloudEvents.TAGS);
-        if (rawTags != null && !(rawTags instanceof String)) {
+        String encodedTags;
+        if (rawTags == null || rawTags instanceof String) {
+            encodedTags = (String) rawTags;
+        } else {
+            // The position does not depend on the tags, so carry on and repair it. Only the tag array is beyond
+            // saving here, the same way an unreadable position below still leaves the tag array repairable.
             unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.UNREADABLE,
                     "dcbtags is a " + rawTags.getClass().getSimpleName() + " rather than a string"));
-            return false;
+            encodedTags = null;
         }
-        String encodedTags = (String) rawTags;
         List<Bson> updates = new ArrayList<>(2);
 
         if (storedPosition instanceof String positionAsString) {

@@ -79,6 +79,7 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
     @RegisterExtension
     OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
+    private MongoClient mongoClient;
     private ReactiveMongoTemplate mongoTemplate;
     private ReactiveMongoTransactionManager transactionManager;
     private String databaseName;
@@ -89,7 +90,7 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
     void create_template_and_capture_the_store_log() {
         ConnectionString connectionString = new ConnectionString(mongoDBContainer.getReplicaSetUrl() + ".damagedreactor");
         databaseName = requireNonNull(connectionString.getDatabase());
-        MongoClient mongoClient = com.mongodb.reactivestreams.client.MongoClients.create(connectionString);
+        mongoClient = com.mongodb.reactivestreams.client.MongoClients.create(connectionString);
         mongoTemplate = new ReactiveMongoTemplate(mongoClient, databaseName);
         transactionManager = new ReactiveMongoTransactionManager(new SimpleReactiveMongoDatabaseFactory(mongoClient, databaseName));
 
@@ -100,9 +101,10 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
     }
 
     @org.junit.jupiter.api.AfterEach
-    void release_the_log() {
+    void close_mongo_client_and_release_the_log() {
         storeLogger.detachAppender(logAppender);
         logAppender.stop();
+        mongoClient.close();
     }
 
     @Test

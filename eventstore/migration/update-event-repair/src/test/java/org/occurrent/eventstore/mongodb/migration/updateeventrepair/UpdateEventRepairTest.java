@@ -354,8 +354,11 @@ class UpdateEventRepairTest {
                         .extracting(UnrecoverableEvent::reason)
                         .isEqualTo(UnrecoverableEvent.Reason.UNREADABLE),
                 () -> assertThat(result.eventsRepaired())
-                        .as("the readable event must still be repaired")
-                        .isEqualTo(1),
+                        .as("both events must be repaired, since an unreadable tag encoding does not stop the position being restored")
+                        .isEqualTo(2),
+                () -> assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
+                        .as("the position does not depend on the tags, so an unreadable tag encoding must not cost the event its position too")
+                        .isInstanceOf(Long.class),
                 () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:2"))))
                         .as("an event after the unreadable one must be visible again")
                         .containsExactly("b")

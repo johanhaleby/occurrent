@@ -67,8 +67,10 @@ position mapper and tag decoder, so a repaired event is what a running store wou
   `<events>_update_event_repair_checkpoint` collection). If the process is killed, running it again continues from
   where it stopped, and the events it already repaired stay repaired. On completion the checkpoint document is
   removed.
-- **Atomic per event.** Both fields are written in one update, so an event is never left with a restored position
-  and a missing tag array, or the other way round.
+- **Atomic across what it can restore.** The fields it can restore are written in one update, so a partly applied
+  write cannot happen. That is not a promise that both fields always come back. When one is beyond saving and the
+  other is not, the recoverable one is restored and the other is reported, so an event can end up with its position
+  back and its tag array still missing. Only a rejected write keeps both exactly as they were found.
 - **Throttled.** You can make it sleep between batches so it does not compete with production traffic.
 
 Run one instance at a time. Two concurrent runs share one checkpoint document, and the first to finish deletes it

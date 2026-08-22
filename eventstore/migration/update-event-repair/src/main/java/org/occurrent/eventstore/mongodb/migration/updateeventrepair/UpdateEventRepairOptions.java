@@ -50,7 +50,7 @@ public record UpdateEventRepairOptions(int batchSize, long throttleMillis, int m
     }
 
     /**
-     * Sensible defaults for a moderately sized deployment: batches of {@value #DEFAULT_BATCH_SIZE} events, no
+     * Sensible defaults for a moderately sized deployment, meaning batches of {@value #DEFAULT_BATCH_SIZE} events, no
      * throttling, and up to {@value #DEFAULT_MAX_REPORTED_UNRECOVERABLE} unrecoverable events kept in the result.
      */
     public static UpdateEventRepairOptions defaults() {
