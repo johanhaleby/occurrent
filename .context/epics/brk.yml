@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 158
+revision: 159
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -311,7 +311,7 @@ units:
     deliverables:
       - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
     blocking_on: []
-    next_action: "PR 896 MERGED 2026-08-22T06:2xZ as 65041b387 (CAS pin b5c94732d, branch deleted) after round six bounded to four items, re-verify MERGE-SAFE on the delta, 28/28 green, one thread left open by reasoned reply (reactor marker window, #893). Johan ruled dec-0018 in Attended: merge, durable marker fence as its own unit in this epic. Copilot non-loss finding on the head (NOT_DELIVERABLE described as filter-only in seven comments) recorded as #893 item 24. Docs branch docs/421-broker-modules updated at bfe02e0b (lines 3261, 3267, 3508). NEXT: U15 registered as the durable marker fence unit (plan gate first, both stacks, CheckpointWriteCondition keyed by the attempt token or a durable delete) and dispatch round-3 fixpoint review over main at 65041b387 with #893 as the carry list. Monitor bkc4p3e8e active"
-    last_meaningful_progress_at: 2026-08-22T06:25:00Z
+    next_action: "ROUND 3 (cap) DONE 2026-08-22T07:1xZ over 65041b387, session ecstatic-dubinsky-bf9908-4e: one loss-class finding (explicit empty bindings/topics binds nothing, bridge reports healthy), fixed regardless of severity per the standing bar via a Sonnet worktree subagent on brk/u9-round3-carry together with #893 items 16 and 24, the stale 896 prose (Kafka bridge comment, ADR 133 line 151, changelog line 6) and the stray .plan/u9-pr-b-plan.md. Below-threshold remainders posted as #893 items 25 to 28. Cap reached, so the remainder list goes to Johan as the one structured ask at closeout. U9 closes when the carry PR merges and the mechanical checklist in the goal is run. Monitor bkc4p3e8e active"
+    last_meaningful_progress_at: 2026-08-22T07:10:00Z
     observed: {}
     assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."
