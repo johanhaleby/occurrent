@@ -391,3 +391,74 @@ The blocking and reactor descriptors are separate types, unlike `Projection`, so
 and run on both stacks. That is a genuine loss against the projection precedent. It comes from the handler being an
 effect, and there is no honest way to give a blocking handler to a reactive runner, so a shared type would only be
 possible by making one of the two stacks pretend to be the other.
+
+## Amended on 2026-08-22: the runner becomes the single execution path, and the descriptor gains a catch-all
+
+Decision 1 designs the descriptor and Decision 6 scopes rewriting the annotation registrars as epic work, but reading
+every call site those registrars hold surfaces two things neither says, what a descriptor path executes through and a
+hole in the builder's own coverage found while answering that question. Both are decided here.
+
+### A catch-all handler joins the explicit selector
+
+Decision 1 lets an explicit `Filter` override the type-derived selector, the way `Projection.filter()` does, and
+separately says an event the selector admits that no handler handles is ignored. Put those two together and a
+descriptor built from an explicit `Filter` has nowhere to put an event it admits, because every registration on the
+builder is keyed to a type, so a caller who wants "handle everything this filter matches" cannot say so, and the
+descriptor that results has zero registrations and drops every event it receives. That is a gap in the descriptor's own
+design, not something the epic introduced, and it falls hardest on exactly the caller most likely to use an explicit
+`Filter`, since that caller has already said the type-derived selector is not what they want.
+
+The builder gains a type-free catch-all handler, and it is public, alongside the type-keyed registrations Decision 1
+already defines. Which handler an event reaches follows the same rule Decision 1 already takes from
+`Projection.Builder.on`, an exact match first, then the nearest superclass, then an interface, and the catch-all runs
+only when nothing more specific claims the event, never in addition to a type-keyed handler that did. A descriptor built
+from one `Filter` and the catch-all alone now says exactly what a plain `subscribe(id, filter, startAt, (metadata,
+event) -> ..)` call says today, which keeps the descriptor able to express every subscription the DSL already can.
+
+### The registrars have never named what they call
+
+Five of the framework's annotation registrars reach the subscription DSL to run their handlers: `SubscriptionAnnotationRegistrar`
+on both stacks, the two files Decision 6 names, `ProjectionAnnotationRegistrar` on the blocking stack, and
+`SnapshotAnnotationRegistrar` on both stacks. The reactor `ProjectionAnnotationRegistrar` is not among them. It calls
+`ReactiveProjectionRunner` directly and never reaches the subscription DSL. Between the five there are 21 lookups, four
+per registrar, one stream against `StreamSubscriptions`, one agnostic against `Subscriptions`, one synchronous against a
+name-qualified `Subscriptions` bean over a `SynchronousSubscriptionModel`, and one DCB against `DcbSubscriptions` in
+`dsl/dcb-dsl`. All seventeen non-DCB calls share one shape, `subscribe(id, <Filter>, startAt,
+[waitUntilStarted], (metadata, event) -> ..)`, and not one of the 21 passes an event `Class`. The registrar derives its
+selector from the annotation before it ever reaches the DSL and hands over a finished filter and one handler, exactly
+the shape the catch-all handler above now lets a hand-built descriptor express too.
+
+### The runner is the single execution path, within 0.35.0
+
+Every one of those 21 lookups calls the runner instead of `StreamSubscriptions.subscribe`, `Subscriptions.subscribe`,
+or `DcbSubscriptions.subscribeWithMetadata`. `Subscriptions` and `StreamSubscriptions` are reshaped into a thin idiom
+layer that builds a `Subscription<E>` and hands it to the matching runner, covering the seventeen stream, agnostic, and
+synchronous sites, the synchronous ones for free since they are the same class reached through a different bean name.
+That reshape is unit U13 of the implementation epic this ADR scopes. `DcbSubscriptions` is reshaped the same way onto
+the two DCB runners, covering the remaining four sites, as unit U14. Both ship inside 0.35.0, so the runner becomes the
+one execution path across all 21 call sites within a single release rather than as a goal spread across two.
+
+### `waitUntilStarted` is forwarded, never moved
+
+The blocking `subscribe` overloads already have `waitUntilStarted` as a released parameter, with a default of `true`,
+and the registrars already compute its value before calling one, through
+`SubscriptionAnnotations.subscriptionsStartOnTheirOwn` reading the Spring `ApplicationContext`. A descriptor cannot
+compute that value itself: Decision 1 keeps `Subscription<E>` free of Spring, and reading the application context is
+exactly the coupling that freedom rules out. So the caller keeps computing it and passes it to the runner as an
+argument, the same way it already passes a start position, and the runner is what honours it. The reactor stack has no
+such parameter today, for the reason Decision 1 already gives, that a reactive handle returns its own `Mono<Void>`
+from `waitUntilStarted()` rather than blocking the caller to produce one, and this amendment does not add one there.
+
+### The Kotlin DSL classes stay real classes, and real Spring beans
+
+Reshaping `Subscriptions` and `StreamSubscriptions` into an idiom layer changes what their bodies do, not what they
+are. Both stay a `class`, and both stay the beans the Mongo auto-configuration exposes with `@Bean`. [ADR
+29](0029-rename-subscriptions-dsl-to-stream-subscriptions.md) is the one that still binds here, for the constraint
+rather than the description: `Subscriptions` has been released since 0.20.4, the auto-configuration exposes it as a
+bean, the annotation processor looks it up with `getBean`, and callers inject it, so removing the class or changing its
+identity would break source and binary compatibility that ADR 29 chose to keep. What ADR 29 decided the class would be,
+a deprecated empty subclass of `StreamSubscriptions`, is not what it is today. [ADR
+51](0051-capability-agnostic-subscription.md) revived `Subscriptions` as the capability-neutral default that delivers
+both stream and DCB events filtered only by type, superseding ADR 29's decision in part, which is what ADR 29's own
+Status now says. The reshape changes `Subscriptions` and `StreamSubscriptions` again, a third time for the same two
+classes, and it changes what is inside them, never whether they exist as classes and beans.
