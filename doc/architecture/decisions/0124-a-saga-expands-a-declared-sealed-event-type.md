@@ -6,6 +6,12 @@ Date: 2026-08-11
 
 Accepted. Fixes #743. Ships in 0.33.0, which is held for it.
 
+Amended in 0.34.0 on the exemption only, by [#753](https://github.com/johanhaleby/occurrent/issues/753). The
+paragraph below titled "The one deliberate exemption" describes 0.33.0 and no later release. A non-sealed concrete
+class declared directly is refused from 0.34.0, so the rule this ADR states now holds with nothing exempt from it.
+Everything else here is unchanged. See the changelog's breaking changes and section 3 of
+[the 0.34.0 upgrade guide](../../migration/upgrading-to-0.34.0.md#3-declaring-an-event-type-whose-concrete-subtypes-cannot-be-found-is-refused).
+
 123 was the highest number claimed anywhere at write time, on `cdx33/u11-stepcondition-counters`, which is unmerged.
 The check covered every remote branch (47 of them) rather than `main` alone, because this repository has already had one
 collision from a number claimed on a branch that never merged. The audit ran again at the moment this file was written,

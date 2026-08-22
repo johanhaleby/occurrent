@@ -7,6 +7,17 @@ Date: 2026-08-16
 Accepted. Decides #750, #753 and #758. The code change follows in a separate unit. This
 records the decision, not the diff.
 
+Amended in 0.34.0 on the exemption only, by [#753](https://github.com/johanhaleby/occurrent/issues/753). What
+this ADR decided about #753 was to leave the exemption in place and record it, on the reading that a uniform
+exemption needed no code change. That reading held while the loss stayed invisible, and it is what changed. A
+caller declaring a concrete class that is neither final nor sealed and publishing a subclass of it never
+receives that subclass and gets no warning, and no later release makes that visible without the same break,
+so the refusal arrives in 0.34.0 instead. Every passage below saying the exemption is uniform across the sites
+this ADR routes through is still true of the code, since they all share the one helper. The exemption itself
+is gone, and with it the `Outcome.EXEMPT_AND_MISSES_SUBCLASSES` outcome named below, since the property test
+now has only the two outcomes left. Everything else here is unchanged. See the changelog's breaking changes and section 3 of
+[the 0.34.0 upgrade guide](../../migration/upgrading-to-0.34.0.md#3-declaring-an-event-type-whose-concrete-subtypes-cannot-be-found-is-refused).
+
 125 was the highest ADR number claimed anywhere at write time, across all 75 remote branches
 that exist, not main alone, matching the convention ADR 124 adopted after this repository's
 prior numbering collisions. The audit ran again immediately before this file was written.
