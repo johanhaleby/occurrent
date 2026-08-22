@@ -114,7 +114,8 @@ class MongoAppliedAppendStoreBoundsTest {
         assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
                 .isInstanceOf(MongoAppliedAppendStore.ConflictingIndexException.class)
                 .hasMessageContaining("projectionId_appendId")
-                .hasMessageContaining("Drop that index");
+                .hasMessageContaining("Drop that index")
+                .hasMessageContaining("restart");
 
         verify(indexOperations, times(1)).ensureIndex(any());
     }

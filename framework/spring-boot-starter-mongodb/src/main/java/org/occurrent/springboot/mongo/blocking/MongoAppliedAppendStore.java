@@ -279,11 +279,15 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      * The deadline stops a read from starting, not one already running. After the first read, no attempt begins
      * once the deadline has passed, and the one already in flight when it passes runs on, so this method returns
      * once that attempt answers. The first read always runs, so a {@code timeout} of zero or one that has already
-     * elapsed still answers whether the append is applied rather than reporting that it is not. A MongoDB client left with no timeout of its own does not answer at all while a connection it has
-     * accepted stops responding, so the timeout a caller asked for holds only as far as the client's own
-     * {@code timeoutMS} or socket timeout holds. Configure one on the client if the wait's deadline has to be the
-     * one a caller gets, for example through {@code spring.mongodb.uri}. The reactive store bounds the same
-     * read with {@code block(Duration)}, which the blocking driver has no equivalent of.
+     * elapsed still answers whether the append is applied rather than reporting that it is not.
+     * <p>
+     * A MongoDB client left with no timeout of its own does not answer at all while a connection it has accepted
+     * stops responding, so the timeout a caller asked for holds only as far as the client's own {@code timeoutMS}
+     * or socket timeout holds. Configure one on the client if the wait's deadline has to be the one a caller gets,
+     * for example through {@code spring.mongodb.uri}. The reactive store cancels a read that outlasts the time it
+     * has left, with {@code block(Duration)}, which the blocking driver has no equivalent of. It has no such
+     * advantage on the first read, where there is no remaining time to cancel against and it blocks exactly as
+     * this store does.
      */
     @Override
     public boolean waitUntilApplied(String projectionId, AppendId appendId, Duration timeout, Backoff backoff) {
@@ -373,7 +377,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
             // No collMod for this one, unlike the TTL index. collMod changes expireAfterSeconds and hidden, and it
             // cannot change a partial filter or a collation at all, so there is nothing to alter this index into.
             // An operator drops it, and the message says so rather than leaving error 85 to be retried.
-            throw new ConflictingIndexException("Collection '" + collection + "' already has an index named '" + PROJECTION_ID_APPEND_ID_INDEX + "' whose options differ from the unique index on " + PROJECTION_ID + " and " + APPEND_ID + " this store needs. Drop that index and let this store create its own.", e);
+            throw new ConflictingIndexException("Collection '" + collection + "' already has an index named '" + PROJECTION_ID_APPEND_ID_INDEX + "' whose options differ from the unique index on " + PROJECTION_ID + " and " + APPEND_ID + " this store needs. Drop that index and restart the application, since this store remembers the conflict rather than asking MongoDB again on every call.", e);
         }
         try {
             indexOps.ensureIndex(new Index().on(RECORDED_AT, Direction.ASC).named(RECORDED_AT_TTL_INDEX).expire(retention));

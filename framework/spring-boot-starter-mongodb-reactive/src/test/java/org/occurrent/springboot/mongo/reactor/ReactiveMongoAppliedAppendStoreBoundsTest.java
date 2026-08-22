@@ -120,7 +120,8 @@ class ReactiveMongoAppliedAppendStoreBoundsTest {
         assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
                 .isInstanceOf(ReactiveMongoAppliedAppendStore.ConflictingIndexException.class)
                 .hasMessageContaining("projectionId_appendId")
-                .hasMessageContaining("Drop that index");
+                .hasMessageContaining("Drop that index")
+                .hasMessageContaining("restart");
 
         assertThat(indexAttempts).hasValue(1);
     }

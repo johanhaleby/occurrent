@@ -198,7 +198,7 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
             // An operator drops it, and the message says so rather than leaving error 85 to be retried.
             Mono<Void> uniqueIndex = indexOps.ensureIndex(new Index().on(PROJECTION_ID, Direction.ASC).on(APPEND_ID, Direction.ASC).named(PROJECTION_ID_APPEND_ID_INDEX).unique()).then()
                     .onErrorMap(ReactiveMongoAppliedAppendStore::isIndexOptionsConflict,
-                            e -> remember(new ConflictingIndexException("Collection '" + collection + "' already has an index named '" + PROJECTION_ID_APPEND_ID_INDEX + "' whose options differ from the unique index on " + PROJECTION_ID + " and " + APPEND_ID + " this store needs. Drop that index and let this store create its own.", e)));
+                            e -> remember(new ConflictingIndexException("Collection '" + collection + "' already has an index named '" + PROJECTION_ID_APPEND_ID_INDEX + "' whose options differ from the unique index on " + PROJECTION_ID + " and " + APPEND_ID + " this store needs. Drop that index and restart the application, since this store remembers the conflict rather than asking MongoDB again on every call.", e)));
             Mono<Void> ttlIndex = indexOps.ensureIndex(new Index().on(RECORDED_AT, Direction.ASC).named(RECORDED_AT_TTL_INDEX).expire(retention)).then()
                     .onErrorResume(e -> isIndexOptionsConflict(e)
                             ? indexOps.alterIndex(RECORDED_AT_TTL_INDEX, IndexOptions.expireAfter(retention))
