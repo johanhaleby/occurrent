@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 45
-updated_at: '2026-08-22T13:59:02+00:00'
-updated_by: 'orchestrator rel34: U19 registered for #931, the retryIf invocation contract'
+revision: 46
+updated_at: '2026-08-22T14:02:19+00:00'
+updated_by: 'orchestrator rel34: #927 adopted into U2 by Johan''s ruling, U19 chip dispatched'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -125,10 +125,14 @@ units:
       ref: 876
       met: false
       evidence: ''
+    - check: issue_closed
+      ref: 927
+      met: false
+      evidence: ''
     blocking_on: []
     next_action: worker adds the forged-tags-on-a-non-DCB-original test, verifies it fails with preserveTags
       reverted, then the gate re-runs
-    last_meaningful_progress_at: '2026-08-22T12:54:55+00:00'
+    last_meaningful_progress_at: '2026-08-22T14:02:19+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
@@ -266,6 +270,19 @@ units:
           the suite is what remains. Said so on the PR.'
         via: gh api pulls/901/reviews + reading the three test files at pr901
         at: '2026-08-22T12:54:55+00:00'
+      927_folded_in:
+        note: '#927 adopted into 0.34.0 on Johan''s ruling and added to THIS unit rather than dispatched
+          separately. The returned event never regains streamId and streamVersion when an updater builds
+          a replacement from scratch, because they are baked into the stored document through convertToDocument''s
+          parameters and never reapplied to the object handed back. Third instance of one defect class
+          on updateEvent: this PR closes the position instance (#876) and the DCB-tags instance (#904),
+          and its own verification confirmed position, tags and appendId all agree between the returned
+          event and the document in every case tried, so these two fields are what remains. Into U2 because
+          901 must push again for the coverage test regardless, so it costs a commit rather than a review
+          cycle, and a separate unit would rebuild the same setup across the same three stores and collide
+          on the same files. NOT a regression from 901 and 901 does not touch it.'
+        via: Johan's structured-ask ruling
+        at: '2026-08-22T14:02:19+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
@@ -1637,7 +1654,7 @@ units:
     goal: RetryStrategy.retryIf and mapRetryPredicate document that the predicate may be invoked more
       than once per attempt, is consulted during the backoff wait as well as on failure, and must therefore
       be free of side effects. Documentation only, no behaviour change.
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -1652,8 +1669,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch as a chip
-    last_meaningful_progress_at: '2026-08-22T13:59:02+00:00'
+    next_action: 'await the worker''s claim on #931'
+    last_meaningful_progress_at: '2026-08-22T14:02:19+00:00'
     observed:
       origin:
         note: 'Found by U4 the expensive way. ReactiveMongoAppliedAppendStore counted attempts inside
@@ -1675,6 +1692,11 @@ units:
           That one PREDATES #916 and correctly stays at 0.35.0. Cross linked in both directions.'
         via: AGENTS.md release-status rule
         at: '2026-08-22T13:59:02+00:00'
+      dispatched:
+        note: Dispatched as a chip titled '⌁[rel34/U19#931] Document retryIf invocation · Sonnet/low',
+          57 chars, both title gates run BEFORE the spawn call this time rather than after.
+        via: orchestrator
+        at: '2026-08-22T14:02:19+00:00'
     assessment: Small and documentation only, but it closes a behaviour change this release introduces.
       Registered rather than folded into U4 so PR 914 can merge on its own gate.
 cross_epic:
