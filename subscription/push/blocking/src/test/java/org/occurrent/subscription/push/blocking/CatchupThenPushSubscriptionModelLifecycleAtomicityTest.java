@@ -26,14 +26,19 @@ import org.junit.jupiter.api.Timeout;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -250,6 +255,83 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while waiting for the latch", e);
         }
+    }
+
+    /**
+     * The marker write and the ownership check that guards it are one step, so a cancel cannot take the id from an
+     * attempt whose write is already running. Only an attempt that read the whole history and owned the id
+     * throughout the write can have left a marker behind, which is what lets every later attempt trust one it
+     * finds, in this process and after a restart alike.
+     * <p>
+     * Asserted as an ordering rather than as a duration, so it says which of the two finished first rather than how
+     * long either took. The cancel is released only once it is genuinely waiting on the monitor, which is what
+     * keeps the ordering from being decided by the cancel simply not having started yet.
+     */
+    @Test
+    void a_cancel_cannot_take_the_id_from_an_attempt_whose_marker_write_is_already_running() throws Exception {
+        CountDownLatch saveEntered = new CountDownLatch(1);
+        CountDownLatch releaseSave = new CountDownLatch(1);
+        List<String> order = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage backing = new InMemoryCheckpointStorage();
+        CheckpointStorage marker = new CheckpointStorage() {
+            @Override
+            public @Nullable Checkpoint read(String subscriptionId) {
+                return backing.read(subscriptionId);
+            }
+
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                saveEntered.countDown();
+                awaitLatch(releaseSave);
+                Checkpoint saved = backing.save(subscriptionId, checkpoint, condition);
+                order.add("marker write returned");
+                return saved;
+            }
+
+            @Override
+            public OptionalLong writeVersion(String subscriptionId) {
+                return backing.writeVersion(subscriptionId);
+            }
+
+            @Override
+            public void delete(String subscriptionId) {
+                backing.delete(subscriptionId);
+            }
+
+            @Override
+            public boolean exists(String subscriptionId) {
+                return backing.exists(subscriptionId);
+            }
+        };
+
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(() -> Stream.of(cloudEvent("1"))), feed, marker);
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        });
+
+        assertThat(saveEntered.await(10, TimeUnit.SECONDS))
+                .as("the attempt read its history and its marker write is running")
+                .isTrue();
+
+        Thread canceller = new Thread(() -> {
+            model.cancelSubscription("sub");
+            order.add("cancel returned");
+        }, "canceller");
+        canceller.start();
+        // Either it is waiting for the monitor the write holds, which is the invariant, or it already ran, which is
+        // the falsification. Waiting for one of the two rather than sleeping is what makes the assertion below mean
+        // something in both cases.
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (canceller.getState() != Thread.State.BLOCKED && order.isEmpty() && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+
+        releaseSave.countDown();
+        canceller.join(TimeUnit.SECONDS.toMillis(10));
+
+        assertThat(order)
+                .as("the write the owning attempt started ran to completion before the cancel could take the id")
+                .containsExactly("marker write returned", "cancel returned");
     }
 
     private static PositionOrderedReader reader(Supplier<Stream<CloudEvent>> history) {
