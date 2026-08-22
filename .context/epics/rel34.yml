@@ -1,8 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 50
-updated_at: '2026-08-22T15:07:04+00:00'
-updated_by: 'orchestrator rel34: revert merged, R3 clear of both sibling epics'
+revision: 52
+updated_at: '2026-08-22T15:11:57+00:00'
+updated_by: 'orchestrator rel34: blocking_on entries given the documented {what, since, recheck_after}
+  shape'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -129,10 +130,15 @@ units:
       ref: 927
       met: false
       evidence: ''
-    blocking_on: []
+    blocking_on:
+    - what: 'PR 901 held by the orchestrator gate. Clears when the worker pushes a test for an original
+        with no tags whose updater forges some, proving the withoutExtension(TAGS) branch, plus #927''s
+        streamId and streamVersion, and the gate re-runs from the top on the new head.'
+      since: '2026-08-22T15:11:57+00:00'
+      recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker adds the forged-tags-on-a-non-DCB-original test, verifies it fails with preserveTags
       reverted, then the gate re-runs
-    last_meaningful_progress_at: '2026-08-22T14:02:19+00:00'
+    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
@@ -283,6 +289,17 @@ units:
           on the same files. NOT a regression from 901 and 901 does not touch it.'
         via: Johan's structured-ask ruling
         at: '2026-08-22T14:02:19+00:00'
+      holds_were_prose_only:
+        note: SELF-AUDIT prompted by sdi finding the same defect in its own file. FIVE rel34 units (U2,
+          U4, U6, U10, U16) were marked BLOCKED with the reason recorded ONLY in next_action prose, and
+          blocking_on empty on every one. epic-state.py derives phase from deliverables, blocking_on and
+          session, and never from prose, so derive computed these as READY or RUNNING while every human-readable
+          surface said held. A restarted orchestrator would have treated five in-flight held PRs as dispatchable.
+          Same defect sdi hit, where its U2 was READY by the graph and held only by a sentence in ORCHESTRATOR.md.
+          Fixed by writing each hold into blocking_on with its CLEARING CONDITION stated as an observable
+          event rather than as a description of the problem, so a restart can tell whether it still holds.
+        via: self-audit against epic-state.py's phase derivation
+        at: '2026-08-22T15:11:32+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
@@ -432,9 +449,15 @@ units:
       ref: 879
       met: false
       evidence: ''
-    blocking_on: []
+    blocking_on:
+    - what: PR 914 held by the orchestrator gate on three grouped defects. Clears when the reactive first-read
+        overclaim is corrected on all three prose surfaces in one pass, the retry context is preserved
+        in all three wrappers including the one only in the suppressed block, and the attempt ceiling
+        either rejects values above it or honours them.
+      since: '2026-08-22T15:11:57+00:00'
+      recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker answers three grouped defects on 914, then the gate re-runs from the top
-    last_meaningful_progress_at: '2026-08-22T13:44:39+00:00'
+    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -573,10 +596,15 @@ units:
       ref: 837
       met: false
       evidence: ''
-    blocking_on: []
+    blocking_on:
+    - what: PR 933 held by the orchestrator gate on the no-regression floor. Clears when the shared resolve
+        helper falls back to the raw bean wherever the resolved target cannot take the method, and processSynchronousSubscribeAnnotation
+        routes through that same helper rather than its own bare getBean.
+      since: '2026-08-22T15:11:57+00:00'
+      recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker adds the no-regression floor to its resolve helper and routes the fourth call
       site through it
-    last_meaningful_progress_at: '2026-08-22T15:01:48+00:00'
+    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
     observed:
       scope_derived_by_orchestrator:
         note: 'Enumerated the invocation sites myself rather than trusting the issue text. The defect
@@ -939,9 +967,14 @@ units:
       ref: 867
       met: false
       evidence: ''
-    blocking_on: []
+    blocking_on:
+    - what: PR 919 held by a falsified adversarial pass. Clears when RabbitMqBuildFailureClassifier.isTransient
+        returns for every cause chain a caller can construct, including one that loops back on itself,
+        with a test carrying a timeout.
+      since: '2026-08-22T15:11:57+00:00'
+      recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker fixes the non-terminating classifier, then the gate re-runs from the top
-    last_meaningful_progress_at: '2026-08-22T12:31:11+00:00'
+    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
     observed:
       gate_919:
         note: 'PR 919 opened, all ten dispatched units now have PRs. TWO FAILURES on test (example-projection)
@@ -1609,10 +1642,15 @@ units:
       ref: 912
       met: false
       evidence: ''
-    blocking_on: []
+    blocking_on:
+    - what: PR 928 held by a falsified adversarial pass. Clears when the invariant names which walk it
+        means, the ExecuteFilter javadoc stops promising a widened exclusion is always safe, and the Kotlin
+        enum with constant bodies gets advice a caller can actually act on.
+      since: '2026-08-22T15:11:57+00:00'
+      recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker restates the invariant's walk, corrects the excludeTypes javadoc, fixes the Kotlin
       enum advice
-    last_meaningful_progress_at: '2026-08-22T13:44:39+00:00'
+    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
     observed:
       pr_opened:
         note: PR 928 on rel34/u16-type-filter-expansion, 8 files, touching ExecuteFilter, DcbCriteriaBuilder.kt,
@@ -1731,7 +1769,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: 'loving-spence-127dc6-e8, chip session for #931, delivered PR 937'
     deliverables:
     - check: pr_merged
       ref: 937
@@ -1743,7 +1781,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: gate PR 937 once CI concludes
-    last_meaningful_progress_at: '2026-08-22T15:01:48+00:00'
+    last_meaningful_progress_at: '2026-08-22T15:11:57+00:00'
     observed:
       origin:
         note: 'Found by U4 the expensive way. ReactiveMongoAppliedAppendStore counted attempts inside
