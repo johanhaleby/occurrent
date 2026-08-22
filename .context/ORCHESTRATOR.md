@@ -1022,3 +1022,17 @@ Skill re-read properly this time, by enumerating rather than by inferring: five 
 **STALLED on a unit with no session is a claim about the orchestrator.** Appended to the sweep sentence that flips health to STALLED and prescribes a tail-read, because a tail-read presumes a worker and a blocked unit has none. Johan's question about stalled units is what surfaced it, and the honest count was two real out of five.
 
 **One thing deliberately not patched, recorded because the near miss is the useful part.** sdi's PR monitor computed its foreign set once at arming, so every PR opened afterwards emitted deltas forever. That looked like a defect in the tested pattern and the fix belonged in `references/fleet-monitor.md`. The word "foreign" does not occur in that reference at all. It was sdi's own addition on top of the shared pattern, so the lesson stays local and a shared reference was not edited for a bug it does not have. Checking before patching cost one grep.
+
+### sdi 2026-08-22T16:04:49Z: stale a second time, for the opposite reason, and the fix caused it
+
+Johan pointed at the stale banner again. Correct again, and the cause inverts the first one.
+
+The first staleness was a busy loop skipping the refresh 21 times. This one is a QUIET loop: zero checkpoints fired between 15:22Z and 16:00Z, which is right, because sdi is idle by choice waiting on a release tag that may be hours away. Nothing was neglected. The projection was simply published as `active` with a 38 minute deadline that nothing intended to meet.
+
+**The skill already answers this and the answer was read today.** A loop about to go quiet for longer than its deadline sets `loop_state` to `paused` rather than leaving `active` with a deadline nobody will meet, because active plus an expired deadline renders as a lie rather than as silence. This file already called the epic idle by choice, in those words.
+
+**The reason it happened anyway is the fix for the first failure.** The refresh was made into one command so a busy checkpoint could not skip it, and that script hardcoded `"loop_state":"active"`. It could not express `paused`, so the option stopped being a decision available at the point of use, and a missing option is invisible from there. The mechanism built to enforce the rule had encoded only the rule's common case.
+
+Fixed: the command now takes `active <stale_after> | paused | finished`, refuses an unknown state, and sends a null deadline for anything but active, which is what the schema required all along. sdi's projection now reads `paused` with no deadline, which is the honest rendering of a fleet holding a single watch on the `occurrent-0.34.0` tag.
+
+The resume path is real rather than assumed: the tag monitor `bgoj266dz` wakes the loop when the tag appears, and that wake is where `active` comes back with a deadline sdi actually intends.
