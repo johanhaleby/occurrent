@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 71
-updated_at: '2026-08-22T17:20:35+00:00'
-updated_by: 'orchestrator rel34: U13 and U14 dispatched the tick 901 unblocked them'
+revision: 72
+updated_at: '2026-08-22T17:23:15+00:00'
+updated_by: 'orchestrator rel34: 941 CI failure is real event loss, not the environment'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -499,9 +499,9 @@ units:
         either rejects values above it or honours them.
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: worker fixes two self-contradictions, adds a biting test for retryUntil, corrects the
-      :67 javadoc
-    last_meaningful_progress_at: '2026-08-22T17:03:48+00:00'
+    next_action: await CI on 4986f8978, then re-gate with a fresh adversarial pass since production behaviour
+      changed
+    last_meaningful_progress_at: '2026-08-22T17:23:15+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -628,6 +628,22 @@ units:
           of 13, and the zero and already-expired cases making exactly one read on both stacks.'
         via: adversarial verify subagent, empirical with mocked Mongo
         at: '2026-08-22T17:03:48+00:00'
+      all_four_fixed_and_the_boundary_behaviour_changed:
+        note: 'Worker fixed all four and, importantly, took the instruction that mattered: it checked
+          each of the 44 current hits against what the code does rather than re-running the grep. Three
+          were stale diff artifacts of the two fixes, confirmed gone from the working tree rather than
+          assumed; the rest are counterfactuals about old behaviour, historical notes, a claim about error
+          85, or claims a test now covers. Falsifier 1 fixed by replacing the whole passage with one statement
+          naming which implementation does what, and ADR 132 separated the two stacks with the blocking-only
+          reason attached to the blocking half. Falsifier 2 fixed by CHANGING BEHAVIOUR rather than wording:
+          the store now stops only a policy still retrying past the ceiling, so a policy stopping at or
+          before it ends on its own terms including its own onRetryExhaustedThrow mapping. The consequence,
+          that the store makes at most one attempt beyond the ceiling when a policy never stops, is now
+          stated in the constant''s javadoc in those words rather than as a round number. That is a production
+          change and the head must be re-verified rather than carried. Both secondaries fixed, and the
+          retryUntil test now bites, verified by reverting only that constructor.'
+        via: worker report
+        at: '2026-08-22T17:23:15+00:00'
     assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:30:57Z after
       a scoping read, which is why #878 moved here from U5. The read found two collisions the original
       split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
@@ -657,8 +673,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: await CI and Copilot on 941, then gate with an adversarial pass
-    last_meaningful_progress_at: '2026-08-22T16:58:50+00:00'
+    next_action: worker reproduces the TCK lifecycle test on its own head and rules finding versus flake
+    last_meaningful_progress_at: '2026-08-22T17:23:15+00:00'
     observed:
       dispatched_plan_first:
         note: 'Dispatched PLAN FIRST rather than as an implementation, because #891''s own filer recorded
@@ -719,6 +735,26 @@ units:
           six months later.'
         via: git diff origin/main...pr941 and reading ADR 0135
         at: '2026-08-22T16:58:50+00:00'
+      ci_failure_is_event_loss_not_environment:
+        note: 'MY DIAGNOSIS METHOD WAS WRONG AND THE WORKER CAUGHT IT. I reported the CI log as unreadable
+          when the RUN was still in_progress. I checked the JOB''s status, which was completed/failure,
+          and never the run''s, and logs are only served once the run completes. Run 32586344244 has since
+          completed and the log reads fine. THE FAILURE IS REAL AND IS NOT WHAT THE WORKER REPRODUCED
+          LOCALLY. Zero MongoDBContainer errors, zero container errors of any kind, ONE assertion failure:
+          SubscriptionModelConformance$TheLifeCycle.a_paused_subscription_receives_what_the_fixture_declares_and_delivers_again_once_resumed,
+          expecting subsequence [''2'',''3''] and getting actual [''3'']. An event published while the
+          subscription was paused was LOST, in a model that declares it holds events for a paused subscription.
+          That is the TCK asserting event loss. The worker''s local Chunk A reproduction found genuine
+          container contention in SpringMongoSubscriptionModelTest on a 2 GiB VM, established properly
+          by passing in isolation, but that is a different problem from what CI hit. Its two reachability
+          arguments were also scoped to subscription/mongodb/spring and application, while the failure
+          is in tck/subscription-blocking, which its modules depend on the other way. A Mongo driver ''IllegalStateException:
+          state should be: open'' is logged from ReactorMongoSubscriptionModel immediately after the assertion,
+          which may be shutdown ordering after the failure or may be its cause, and a closed client mid-stream
+          would explain a dropped delivery. Routed to the worker to establish which. NOT re-running the
+          shard on the strength of a different failure reproduced elsewhere.'
+        via: gh api actions jobs logs --allow-escape-sequences on the completed run
+        at: '2026-08-22T17:23:15+00:00'
     assessment: '#891 ALONE now; #878 moved to U4. Sequenced behind U12 rather than run beside it: #891''s
       fix path runs through framework/spring-boot-autoconfigure/reactor ProjectionAnnotationRegistrar.java
       and ComposedCatchupModel.java, the two files U12 owns. Give it to the U12 worker when U12 merges,
