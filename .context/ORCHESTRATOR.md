@@ -769,3 +769,11 @@ So the rule both fleets wrote this morning is the weaker form. Read the clock is
 Two observation keys still embed fabricated times in their names, `fence_2026_08_22T11_35Z` and `fence_2026_08_22T13_0xZ`. Values inside corrected, keys deliberately not, since a key is a label with no consumer and renaming risks a reference for no gain. Recorded rather than fixed so nobody later reads those names as measurements.
 
 U1 unchanged at 149 files and quiet for five minutes inside a testcontainers run, which is expected for Mongo startup rather than a stall. Watch it past twenty minutes.
+
+### sdi checkpoint 2026-08-22T13:40:55Z: every completion claim verified against gh, zero exceptions
+
+rel34 extended the audit to completion claims and sdi ran the same pass. Both DONE units rest on merged-PR deliverables and both verify to the second and to the SHA: PR 924 merged `12:48:17Z` as `6f47516c6`, PR 923 merged `12:38:27Z` as `5ba3b9bfa`. Every other external fact the state file cites verifies too: PR 913 merged as `a86909f5d`, PR 902 merged as `4f12b2ffb`, PR 908 closed with a null `mergedAt` exactly as the file's "CLOSED WITHOUT MERGING" note says, #753 closed, #871 closed at `12:23:30Z`, and both anchor issues #721 and #725 still open as the epic expects.
+
+That is the same total split rel34 found on its own data. Values fetched from a program are right, values typed by a model are wrong, and now on two independent datasets with no counterexample in either direction. The mechanism is worth stating over the symptom: a model filling a field cannot tell recalling from inventing, and a program filling the same field never faces the choice.
+
+One scoping note carried back from rel34. Its repair sweep missed three external times because it matched full ISO strings while those were written bare as `HH:MM:SSZ` in prose. sdi's file carried one of that shape, the `12:23:30Z` issue-close time, which verified. An audit anchored on the schema's format will not see what a sentence carries, and prose is where a fabricated time is least likely to be challenged.
