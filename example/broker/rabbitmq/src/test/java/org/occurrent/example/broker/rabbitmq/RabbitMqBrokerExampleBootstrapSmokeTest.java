@@ -113,10 +113,14 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
      * an accessor for it, and {@code RabbitMqCloudEventSink} itself has no closed-state to probe from outside. A
      * leaked sink would show up as an open channel on the connection, not as anything this probe can observe.
      * Failing the bridge's own channel open,
-     * the second {@code openChannel()} call on the connection (the first is the sink's), forces exactly that
-     * partial-construction failure without touching the bridge's own topology. If the forwarder subscription
-     * leaked, it would still be watching the store and would forward a fresh order to the exchange, so a queue
-     * bound directly to it, independent of the bridge that never got to declare its own, proves it did not.
+     * the second {@code openChannel()} call on the connection and every one after it (the first is the sink's),
+     * forces exactly that partial-construction failure without touching the bridge's own topology. Every call
+     * after the first has to fail, not just the second, since {@code RabbitMqCloudEventBridge.Builder#build()}
+     * retries a failed channel open by default (#867), so a proxy that only failed the second call would let a
+     * later retry attempt succeed instead of ever reaching the failure this test exists to force. If the forwarder
+     * subscription leaked, it would still be watching the store and would forward a fresh order to the exchange,
+     * so a queue bound directly to it, independent of the bridge that never got to declare its own, proves it did
+     * not.
      */
     @Test
     void a_failure_partway_through_starting_the_cloud_event_level_bootstrap_closes_what_already_started() throws Exception {
@@ -142,13 +146,15 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
     }
 
     /** A {@link Connection} that delegates everything to {@code real}, except its second no-argument
-     * {@code openChannel()} call, which it fails instead, simulating the bridge's own channel open failing
-     * while leaving the sink's earlier one, and everything built from it, already running. */
+     * {@code openChannel()} call and every one after it, which it fails instead, simulating the bridge's own
+     * channel open failing while leaving the sink's earlier one, and everything built from it, already running.
+     * Fails permanently rather than once, so the bridge's own default retry (#867) still exhausts into the same
+     * failure this test forces, instead of succeeding on a later attempt. */
     private static Connection failOnSecondOpenChannel(Connection real) {
         AtomicInteger openChannelCalls = new AtomicInteger();
         InvocationHandler handler = (proxy, method, args) -> {
             if ("openChannel".equals(method.getName()) && method.getParameterCount() == 0
-                    && openChannelCalls.incrementAndGet() == 2) {
+                    && openChannelCalls.incrementAndGet() >= 2) {
                 return Optional.empty();
             }
             try {
