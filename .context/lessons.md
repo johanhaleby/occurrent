@@ -1681,22 +1681,35 @@ had not constructed the double-call scenario, which is a real gap nobody had nam
 
 ## A green rollup over a partial matrix reads exactly like a green rollup (rel34, 2026-08-22)
 
-The check-context count on a pull request here goes from 6 to 26 when the shard matrix spawns,
-partway through the run. Read `statusCheckRollup` before that moment and it reports zero pending
-and zero failing over six contexts, which every gate condition passes. The merge gate then merges
-on a matrix that never ran.
+SUPERSEDED IN ITS REMEDY, kept for the diagnosis. The rollup on a pull request here reports zero
+pending and zero failing over a partial set of contexts while the shard matrix has not spawned, and
+every ordinary gate condition passes. The first remedy recorded here was to compare the context
+COUNT against a full matrix on a sibling pull request, 26 or 27. That remedy is wrong and sdi's
+argument for why is decisive: counting needs a magic number, needs a comparable sibling to derive
+it from, and breaks silently the day the matrix legitimately changes size, in the DANGEROUS
+direction, because a matrix that shrinks makes a real partial set look full.
 
-So the gate needs a fourth quantity beside pending, failing and mergeable: the context COUNT,
-compared against what a full matrix looks like on a sibling pull request of the same shape. On this
-repository that is 26, or 27 where an extra job applies. A rollup materially below that is not
-green, it is early.
+THE REMEDY THAT WORKS: ask the workflow, not the contexts. `gh run list --commit <sha>` and require
+the "Java CI with Maven" run to be `completed` with conclusion `success` for that exact head. A
+workflow only concludes once every shard job it spawned has finished, so the partial state is
+unambiguous at the workflow level while being invisible at the context level. It needs no magic
+number and survives any matrix change.
 
-The `[ci skip]` prose case is the deliberate exception and is distinguishable: it reports zero
-contexts, not a partial set, and its verdict carries by compare from the last code-bearing green
-state.
+Measured live on three heads: PR 913 rollup 27 contexts all green and the run `completed/success`,
+genuinely done. PR 916 rollup 26 with 2 pending and the run `in_progress`, consistent. PR 914 rollup
+THREE contexts, zero pending, zero failing, and "Java CI with Maven" ABSENT from its runs entirely,
+so the matrix had not started at all for that head. The third case passes both the naive gate and
+the counting gate's spirit while being nowhere near green.
 
-Found by a worker reporting it in its own delivery result rather than by the gate catching it. That
-is worth noting on its own: the gate had passed several merges without ever checking the count.
+AND THE SAME DEFECT IS IN THE SHARED WORK-ITEM MONITOR. The v7 pattern derives its DONE flag from
+`statusCheckRollup` with exactly the "zero contexts still pending" test, so on PR 914's partial head
+it emitted `0fail DONE`. A monitor DONE is therefore an invitation to check, never a merge signal.
+Three fleets run that pattern.
+
+Credit where it belongs: the partial-rollup diagnosis came from a worker volunteering it in a
+delivery result, the better remedy came from another orchestrator refusing the first one, and the
+monitor consequence came from verifying that suggestion instead of adopting it.
+
 ## An exclusion list keyed by issue number cannot see a unit that has no issue (sdi, 2026-08-22)
 
 Three fleets ran concurrently and fenced each other by listing issue numbers: sdi's registration
@@ -1722,3 +1735,54 @@ that describes it.** rel34 drew a file fence from where a symbol is DECLARED rat
 CALLED. sdi measured a rename with a grep anchored on import syntax, missing fully qualified uses
 and every Kotlin import. sdi then read issue bodies in place of PR diffs. Declaration, syntax, and
 intent each stood in for the artifact, and each read as diligence while it happened.
+
+## An issue-number fence cannot see a unit that has no issue (rel34, 2026-08-22)
+
+Cross-epic fences here are keyed by issue number: rel34's sweeps exclude #388, #421, #893 and
+#896, and the reciprocal lists are the same shape. brk's U15 has no issue number at all. A unit
+like that can never appear in a list of that shape however carefully either side maintains it,
+so the fence reads as coverage while having a hole exactly the size of every unit nobody filed
+an issue for.
+
+Found by sdi, which also found that its own "no rel34 issue overlaps our units" claim had been
+built from issue BODIES rather than PR diffs, and was wrong: rel34's PR 914 edits two of sdi's
+three fence surfaces.
+
+The coverage check is at file level, not issue level: `gh pr list --state open --json
+number,headRefName`, attribute each PR to a fleet by branch prefix, then `gh pr view <n> --json
+files` and intersect. Run it before merging into a contended area rather than trusting the
+exclusion list. On this repository it takes seconds and it immediately showed that every
+cross-epic collision today is `changelog.md` alone, which is the known keep-both case, while the
+two within-epic collisions were in the same file but different bean methods, verified by
+comparing hunk headers rather than assumed from the file name matching.
+
+Issue-number exclusions stay useful as the first filter. They are not the coverage argument.
+
+## Ask the workflow whether it finished, not the contexts whether they are pending (sdi, 2026-08-22)
+
+rel34 found that a green rollup over a partial matrix reads exactly like a green rollup, and
+proposed comparing the context COUNT against a sibling pull request. brk turned out to have a
+better mechanism already, and it is the one to use.
+
+`gh run list --commit <sha>` and require the "Java CI with Maven" workflow RUN to be `completed`
+with conclusion `success`. A workflow only concludes after every shard job it spawned has
+finished, so a partial matrix cannot pass. Measured on two live heads:
+
+```
+PR 910 head:  Java CI with Maven   status=in_progress  conclusion=null     (rollup: 7 contexts, 5 pending)
+PR 913 head:  Java CI with Maven   status=completed    conclusion=success  (rollup: 27 contexts, all green)
+```
+
+The state that is indistinguishable at the context layer is unambiguous one layer up.
+
+Why it beats counting. Counting needs the magic number, 26 here or 27 with an extra job. It needs
+a comparable sibling to derive that number from. And it fails in the DANGEROUS direction the day
+the matrix legitimately changes size: a matrix that shrinks makes a real partial set look
+complete, so the check goes quiet exactly when it stops being true. Asking whether the run
+concluded needs no number, no sibling, and survives any matrix change.
+
+The wider point, which cost nothing here and could have cost more: I warned brk their gate was
+about to merge on a partial matrix without first asking what their gate reads. It read the
+workflow, not the rollup, and was never exposed. Ask what a peer's mechanism actually is before
+telling them it is broken, because the fleet's shared lesson describes the mechanism SOMEONE used,
+not the one they use.
