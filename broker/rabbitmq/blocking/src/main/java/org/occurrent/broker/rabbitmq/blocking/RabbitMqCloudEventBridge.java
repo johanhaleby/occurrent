@@ -68,8 +68,8 @@ import static java.util.Objects.requireNonNull;
  * {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED} acknowledges. A normal return with
  * {@link RoutingOutcome#UNAVAILABLE} never acknowledges either, and is held and paced rather than sent through a
  * failure policy, see below. A normal return with {@link RoutingOutcome#NOT_DELIVERABLE} cannot happen, since that
- * outcome always comes with an exception, the filter's own or a transient refusal's (a full live catch-up buffer,
- * say). A {@link RoutingOutcome#REFUSED} stops this bridge for
+ * outcome always comes with an exception, the filter's own or a transient action refusal's. A
+ * {@link RoutingOutcome#REFUSED} stops this bridge for
  * good, also below. For every other failure this bridge's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) negatively
  * acknowledges with requeue, {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only then
  * acknowledges the original. A normal return with {@link RoutingOutcome#DEFERRED}, a
@@ -488,10 +488,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             // thread to act on instead.
             heldDeferredDeliveryTags.add(new HeldDelivery(deliveryTag, deliveryGeneration));
         } else {
-            // NOT_DELIVERABLE, whether the filter itself failed to answer or a transient refusal reported it (a
-            // full live catch-up buffer, say). It always arrives with an exception, which the catch above already
-            // routed, so reaching here means a future outcome this bridge has not been taught yet. Routed as a
-            // failure either way.
+            // NOT_DELIVERABLE, whether the filter itself failed to answer or a transient refusal reported it. It
+            // always arrives with an exception, which the catch above already routed, so reaching here means a
+            // future outcome this bridge has not been taught yet. Routed as a failure either way.
             log.debug("A message on queue \"{}\", delivery tag {}, reported an outcome this bridge does not " +
                     "recognize. Routing it as a failure.", queue, deliveryTag);
             routeFailure(deliveryTag, deliveryGeneration, delivery.getProperties(), delivery.getBody());

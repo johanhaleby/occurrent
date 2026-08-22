@@ -63,8 +63,8 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * or {@link RoutingOutcome#FILTERED} stages this record's offset for the next commit. A normal return with
  * {@link RoutingOutcome#UNAVAILABLE} never does either, and is seeked back and paced rather than sent through a
  * failure policy, see below. A normal return with {@link RoutingOutcome#NOT_DELIVERABLE} cannot happen, since that
- * outcome always comes with an exception, the filter's own or a transient refusal's (a full live catch-up buffer,
- * say). A {@link RoutingOutcome#REFUSED} stops this bridge for
+ * outcome always comes with an exception, the filter's own or a transient action refusal's. A
+ * {@link RoutingOutcome#REFUSED} stops this bridge for
  * good, also below. For every other failure this bridge's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) seeks the consumer back to this record's offset,
  * {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only once that publish is confirmed
  * treats this record as resolved, exactly as a delivered one. A normal return with {@link RoutingOutcome#DEFERRED},
@@ -535,10 +535,9 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             // readinessSource-gated path already relied on.
             return false;
         }
-        // NOT_DELIVERABLE, whether the filter itself failed to answer or a transient refusal reported it (a full
-        // live catch-up buffer, say). It always arrives with an exception, which the catch above already routed,
-        // so reaching here means a future outcome this bridge has not been taught yet. Routed as a failure either
-        // way.
+        // NOT_DELIVERABLE, whether the filter itself failed to answer or a transient refusal reported it. It
+        // always arrives with an exception, which the catch above already routed, so reaching here means a
+        // future outcome this bridge has not been taught yet. Routed as a failure either way.
         log.debug("A record on topic \"{}\" partition {} offset {} reported an outcome this bridge does not " +
                 "recognize. Routing it as a failure.", record.topic(), record.partition(), record.offset());
         return resolve(record, toCommit, failureAction.apply(record));
