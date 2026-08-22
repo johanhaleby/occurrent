@@ -25,9 +25,15 @@ import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.filtermatching.DataFieldReader;
+import org.occurrent.subscription.Checkpoint;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.CatchupThenLiveOptions;
 import org.occurrent.subscription.DcbSubscriptionFilter;
+import org.occurrent.subscription.RoutingOutcome;
+import org.occurrent.subscription.CheckpointWriteCondition;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.reactor.CheckpointStorage;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.occurrent.subscription.inmemory.reactor.InMemoryCheckpointStorage;
 import reactor.core.publisher.Flux;
@@ -37,11 +43,14 @@ import reactor.test.StepVerifier;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -52,6 +61,58 @@ import static org.awaitility.Awaitility.await;
 
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class CatchupThenPushSubscriptionModelTest {
+
+    // A second catch-up for the same id announces itself and reads its own history as history. The listener is
+    // registered once, before either subscribe, and stays registered across the cancel, since the recorder behind it
+    // has a standing interest in this id's catch-ups rather than in any one of them.
+    @Test
+    void a_second_catch_up_for_the_same_id_reads_its_history_as_history() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        AtomicInteger round = new AtomicInteger();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("e" + round.incrementAndGet(), "Created")), 1);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        EpisodeLog log = new EpisodeLog();
+        assertThat(model.listenForCatchup("proj", log)).isTrue();
+
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block();
+        model.cancelSubscription("proj");
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()).waitUntilStarted().block();
+
+        await().untilAsserted(() -> assertThat(log.signals())
+                .containsExactly("started:0", "historyRead:0", "started:1", "historyRead:1"));
+    }
+
+    // A payload buffered while the history was being read is delivered once and never again, so the boundary has to
+    // fall before that drain rather than after it. Otherwise a recording projection sees it as history and records
+    // nothing for it, and nothing else ever delivers it again.
+    @Test
+    void a_payload_buffered_during_the_history_read_is_delivered_as_part_of_the_catch_up() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        List<String> timeline = new CopyOnWriteArrayList<>();
+        CloudEvent buffered = cloudEvent("buffered", "Updated");
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("history", "Created"))
+                .doOnNext(__ -> feed.accept(buffered).subscribe()), 1);
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+        model.listenForCatchup("proj", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                timeline.add("started");
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+                timeline.add("historyRead");
+            }
+        });
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), event -> {
+            timeline.add(event.getId());
+            return Mono.empty();
+        }).waitUntilStarted().block();
+
+        await().untilAsserted(() -> assertThat(timeline).containsExactly("started", "history", "historyRead", "buffered"));
+    }
 
     @Test
     void catches_up_history_then_delivers_the_live_feed() {
@@ -114,6 +175,125 @@ class CatchupThenPushSubscriptionModelTest {
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "2", "late"));
     }
 
+    // A cancel and a fresh subscribe can run between an attempt taking the subscription id and announcing its
+    // catch-up. If the announce sits outside the step that takes the id, the stale attempt's start arrives after its
+    // replacement's, the recorder adopts a catch-up that is already over, and the replacement's own boundary is then
+    // ignored, so everything the replacement records is lost.
+    //
+    // No sleep decides anything here. The first attempt is held inside its own announce until the second one
+    // announces, so under a broken ordering the second is recorded first, deterministically. Under a correct one the
+    // second cannot announce at all while the first holds the id, so the first attempt's wait runs out instead and
+    // the two are recorded in the order they were announced.
+    @Test
+    void a_start_is_never_announced_by_an_attempt_that_has_lost_the_id() throws Exception {
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+
+        List<Object> announced = new CopyOnWriteArrayList<>();
+        AtomicReference<Object> firstToEnter = new AtomicReference<>();
+        AtomicBoolean firstEntry = new AtomicBoolean(true);
+        CountDownLatch firstAnnounceEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirstAnnounce = new CountDownLatch(1);
+
+        model.listenForCatchup("proj", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                if (firstEntry.compareAndSet(true, false)) {
+                    firstToEnter.set(episode);
+                    firstAnnounceEntered.countDown();
+                    // Released by whichever attempt announces next, and otherwise given up on, since a correct
+                    // ordering means no other attempt can announce while this one holds the id.
+                    awaitAtMost(releaseFirstAnnounce, Duration.ofSeconds(1));
+                } else {
+                    releaseFirstAnnounce.countDown();
+                }
+                announced.add(episode);
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+            }
+        });
+
+        Thread first = new Thread(() -> model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()));
+        first.start();
+        assertThat(firstAnnounceEntered.await(5, TimeUnit.SECONDS))
+                .as("the first attempt reached its announce")
+                .isTrue();
+
+        Thread replacement = new Thread(() -> {
+            model.cancelSubscription("proj");
+            model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        });
+        replacement.start();
+
+        replacement.join(TimeUnit.SECONDS.toMillis(10));
+        first.join(TimeUnit.SECONDS.toMillis(10));
+
+        assertThat(announced).hasSize(2);
+        assertThat(announced.get(0))
+                .as("the attempt that reached its announce first is the one announced first, so a start never "
+                        + "arrives behind the start of the attempt that replaced it")
+                .isSameAs(firstToEnter.get());
+    }
+
+    // isCatchingUp answers for the whole catch-up, marker included, so it must not turn false while the marker
+    // write is still in flight. A crash in that window leaves no marker on a subscription that already said it was
+    // live, and the saga timer gate and every readiness probe read the same answer.
+    @Test
+    void a_catch_up_with_nothing_buffered_still_reports_catching_up_until_its_marker_is_written() throws Exception {
+        HeldMarkerStorage marker = new HeldMarkerStorage();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
+        // Nothing is pushed to the feed while the replay runs, so the live buffer is empty at the drain.
+        Subscription subscription = model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+
+        // Parked inside the marker write, which is after the replay and after the drain point, and before the
+        // handover has finished.
+        assertThat(marker.writeStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(model.isCatchingUp("proj"))
+                .as("the marker is not written yet, so this catch-up is not over")
+                .isTrue();
+
+        marker.release.countDown();
+        subscription.waitUntilStarted().block(Duration.ofSeconds(5));
+
+        await().untilAsserted(() -> assertThat(model.isCatchingUp("proj")).isFalse());
+    }
+
+    // Holds the marker write open so a test can look at the model while the handover is half done.
+    private static final class HeldMarkerStorage implements CheckpointStorage {
+        final CountDownLatch writeStarted = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+
+        @Override
+        public Mono<Checkpoint> read(String subscriptionId) {
+            return Mono.empty();
+        }
+
+        @Override
+        public Mono<Checkpoint> save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+            return Mono.fromCallable(() -> {
+                writeStarted.countDown();
+                awaitLatch(release);
+                return checkpoint;
+            }).subscribeOn(Schedulers.boundedElastic());
+        }
+
+        @Override
+        public Mono<Long> writeVersion(String subscriptionId) {
+            return Mono.empty();
+        }
+
+        @Override
+        public Mono<Void> delete(String subscriptionId) {
+            return Mono.empty();
+        }
+    }
+
     @Test
     void a_restart_skips_the_replay_when_the_catchup_marker_exists() {
         InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
@@ -129,10 +309,17 @@ class CatchupThenPushSubscriptionModelTest {
         // Restart: fresh feed and model, same reader and marker. The replay is skipped.
         PushSubscriptionModel feed2 = new PushSubscriptionModel();
         List<String> secondRun = new CopyOnWriteArrayList<>();
-        new CatchupThenPushSubscriptionModel(reader, feed2, marker)
-                .subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(secondRun))
+        CatchupThenPushSubscriptionModel restarted = new CatchupThenPushSubscriptionModel(reader, feed2, marker);
+        EpisodeLog log = new EpisodeLog();
+        restarted.listenForCatchup("proj", log);
+        restarted.subscribe("proj", null, StartAt.subscriptionModelDefault(), recordInto(secondRun))
                 .waitUntilStarted().block();
         assertThat(secondRun).isEmpty();
+
+        // Both signals, even though no replay ran. This restart is the case that decides where the boundary goes:
+        // it skips the replay entirely and never reaches replayCompleted(), so a boundary placed there would leave
+        // the projection reading history for the rest of the model's life.
+        await().untilAsserted(() -> assertThat(log.signals()).containsExactly("started:0", "historyRead:0"));
 
         feed2.accept(cloudEvent("3", "Updated")).block();
         assertThat(secondRun).containsExactly("3");
@@ -266,6 +453,89 @@ class CatchupThenPushSubscriptionModelTest {
 
         assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
         assertThat(model.isRunning("sub")).isTrue();
+    }
+
+    /**
+     * The reactor mirror of the blocking
+     * {@code a_catch_up_failure_reports_not_deliverable_rather_than_delivered_on_the_broker_path} test. A refusal
+     * decided before any dispatch was attempted (ReactiveHandover's catchUpFailure) must report
+     * {@link RoutingOutcome#NOT_DELIVERABLE}, never {@link RoutingOutcome#DELIVERED}, so a caller applies its own
+     * failure policy instead of acknowledging a message nothing consumed.
+     */
+    @Test
+    void a_catch_up_failure_reports_refused_rather_than_delivered() {
+        List<RoutingOutcome> observed = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+        PositionOrderedReader failingReader = failingReader();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(failingReader, liveFeed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        Throwable replayFailure = catchThrowable(() -> subscription.waitUntilStarted().block());
+        assertThat(replayFailure).isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")).block());
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(observed).containsExactly(RoutingOutcome.REFUSED);
+    }
+
+    /**
+     * The reactor mirror of the blocking
+     * {@code a_handlers_own_illegalstateexception_reports_delivered_rather_than_not_deliverable_on_the_broker_path}
+     * test. Catching every {@code IllegalStateException} the handover errors with, rather than only
+     * {@code ReactiveHandover.PreDispatchRefusalException}, would wrap a handler's own thrown
+     * {@code IllegalStateException} as a {@code RoutingAction.Refusal} too, misreporting a handler that genuinely
+     * ran and failed as {@link RoutingOutcome#NOT_DELIVERABLE} instead of {@link RoutingOutcome#DELIVERED}.
+     */
+    @Test
+    void a_handlers_own_illegalstateexception_reports_delivered_rather_than_not_deliverable() {
+        List<RoutingOutcome> observed = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+        RuntimeException handlerFailure = new IllegalStateException("handler boom");
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Flux::empty, 0), liveFeed, null);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+                ce -> Mono.error(handlerFailure));
+        assertThat(subscription.waitUntilStarted().block(Duration.ofSeconds(5))).isNull();
+
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")).block());
+
+        assertThat(thrown).isSameAs(handlerFailure);
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+    }
+
+    /**
+     * The reactor twin of the blocking
+     * {@code a_refusal_from_a_handover_the_handler_reached_into_reports_delivered_for_this_registration}. A
+     * handler that reaches into a second model whose own catch-up has failed lets that model's refusal out through
+     * this one. This handler ran, so its own outcome is DELIVERED.
+     */
+    @Test
+    void a_refusal_from_a_handover_the_handler_reached_into_reports_delivered_for_this_registration() {
+        List<RoutingOutcome> observed = new CopyOnWriteArrayList<>();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent ce, RoutingOutcome outcome) -> observed.add(outcome));
+
+        PushSubscriptionModel otherFeed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel otherModel = new CatchupThenPushSubscriptionModel(failingReader(), otherFeed, null);
+        Subscription otherSubscription = otherModel.subscribe("other", null, StartAt.subscriptionModelDefault(), ce -> Mono.empty());
+        assertThat(catchThrowable(() -> otherSubscription.waitUntilStarted().block(Duration.ofSeconds(5))))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("replay boom");
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(Flux::empty, 0), liveFeed, null);
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+                ce -> otherFeed.accept(ce));
+        assertThat(subscription.waitUntilStarted().block(Duration.ofSeconds(5))).isNull();
+
+        Throwable thrown = catchThrowable(() -> liveFeed.accept(cloudEvent("1", "Created")).block());
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class).hasMessageContaining("Catch-up failed");
+        assertThat(observed)
+                .as("this registration's handler ran, so its own outcome is DELIVERED even though what it called "
+                        + "into refused")
+                .containsExactly(RoutingOutcome.DELIVERED);
     }
 
     @Test
@@ -458,6 +728,46 @@ class CatchupThenPushSubscriptionModelTest {
 
     private static Function<CloudEvent, Mono<Void>> recordInto(List<String> delivered) {
         return ce -> Mono.fromRunnable(() -> delivered.add(ce.getId()));
+    }
+
+    // Names each catch-up by the order it was announced in, so an assertion can say which one a signal belongs to
+    // without depending on what the model uses to identify it.
+    private static final class EpisodeLog implements CatchupListener {
+        private final List<String> signals = new CopyOnWriteArrayList<>();
+        private final List<Object> episodes = new ArrayList<>();
+
+        @Override
+        public void catchupStarted(Object episode) {
+            signals.add("started:" + indexOf(episode));
+        }
+
+        @Override
+        public void historyRead(Object episode) {
+            signals.add("historyRead:" + indexOf(episode));
+        }
+
+        List<String> signals() {
+            return signals;
+        }
+
+        private synchronized int indexOf(Object episode) {
+            for (int i = 0; i < episodes.size(); i++) {
+                if (episodes.get(i) == episode) {
+                    return i;
+                }
+            }
+            episodes.add(episode);
+            return episodes.size() - 1;
+        }
+    }
+
+    private static void awaitAtMost(CountDownLatch latch, Duration timeout) {
+        try {
+            latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
     }
 
     private static PositionOrderedReader reader(Supplier<Flux<CloudEvent>> flux, long head) {

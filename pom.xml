@@ -666,6 +666,8 @@
                                 </excludeArtifact>
                                 <excludeArtifact>example-domain-word-guessing-game-eventstore-mongodb-spring-dcb-autoconfig
                                 </excludeArtifact>
+                                <excludeArtifact>example-broker</excludeArtifact>
+                                <excludeArtifact>example-broker-rabbitmq</excludeArtifact>
                             </excludeArtifacts>
                         </configuration>
                     </plugin>

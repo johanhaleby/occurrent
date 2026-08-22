@@ -145,11 +145,21 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
     @Override
     public void publish(CloudEvent cloudEvent) {
         requireNonNull(cloudEvent, "cloudEvent cannot be null");
-        executeWithRetry(() -> publishOnce(cloudEvent), __ -> !shutdown, retryStrategy).run();
+        KafkaDestination destination = resolver.destinationFor(cloudEvent);
+        if (destination.topicIsPattern()) {
+            // A resolver's own bug, not a transient publish failure, so this is refused here, before
+            // executeWithRetry ever sees it, rather than inside the retried lambda, where a caller's own broader
+            // RetryStrategy could retry it and only repeat the same mistake against the same event. The shipped
+            // resolvers never return a pattern-typed destination from destinationFor(...), only catchAllDestination()
+            // ever does, so this can only be reached through a custom DestinationResolver.
+            throw new IllegalStateException("destinationFor(...) returned \"" + destination.topic() + "\" as " +
+                    "pattern-typed (topicIsPattern() is true), meant for subscribing, never for publishing. A " +
+                    "DestinationResolver's destinationFor(CloudEvent) must always return a literal topic name.");
+        }
+        executeWithRetry(() -> publishOnce(cloudEvent, destination), __ -> !shutdown, retryStrategy).run();
     }
 
-    private void publishOnce(CloudEvent cloudEvent) {
-        KafkaDestination destination = resolver.destinationFor(cloudEvent);
+    private void publishOnce(CloudEvent cloudEvent, KafkaDestination destination) {
         ProducerRecord<String, byte[]> record = KafkaMessageFactory
                 .<String>createWriter(destination.topic(), null, null, destination.key())
                 .writeBinary(cloudEvent);
@@ -313,6 +323,13 @@ public final class KafkaCloudEventSink implements CloudEventSink, AutoCloseable 
          * actually ordering records for whatever calls {@link #publish(io.cloudevents.CloudEvent)} concurrently,
          * this builder has no way to see whether its caller ever does, and either leg failing loses that silently
          * for the caller that does, with nothing else about the deployment looking unhealthy.
+         * <p>
+         * One combination never reaches this warning at all. Explicitly setting {@code enable.idempotence=true}
+         * together with {@code max.in.flight.requests.per.connection} greater than five is refused by the
+         * {@link KafkaProducer} constructor itself, with Kafka's own {@code ConfigException}, before this method
+         * ever returns. Lower {@code max.in.flight.requests.per.connection} to five or less to keep both
+         * idempotence and ordering, or leave it unset and let idempotence default on with its own compatible
+         * default.
          */
         public KafkaCloudEventSink build() {
             Map<String, Object> config = new HashMap<>(producerConfig);

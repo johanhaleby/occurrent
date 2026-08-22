@@ -26,7 +26,6 @@ import org.occurrent.dsl.projection.AppliedAppendRecorder;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.Projection;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.projection.internal.ProjectionFilters;
 import org.occurrent.dsl.projection.reactor.DomainEventFeed;
 import org.occurrent.dsl.projection.reactor.Projections;
@@ -37,6 +36,7 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.springboot.common.AppliedAppendRecordingRegistry;
+import org.occurrent.springboot.common.PolledCatchupSignals;
 import org.occurrent.springboot.common.AsynchronousSubscribables;
 import org.occurrent.springboot.common.PushCatchupStatusImpl;
 import org.occurrent.springboot.common.OccurrentProperties.ProjectionProperties.AppliedAppendProperties.ReplayPollProperties;
@@ -71,6 +71,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -230,8 +231,8 @@ class ProjectionAnnotationRegistrar {
             // the two lookups disagree about which model the phase actually describes. Checked against
             // SubscriptionModelCapability rather than Subscribable specifically, since ReplayAwareSubscriptions
             // itself does not require the wider Subscribable contract, only the capability lookup.
-            ReplayPhaseResolution recordingResolution = annotation.recordAppliedAppends()
-                    ? resolveEventStorePhase(id, fluxSubscriptionModel instanceof SubscriptionModelCapability capability ? capability : null)
+            CatchupResolution recordingResolution = annotation.recordAppliedAppends()
+                    ? resolveCatchupModel(id, fluxSubscriptionModel instanceof SubscriptionModelCapability capability ? capability : null)
                     : null;
             warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution));
             var subscription = projectDcb(runner, id, annotation, dcbProjection, resolveStore(annotation, id), startAt, recordingResolution);
@@ -262,7 +263,7 @@ class ProjectionAnnotationRegistrar {
                 }
                 StartAt startAt = startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
                 startPositionSupport.applyStartupWorkarounds();
-                ReplayPhaseResolution recordingResolution = annotation.recordAppliedAppends() ? resolveEventStorePhase(id, subscribable) : null;
+                CatchupResolution recordingResolution = annotation.recordAppliedAppends() ? resolveCatchupModel(id, subscribable) : null;
                 warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), verifiedNeverReplays(annotation, recordingResolution));
                 var subscription = projectAgnosticOrStream(runner, id, annotation, projection, resolveStore(annotation, id), startAt, recordingResolution);
                 if (subscriptionsStartOnTheirOwn(applicationContext) && shouldWaitUntilStarted(replaysHistory, annotation.startupMode())) {
@@ -329,43 +330,47 @@ class ProjectionAnnotationRegistrar {
         return store;
     }
 
-    // The phase for an event-store-fed projection (DCB or plain), asynchronous. Tried in order: the ComposedReplayPhase
-    // holder OccurrentReactiveMongoAutoConfiguration fills for the default Mongo composition, then a direct capability
-    // check on capability itself for a composition that exposes ReplayAwareSubscriptions directly (this stack's
-    // capability lookup is a plain instanceof, not a wrapper-chain walk, so nothing else can see further in). Falling
-    // back to neverReplays() when both come up empty cannot tell "this composition genuinely never replays" from "it
-    // replays but nothing here can see it", so it warns rather than silently choosing the optimistic reading (ADR 132
-    // decision 2). Typed as the minimal SubscriptionModelCapability rather than Subscribable, since a DCB-only
-    // FluxSubscriptionModel bean can implement ReplayAwareSubscriptions directly without being a full Subscribable.
-    // capability is null for a composition whose model exposes neither, treated the same as one that does but
-    // answers empty.
-    private ReplayPhaseResolution resolveEventStorePhase(String id, @Nullable SubscriptionModelCapability capability) {
-        ComposedReplayPhase holder = applicationContext.getBeanProvider(ComposedReplayPhase.class).getIfAvailable();
-        Optional<ReplayPhase> composed = holder == null ? Optional.empty() : holder.forSubscription(id);
-        if (composed.isPresent()) {
-            ReplayPhase phase = composed.get();
-            // The holder can answer neverReplays() as a known fact (the default composition legitimately has no
-            // catch-up layer, decision 9), not only as a live subscription's isCatchingUp. Polling a phase that can
-            // never report true would only cost a tick every interval for an answer that cannot change.
-            return new ReplayPhaseResolution(phase, phase != ReplayPhase.neverReplays(), false);
+    // Who tells a recording projection about its catch-ups, for an event-store-fed projection (DCB or plain),
+    // asynchronous. Tried in order: the ComposedCatchupModel holder OccurrentReactiveMongoAutoConfiguration fills
+    // for the default Mongo composition, then a direct capability check on capability itself for a composition that
+    // exposes ReplayAwareSubscriptions directly (this stack's capability lookup is a plain instanceof, not a
+    // wrapper-chain walk, so nothing else can see further in). Coming up empty on both cannot tell "this
+    // composition genuinely never catches up" from "it does but nothing here can see it", so it warns rather than
+    // silently choosing the optimistic reading (ADR 132 decision 2). Typed as the minimal
+    // SubscriptionModelCapability rather than Subscribable, since a DCB-only FluxSubscriptionModel bean can
+    // implement ReplayAwareSubscriptions directly without being a full Subscribable. capability is null for a
+    // composition whose model exposes neither, treated the same as one that does but answers empty.
+    private CatchupResolution resolveCatchupModel(String id, @Nullable SubscriptionModelCapability capability) {
+        ComposedCatchupModel holder = applicationContext.getBeanProvider(ComposedCatchupModel.class).getIfAvailable();
+        if (holder != null && holder.isSupplied()) {
+            // The holder answering with no model is a known fact (the default composition legitimately has no
+            // catch-up layer, decision 9), not an unresolved question, so it is a different answer from the warning
+            // below even though both leave the projection with nothing to listen to.
+            return new CatchupResolution(holder.catchupModel().orElse(null), holder.catchupModel().isEmpty(), false);
         }
         Optional<ReplayAwareSubscriptions> direct = capability == null ? Optional.empty() : capability.capability(ReplayAwareSubscriptions.class);
         if (direct.isPresent()) {
-            ReplayAwareSubscriptions replayAware = direct.get();
-            return new ReplayPhaseResolution(() -> replayAware.isCatchingUp(id), true, false);
+            return new CatchupResolution(direct.get(), false, false);
         }
         log.warn("@Projection '{}' sets recordAppliedAppends = true, but its subscription model ({}) does not expose " +
-                        "whether it is replaying. The default reactive Mongo composition does not have this problem; a " +
+                        "whether it is catching up. The default reactive Mongo composition does not have this problem; a " +
                         "custom or third-party subscription model can. Recording proceeds as though this projection " +
-                        "never replays: a genuine replay would record straight through it, with no automatic clear afterwards.",
+                        "never catches up: a genuine catch-up would record straight through it, with no automatic clear afterwards.",
                 id, capability == null ? "none" : capability.getClass().getName());
-        // replayAwarenessUnknown is true here, since the warning just above already covers this case accurately (it
-        // might genuinely replay, this registrar just cannot tell). warnIfRecordingNeverResets must not also claim
-        // it never replays, and must not fire a second warning for the same unresolved composition.
-        return new ReplayPhaseResolution(ReplayPhase.neverReplays(), false, true);
+        // catchupAwarenessUnknown is true here, since the warning just above already covers this case accurately (it
+        // might genuinely catch up, this registrar just cannot tell). warnIfRecordingNeverResets must not also claim
+        // it never does, and must not fire a second warning for the same unresolved composition.
+        return new CatchupResolution(null, false, true);
     }
 
-    private record ReplayPhaseResolution(ReplayPhase phase, boolean registerWithPoll, boolean replayAwarenessUnknown) {
+    // Who a recording projection listens to for its catch-up boundaries, null when nothing can tell it. The two
+    // reasons for a null model are different facts and are kept apart: structurallyNeverCatchesUp is a composition
+    // known to have no catch-up layer, catchupAwarenessUnknown is one this registrar cannot see into.
+    private record CatchupResolution(@Nullable ReplayAwareSubscriptions model, boolean structurallyNeverCatchesUp,
+                                     boolean catchupAwarenessUnknown, boolean pollsForClear) {
+        CatchupResolution(@Nullable ReplayAwareSubscriptions model, boolean structurallyNeverCatchesUp, boolean catchupAwarenessUnknown) {
+            this(model, structurallyNeverCatchesUp, catchupAwarenessUnknown, false);
+        }
     }
 
     // ADR 132 decision 9's third case: a composition that can replay and can report its phase, but is wired so it
@@ -386,18 +391,16 @@ class ProjectionAnnotationRegistrar {
     //   1. An explicit NOW, StartAt.now() is a documented, composition-independent contract every Subscribable
     //      must honor, true regardless of what the composition can do.
     //   2. The composition structurally has no catch-up layer at all (ADR 132 decision 9's third case), a known
-    //      fact resolveEventStorePhase's ComposedReplayPhase branch already verified, not an unobserved absence.
-    //   3. DEFAULT, where the auto-configuration that composed this model registered, through ComposedReplayPhase,
+    //      fact resolveCatchupModel's ComposedCatchupModel branch already verified, not an unobserved absence.
+    //   3. DEFAULT, where the auto-configuration that composed this model registered, through ComposedCatchupModel,
     //      that its own DEFAULT bypasses catch-up. True for Occurrent's shipped Mongo composition (issue 865), never
     //      assumed for an application-supplied one, whose own DEFAULT semantics are its own to declare.
     // DEFAULT on a composition with no registered fact stays silent. This registrar cannot verify it either way.
-    private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation, @Nullable ReplayPhaseResolution recordingResolution) {
+    private boolean verifiedNeverReplays(org.occurrent.annotation.Projection annotation, @Nullable CatchupResolution recordingResolution) {
         if (annotation.startAt() == org.occurrent.annotation.StartPosition.NOW) {
             return true;
         }
-        boolean structurallyNeverReplays = recordingResolution != null
-                && recordingResolution.phase() == ReplayPhase.neverReplays()
-                && !recordingResolution.replayAwarenessUnknown();
+        boolean structurallyNeverReplays = recordingResolution != null && recordingResolution.structurallyNeverCatchesUp();
         if (structurallyNeverReplays) {
             return true;
         }
@@ -405,7 +408,7 @@ class ProjectionAnnotationRegistrar {
             // startAtGlobalPosition >= 0 overrides DEFAULT and replays from that position regardless
             // (generateAgnosticStartAt/generateDcbStartAt check it first), so it must be excluded here too, or a
             // projection that genuinely replays from an explicit position would get the never-replays warning.
-            ComposedReplayPhase holder = applicationContext.getBeanProvider(ComposedReplayPhase.class).getIfAvailable();
+            ComposedCatchupModel holder = applicationContext.getBeanProvider(ComposedCatchupModel.class).getIfAvailable();
             return holder != null && holder.isDefaultKnownLiveOnly();
         }
         return false;
@@ -414,9 +417,20 @@ class ProjectionAnnotationRegistrar {
     // Wraps update so it records every applied append. Caller only calls this once it has already decided recording
     // is on (resolution is only ever built when annotation.recordAppliedAppends() is true), so there is no flag to
     // re-check here.
-    private <E> BiFunction<EventMetadata, E, Mono<Void>> applyRecording(String id, BiFunction<EventMetadata, E, Mono<Void>> update, ReplayPhaseResolution resolution) {
-        BiFunction<EventMetadata, E, Mono<Void>> recording = Projections.recordingAppliedAppends(update, id, resolveAppliedAppendStore(id), resolution.phase());
-        if (resolution.registerWithPoll() && recording instanceof AppliedAppendRecorder recorder) {
+    private <E> BiFunction<EventMetadata, E, Mono<Void>> applyRecording(String id, BiFunction<EventMetadata, E, Mono<Void>> update, CatchupResolution resolution) {
+        BiFunction<EventMetadata, E, Mono<Void>> recording = Projections.recordingAppliedAppends(update, id, resolveAppliedAppendStore(id));
+        ReplayAwareSubscriptions model = resolution.model();
+        if (model != null && recording instanceof AppliedAppendRecorder recorder) {
+            // Registered before the subscription that produces the catch-ups is started by the caller, so a
+            // catch-up that begins the moment it starts is heard rather than recorded as though it were live.
+            if (model.listenForCatchup(id, recorder)) {
+                registerForPoll(id, recorder);
+            } else {
+                registerForPoll(id, new PolledCatchupSignals(recorder, () -> model.isCatchingUp(id)));
+            }
+        } else if (model == null && resolution.pollsForClear() && recording instanceof AppliedAppendRecorder recorder) {
+            // A pull feed drives its own replay and needs no watching, but the clear that replay owes can still fail,
+            // and a feed that then goes quiet has nothing left to retry it. The poll does.
             registerForPoll(id, recorder);
         }
         return recording;
@@ -429,6 +443,11 @@ class ProjectionAnnotationRegistrar {
     // is a blocking-shaped interface and the tick calls it directly.
     private void registerForPoll(String id, AppliedAppendRecorder recorder) {
         appliedAppendRecordingRegistry().register(id, recorder);
+        scheduleNextTick(id);
+    }
+
+    private void registerForPoll(String id, BooleanSupplier tick) {
+        appliedAppendRecordingRegistry().register(id, tick);
         scheduleNextTick(id);
     }
 
@@ -486,10 +505,10 @@ class ProjectionAnnotationRegistrar {
         Projection<S, E, ID> projection = validatePushDescriptor(annotation, id, descriptor, synchronous);
         boolean catchesUp = annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;
         Subscribable subscribable;
-        // Recording's phase source for a push projection, per ADR 132 decision 8: a catch-up-then-push composition
-        // asks the model it just built directly, since this registrar composed it and already has the reference; one
-        // with catchup = NONE never replays (decision 9), so it is neverReplays() and not registered with the poll.
-        @Nullable ReplayPhaseResolution recordingResolution = null;
+        // Who a recording push projection listens to, per ADR 132 decision 8. A catch-up-then-push composition
+        // listens to the model this registrar just built, since it already has the reference. One with
+        // catchup = NONE has no catch-ups to hear about (decision 9), so it listens to nothing.
+        @Nullable CatchupResolution recordingResolution = null;
         if (catchesUp) {
             PositionOrderedReader reader = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Projection", PositionOrderedReader.class, id);
             CheckpointStorage catchupMarker = SubscriptionAnnotations.resolveCatchupBean(applicationContext, "@Projection", CheckpointStorage.class, id);
@@ -502,7 +521,7 @@ class ProjectionAnnotationRegistrar {
             withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
             subscribable = model;
             if (annotation.recordAppliedAppends()) {
-                recordingResolution = new ReplayPhaseResolution(() -> model.isCatchingUp(id), true, false);
+                recordingResolution = new CatchupResolution(model, false, false);
             }
         } else {
             // catchup = NONE never replays, so it is live as soon as it is running. Asked rather than recorded because
@@ -511,14 +530,14 @@ class ProjectionAnnotationRegistrar {
             withPushCatchupStatus(status -> status.register(id, () -> false, () -> pushModel.isRunning(id)));
             subscribable = pushModel;
             if (annotation.recordAppliedAppends()) {
-                recordingResolution = new ReplayPhaseResolution(ReplayPhase.neverReplays(), false, false);
+                recordingResolution = new CatchupResolution(null, true, false);
             }
         }
-        warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), recordingResolution == null || !recordingResolution.registerWithPoll());
+        warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), recordingResolution == null || recordingResolution.model() == null);
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         ReactiveProjectionRunner<E> runner = stream ? ReactiveProjectionRunner.stream(subscribable, converter) : ReactiveProjectionRunner.agnostic(subscribable, converter);
         Object store = resolveStore(annotation, id);
-        @Nullable ReplayPhaseResolution resolution = recordingResolution;
+        @Nullable CatchupResolution resolution = recordingResolution;
         if (subscriptionsStartOnTheirOwn(applicationContext)) {
             // Registration happens here, on the refresh thread, which is what captures an event committing mid-replay.
             // Only the replay is elsewhere.
@@ -548,7 +567,8 @@ class ProjectionAnnotationRegistrar {
         Object store = resolveStore(annotation, id);
         DomainEventFeed<E> feed = (DomainEventFeed<E>) feedBean;
         // Computed early: catchesUp is what actually decides whether this projection replays (it drives the view-DSL
-        // replay lifecycle below, not a ReplayPhase), and warnIfRecordingNeverResets needs it before the fold is built.
+        // replay lifecycle below, not a subscription model), and warnIfRecordingNeverResets needs it before the
+        // fold is built.
         boolean catchesUp = annotation.catchup() == org.occurrent.annotation.Catchup.FROM_EVENT_STORE;
         warnIfRecordingNeverResets(id, annotation.recordAppliedAppends(), !catchesUp);
         Runnable registerOnFeed;
@@ -569,12 +589,11 @@ class ProjectionAnnotationRegistrar {
             BiFunction<EventMetadata, E, Mono<Void>> fold = store instanceof ViewStateRepository
                     ? Projections.reactiveUpdateWithMetadata(projection, (ViewStateRepository<S, ID>) store, id)
                     : Projections.reactiveUpdateWithMetadata((MaterializedView<E>) store);
-            // A domain feed never replays through a ReplayPhase of its own: the CatchupProjectionFeed handover behind
-            // it drives the view-DSL ReplayAware lifecycle instead, which the recording wrapper forwards to and
-            // drives its own bookkeeping from (ADR 132 decision 6). So this is always neverReplays() and never
-            // polled.
+            // A domain feed listens to no subscription model. The CatchupProjectionFeed handover behind it drives
+            // the view-DSL ReplayAware lifecycle instead, which the recording wrapper forwards to and drives its own
+            // bookkeeping from (ADR 132 decision 6).
             BiFunction<EventMetadata, E, Mono<Void>> effectiveFold = annotation.recordAppliedAppends()
-                    ? applyRecording(id, fold, new ReplayPhaseResolution(ReplayPhase.neverReplays(), false, false))
+                    ? applyRecording(id, fold, new CatchupResolution(null, true, false, catchesUp))
                     : fold;
             Filter replayFilter = ProjectionFilters.filterFor(converter, (Projection<?, E, ?>) projection);
             registerOnFeed = () -> feed.register(id, effectiveFold, replayFilter);
@@ -709,7 +728,7 @@ class ProjectionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E, S, ID> org.occurrent.subscription.api.reactor.Subscription projectAgnosticOrStream(ReactiveProjectionRunner<E> runner, String id, org.occurrent.annotation.Projection annotation, Projection<S, E, ID> projection, Object store, @Nullable StartAt startAt, @Nullable ReplayPhaseResolution recordingResolution) {
+    private <E, S, ID> org.occurrent.subscription.api.reactor.Subscription projectAgnosticOrStream(ReactiveProjectionRunner<E> runner, String id, org.occurrent.annotation.Projection annotation, Projection<S, E, ID> projection, Object store, @Nullable StartAt startAt, @Nullable CatchupResolution recordingResolution) {
         if (recordingResolution == null) {
             if (store instanceof MaterializedView) {
                 return runner.project(id, projection, (MaterializedView<E>) store, startAt);
@@ -726,7 +745,7 @@ class ProjectionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E, S, ID> org.occurrent.subscription.api.reactor.Subscription projectDcb(ReactiveDcbProjectionRunner<E> runner, String id, org.occurrent.annotation.Projection annotation, DcbProjection<S, E, ID> dcbProjection, Object store, @Nullable DcbStartAt startAt, @Nullable ReplayPhaseResolution recordingResolution) {
+    private <E, S, ID> org.occurrent.subscription.api.reactor.Subscription projectDcb(ReactiveDcbProjectionRunner<E> runner, String id, org.occurrent.annotation.Projection annotation, DcbProjection<S, E, ID> dcbProjection, Object store, @Nullable DcbStartAt startAt, @Nullable CatchupResolution recordingResolution) {
         if (recordingResolution == null) {
             if (store instanceof MaterializedView) {
                 return runner.project(id, dcbProjection, (MaterializedView<E>) store, startAt);

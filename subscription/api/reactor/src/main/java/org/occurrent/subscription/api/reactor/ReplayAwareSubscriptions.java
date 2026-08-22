@@ -17,6 +17,9 @@
 package org.occurrent.subscription.api.reactor;
 
 import org.jspecify.annotations.NullMarked;
+import org.occurrent.subscription.CatchupListener;
+
+import java.util.Objects;
 
 /**
  * A reactive subscription model that replays history before it delivers live events, and can say which of its
@@ -48,4 +51,35 @@ public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
      * @return {@code true} while a replay for this id is in flight.
      */
     boolean isCatchingUp(String subscriptionId);
+
+    /**
+     * Registers {@code listener} for {@code subscriptionId}'s catch-up boundaries, replacing any listener already
+     * registered for that id, and answers whether this model sends them at all.
+     * <p>
+     * Told rather than asked, because a caller that samples this model has to work out what happened between two of
+     * its own readings, and a catch-up that started and finished in between looks like no catch-up at all. A model
+     * that sends them calls {@link CatchupListener#catchupStarted(Object)} before the catch-up delivers anything and
+     * {@link CatchupListener#historyRead(Object)} once the history it set out to read has been read, both naming
+     * that catch-up.
+     * <p>
+     * Register before subscribing. A listener registered after a catch-up has begun misses its start, and a
+     * recording projection behind it would then record the history that catch-up is replaying.
+     * <p>
+     * The default answers {@code false} and registers nothing, which is the honest answer for a model that cannot
+     * tell its catch-ups apart. A caller then falls back to polling {@link #isCatchingUp(String)}, which cannot tell
+     * the history a catch-up replays from what was written while it ran, so a recording projection behind such a
+     * model records nothing for the whole catch-up
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
+     * decision 6). Override it if your model replays.
+     *
+     * @param subscriptionId The subscription whose catch-ups the listener wants.
+     * @param listener       Told when a catch-up begins and when its history has been read.
+     * @return {@code true} when this model sends those, {@code false} when it does not and nothing was registered.
+     */
+    default boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
+        return false;
+    }
+
 }

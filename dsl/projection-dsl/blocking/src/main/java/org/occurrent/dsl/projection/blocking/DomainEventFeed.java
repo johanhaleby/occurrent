@@ -181,15 +181,36 @@ public final class DomainEventFeed<E> {
      * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has actually reached live,
      * {@code false} while either is still replaying or buffering ahead of its own drain, and {@code false} forever
      * once either has thrown, since that failure is permanent and a later call reaching live does not clear it. A
-     * live event fed through {@link #acceptCloudEvent(CloudEvent)} while this answers {@code false} only ever
-     * buffers, or is dropped outright, and {@link #acceptCloudEvent(CloudEvent)}'s own javadoc covers what it
-     * reports for both. {@code false} for an unregistered feed, the same as {@link #hasProjection()} rather than
-     * the {@link IllegalStateException} {@link #accept(Object)} throws, so a listener can check both together
-     * before it has anything registered at all.
+     * live event fed through {@link #acceptCloudEvent(CloudEvent)} while this answers {@code false} is never
+     * buffered: it is refused outright, and {@link #acceptCloudEvent(CloudEvent)}'s own javadoc covers what it
+     * reports for that, and for a permanently failed catch-up. {@code false} for an unregistered feed, the same as
+     * {@link #hasProjection()} rather than the {@link IllegalStateException} {@link #accept(Object)} throws, so a
+     * listener can check both together before it has anything registered at all.
      */
     public boolean isReadyForLiveDelivery() {
         Registered<E> registered = feed.get();
         return registered != null && registered.catchupFeed().isReadyForLiveDelivery();
+    }
+
+    /**
+     * Whether the registered projection's catch-up has permanently failed, so every later
+     * {@link #acceptCloudEvent(CloudEvent)} on this registration refuses the event and will go on refusing.
+     * {@code false} until a {@link #catchUpAll()}, {@link #catchUp(String)} or {@link #goLive(String)} attempt has
+     * thrown, and never {@code false} again after that, since the failure it records is never cleared.
+     * <p>
+     * Distinct from {@link #isReadyForLiveDelivery()}, which is also {@code false} while a replay that is going to
+     * succeed is still running. A listener deciding whether to stop consuming for good needs to tell those two
+     * apart, and because this only ever goes from {@code false} to {@code true} it is safe to read after catching
+     * a refusal rather than at the moment the refusal was thrown.
+     * <p>
+     * A refusal that escaped a handler which reached into some other projection feed or subscription model leaves
+     * this {@code false}, which is what lets a listener tell its own feed's permanent refusal from one that is not
+     * its own. {@code false} for an unregistered feed, the same as {@link #isReadyForLiveDelivery()}, so a listener
+     * can ask both together before it has anything registered at all.
+     */
+    public boolean refusesPermanently() {
+        Registered<E> registered = feed.get();
+        return registered != null && registered.catchupFeed().refusesPermanently();
     }
 
     /**
@@ -223,12 +244,13 @@ public final class DomainEventFeed<E> {
     /**
      * Feed a live event as a {@link CloudEvent} rather than an already-decoded domain event. This matches it against
      * the {@link Filter} {@link #register} was called with, decodes it with this feed's {@link CloudEventConverter}
-     * only if it matches, delivers it, and reports which of the three {@link RoutingOutcome}s happened. Call this
-     * from a broker listener that has a CloudEvent to rebuild rather than a domain event and an
-     * {@link EventMetadata} already in hand, and acknowledge on {@link RoutingOutcome#DELIVERED} once this has
-     * returned normally, and on {@link RoutingOutcome#FILTERED}, where redelivering would loop forever against this
-     * same registration, since the event is not this projection's under the {@link Filter} currently registered.
-     * Named distinctly from {@link #accept(Object)} rather than overloaded
+     * only if it matches, delivers it, and reports which {@link RoutingOutcome} happened. Call this from a broker
+     * listener that has a CloudEvent to rebuild rather than a domain event and an {@link EventMetadata} already in
+     * hand. Acknowledge on {@link RoutingOutcome#DELIVERED}, once this has returned normally, and on
+     * {@link RoutingOutcome#FILTERED}, where redelivering would loop forever against this same registration, since
+     * the event is not this projection's under the {@link Filter} currently registered. Redeliver instead on
+     * {@link RoutingOutcome#DEFERRED}, safe arbitrarily many times, and never acknowledge it. Named distinctly from
+     * {@link #accept(Object)} rather than overloaded
      * onto it, since a {@code DomainEventFeed<CloudEvent>} would otherwise let the compiler silently pick between
      * two overloads with different behavior for the same argument.
      * <p>
@@ -246,32 +268,29 @@ public final class DomainEventFeed<E> {
      * Whichever of the two this first call produces, a working matcher or the refusal below, is then cached and
      * reused for every call after that against the same registration, rather than rebuilt each time.
      * <p>
-     * Reports {@link RoutingOutcome#NOT_DELIVERABLE} rather than {@link RoutingOutcome#DELIVERED} for a matching
-     * event that only reaches the buffer, not the view, whatever the reason. {@link #isReadyForLiveDelivery()} is
-     * what decides this, and it answers only whether the underlying handover is live right now, not whether a
-     * buffered event happens to be safe because an actual replay backs it. That covers an event fed before
-     * {@link #catchUpAll()}/{@link #catchUp(String)} or {@link #goLive(String)} has been called at all, one fed
-     * while a replay is still running and buffering ahead of its own drain, and one fed after
-     * {@link #stopCatchUp()} interrupted a replay in flight. None of those three lose the event, since the
-     * catch-up-then-live engine still folds a buffered one once its drain runs, or a later {@link #catchUpAll()}
-     * replays it again from the store if the attempt that buffered it never reaches a drain at all, but this method
-     * does not try to tell a safe case apart from an unsafe one. {@link #goLive(String)} exists precisely for a
-     * registration whose events are not in the local store, where a buffered-then-lost event has nothing to replay
-     * it back from, and this feed has no way to know in advance which kind of registration it is fielding an event
-     * for, so it answers the same way for all three.
-     * <p>
-     * {@link #isReadyForLiveDelivery()} is read before this event is handed to the underlying handover, not after.
-     * A concurrent {@link #goLive(String)} can claim and start folding this exact event the instant it lands in the
-     * buffer, so reading readiness afterward could observe that claim as already live before the fold it depends on
-     * has actually completed, reporting {@link RoutingOutcome#DELIVERED} for a copy the caller then acknowledges
-     * away before it is provably safe. Reading it first is conservative instead, at the cost of an occasional extra
-     * redelivery a de-dup key absorbs for free.
+     * Reports {@link RoutingOutcome#DEFERRED} rather than {@link RoutingOutcome#DELIVERED} for a matching event
+     * that only reaches the buffer, not the view, whatever the reason. One evaluation decides both the live check
+     * and the accept together, under the same lock the underlying handover already holds for that decision, so
+     * there is no window between "is it live" and "hand it over" for a concurrent {@link #goLive(String)} to land
+     * in. That covers an event fed before {@link #catchUpAll()}/{@link #catchUp(String)} or
+     * {@link #goLive(String)} has been called at all, one fed while a replay is still running and buffering ahead
+     * of its own drain, and one fed after {@link #stopCatchUp()} interrupted a replay in flight. Redelivering a
+     * {@link RoutingOutcome#DEFERRED} event is always safe: this feed's own de-dup key absorbs a repeat that
+     * already landed, and a caller with nowhere else to redeliver from, {@link #goLive(String)} exists precisely
+     * for a registration whose events are not in the local store, gets the same outcome either way, since this
+     * feed has no way to know in advance which kind of registration it is fielding an event for.
      *
      * @throws IllegalStateException if no projection is registered on this feed, for the reason
      *                               {@link #accept(Object)} gives. Refused rather than reported as
      *                               {@link RoutingOutcome#NOT_DELIVERABLE}, since this feed, unlike a push
      *                               subscription model, has no write path to protect and ADR 104 already refuses
      *                               here for {@link #accept(Object)} and {@link #accept(EventMetadata, Object)}.
+     *                               Also thrown, unwrapped, as {@code BlockingHandover.PreDispatchRefusalException}
+     *                               (an {@code IllegalStateException} subtype, in
+     *                               {@code org.occurrent.subscription.api.blocking.internal}) once this
+     *                               registration's catch-up-then-live handover has permanently failed. That
+     *                               failure never clears, so every later call on the same registration throws the
+     *                               same way.
      * @throws UnreadableLiveFilterException the first time this is called on a registration whose {@link Filter}
      *                               references a {@code data} field this feed's {@link DataFieldReader} cannot
      *                               read, and again with the exact same exception instance on every later call on
@@ -281,6 +300,10 @@ public final class DomainEventFeed<E> {
      *                               expecting a different answer. Register a new {@code DomainEventFeed} with a
      *                               {@link Filter} that does not reference the field, or with a
      *                               {@link DataFieldReader} that can read it.
+     * @throws RuntimeException whatever {@link CloudEventConverter#toDomainEvent(CloudEvent)} throws for a matching
+     *                               event it cannot decode, uncaught. Reachable for a filter no more selective than
+     *                               the event type, {@link Filter#all()} in particular, against a source carrying
+     *                               event types this feed's converter was never built to decode.
      */
     public RoutingOutcome acceptCloudEvent(CloudEvent cloudEvent) {
         Objects.requireNonNull(cloudEvent, "cloudEvent cannot be null");
@@ -294,10 +317,8 @@ public final class DomainEventFeed<E> {
         }
         E event = converter.toDomainEvent(cloudEvent);
         CatchupProjectionFeed<E> catchupFeed = registered.catchupFeed();
-        // Checked before accepting, not after. See this method's own javadoc for why the order matters.
-        boolean readyForLiveDelivery = catchupFeed.isReadyForLiveDelivery();
-        boolean delivered = catchupFeed.acceptReportingDelivery(EventMetadata.from(cloudEvent), event);
-        return delivered && readyForLiveDelivery ? RoutingOutcome.DELIVERED : RoutingOutcome.NOT_DELIVERABLE;
+        boolean delivered = catchupFeed.acceptIfLive(EventMetadata.from(cloudEvent), event);
+        return delivered ? RoutingOutcome.DELIVERED : RoutingOutcome.DEFERRED;
     }
 
     // The one place the "nothing registered" refusal is spelled, so every accept overload and catchUpAll cannot

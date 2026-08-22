@@ -17,10 +17,12 @@
 package org.occurrent.dsl.projection.blocking;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
+
+import java.util.concurrent.atomic.AtomicReference;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedAppendRecorder;
 import org.occurrent.dsl.projection.AppliedAppendStore;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.projection.internal.AppliedAppendRecording;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ReplayAware;
@@ -28,7 +30,7 @@ import org.occurrent.dsl.view.ReplayAware;
 import static java.util.Objects.requireNonNull;
 
 /**
- * The recording view {@link Projections#recordingAppliedAppends(MaterializedView, String, AppliedAppendStore, ReplayPhase)}
+ * The recording view {@link Projections#recordingAppliedAppends(MaterializedView, String, AppliedAppendStore)}
  * builds
  * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>).
  * Always delegates {@link #update(EventMetadata, Object)} first, then records the delivered event's append id into
@@ -41,7 +43,7 @@ import static java.util.Objects.requireNonNull;
  * Implements {@link ReplayAware} and forwards every call to the delegate when it is one too, so a batching view
  * underneath keeps batching, and drives its own replay bookkeeping either way: a domain-feed or catch-up-feed
  * composition is the only source of these calls (see {@code CatchupProjectionFeed}), so this is also this class's
- * only replay signal on that path, distinct from the {@link ReplayPhase} a subscription-fed composition supplies
+ * only replay signal on that path, mapped onto the same two catch-up signals a subscription model sends
  * instead. The first {@link MaterializedView} wrapping another {@link MaterializedView} in this library.
  */
 @NullMarked
@@ -49,10 +51,13 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
 
     private final MaterializedView<E> delegate;
     private final AppliedAppendRecording recording;
+    // The replay a pull feed is currently driving. Taken rather than read when that replay ends, so a second
+    // ending sends nothing and an ending that arrives with no replay in flight sends nothing either.
+    private final AtomicReference<@Nullable Object> feedEpisode = new AtomicReference<>();
 
-    RecordingMaterializedView(MaterializedView<E> delegate, String projectionId, AppliedAppendStore store, ReplayPhase phase) {
+    RecordingMaterializedView(MaterializedView<E> delegate, String projectionId, AppliedAppendStore store) {
         this.delegate = requireNonNull(delegate, "delegate cannot be null");
-        this.recording = new AppliedAppendRecording(projectionId, store, phase);
+        this.recording = new AppliedAppendRecording(projectionId, store);
     }
 
     @Override
@@ -82,8 +87,13 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
     }
 
     @Override
-    public void replayObserved() {
-        recording.replayObserved();
+    public void catchupStarted(Object episode) {
+        recording.catchupStarted(episode);
+    }
+
+    @Override
+    public void historyRead(Object episode) {
+        recording.historyRead(episode);
     }
 
     @Override
@@ -92,16 +102,20 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
     }
 
     @Override
-    public boolean pollReplayPhase() {
-        return recording.pollReplayPhase();
+    public boolean pollForClear() {
+        return recording.pollForClear();
     }
 
+    // The replay lifecycle a pull feed drives, mapped onto the two catch-up signals. The feed does not mint an
+    // episode, so one is minted here, which is the same thing once per replay it starts.
     @Override
     public void replayStarted() {
         if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayStarted();
         }
-        recording.replayStarted();
+        Object started = new Object();
+        feedEpisode.set(started);
+        recording.catchupStarted(started);
     }
 
     @Override
@@ -109,7 +123,13 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
         if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayCompleted();
         }
-        recording.replayCompleted();
+        Object started = feedEpisode.getAndSet(null);
+        if (started != null) {
+            recording.historyRead(started);
+        }
+        // A feed is not polled, so nothing else would retry a clear its replay left owed, and this call runs on a
+        // thread the engine already blocks on.
+        recording.retryPendingClear();
     }
 
     @Override
@@ -117,6 +137,13 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
         if (delegate instanceof ReplayAware replayAware) {
             replayAware.replayAbandoned();
         }
-        recording.replayAbandoned();
+        // The history read is over even though it was cut short, and a pull feed goes on delivering live events
+        // to this same view afterwards, which are applied and are recorded. The clear the replay owed stays owed.
+        // A subscription model sends nothing here instead, since a stopped catch-up delivers nothing more until a
+        // new one announces itself.
+        Object started = feedEpisode.getAndSet(null);
+        if (started != null) {
+            recording.historyRead(started);
+        }
     }
 }

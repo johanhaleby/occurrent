@@ -63,6 +63,40 @@ class ReactorStreamCatchupSubscriptionModelTest {
                 .isEmpty();
     }
 
+    // The contract a recording projection is told, rather than one it reads per delivery. The start arrives before
+    // anything this catch-up delivers, the boundary arrives after the history that was already there and before the
+    // events written since the catch-up started, and both name the same catch-up.
+    @Test
+    void tells_a_listener_when_a_catch_up_starts_and_when_its_history_has_been_read() {
+        GrowingPositionOrderedReader reader = new GrowingPositionOrderedReader();
+        ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(new NamedRecordingSubscriptionModel(), reader);
+
+        List<String> signals = new CopyOnWriteArrayList<>();
+        List<Object> episodes = new CopyOnWriteArrayList<>();
+        boolean sendsThem = catchup.listenForCatchup("sub", new CatchupListener() {
+            @Override
+            public void catchupStarted(Object episode) {
+                signals.add("started");
+                episodes.add(episode);
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+                signals.add("historyRead");
+                episodes.add(episode);
+            }
+        });
+        assertThat(sendsThem).isTrue();
+
+        Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+                StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.fromRunnable(() -> signals.add("delivered")));
+        StepVerifier.create(subscription.waitUntilStarted()).verifyComplete();
+
+        assertThat(signals).containsExactly("started", "delivered", "historyRead", "delivered");
+        assertThat(episodes).hasSize(2);
+        assertThat(episodes.get(0)).isSameAs(episodes.get(1));
+    }
+
     @Test
     void a_replay_start_fails_loudly_when_the_model_reports_no_resume_token() {
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(new NoTokenSubscriptionModel(), new UnusedPositionOrderedReader());
@@ -116,6 +150,35 @@ class ReactorStreamCatchupSubscriptionModelTest {
         StepVerifier.create(catchup.subscribe(DcbSubscriptionFilter.filter(DcbCriteria.all()), StartAt.now()))
                 .expectError(IllegalArgumentException.class)
                 .verify();
+    }
+
+    // One event already there and one more written while the history is being read, so the catch-up has a history to
+    // read and something to deliver afterwards. The head grows on the second read, which is what the reconciliation
+    // sees.
+    private static final class GrowingPositionOrderedReader implements PositionOrderedReader {
+        private final java.util.concurrent.atomic.AtomicInteger headReads = new java.util.concurrent.atomic.AtomicInteger();
+
+        @Override
+        public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            long from = range.afterPosition().orElse(0L) + 1;
+            long to = range.upToPosition().orElse(0L);
+            return Flux.fromStream(java.util.stream.LongStream.rangeClosed(from, to).boxed()
+                    .map(position -> io.cloudevents.core.builder.CloudEventBuilder.v1()
+                            .withId("e" + position)
+                            .withSource(java.net.URI.create("urn:test"))
+                            .withType("type")
+                            .build()));
+        }
+
+        @Override
+        public Mono<Long> currentPosition() {
+            return Mono.fromSupplier(() -> headReads.incrementAndGet() == 1 ? 1L : 2L);
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return true;
+        }
     }
 
     private static final class NoTokenSubscriptionModel implements CheckpointAwareSubscriptionModel {

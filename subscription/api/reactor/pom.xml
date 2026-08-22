@@ -54,6 +54,11 @@
             <artifactId>jspecify</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- Logging a live-phase handover failure that reaches no caller, since the catch-up signal already completed -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.cloudevents</groupId>
             <artifactId>cloudevents-core</artifactId>

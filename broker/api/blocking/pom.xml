@@ -26,8 +26,6 @@
 
     <artifactId>occurrent-broker-api-blocking</artifactId>
 
-    <name>${mavenProjectName}</name>
-
     <dependencies>
         <dependency>
             <groupId>org.occurrent</groupId>

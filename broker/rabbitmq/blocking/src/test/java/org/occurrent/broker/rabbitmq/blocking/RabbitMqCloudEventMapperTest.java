@@ -48,6 +48,9 @@ class RabbitMqCloudEventMapperTest {
                 .withData("{}".getBytes(StandardCharsets.UTF_8))
                 .withExtension("streamid", "stream-1")
                 .withExtension("streamversion", 3L)
+                .withExtension("occurredat", OffsetDateTime.parse("2026-08-18T09:00:00Z"))
+                .withExtension("causationsource", URI.create("urn:causation"))
+                .withExtension("retrycount", 2)
                 .build();
 
         BasicProperties properties = RabbitMqCloudEventMapper.toBasicProperties(cloudEvent, Map.of());
@@ -58,10 +61,17 @@ class RabbitMqCloudEventMapperTest {
                 .containsEntry("cloudEvents_source", "urn:test")
                 .containsEntry("cloudEvents_type", "com.acme.OrderPlaced")
                 .containsEntry("cloudEvents_subject", "subject-1")
+                .containsEntry("cloudEvents_time", "2026-08-18T10:00Z")
                 .containsEntry("cloudEvents_dataschema", "urn:schema")
                 .containsEntry("cloudEvents_specversion", "1.0")
                 .containsEntry("cloudEvents_streamid", "stream-1")
                 .containsEntry("cloudEvents_streamversion", "3")
+                // OffsetDateTime, URI and Integer (a Number) extensions, alongside the String and Long ones above,
+                // so this test proves toString() carries every extension value type withExtension(...) accepts, not
+                // only the two the streamid/streamversion pair happens to cover.
+                .containsEntry("cloudEvents_occurredat", "2026-08-18T09:00Z")
+                .containsEntry("cloudEvents_causationsource", "urn:causation")
+                .containsEntry("cloudEvents_retrycount", "2")
                 .doesNotContainKey("cloudEvents_datacontenttype");
     }
 

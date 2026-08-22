@@ -22,6 +22,7 @@ import org.occurrent.dsl.projection.AppliedAppendRecorder;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BooleanSupplier;
 
 import static java.util.Objects.requireNonNull;
 
@@ -49,7 +50,7 @@ public final class AppliedAppendRecordingRegistry {
     private final double multiplier;
     private final Map<String, Entry> entries = new ConcurrentHashMap<>();
 
-    private record Entry(AppliedAppendRecorder recorder, long[] intervalNanos) {
+    private record Entry(BooleanSupplier tick, long[] intervalNanos) {
     }
 
     /**
@@ -85,11 +86,27 @@ public final class AppliedAppendRecordingRegistry {
     /**
      * Registers {@code projectionId} for the poll, due for its first {@link #tick(String)} after
      * {@link #dueInNanos(String)} nanoseconds, which starts at the configured {@code initial} interval.
+     * <p>
+     * For a projection whose model tells it when its catch-ups begin and end. A tick then only retries a clear the
+     * recorder still owes, which is the one thing a poll can do that a pushed signal cannot, since the clear that
+     * follows a catch-up start can fail against a store that is momentarily unavailable.
      */
     public void register(String projectionId, AppliedAppendRecorder recorder) {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(recorder, "recorder cannot be null");
-        entries.put(projectionId, new Entry(recorder, new long[]{initialNanos}));
+        register(projectionId, (BooleanSupplier) recorder::pollForClear);
+    }
+
+    /**
+     * Registers {@code projectionId} for the poll with a tick of its own, for a projection whose catch-ups have to be
+     * watched rather than heard about. {@code tick} does whatever that watching needs and answers whether this
+     * projection has something to react to, which paces the next tick the same way
+     * {@link #register(String, AppliedAppendRecorder)}'s does.
+     */
+    public void register(String projectionId, BooleanSupplier tick) {
+        requireNonNull(projectionId, "projectionId cannot be null");
+        requireNonNull(tick, "tick cannot be null");
+        entries.put(projectionId, new Entry(tick, new long[]{initialNanos}));
     }
 
     /**
@@ -104,18 +121,23 @@ public final class AppliedAppendRecordingRegistry {
     }
 
     /**
-     * Calls {@link AppliedAppendRecorder#pollReplayPhase()}, which checks the phase and reacts to it atomically
-     * rather than this class checking it first and dispatching from a reading that could go stale before the
-     * recorder acts on it. Replaying resets the interval to {@code initial}, so a projection just seen replaying, or
-     * one that has just registered, is polled at the fast end. Live grows the interval by {@code multiplier}, capped
-     * at {@code max}.
+     * Runs one tick for {@code projectionId} and paces the next one on what it reports.
+     * <p>
+     * What a tick does depends on how the projection learns about its catch-ups. One whose model tells it retries a
+     * clear that is still owed, which is the only thing left for a poll to do there, and reports whether one still
+     * is. One that has to be watched instead also reads whether a catch-up is running and drives the same two
+     * signals from the edges, and reports either condition, so the interval stays at {@code initial} for the whole
+     * catch-up rather than growing while one is in flight and seeing its end up to {@code max} late.
+     * <p>
+     * Something to react to resets the interval to {@code initial}. Nothing to react to grows it by
+     * {@code multiplier}, capped at {@code max}.
      *
      * @throws IllegalArgumentException if {@code projectionId} was never registered
      */
     public void tick(String projectionId) {
         Entry entry = entryFor(projectionId);
-        boolean replaying = entry.recorder().pollReplayPhase();
-        if (replaying) {
+        boolean busy = entry.tick().getAsBoolean();
+        if (busy) {
             entry.intervalNanos()[0] = initialNanos;
         } else {
             entry.intervalNanos()[0] = Math.min((long) (entry.intervalNanos()[0] * multiplier), maxNanos);

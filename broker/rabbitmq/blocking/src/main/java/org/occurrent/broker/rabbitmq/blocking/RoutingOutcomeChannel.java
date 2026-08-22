@@ -38,12 +38,12 @@ import static java.util.Objects.requireNonNull;
  *         .build();
  * }</pre>
  * <p>
- * and the bridge reads the outcome of the {@code accept(...)} call it just made off the same instance, rather than
+ * and the bridge reads the outcome of the {@code acceptRedeliverable(...)} call it just made off the same instance, rather than
  * needing the model to return one.
  * <p>
  * The outcome is captured per calling thread rather than in a single shared field, so correctness never depends on
  * how the bridge happens to configure RabbitMQ's prefetch. It only has to hold for the one thread currently inside
- * {@code accept(...)}.
+ * {@code acceptRedeliverable(...)}.
  * <p>
  * Delegates to another {@link PushObserver}, {@link PushObserver#noop()} by default, so an application with its own
  * diagnostics keeps them instead of having to choose between this wiring and its own observer.
@@ -77,8 +77,8 @@ public final class RoutingOutcomeChannel implements PushObserver {
     }
 
     /**
-     * The {@link RoutingOutcome} the most recent {@code accept(...)} call on the calling thread reported, and clears
-     * it, so a call made without having just called {@code accept(...)} on this thread reads {@code null} rather
+     * The {@link RoutingOutcome} the most recent {@code acceptRedeliverable(...)} call on the calling thread reported, and clears
+     * it, so a call made without having just called {@code acceptRedeliverable(...)} on this thread reads {@code null} rather
      * than a stale answer left over from an earlier one.
      */
     @Nullable RoutingOutcome takeLastOutcome() {

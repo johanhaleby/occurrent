@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.eventstore.api.AppendId;
 
 import java.util.ArrayList;
@@ -39,14 +38,14 @@ class AppliedAppendRecordingTest {
 
     private static final String PROJECTION_ID = "orders";
 
-    // Reproduces the race a shared lock closes: without one, a live delivery could read "ready" just before an
-    // observed replay's clear ran, then write its append back in right after that clear finished, reinstating a
-    // record the clear was supposed to remove.
+    // Reproduces the race a shared lock closes: without one, a live delivery could read "ready" just before a
+    // catch-up's clear ran, then write its append back in right after that clear finished, reinstating a record the
+    // clear was supposed to remove.
     @Test
-    void a_concurrent_clear_cannot_interleave_between_the_readiness_check_and_the_write_it_authorized() throws InterruptedException {
+    void a_concurrent_catch_up_cannot_interleave_between_the_readiness_check_and_the_write_it_authorized() throws InterruptedException {
         List<String> order = new ArrayList<>();
         CountDownLatch recordingStarted = new CountDownLatch(1);
-        CountDownLatch clearAttempted = new CountDownLatch(1);
+        CountDownLatch catchupAnnounced = new CountDownLatch(1);
         AppliedAppendStore delegate = AppliedAppendStore.inMemory();
         AppliedAppendStore store = new AppliedAppendStore() {
             @Override
@@ -54,9 +53,9 @@ class AppliedAppendRecordingTest {
                 order.add("record-start");
                 recordingStarted.countDown();
                 try {
-                    // Gives the concurrent clear attempt below a window to run. It must not be able to: it needs
-                    // the same lock this write is still holding.
-                    clearAttempted.await(200, TimeUnit.MILLISECONDS);
+                    // Gives the concurrent catch-up announcement below a window to run. It must not be able to: it
+                    // needs the same lock this write is still holding.
+                    catchupAnnounced.await(200, TimeUnit.MILLISECONDS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }
@@ -75,79 +74,168 @@ class AppliedAppendRecordingTest {
                 delegate.clear(projectionId);
             }
         };
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, ReplayPhase.neverReplays());
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store);
 
         Thread recorder = new Thread(() -> recording.recordIfReady(metadataWithAppendId(AppendId.mint())));
         recorder.start();
         recordingStarted.await();
-        recording.replayObserved();
-        clearAttempted.countDown();
+        recording.catchupStarted(new Object());
+        catchupAnnounced.countDown();
         recorder.join(TimeUnit.SECONDS.toMillis(5));
+        recording.pollForClear();
 
         assertThat(recorder.isAlive()).isFalse();
         assertThat(order).containsExactly("record-start", "record-end", "clear");
     }
 
+    // Both signals are sent from the thread driving the catch-up, and on the blocking stream model the boundary is
+    // sent from inside the replay's own loop. If either waited on the lock the store calls are made under, an
+    // unavailable store would stall the replay itself rather than only the recording.
     @Test
-    void a_delivery_that_discovers_replaying_clears_immediately_rather_than_waiting_for_a_separate_observation() {
+    void neither_signal_waits_for_a_store_call_already_in_flight() throws InterruptedException {
+        CountDownLatch clearEntered = new CountDownLatch(1);
+        CountDownLatch releaseClear = new CountDownLatch(1);
+        AppliedAppendStore delegate = AppliedAppendStore.inMemory();
+        AppliedAppendStore heldStore = new AppliedAppendStore() {
+            @Override
+            public void recordApplied(String projectionId, AppendId appendId) {
+                delegate.recordApplied(projectionId, appendId);
+            }
+
+            @Override
+            public boolean hasApplied(String projectionId, AppendId appendId) {
+                return delegate.hasApplied(projectionId, appendId);
+            }
+
+            @Override
+            public void clear(String projectionId) {
+                clearEntered.countDown();
+                awaitFor(releaseClear);
+                delegate.clear(projectionId);
+            }
+        };
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, heldStore);
+
+        // A first catch-up, whose clear the poll below runs and gets stuck in.
+        recording.catchupStarted(new Object());
+        Thread stuckInClear = new Thread(recording::pollForClear);
+        stuckInClear.start();
+        assertThat(clearEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        Object episode = new Object();
+        CountDownLatch signalsReturned = new CountDownLatch(1);
+        Thread signalling = new Thread(() -> {
+            recording.catchupStarted(episode);
+            recording.historyRead(episode);
+            signalsReturned.countDown();
+        });
+        signalling.start();
+
+        assertThat(signalsReturned.await(2, TimeUnit.SECONDS))
+                .as("both signals returned while the store call was still in flight")
+                .isTrue();
+
+        releaseClear.countDown();
+        stuckInClear.join(TimeUnit.SECONDS.toMillis(30));
+        signalling.join(TimeUnit.SECONDS.toMillis(5));
+    }
+
+    @Test
+    void the_first_delivery_after_a_catch_up_starts_runs_the_clear_that_catch_up_owes() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId before = AppendId.mint();
         store.recordApplied(PROJECTION_ID, before);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, () -> true);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store);
 
+        recording.catchupStarted(new Object());
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
 
         assertThat(store.hasApplied(PROJECTION_ID, before)).isFalse();
     }
 
+    // A catch-up whose deliveries were all filtered out server-side gives the recorder nothing to run the clear on,
+    // so the poll has to.
     @Test
-    void replayCompleted_attempts_the_clear_directly_so_a_replay_with_no_matching_deliveries_is_not_left_pending() {
+    void a_poll_tick_runs_the_clear_for_a_catch_up_that_delivered_nothing() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId before = AppendId.mint();
         store.recordApplied(PROJECTION_ID, before);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, ReplayPhase.neverReplays());
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store);
 
-        recording.replayStarted();
-        // No deliveries in between: a domain-feed replay whose deliveries were all filtered out server-side.
-        recording.replayCompleted();
+        recording.catchupStarted(new Object());
+        boolean stillOwed = recording.pollForClear();
 
+        assertThat(stillOwed).isFalse();
         assertThat(store.hasApplied(PROJECTION_ID, before)).isFalse();
     }
 
-    // The race a poller closes by calling pollReplayPhase() instead of reading the phase itself first and
-    // dispatching to replayObserved()/retryPendingClear() from that earlier reading: between the two, a live
-    // delivery can land and record a genuinely live append, which replayObserved() called from the stale reading
-    // would then wipe. pollReplayPhase() re-checks the phase itself, so it sees the replay has already ended and
-    // leaves the live record alone.
+    // The signal is sent from the thread that registers the catch-up, before anything that could deliver exists, so
+    // it must not block that thread on a store round trip.
     @Test
-    void pollReplayPhase_checks_the_phase_fresh_so_a_live_delivery_recorded_after_an_earlier_reading_survives() {
-        AtomicBoolean replaying = new AtomicBoolean(true);
-        AppliedAppendStore store = AppliedAppendStore.inMemory();
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, replaying::get);
+    void catchupStarted_touches_the_store_on_no_thread_of_its_own() {
+        List<String> clears = new ArrayList<>();
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)));
 
-        // A poller would have read "replaying" here...
-        assertThat(replaying.get()).isTrue();
+        recording.catchupStarted(new Object());
 
-        // ...but the replay actually ends and a live delivery arrives and records before the poller acts.
-        replaying.set(false);
-        AppendId liveAppend = AppendId.mint();
-        recording.recordIfReady(metadataWithAppendId(liveAppend));
-        assertThat(store.hasApplied(PROJECTION_ID, liveAppend)).isTrue();
-
-        // The poller now calls pollReplayPhase(), not replayObserved() from its stale earlier reading.
-        boolean sawReplaying = recording.pollReplayPhase();
-
-        assertThat(sawReplaying).isFalse();
-        assertThat(store.hasApplied(PROJECTION_ID, liveAppend)).isTrue();
+        assertThat(clears).isEmpty();
     }
 
-    // Decision 7 mandates a clear attempt on every delivery seen while replaying, not a repeat store.clear() call on
-    // every one of them: a replay of N events all hitting the per-delivery check must clear once, not N times.
+    // The defect this design exists to fix (#890). A catch-up delivers the events written since it started through
+    // the same action it used for the history, and for some of them that is the only delivery, so treating the whole
+    // catch-up as history loses them.
     @Test
-    void a_replay_episode_clears_the_store_at_most_once_across_every_delivery_seen_while_replaying() {
-        List<String> clears = new ArrayList<>();
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), () -> true);
+    void an_append_delivered_after_the_history_has_been_read_is_recorded_even_though_the_catch_up_has_not_handed_over() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store);
+        Object episode = new Object();
 
+        recording.catchupStarted(episode);
+        AppendId history = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(history));
+        assertThat(store.hasApplied(PROJECTION_ID, history)).isFalse();
+
+        recording.historyRead(episode);
+        AppendId writtenDuringTheCatchup = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(writtenDuringTheCatchup));
+
+        assertThat(store.hasApplied(PROJECTION_ID, writtenDuringTheCatchup)).isTrue();
+        assertThat(store.hasApplied(PROJECTION_ID, history)).isFalse();
+    }
+
+    // The episode token, and the whole reason there is one. A catch-up that lost its subscription can still be
+    // running when its replacement starts, and its history-read signal arriving late must not move the replacement
+    // past a history the replacement has not read yet.
+    @Test
+    void a_history_read_from_a_catch_up_that_has_been_replaced_does_not_start_recording_for_the_replacement() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store);
+        Object replaced = new Object();
+        Object replacement = new Object();
+
+        recording.catchupStarted(replaced);
+        recording.catchupStarted(replacement);
+        recording.historyRead(replaced);
+
+        AppendId historyOfTheReplacement = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(historyOfTheReplacement));
+        assertThat(store.hasApplied(PROJECTION_ID, historyOfTheReplacement)).isFalse();
+
+        recording.historyRead(replacement);
+        AppendId writtenDuringTheReplacement = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(writtenDuringTheReplacement));
+
+        assertThat(store.hasApplied(PROJECTION_ID, writtenDuringTheReplacement)).isTrue();
+    }
+
+    // Every delivery seen while the history is being read attempts the clear, but a clear that already succeeded is
+    // not run again: a history of N events must clear once, not N times.
+    @Test
+    void a_catch_up_clears_the_store_at_most_once_across_every_delivery_of_its_history() {
+        List<String> clears = new ArrayList<>();
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)));
+
+        recording.catchupStarted(new Object());
         for (int i = 0; i < 1000; i++) {
             recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         }
@@ -155,37 +243,73 @@ class AppliedAppendRecordingTest {
         assertThat(clears).hasSize(1);
     }
 
-    // The latch that suppresses a repeat clear has to reset once the episode ends, or a genuinely new replay later
-    // would find recording still off with nothing left to clear it.
+    // A poll tick runs the clear the catch-up owes, and a delivery arriving afterwards must not run it again. The
+    // poll holds a projection at its fast interval for the whole catch-up, so a tick landing between two history
+    // deliveries is the ordinary interleaving rather than an unlucky one.
     @Test
-    void a_new_replay_episode_after_going_live_is_cleared_again() {
+    void a_poll_tick_during_the_history_leaves_nothing_for_the_next_delivery_to_clear_again() {
         List<String> clears = new ArrayList<>();
-        AtomicBoolean replaying = new AtomicBoolean(true);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)), replaying::get);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)));
 
+        recording.catchupStarted(new Object());
+        recording.pollForClear();
+        for (int i = 0; i < 1000; i++) {
+            recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        }
+
+        assertThat(clears).hasSize(1);
+    }
+
+    @Test
+    void a_second_catch_up_clears_again() {
+        List<String> clears = new ArrayList<>();
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)));
+
+        Object first = new Object();
+        recording.catchupStarted(first);
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         assertThat(clears).hasSize(1);
 
-        replaying.set(false);
+        recording.historyRead(first);
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
 
-        replaying.set(true);
+        recording.catchupStarted(new Object());
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
 
         assertThat(clears).hasSize(2);
     }
 
-    // The full state machine the per-episode latch has to get right: a failing clear is retried on every delivery
-    // until it succeeds (unchanged from before this latch existed), and once it succeeds, every later delivery in
-    // the same episode is suppressed rather than retried.
+    // A stop parks a catch-up after its history has been read and a start reads that history again. Nothing goes
+    // live in between, so the second catch-up's start is the only thing that can say so.
     @Test
-    void a_failing_clear_is_retried_every_delivery_until_it_succeeds_then_suppressed_for_the_rest_of_the_episode() {
+    void a_catch_up_relaunched_after_its_history_was_read_clears_again_with_no_live_delivery_in_between() {
+        List<String> clears = new ArrayList<>();
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)));
+
+        Object parked = new Object();
+        recording.catchupStarted(parked);
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        recording.historyRead(parked);
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        assertThat(clears).hasSize(1);
+
+        recording.catchupStarted(new Object());
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+
+        assertThat(clears).hasSize(2);
+    }
+
+    // The full state machine: a failing clear is retried on every delivery until it succeeds, and once it succeeds,
+    // every later delivery in the same catch-up is left alone rather than retried.
+    @Test
+    void a_failing_clear_is_retried_every_delivery_until_it_succeeds_then_suppressed_for_the_rest_of_the_catch_up() {
         List<String> clears = new ArrayList<>();
         AtomicBoolean clearShouldFail = new AtomicBoolean(true);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, clearShouldFail), () -> true);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, clearShouldFail));
 
+        recording.catchupStarted(new Object());
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
         assertThat(clears).hasSize(2);
@@ -199,19 +323,145 @@ class AppliedAppendRecordingTest {
         assertThat(clears).hasSize(3);
     }
 
+    // The clear stays a precondition after the history has been read, so a projection whose history read handled
+    // nothing (an empty store, or a filter that matched none of it) still clears before it records anything.
     @Test
-    void replayAbandoned_does_not_attempt_the_clear_but_a_later_delivery_still_retries_it() {
-        AppliedAppendStore store = AppliedAppendStore.inMemory();
-        AppendId before = AppendId.mint();
-        store.recordApplied(PROJECTION_ID, before);
-        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store, ReplayPhase.neverReplays());
+    void the_events_written_since_a_catch_up_started_clear_once_before_they_record_and_not_again_per_delivery() {
+        List<String> clears = new ArrayList<>();
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, clearCountingStore(clears, new AtomicBoolean(false)));
+        Object episode = new Object();
 
-        recording.replayStarted();
-        recording.replayAbandoned();
-        assertThat(store.hasApplied(PROJECTION_ID, before)).isTrue();
+        recording.catchupStarted(episode);
+        recording.historyRead(episode);
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+
+        assertThat(clears).hasSize(1);
+    }
+
+    // Recording an append while a clear is owed would only give that clear something more to delete, so it waits.
+    // Without the wait the append is lost for good, since this catch-up is the only delivery it gets.
+    @Test
+    void an_append_handled_while_a_clear_is_owed_is_written_once_that_clear_succeeds() {
+        List<String> clears = new ArrayList<>();
+        AtomicBoolean clearShouldFail = new AtomicBoolean(true);
+        AppliedAppendStore store = clearCountingStore(clears, clearShouldFail);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store);
+        Object episode = new Object();
+
+        recording.catchupStarted(episode);
+        recording.historyRead(episode);
+        AppendId first = AppendId.mint();
+        AppendId second = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(first));
+        recording.recordIfReady(metadataWithAppendId(second));
+        assertThat(store.hasApplied(PROJECTION_ID, first)).isFalse();
+
+        clearShouldFail.set(false);
+        recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
+
+        assertThat(store.hasApplied(PROJECTION_ID, first)).isTrue();
+        assertThat(store.hasApplied(PROJECTION_ID, second)).isTrue();
+    }
+
+    // retryPendingClear runs the clear and deliberately writes nothing, since it is not told which catch-up the
+    // projection is in. The next delivery is what has to notice the buffer is now writable.
+    @Test
+    void appends_waiting_for_a_clear_are_written_by_the_next_delivery_when_retryPendingClear_made_that_clear_succeed() {
+        AtomicBoolean clearShouldFail = new AtomicBoolean(true);
+        AppliedAppendStore store = clearCountingStore(new ArrayList<>(), clearShouldFail);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store);
+        Object episode = new Object();
+
+        recording.catchupStarted(episode);
+        recording.historyRead(episode);
+        AppendId waiting = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(waiting));
+        assertThat(store.hasApplied(PROJECTION_ID, waiting)).isFalse();
+
+        clearShouldFail.set(false);
+        recording.retryPendingClear();
+        assertThat(store.hasApplied(PROJECTION_ID, waiting)).isFalse();
 
         recording.recordIfReady(metadataWithAppendId(AppendId.mint()));
-        assertThat(store.hasApplied(PROJECTION_ID, before)).isFalse();
+
+        assertThat(store.hasApplied(PROJECTION_ID, waiting)).isTrue();
+    }
+
+    // pollForClear does know, so it writes them itself. This is what keeps a projection that has gone quiet from
+    // holding an append until its next delivery, which may never come.
+    @Test
+    void appends_waiting_for_a_clear_are_written_by_the_poll_tick_that_makes_that_clear_succeed() {
+        AtomicBoolean clearShouldFail = new AtomicBoolean(true);
+        AppliedAppendStore store = clearCountingStore(new ArrayList<>(), clearShouldFail);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store);
+        Object episode = new Object();
+
+        recording.catchupStarted(episode);
+        recording.historyRead(episode);
+        AppendId waiting = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(waiting));
+        assertThat(recording.pollForClear()).isTrue();
+        assertThat(store.hasApplied(PROJECTION_ID, waiting)).isFalse();
+
+        clearShouldFail.set(false);
+
+        assertThat(recording.pollForClear()).isFalse();
+        assertThat(store.hasApplied(PROJECTION_ID, waiting)).isTrue();
+    }
+
+    // A catch-up starting means the read model is being built from scratch, so anything a previous one was still
+    // holding describes events that read model has not been given.
+    @Test
+    void appends_waiting_for_a_clear_are_dropped_when_the_next_catch_up_starts() {
+        AtomicBoolean clearShouldFail = new AtomicBoolean(true);
+        AppliedAppendStore store = clearCountingStore(new ArrayList<>(), clearShouldFail);
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store);
+        Object first = new Object();
+
+        recording.catchupStarted(first);
+        recording.historyRead(first);
+        AppendId waiting = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(waiting));
+        assertThat(store.hasApplied(PROJECTION_ID, waiting)).isFalse();
+
+        clearShouldFail.set(false);
+        Object second = new Object();
+        recording.catchupStarted(second);
+        recording.historyRead(second);
+        AppendId afterTheSecondCatchup = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(afterTheSecondCatchup));
+
+        assertThat(store.hasApplied(PROJECTION_ID, waiting)).isFalse();
+        assertThat(store.hasApplied(PROJECTION_ID, afterTheSecondCatchup)).isTrue();
+    }
+
+    @Test
+    void a_projection_that_has_never_caught_up_records_every_append_it_is_given() {
+        List<String> clears = new ArrayList<>();
+        AppliedAppendStore store = clearCountingStore(clears, new AtomicBoolean(false));
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, store);
+
+        AppendId first = AppendId.mint();
+        AppendId second = AppendId.mint();
+        recording.recordIfReady(metadataWithAppendId(first));
+        recording.recordIfReady(metadataWithAppendId(second));
+
+        assertThat(clears).isEmpty();
+        assertThat(store.hasApplied(PROJECTION_ID, first)).isTrue();
+        assertThat(store.hasApplied(PROJECTION_ID, second)).isTrue();
+    }
+
+    private static void awaitFor(CountDownLatch latch) {
+        try {
+            if (!latch.await(30, TimeUnit.SECONDS)) {
+                throw new AssertionError("timed out waiting for the test to release the store");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
     }
 
     private static EventMetadata metadataWithAppendId(AppendId appendId) {

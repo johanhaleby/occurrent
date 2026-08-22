@@ -42,6 +42,7 @@ import java.util.function.Consumer;
 import static org.occurrent.subscription.RoutingOutcome.DELIVERED;
 import static org.occurrent.subscription.RoutingOutcome.FILTERED;
 import static org.occurrent.subscription.RoutingOutcome.NOT_DELIVERABLE;
+import static org.occurrent.subscription.RoutingOutcome.UNAVAILABLE;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -237,7 +238,10 @@ class PushSubscriptionModelTest {
     }
 
     @Test
-    void the_observer_is_told_delivered_before_the_handler_runs() {
+    void the_observer_is_told_delivered_once_the_handler_has_run() {
+        // Reporting after the action runs, rather than before it, is what lets a catch-up-then-live engine tell
+        // DELIVERED and DEFERRED apart accurately instead of assuming delivery ahead of the fold. A direct
+        // dispatch such as this one has already run its handler by the time the observer is told.
         List<String> observed = new ArrayList<>();
         List<String> handled = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
@@ -246,23 +250,39 @@ class PushSubscriptionModelTest {
 
         model.accept(cloudEvent("1", "NameDefined"));
 
-        assertThat(observed).containsExactly("1:DELIVERED:0");
+        assertThat(observed).containsExactly("1:DELIVERED:1");
         assertThat(handled).containsExactly("1");
     }
 
     @Test
-    void the_observer_is_told_not_deliverable_when_nothing_is_registered() {
+    void the_observer_is_still_told_delivered_when_the_handler_throws_and_the_original_exception_still_propagates() {
+        RuntimeException handlerFailure = new IllegalStateException("handler failed");
+        List<RoutingOutcome> observed = new ArrayList<>();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
+                (CloudEvent cloudEvent, RoutingOutcome outcome) -> observed.add(outcome));
+        model.subscribe("sub", cloudEvent -> {
+            throw handlerFailure;
+        });
+
+        Throwable thrown = catchThrowable(() -> model.accept(cloudEvent("1", "NameDefined")));
+
+        assertThat(observed).containsExactly(RoutingOutcome.DELIVERED);
+        assertThat(thrown).isSameAs(handlerFailure);
+    }
+
+    @Test
+    void the_observer_is_told_unavailable_when_nothing_is_registered() {
         List<RoutingOutcome> outcomes = new ArrayList<>();
         PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(),
                 (CloudEvent cloudEvent, RoutingOutcome outcome) -> outcomes.add(outcome));
 
         model.accept(cloudEvent("1", "NameDefined"));
 
-        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
+        assertThat(outcomes).containsExactly(UNAVAILABLE);
     }
 
     @Test
-    void the_observer_is_told_not_deliverable_while_the_model_is_stopped() {
+    void the_observer_is_told_unavailable_while_the_model_is_stopped() {
         // A stopped model drops live events by design (ADR 85), and the observer contract mirrors that: the
         // outcome reflects what would actually be delivered, not merely what the filter would have accepted.
         List<RoutingOutcome> outcomes = new ArrayList<>();
@@ -274,11 +294,11 @@ class PushSubscriptionModelTest {
 
         model.accept(cloudEvent("1", "NameDefined"));
 
-        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
+        assertThat(outcomes).containsExactly(UNAVAILABLE);
     }
 
     @Test
-    void the_observer_is_told_not_deliverable_while_the_subscription_is_paused_on_a_running_model() {
+    void the_observer_is_told_unavailable_while_the_subscription_is_paused_on_a_running_model() {
         // Distinct from the stopped case above, and distinct from FILTERED: a paused subscription's filter is never
         // consulted, so reporting FILTERED here would tell a caller the event was this subscription's and it was
         // declined, when in truth nothing decided that.
@@ -291,7 +311,7 @@ class PushSubscriptionModelTest {
 
         model.accept(cloudEvent("1", "NameDefined"));
 
-        assertThat(outcomes).containsExactly(NOT_DELIVERABLE);
+        assertThat(outcomes).containsExactly(UNAVAILABLE);
     }
 
     @Test
@@ -457,7 +477,7 @@ class PushSubscriptionModelTest {
         // The race #848 names: a caller that checked isRunning(subscriptionId) *after* accept() returns, instead of
         // reading the outcome the observer was told *during* the one routing evaluation, could see a concurrent
         // resume make isRunning() answer true for an event that was actually dropped while paused. The observer
-        // callback runs synchronously inside the same evaluation that decided NOT_DELIVERABLE, so triggering the
+        // callback runs synchronously inside the same evaluation that decided UNAVAILABLE, so triggering the
         // resume from inside it is the earliest a "concurrent" resume could possibly land relative to accept()
         // returning, and the already-reported outcome must not be retroactively correct about a state that didn't
         // hold at evaluation time.
@@ -475,7 +495,7 @@ class PushSubscriptionModelTest {
         model.accept(cloudEvent("1", "NameDefined"));
 
         assertThat(outcomes).as("the outcome reported during evaluation reflects the paused state at that moment")
-                .containsExactly(NOT_DELIVERABLE);
+                .containsExactly(UNAVAILABLE);
         assertThat(handled).as("the event was genuinely dropped, never handed to the handler")
                 .isEmpty();
         assertThat(model.isRunning("sub")).as("a caller checking isRunning(..) *after* accept() returns would now "
@@ -488,7 +508,7 @@ class PushSubscriptionModelTest {
     void concurrent_pause_and_resume_never_makes_the_reported_outcome_disagree_with_what_was_actually_delivered() throws InterruptedException {
         // A broader, genuinely multi-threaded version of the race above: one thread hammers accept() while another
         // toggles pause/resume on the same subscription. Every event pushed is one of two types, only one of which
-        // matches the subscription's filter, so a run exercises FILTERED as well as DELIVERED and NOT_DELIVERABLE,
+        // matches the subscription's filter, so a run exercises FILTERED as well as DELIVERED and UNAVAILABLE,
         // not just the two outcomes a filter that always matches would produce. Whatever RoutingOutcome the observer
         // is told for a given event must agree both with whether that event actually reached the handler and with
         // whether its type was one the filter accepts, for every one of many interleavings, not just the
@@ -510,7 +530,7 @@ class PushSubscriptionModelTest {
         // A deterministic warm-up, run unpaused before the race starts, so DELIVERED and FILTERED are proven to
         // occur regardless of how the toggler and pusher threads happen to interleave below. Left to the race
         // alone, an unlucky schedule (the toggler pauses once and is never rescheduled before the pusher finishes)
-        // could leave the subscription paused for the whole run and report every event NOT_DELIVERABLE, which
+        // could leave the subscription paused for the whole run and report every event UNAVAILABLE, which
         // would fail the two-outcome assertion further down despite nothing being wrong.
         model.accept(cloudEvent("warmup-match", matchingType));
         model.accept(cloudEvent("warmup-no-match", nonMatchingType));
@@ -561,10 +581,10 @@ class PushSubscriptionModelTest {
             boolean wasDelivered = deliveredIds.contains(String.valueOf(i));
             if (typeMatches) {
                 assertThat(outcome).as("event %d has the matching type, so its filter is never the reason it is not delivered", i)
-                        .isIn(DELIVERED, NOT_DELIVERABLE);
+                        .isIn(DELIVERED, UNAVAILABLE);
             } else {
                 assertThat(outcome).as("event %d has the non-matching type, so a running subscription always declines it", i)
-                        .isIn(FILTERED, NOT_DELIVERABLE);
+                        .isIn(FILTERED, UNAVAILABLE);
             }
             assertThat(wasDelivered).as("event %d: whether the handler actually ran must agree with a reported outcome of DELIVERED", i)
                     .isEqualTo(outcome == DELIVERED);

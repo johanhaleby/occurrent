@@ -200,6 +200,15 @@ public final class CatchupProjectionFeed<E> {
         return handover.acceptReportingDelivery(Delivered.live(metadata, event));
     }
 
+    // Package-private. Lets DomainEventFeed.acceptCloudEvent(CloudEvent) refuse rather than buffer an event it can
+    // redeliver, one evaluation deciding both the live check and the accept, see BlockingHandover.acceptIfLive(..)
+    // for why that matters.
+    boolean acceptIfLive(EventMetadata metadata, E event) {
+        Objects.requireNonNull(metadata, "metadata cannot be null");
+        Objects.requireNonNull(event, "event cannot be null");
+        return handover.acceptIfLive(Delivered.live(metadata, event));
+    }
+
     // Two routes on purpose. MaterializedView.update(E) and update(EventMetadata, E) are separate interface methods a
     // caller's view may implement differently, so an event fed without metadata must still take the one-argument route
     // rather than the metadata one carrying EventMetadata.empty(). A replayed delivery always has metadata, so it always
@@ -223,6 +232,13 @@ public final class CatchupProjectionFeed<E> {
     // See BlockingHandover.isReadyForLiveDelivery()'s own javadoc for exactly what this answers.
     boolean isReadyForLiveDelivery() {
         return handover.isReadyForLiveDelivery();
+    }
+
+    // Package-private, beside isReadyForLiveDelivery() and for the same reason: the handover owns this state, so
+    // asking it beats tracking a second copy. False until this feed's own catch-up throws and true forever after,
+    // which is what makes it safe to read after catching the refusal rather than at the moment it was thrown.
+    boolean refusesPermanently() {
+        return handover.refusesPermanently();
     }
 
     /**

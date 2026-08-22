@@ -304,6 +304,134 @@ class BlockingHandoverTest {
         }
     }
 
+    // acceptIfLive(..): a caller that can redeliver, unlike accept(..)/acceptReportingDelivery(..), which keep
+    // buffering when not live (proved unchanged by live_payloads_accepted_before_catch_up_are_buffered_and_delivered_after_the_replay_in_order
+    // above, still exercised through accept(..) itself, the write path's only entry point).
+
+    @Test
+    void acceptIfLive_refuses_without_buffering_when_not_live() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
+
+        boolean landed = handover.acceptIfLive("L1");
+
+        assertThat(landed).isFalse();
+        assertThat(delivered).as("refused outright, never buffered").isEmpty();
+
+        // Proof it was truly refused rather than silently buffered: a catch-up that reaches live delivers only the
+        // replay's own history, never the refused payload.
+        handover.catchUp(source(List.of("R1"), false));
+        assertThat(delivered).containsExactly("R1");
+    }
+
+    @Test
+    void acceptIfLive_delivers_when_live() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
+        handover.catchUp(source(List.of(), true));
+
+        boolean landed = handover.acceptIfLive("L1");
+
+        assertThat(landed).isTrue();
+        assertThat(delivered).containsExactly("L1");
+    }
+
+    @Test
+    void acceptIfLive_reports_true_for_a_key_an_earlier_attempt_already_delivered() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
+        handover.catchUp(source(List.of(), true));
+
+        assertThat(handover.acceptIfLive("L1")).isTrue();
+        assertThat(handover.acceptIfLive("L1")).as("already delivered, so a redelivery still lands true").isTrue();
+
+        assertThat(delivered).as("folded once, not twice").containsExactly("L1");
+    }
+
+    @Test
+    void acceptIfLive_reports_false_for_a_concurrent_delivery_of_the_same_key_already_in_flight() throws Exception {
+        CountDownLatch firstStarted = new CountDownLatch(1);
+        CountDownLatch releaseFirst = new CountDownLatch(1);
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        BlockingHandover<String> handover = BlockingHandover.create(
+                payload -> {
+                    firstStarted.countDown();
+                    awaitLatch(releaseFirst);
+                    delivered.add(payload);
+                },
+                payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+        handover.catchUp(source(List.of(), true));
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Boolean> first = pool.submit(() -> handover.acceptIfLive("A"));
+            awaitLatch(firstStarted);
+
+            boolean secondResult = handover.acceptIfLive("A");
+            releaseFirst.countDown();
+
+            assertThat(first.get(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(secondResult).as("the concurrent duplicate must not be reported landed while the in-flight "
+                            + "attempt for the same key has not itself succeeded yet, safe to redeliver again since "
+                            + "it was never buffered either")
+                    .isFalse();
+            assertThat(delivered).containsExactly("A");
+        } finally {
+            pool.shutdown();
+        }
+    }
+
+    /**
+     * The regression guard for the exact bug a fresh-context review caught in an earlier draft: reading
+     * {@code catchUpFailure} after the live check would let a permanently failed catch-up report {@code false}
+     * (redeliver forever) instead of throwing, turning a real failure into an unbounded bypass-of-every-delivery-
+     * failure-policy loop. {@code catchUpFailure} must be checked, and thrown, before the live check, exactly as
+     * {@link BlockingHandover#acceptReportingDelivery(Object)} already orders it.
+     */
+    @Test
+    void acceptIfLive_throws_rather_than_reports_false_after_a_catch_up_failure() {
+        BlockingHandover<String> handover = handover(new ArrayList<>());
+        RuntimeException replayFailure = new RuntimeException("replay boom");
+        FakeSource failingSource = source(List.of(), false);
+        failingSource.replayFailure = replayFailure;
+        catchThrowable(() -> handover.catchUp(failingSource));
+
+        Throwable thrown = catchThrowable(() -> handover.acceptIfLive("L1"));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.catchUpFailed(NOUN));
+        assertThat(thrown.getCause()).isSameAs(replayFailure);
+    }
+
+    /**
+     * dec-0011's amendment 1: a {@code stop()} on the wrapping subscription model interrupts a replay in flight
+     * (this handover's own {@code stopped} state) at essentially the same moment {@code RegisteringSubscribable}
+     * adds the subscription id to {@code pausedSubscriptions}, which {@code routeReportingMatch} checks before ever
+     * reaching this method. The only window where {@code acceptIfLive} can observe {@code stopped} at all is the
+     * narrow interleaving between those two, and this proves the bound: at most one {@code false} for a payload fed
+     * into that window, not an unbounded loop, since a stopped-but-not-yet-poisoned handover keeps reporting
+     * {@code false} exactly like "still replaying, never poisoned" does, not like a permanent failure.
+     */
+    @Test
+    void acceptIfLive_reports_false_rather_than_throwing_when_stopped_but_not_poisoned() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
+
+        assertThat(handover.acceptIfLive("before-any-catch-up")).as("never started").isFalse();
+
+        FakeSource source = source(List.of("R1", "R2", "R3"), false);
+        source.stopAfter(2);
+        boolean caughtUp = handover.catchUp(source);
+        assertThat(caughtUp).as("Source.keepReplaying() stopped it, not a failure").isFalse();
+
+        boolean landedAfterStop = handover.acceptIfLive("after-stop");
+
+        assertThat(landedAfterStop).as("stopped, not poisoned: refused rather than buffered, never thrown, the "
+                        + "same as any other not-live case, per dec-0011's amendment 1")
+                .isFalse();
+        assertThat(delivered).as("nothing buffered or delivered through the refused payload").containsExactly("R1", "R2");
+    }
+
     private static void awaitLatch(CountDownLatch latch) {
         try {
             assertThat(latch.await(5, TimeUnit.SECONDS)).as("latch reached within the timeout").isTrue();
@@ -469,6 +597,67 @@ class BlockingHandoverTest {
         assertThat(thrown).hasMessage("live drain boom");
         assertThat(source.replayCompletedCallCount).isEqualTo(1);
         assertThat(source.replayAbandonedCallCount).isZero();
+    }
+
+    /**
+     * A delivery that throws part way through the drain stops the drain and fails the catch-up, so the payloads
+     * behind it are never delivered by this handover. A caller recovers by fixing the cause and building a new
+     * handover, which then delivers them, since nothing about them was recorded as delivered.
+     * <p>
+     * The engine also releases the de-dup reservations it took for those payloads. That is not observable from
+     * here, and no test can make it observable, because a failed catch-up refuses every later payload for the life
+     * of the handover, so nothing ever reaches the de-dup check again. It is done to keep the engine's own state
+     * consistent rather than to change any answer it gives.
+     */
+    @Test
+    void a_delivery_that_throws_mid_drain_stops_the_drain_and_leaves_the_rest_for_a_replacement() {
+        List<String> delivered = new ArrayList<>();
+        AtomicBoolean failNext = new AtomicBoolean(true);
+        BlockingHandover<String> handover = BlockingHandover.create(payload -> {
+            if (payload.equals("L2") && failNext.getAndSet(false)) {
+                throw new IllegalStateException("drain boom");
+            }
+            delivered.add(payload);
+        }, payload -> payload, CatchupThenLiveOptions.defaults(), NOUN);
+
+        handover.accept("L1");
+        handover.accept("L2");
+        handover.accept("L3");
+
+        FakeSource source = source(List.of(), false);
+        Throwable thrown = catchThrowable(() -> handover.catchUp(source));
+        assertThat(thrown).hasMessage("drain boom");
+        assertThat(delivered).as("the drain stopped at the payload that threw").containsExactly("L1");
+
+        // The handover refuses every later payload because the catch-up failed, which is the documented answer, so
+        // a second handover stands in for the replacement a caller builds after fixing the cause. What matters is
+        // that L3 is not silently skipped, which is what a leaked reservation would cause.
+        List<String> redelivered = new ArrayList<>();
+        BlockingHandover<String> replacement = handover(redelivered);
+        replacement.catchUp(source(List.of(), true));
+        replacement.accept("L3");
+
+        assertThat(redelivered).as("L3 was never delivered, so offering it again delivers it").containsExactly("L3");
+    }
+
+    /**
+     * The same drain, without a failure. Nothing is left reserved, so a repeat of a payload the drain did deliver
+     * is still recognised as already delivered rather than delivered twice.
+     */
+    @Test
+    void a_drain_that_completes_leaves_no_payload_reserved() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
+
+        handover.accept("L1");
+        handover.accept("L2");
+        handover.catchUp(source(List.of(), false));
+
+        handover.accept("L1");
+        handover.accept("L2");
+
+        assertThat(delivered).as("each payload was delivered once and the repeats were recognised")
+                .containsExactly("L1", "L2");
     }
 
     private static BlockingHandover<String> handover(List<String> delivered) {

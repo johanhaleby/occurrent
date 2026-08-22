@@ -22,7 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.projection.AppliedAppendStore;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ReplayAware;
 import org.occurrent.eventstore.api.AppendId;
@@ -46,7 +45,7 @@ class RecordingMaterializedViewTest {
         MaterializedView<String> delegate = orderTrackingDelegate(order, "delegate");
         AppliedAppendStore store = orderTrackingStore(AppliedAppendStore.inMemory(), order, "record");
 
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, store);
 
         recording.update(metadataWithAppendId(AppendId.mint()), "event");
 
@@ -54,14 +53,15 @@ class RecordingMaterializedViewTest {
     }
 
     @Test
-    void nothing_is_recorded_while_the_phase_says_replaying() {
+    void nothing_is_recorded_while_a_catch_up_is_reading_its_history() {
         List<String> events = new ArrayList<>();
         MaterializedView<String> delegate = recordingDelegate(events);
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
 
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, store, () -> true);
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, store);
 
+        recording.catchupStarted(new Object());
         recording.update(metadataWithAppendId(appendId), "event");
 
         assertThat(events).containsExactly("event");
@@ -74,7 +74,7 @@ class RecordingMaterializedViewTest {
         AppendId appendId = AppendId.mint();
         MaterializedView<String> delegate = throwingDelegate();
 
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, store);
 
         assertThatCode(() -> recording.update(metadataWithAppendId(appendId), "event")).isInstanceOf(RuntimeException.class);
         assertThat(store.hasApplied(PROJECTION_ID, appendId)).isFalse();
@@ -83,7 +83,7 @@ class RecordingMaterializedViewTest {
     @Test
     void an_event_with_no_appendid_extension_is_skipped_without_throwing() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store);
 
         assertThatCode(() -> recording.update(EventMetadata.empty(), "event")).doesNotThrowAnyException();
     }
@@ -91,7 +91,7 @@ class RecordingMaterializedViewTest {
     @Test
     void an_event_with_a_malformed_non_uuid_appendid_is_skipped_without_throwing() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store);
         EventMetadata malformed = new EventMetadata(Map.of(OccurrentCloudEventExtension.APPEND_ID, "not-a-uuid"));
 
         assertThatCode(() -> recording.update(malformed, "event")).doesNotThrowAnyException();
@@ -102,7 +102,7 @@ class RecordingMaterializedViewTest {
         List<String> storeCalls = new ArrayList<>();
         AppliedAppendStore store = orderTrackingStore(AppliedAppendStore.inMemory(), storeCalls, "recordApplied");
         AppendId appendId = AppendId.mint();
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store);
 
         recording.update(metadataWithAppendId(appendId), "event1");
         recording.update(metadataWithAppendId(appendId), "event2");
@@ -111,17 +111,19 @@ class RecordingMaterializedViewTest {
     }
 
     @Test
-    void replayObserved_clears_and_recording_resumes() {
+    void a_catch_up_clears_and_recording_resumes_once_its_history_has_been_read() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId before = AppendId.mint();
         store.recordApplied(PROJECTION_ID, before);
-        AtomicBoolean replaying = new AtomicBoolean(false);
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store, replaying::get);
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store);
+        Object episode = new Object();
 
-        recording.replayObserved();
+        recording.catchupStarted(episode);
+        recording.pollForClear();
 
         assertThat(store.hasApplied(PROJECTION_ID, before)).isFalse();
 
+        recording.historyRead(episode);
         AppendId after = AppendId.mint();
         recording.update(metadataWithAppendId(after), "event");
 
@@ -133,9 +135,12 @@ class RecordingMaterializedViewTest {
         FlakyClearStore store = new FlakyClearStore();
         AppendId first = AppendId.mint();
 
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store);
 
-        recording.replayObserved(); // marks pendingClear, first clear attempt fails
+        Object episode = new Object();
+        recording.catchupStarted(episode);
+        recording.historyRead(episode);
+        recording.pollForClear(); // first clear attempt, which fails
         recording.update(metadataWithAppendId(first), "event-during-failed-clear");
         assertThat(store.hasApplied(PROJECTION_ID, first)).isFalse();
 
@@ -150,12 +155,15 @@ class RecordingMaterializedViewTest {
     void the_dedup_slot_is_reset_across_a_successful_clear() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, store);
 
         recording.update(metadataWithAppendId(appendId), "event1");
         assertThat(store.hasApplied(PROJECTION_ID, appendId)).isTrue();
 
-        recording.replayObserved(); // clears the store and the dedup slot
+        Object episode = new Object();
+        recording.catchupStarted(episode);
+        recording.historyRead(episode);
+        recording.pollForClear(); // clears the store and the dedup slot
         assertThat(store.hasApplied(PROJECTION_ID, appendId)).isFalse();
 
         // The same id, now absent from the store, must be written again rather than skipped as "already recorded".
@@ -167,7 +175,7 @@ class RecordingMaterializedViewTest {
     void nothing_is_recorded_for_a_delegate_that_reports_skipping_the_event() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(skippingDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(skippingDelegate(), PROJECTION_ID, store);
 
         recording.update(metadataWithAppendId(appendId), "event");
 
@@ -178,7 +186,7 @@ class RecordingMaterializedViewTest {
     void an_applied_event_is_still_recorded_when_the_delegate_can_report_skipping() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();
         AppendId appendId = AppendId.mint();
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(applyingDelegate(), PROJECTION_ID, store, ReplayPhase.neverReplays());
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(applyingDelegate(), PROJECTION_ID, store);
 
         recording.update(metadataWithAppendId(appendId), "event");
 
@@ -189,7 +197,7 @@ class RecordingMaterializedViewTest {
     void replayAware_lifecycle_is_forwarded_to_a_replayAware_delegate() {
         List<String> calls = new ArrayList<>();
         MaterializedView<String> delegate = new ReplayAwareDelegate(calls);
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, AppliedAppendStore.inMemory(), ReplayPhase.neverReplays());
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(delegate, PROJECTION_ID, AppliedAppendStore.inMemory());
 
         recording.replayStarted();
         recording.replayCompleted();
@@ -200,7 +208,7 @@ class RecordingMaterializedViewTest {
 
     @Test
     void replayAware_lifecycle_does_not_throw_for_a_plain_delegate() {
-        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, AppliedAppendStore.inMemory(), ReplayPhase.neverReplays());
+        RecordingMaterializedView<String> recording = new RecordingMaterializedView<>(noopDelegate(), PROJECTION_ID, AppliedAppendStore.inMemory());
 
         assertThatCode(() -> {
             recording.replayStarted();

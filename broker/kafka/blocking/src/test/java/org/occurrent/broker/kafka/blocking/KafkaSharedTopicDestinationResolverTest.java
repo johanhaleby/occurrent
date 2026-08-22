@@ -89,6 +89,7 @@ class KafkaSharedTopicDestinationResolverTest {
         assertThat(destination.topic()).isEqualTo("my-topic");
         assertThat(destination.key()).isNull();
         assertThat(destination.headers()).isEmpty();
+        assertThat(destination.topicIsPattern()).isFalse();
     }
 
     @Test

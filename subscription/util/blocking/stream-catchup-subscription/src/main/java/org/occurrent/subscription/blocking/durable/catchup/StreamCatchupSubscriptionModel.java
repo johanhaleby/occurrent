@@ -302,6 +302,13 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         // the window and pushing an old during-catch-up event out. Re-read until the matching count stops growing:
         // a pass with no new event has delivered them all. Re-reads are deduped by the cache (at-least-once).
         // Anything written after a pass is newer than globalCheckpoint and is covered by live delivery regardless.
+        // Everything the bulk replay was going to deliver has been delivered by now, so what follows is the events
+        // written since it started. A recording projection records those and skips the history above it. Skipped when
+        // the replay was truncated, since a history that stopped part way through is not a history that was read.
+        if (shouldKeepReplaying(subscriptionId)) {
+            historyRead(subscriptionId);
+        }
+
         long reconciledThroughCount = numberOfEventsBeforeStartingCatchupSubscription;
         long matchingEventCount = eventStoreQueries.count(catchupFilter);
         while (matchingEventCount > reconciledThroughCount && shouldKeepReplaying(subscriptionId)) {
@@ -444,7 +451,7 @@ public class StreamCatchupSubscriptionModel extends AbstractCatchupSubscriptionM
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(streamReader, windowSize);
         pipeline.replay(startPosition, () -> shouldKeepReplaying(subscriptionId),
                 (events, cache) -> deliverCatchupEvents(events, subscriptionId, action, cache, e -> GlobalCheckpoint.of(OccurrentCloudEventExtension.getPosition(e))),
-                catchupPhaseCache);
+                catchupPhaseCache, () -> historyRead(subscriptionId));
 
         // Locked from the identity decision through the delegate subscribe call below, same reasoning as the
         // time-based path above. An unlocked gap here is observable two ways, a lost cancellation, or a fresh

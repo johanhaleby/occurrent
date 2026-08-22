@@ -61,7 +61,7 @@ class KafkaDestinationTest {
         Map<String, String> mutableHeaders = new HashMap<>();
         mutableHeaders.put("tenant", "acme");
 
-        KafkaDestination destination = new KafkaDestination("my-topic", "stream-1", mutableHeaders);
+        KafkaDestination destination = new KafkaDestination("my-topic", "stream-1", mutableHeaders, false);
         mutableHeaders.put("tenant", "other");
         mutableHeaders.put("extra", "value");
 
@@ -79,7 +79,7 @@ class KafkaDestinationTest {
     void a_header_key_using_the_reserved_ce_prefix_is_refused_at_construction() {
         Map<String, String> headers = Map.of(KafkaDestination.HEADER_PREFIX + "streamid", "should-not-be-allowed");
 
-        assertThatThrownBy(() -> new KafkaDestination("my-topic", "stream-1", headers))
+        assertThatThrownBy(() -> new KafkaDestination("my-topic", "stream-1", headers, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(KafkaDestination.HEADER_PREFIX);
     }
@@ -88,27 +88,52 @@ class KafkaDestinationTest {
     void a_header_key_equal_to_the_reserved_content_type_header_is_refused_at_construction() {
         Map<String, String> headers = Map.of(KafkaDestination.CONTENT_TYPE_HEADER, "text/plain");
 
-        assertThatThrownBy(() -> new KafkaDestination("my-topic", "stream-1", headers))
+        assertThatThrownBy(() -> new KafkaDestination("my-topic", "stream-1", headers, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(KafkaDestination.CONTENT_TYPE_HEADER);
     }
 
     @Test
     void topic_cannot_be_null() {
-        assertThatThrownBy(() -> new KafkaDestination(null, "stream-1", Map.of()))
+        assertThatThrownBy(() -> new KafkaDestination(null, "stream-1", Map.of(), false))
                 .isInstanceOf(NullPointerException.class);
     }
 
     @Test
     void key_may_be_null() {
-        KafkaDestination destination = new KafkaDestination("my-topic", null, Map.of());
+        KafkaDestination destination = new KafkaDestination("my-topic", null, Map.of(), false);
 
         assertThat(destination.key()).isNull();
     }
 
     @Test
     void headers_cannot_be_null() {
-        assertThatThrownBy(() -> new KafkaDestination("my-topic", "stream-1", null))
+        assertThatThrownBy(() -> new KafkaDestination("my-topic", "stream-1", null, false))
                 .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void of_defaults_topicIsPattern_to_false() {
+        assertThat(KafkaDestination.of("my-topic").topicIsPattern()).isFalse();
+        assertThat(KafkaDestination.of("my-topic", "stream-1").topicIsPattern()).isFalse();
+    }
+
+    @Test
+    void withHeaders_carries_topicIsPattern_over_unchanged() {
+        KafkaDestination pattern = KafkaDestination.ofPattern("prefix-.*");
+
+        KafkaDestination withHeaders = pattern.withHeaders(Map.of());
+
+        assertThat(withHeaders.topicIsPattern()).isTrue();
+    }
+
+    @Test
+    void ofPattern_creates_a_pattern_typed_destination_with_no_key_and_no_headers() {
+        KafkaDestination destination = KafkaDestination.ofPattern("prefix-.*");
+
+        assertThat(destination.topic()).isEqualTo("prefix-.*");
+        assertThat(destination.topicIsPattern()).isTrue();
+        assertThat(destination.key()).isNull();
+        assertThat(destination.headers()).isEmpty();
     }
 }

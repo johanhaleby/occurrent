@@ -25,7 +25,6 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.MaterializedViewOptions;
 import org.occurrent.dsl.projection.Projection;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.AppendId;
@@ -56,7 +55,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * This wires the real production classes together: {@link CoalescingMaterializedView} (via
  * {@link Projections#materializedView}) wrapped by the real {@link RecordingMaterializedView} (via
  * {@link Projections#recordingAppliedAppends}), fed by a real {@link CatchupProjectionFeed}, using
- * {@link ReplayPhase#neverReplays()} deliberately: on this pull-fed composition the only thing that can suppress
+ * Listening to no subscription model deliberately. On this pull-fed composition the only thing that can suppress
  * recording during the replay is the {@code ReplayAware} lifecycle forwarding
  * ({@code replayStarted}/{@code replayAbandoned}) the feed drives on the recording wrapper itself, exactly the
  * mechanism {@code CatchupProjectionFeed}/{@code DomainEventFeed} compositions rely on in production. A phase that
@@ -95,7 +94,7 @@ class RecordingMaterializedViewAbandonedReplayNonLieTest {
         // A batch size larger than the whole history, so nothing flushes until replayCompleted() (which an abandon skips).
         MaterializedView<Ticked> coalescing = Projections.materializedView(
                 tickProjection(), repository, RetryStrategy.none(), new MaterializedViewOptions(100));
-        MaterializedView<Ticked> recording = Projections.recordingAppliedAppends(coalescing, PROJECTION_ID, appliedAppendStore, ReplayPhase.neverReplays());
+        MaterializedView<Ticked> recording = Projections.recordingAppliedAppends(coalescing, PROJECTION_ID, appliedAppendStore);
         CatchupProjectionFeed<Ticked> feed = CatchupProjectionFeed.create(
                 PROJECTION_ID, recording, org.occurrent.filter.Filter.all(), store, converter, Ticked::eventId, marker);
 

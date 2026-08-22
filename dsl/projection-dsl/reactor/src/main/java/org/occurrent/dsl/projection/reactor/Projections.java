@@ -21,11 +21,11 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.dcb.reactor.DcbDomainEventQueries;
 import org.occurrent.dsl.projection.AppliedAppendRecorder;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.DcbProjection;
 import org.occurrent.dsl.projection.MaterializedViewOptions;
 import org.occurrent.dsl.projection.Projection;
-import org.occurrent.dsl.projection.ReplayPhase;
 import org.occurrent.dsl.projection.internal.ProjectionKeys;
 import org.occurrent.dsl.query.reactor.DomainEventQueries;
 import org.occurrent.dsl.view.MaterializedView;
@@ -282,27 +282,34 @@ public final class Projections {
      * This is what {@code @Projection(recordAppliedAppends = true)} builds on the reactor stack; call it directly
      * when composing a projection programmatically instead of through the annotation.
      * <p>
-     * {@code phase} answers whether the projection is currently replaying, so the wrapper can skip recording during
-     * a catch-up. Pass {@link ReplayPhase#neverReplays()} for a composition that genuinely never replays; a
-     * composition that does replay must supply a phase that can tell, since nothing here can work that out from
-     * {@code update} alone. If {@code update} is itself {@link ReactiveReplayAware}, wrap the delegate (not the
-     * result of this call) with your own replay-aware behaviour first, since the returned update forwards to
+     * If {@code update} is itself {@link org.occurrent.dsl.view.reactor.ReactiveReplayAware}, wrap the delegate (not
+     * the result of this call) with your own replay-aware behaviour first, since the returned update forwards to
      * whatever {@code update} was when this was called.
      * <p>
-     * The Spring Boot starter's own scheduled poll (ADR 132 decision 7) is what still retries a clear when a replay
-     * delivered no matching event to retry it from. Calling this factory directly does not install that poll. Call
-     * {@link AppliedAppendRecorder#pollReplayPhase()} on the returned update yourself on a schedule, rather than
-     * asking {@code phase} first and dispatching to {@link AppliedAppendRecorder#replayObserved()} or
-     * {@link AppliedAppendRecorder#retryPendingClear()} from that separate reading: a live delivery landing between
-     * the two can record a genuinely live append, which a stale {@code replayObserved()} call would then clear.
-     * {@code pollReplayPhase()} re-checks the phase itself, atomically with reacting to it. Or accept the residual.
-     * Without polling it, a clear a replay left owed only retries once a live delivery reaches this projection.
+     * The returned update is a {@link CatchupListener}, and nothing signals it unless you arrange that. Register it
+     * on the subscription model this projection runs on, before subscribing.
+     * <pre>{@code
+     * RecordingReactiveUpdate<MyEvent> recording = Projections.recordingAppliedAppends(update, projectionId, store);
+     * if (subscriptionModel instanceof ReplayAwareSubscriptions model) {
+     *     model.listenForCatchup(projectionId, recording);
+     * }
+     * }</pre>
+     * <p>
+     * {@code listenForCatchup} answers {@code false} for a model that cannot say when its catch-ups begin and end.
+     * Poll that one instead: call {@link CatchupListener#catchupStarted(Object)} with a fresh object when
+     * {@code isCatchingUp(projectionId)} turns true, and {@link CatchupListener#historyRead(Object)} with that same
+     * object when it turns false again. An update that is never signalled records straight through a replay and
+     * never clears, which is the untruth this recording exists to prevent.
+     * <p>
+     * The Spring Boot starter's own scheduled poll (ADR 132 decision 7) is what retries a clear that keeps failing.
+     * Calling this factory directly does not install it. Call {@link AppliedAppendRecorder#pollForClear()} on the
+     * returned update on a schedule, or accept that a clear a catch-up left owed only retries once another delivery
+     * reaches this projection.
      */
-    public static <E> RecordingReactiveUpdate<E> recordingAppliedAppends(BiFunction<EventMetadata, E, Mono<Void>> update, String projectionId, AppliedAppendStore store, ReplayPhase phase) {
+    public static <E> RecordingReactiveUpdate<E> recordingAppliedAppends(BiFunction<EventMetadata, E, Mono<Void>> update, String projectionId, AppliedAppendStore store) {
         requireNonNull(update, "update cannot be null");
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(store, "store cannot be null");
-        requireNonNull(phase, "phase cannot be null");
-        return new RecordingReactiveUpdate<>(update, projectionId, store, phase);
+        return new RecordingReactiveUpdate<>(update, projectionId, store);
     }
 }

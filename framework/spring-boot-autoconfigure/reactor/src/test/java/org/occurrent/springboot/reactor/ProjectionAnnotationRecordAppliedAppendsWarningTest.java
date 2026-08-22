@@ -106,9 +106,9 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(subscription);
-        ComposedReplayPhase composedReplayPhase = new ComposedReplayPhase();
-        composedReplayPhase.suppliedBy(model);
-        composedReplayPhase.defaultBypassesCatchup();
+        ComposedCatchupModel composedCatchupModel = new ComposedCatchupModel();
+        composedCatchupModel.suppliedBy(model);
+        composedCatchupModel.defaultBypassesCatchup();
 
         new ApplicationContextRunner()
                 .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
@@ -116,7 +116,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .withBean("defaultStartPositionProjection", DefaultStartPositionProjection.class, DefaultStartPositionProjection::new)
                 .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
                 .withBean("subscribable", Subscribable.class, () -> model)
-                .withBean(ComposedReplayPhase.class, () -> composedReplayPhase)
+                .withBean(ComposedCatchupModel.class, () -> composedCatchupModel)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(warnings()).hasSize(1);
@@ -139,9 +139,9 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
         when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
         when(model.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
                 .thenReturn(subscription);
-        ComposedReplayPhase composedReplayPhase = new ComposedReplayPhase();
-        composedReplayPhase.suppliedBy(model);
-        composedReplayPhase.defaultBypassesCatchup();
+        ComposedCatchupModel composedCatchupModel = new ComposedCatchupModel();
+        composedCatchupModel.suppliedBy(model);
+        composedCatchupModel.defaultBypassesCatchup();
         EventStore eventStore = mock(EventStore.class, withSettings().extraInterfaces(PositionOrderedReader.class));
         when(((PositionOrderedReader) eventStore).writesPosition()).thenReturn(true);
 
@@ -151,7 +151,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .withBean("startAtGlobalPositionProjection", StartAtGlobalPositionProjection.class, StartAtGlobalPositionProjection::new)
                 .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
                 .withBean("subscribable", Subscribable.class, () -> model)
-                .withBean(ComposedReplayPhase.class, () -> composedReplayPhase)
+                .withBean(ComposedCatchupModel.class, () -> composedCatchupModel)
                 .withBean("eventStore", EventStore.class, () -> eventStore)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
@@ -169,7 +169,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     @Test
     void a_custom_compositions_default_start_position_does_not_claim_it_never_replays_when_its_capability_is_unreadable() {
         // A model with no ReplayAwareSubscriptions capability at all (a custom or third-party one), and no
-        // ComposedReplayPhase bean in this context either, the same as an application that supplied its own
+        // ComposedCatchupModel bean in this context either, the same as an application that supplied its own
         // Subscribable rather than the shipped Mongo composition. Nothing here registered the DEFAULT fact, and
         // DEFAULT resolves to StartAt.subscriptionModelDefault(), a marker whose actual behavior this specific,
         // unobservable composition is free to interpret however it wants, so it might genuinely replay. Only
@@ -195,7 +195,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
     void a_custom_compositions_default_start_position_does_not_warn_even_when_its_capability_is_readable() {
         // Unlike the shipped composition test above, this model does expose ReplayAwareSubscriptions, so
         // resolveEventStorePhase reads it directly and logs no "cannot tell" warning of its own, but there is still
-        // no ComposedReplayPhase bean registering the DEFAULT fact, the same as an application-supplied composition
+        // no ComposedCatchupModel bean registering the DEFAULT fact, the same as an application-supplied composition
         // nobody told this registrar bypasses catch-up for DEFAULT. A capability-observable composition is not by
         // itself proof of what DEFAULT does, so this stays silent rather than guessing.
         Subscribable model = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));

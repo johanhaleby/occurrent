@@ -28,6 +28,7 @@
         <module>forwarder</module>
         <module>domain</module>
         <module>saga</module>
+        <module>broker</module>
     </modules>
     <modelVersion>4.0.0</modelVersion>
 

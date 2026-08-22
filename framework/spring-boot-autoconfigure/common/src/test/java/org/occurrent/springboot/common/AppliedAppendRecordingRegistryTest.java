@@ -107,21 +107,18 @@ class AppliedAppendRecordingRegistryTest {
     }
 
     @Test
-    void a_replaying_tick_resets_the_interval_to_the_fast_end_and_calls_replayObserved() {
-        AtomicInteger replayObservedCalls = new AtomicInteger();
-        AtomicBoolean replaying = new AtomicBoolean(false);
-        registry.register("p1", polling(replaying::get, replayObservedCalls::incrementAndGet, () -> {
-        }));
+    void a_tick_with_something_to_react_to_resets_the_interval_to_the_fast_end() {
+        AtomicBoolean busy = new AtomicBoolean(false);
+        registry.register("p1", busy::get);
 
         // Grow the interval first, so the reset below is actually observable.
         registry.tick("p1");
         registry.tick("p1");
         assertThat(registry.dueInNanos("p1")).isGreaterThan(Duration.ofMillis(200).toNanos());
 
-        replaying.set(true);
+        busy.set(true);
         registry.tick("p1");
 
-        assertThat(replayObservedCalls.get()).isEqualTo(1);
         assertThat(registry.dueInNanos("p1")).isEqualTo(Duration.ofMillis(200).toNanos());
     }
 
@@ -133,11 +130,8 @@ class AppliedAppendRecordingRegistryTest {
 
     @Test
     void two_projections_pace_independently() {
-        AtomicBoolean p2Replaying = new AtomicBoolean(true);
         registry.register("p1", neverReplaying());
-        registry.register("p2", polling(p2Replaying::get, () -> {
-        }, () -> {
-        }));
+        registry.register("p2", (BooleanSupplier) () -> true);
 
         registry.tick("p1");
         registry.tick("p2");
@@ -146,36 +140,29 @@ class AppliedAppendRecordingRegistryTest {
         assertThat(registry.dueInNanos("p2")).isEqualTo(Duration.ofMillis(200).toNanos());
     }
 
+    // A recorder registered directly is polled for its clear and for nothing else, which is the whole of what a
+    // poll can do for a projection whose model tells it when its catch-ups begin and end.
     @Test
-    void a_live_tick_retries_a_pending_clear_through_retryPendingClear() {
-        AtomicInteger retryCalls = new AtomicInteger();
-        registry.register("p1", polling(() -> false, () -> {
-        }, retryCalls::incrementAndGet));
-
-        registry.tick("p1");
-
-        assertThat(retryCalls.get()).isEqualTo(1);
-    }
-
-    // tick() no longer asks the phase itself and dispatches from that separate reading: it asks the recorder's own
-    // pollReplayPhase(), which re-checks the phase and reacts atomically with that check. A recorder that ignores
-    // the phase it was given and only pollReplayPhase() proves the registry never reads the phase on its own.
-    @Test
-    void tick_drives_entirely_through_pollReplayPhase_not_a_separate_phase_reading() {
+    void a_tick_for_a_recorder_asks_it_only_to_poll_for_a_clear() {
         AtomicInteger pollCalls = new AtomicInteger();
         registry.register("p1", new AppliedAppendRecorder() {
             @Override
-            public void replayObserved() {
-                throw new AssertionError("tick() must not call replayObserved() directly");
+            public void catchupStarted(Object episode) {
+                throw new AssertionError("tick() must not send catch-up signals");
+            }
+
+            @Override
+            public void historyRead(Object episode) {
+                throw new AssertionError("tick() must not send catch-up signals");
             }
 
             @Override
             public void retryPendingClear() {
-                throw new AssertionError("tick() must not call retryPendingClear() directly");
+                throw new AssertionError("tick() must ask pollForClear(), which also writes what was waiting");
             }
 
             @Override
-            public boolean pollReplayPhase() {
+            public boolean pollForClear() {
                 pollCalls.incrementAndGet();
                 return false;
             }
@@ -187,23 +174,24 @@ class AppliedAppendRecordingRegistryTest {
         assertThat(registry.dueInNanos("p1")).isEqualTo(Duration.ofMillis(400).toNanos());
     }
 
-    // The sequence a live tick's retry exists for: a replay is observed and its clear fails (store outage), the
-    // replay ends and the phase reports live again, the store recovers, and no live event ever arrives to retry the
-    // clear through the wrapper's own update path. Without the live-tick retry, pendingClear stays set forever and
-    // hasApplied keeps answering true for the pre-replay appends the reset rule owes removal.
+    // The sequence the poll's clear retry exists for: a catch-up starts and the clear it owes fails (store outage),
+    // the catch-up ends, the store recovers, and no event ever arrives to retry the clear through the wrapper's own
+    // update path. Without the retry, the clear stays owed forever and hasApplied keeps answering true for the
+    // appends the rebuild is discarding.
     @Test
-    void a_clear_that_failed_during_a_replay_is_retried_on_a_later_live_tick_with_no_deliveries_and_recording_resumes() {
+    void a_clear_that_failed_during_a_catch_up_is_retried_on_a_later_tick_with_no_deliveries_and_recording_resumes() {
         FlakyClearStore store = new FlakyClearStore();
         AppendId before = AppendId.mint();
         store.recordApplied("orders", before);
-        AtomicBoolean replaying = new AtomicBoolean(true);
-        AppliedAppendRecording recording = new AppliedAppendRecording("orders", store, replaying::get);
-        registry.register("orders", adapting(recording));
+        AppliedAppendRecording recording = new AppliedAppendRecording("orders", store);
+        registry.register("orders", (BooleanSupplier) recording::pollForClear);
+        Object episode = new Object();
 
+        recording.catchupStarted(episode);
         registry.tick("orders");
         assertThat(store.hasApplied("orders", before)).isTrue();
 
-        replaying.set(false);
+        recording.historyRead(episode);
         store.clearShouldFail = false;
 
         registry.tick("orders");
@@ -214,56 +202,23 @@ class AppliedAppendRecordingRegistryTest {
         assertThat(store.hasApplied("orders", after)).isTrue();
     }
 
-    private static AppliedAppendRecorder neverReplaying() {
-        return polling(() -> false, () -> {
-        }, () -> {
-        });
+    // A tick that keeps reporting a clear is still owed keeps the poll at its fast end, so a store outage is not
+    // waited out at the slow one.
+    @Test
+    void a_tick_that_still_owes_a_clear_stays_at_the_fast_interval() {
+        FlakyClearStore store = new FlakyClearStore();
+        AppliedAppendRecording recording = new AppliedAppendRecording("orders", store);
+        registry.register("orders", (BooleanSupplier) recording::pollForClear);
+
+        recording.catchupStarted(new Object());
+        registry.tick("orders");
+        registry.tick("orders");
+
+        assertThat(registry.dueInNanos("orders")).isEqualTo(Duration.ofMillis(200).toNanos());
     }
 
-    // Mirrors what the registry itself used to orchestrate before pollReplayPhase(): reads phase, reacts, and
-    // reports what it found, all from one recorder call.
-    private static AppliedAppendRecorder polling(BooleanSupplier phase, Runnable onReplayObserved, Runnable onRetryPendingClear) {
-        return new AppliedAppendRecorder() {
-            @Override
-            public void replayObserved() {
-                onReplayObserved.run();
-            }
-
-            @Override
-            public void retryPendingClear() {
-                onRetryPendingClear.run();
-            }
-
-            @Override
-            public boolean pollReplayPhase() {
-                boolean isReplaying = phase.getAsBoolean();
-                if (isReplaying) {
-                    replayObserved();
-                } else {
-                    retryPendingClear();
-                }
-                return isReplaying;
-            }
-        };
-    }
-
-    private static AppliedAppendRecorder adapting(AppliedAppendRecording recording) {
-        return new AppliedAppendRecorder() {
-            @Override
-            public void replayObserved() {
-                recording.replayObserved();
-            }
-
-            @Override
-            public void retryPendingClear() {
-                recording.retryPendingClear();
-            }
-
-            @Override
-            public boolean pollReplayPhase() {
-                return recording.pollReplayPhase();
-            }
-        };
+    private static BooleanSupplier neverReplaying() {
+        return () -> false;
     }
 
     private static EventMetadata metadataWithAppendId(AppendId appendId) {

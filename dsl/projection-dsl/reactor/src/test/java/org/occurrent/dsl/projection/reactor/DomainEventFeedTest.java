@@ -49,7 +49,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
@@ -422,6 +421,53 @@ class DomainEventFeedTest {
         assertThat(repo.get("counter")).isEqualTo(1);
     }
 
+    /**
+     * The one-evaluation fix this unit mirrors from the blocking stack. A matching event that arrives before the
+     * registered projection is live must report {@link RoutingOutcome#DEFERRED}, safe to redeliver, rather than
+     * being buffered and reported as though it had already reached the view.
+     */
+    @Test
+    void accept_cloud_event_matching_the_registered_filter_reports_deferred_before_catch_up_and_never_buffers() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        // Deliberately never caught up or gone live. The projection is registered but not yet ready to receive.
+
+        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("1"))).block();
+
+        assertThat(outcome).isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(repo).as("refused outright, never buffered or applied").isEmpty();
+    }
+
+    /**
+     * A caller that redelivers a {@link RoutingOutcome#DEFERRED} event, or a broker resending a message it never saw
+     * acknowledged, must not double-apply it once the projection has gone live. This feed's own de-dup key absorbs
+     * the repeat.
+     */
+    @Test
+    void a_deferred_event_redelivered_after_going_live_is_applied_once_not_twice() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        DomainEventFeed<Counted> feed = new DomainEventFeed<>(reader(), converter, Counted::eventId);
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        feed.register("counter", projection(), ViewStateRepository.create(repo::get, repo::put));
+        CloudEvent event = converter.toCloudEvent(new Counted("1"));
+
+        RoutingOutcome beforeLive = feed.acceptCloudEvent(event).block();
+        assertThat(beforeLive).isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(repo).isEmpty();
+
+        feed.goLive("counter").block();
+
+        RoutingOutcome firstLiveDelivery = feed.acceptCloudEvent(event).block();
+        assertThat(firstLiveDelivery).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(repo.get("counter")).isEqualTo(1);
+
+        RoutingOutcome retriedDelivery = feed.acceptCloudEvent(event).block();
+        assertThat(retriedDelivery).isEqualTo(RoutingOutcome.DELIVERED);
+        assertThat(repo.get("counter")).as("applied once, not twice").isEqualTo(1);
+    }
+
     @Test
     void accept_cloud_event_not_matching_the_registered_filter_reports_filtered_and_is_never_decoded() {
         AtomicInteger decodes = new AtomicInteger();
@@ -571,10 +617,10 @@ class DomainEventFeedTest {
     }
 
     @Test
-    void accept_cloud_event_reports_not_deliverable_rather_than_delivered_when_a_stopped_catch_up_drops_the_event() {
-        // The exact race Copilot's review of this PR caught: ReactiveHandover.accept(..) completes successfully for
-        // a payload dropped because stopCatchUp() interrupted a replay still in flight (see its own javadoc), so
-        // acceptCloudEvent(..) must read that signal back rather than assume delivery from a normal completion.
+    void accept_cloud_event_reports_deferred_rather_than_delivered_when_a_stopped_catch_up_drops_the_event() {
+        // The one-evaluation fix this unit mirrors from the blocking stack. acceptIfLive refuses an event outright
+        // while the registered projection is not live, rather than buffering it and completing as though it might
+        // still be folded, so acceptCloudEvent(..) reads that refusal back as DEFERRED, safe to redeliver.
         CountDownLatch parked = new CountDownLatch(1);
         CountDownLatch proceed = new CountDownLatch(1);
         AtomicInteger converted = new AtomicInteger();
@@ -592,19 +638,20 @@ class DomainEventFeedTest {
 
         RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live"))).block();
 
-        assertThat(outcome).as("the event matched the filter but the stopped handover dropped it, so it was never "
-                        + "actually delivered to the projection")
-                .isEqualTo(RoutingOutcome.NOT_DELIVERABLE);
+        assertThat(outcome).as("the event matched the filter but the stopped handover refused it outright, so it "
+                        + "was never actually delivered to the projection, and a redelivery is always safe")
+                .isEqualTo(RoutingOutcome.DEFERRED);
         assertThat(repo).doesNotContainKey("counter");
     }
 
+    /**
+     * Proves acceptIfLive's refusal is immediate rather than waiting on the replay. An event fed while the replay is
+     * still parked (mid-fold, before any stop) reports {@link RoutingOutcome#DEFERRED} right away, never buffered
+     * and never left pending on whatever resolves the replay next. This is the behaviour
+     * {@code acceptReportingDelivery} did not have, the defect this unit's fix closes.
+     */
     @Test
-    void accept_cloud_event_reports_not_deliverable_for_an_event_buffered_before_a_stop_resolves_it() {
-        // Distinct from the test above: this event arrives WHILE the catch-up is still buffering (before the stop),
-        // not after. The reactor engine does not complete acceptCloudEvent's Mono until it resolves the buffered
-        // acknowledgement, and a stop resolves every still-pending one as not delivered, so this must also report
-        // NOT_DELIVERABLE rather than the DELIVERED the blocking engine would report for the same interleaving
-        // (see acceptCloudEvent's own javadoc for why the two stacks differ here).
+    void accept_cloud_event_reports_deferred_immediately_for_an_event_that_arrives_while_the_replay_is_still_running() {
         CountDownLatch parked = new CountDownLatch(1);
         CountDownLatch proceed = new CountDownLatch(1);
         AtomicInteger converted = new AtomicInteger();
@@ -617,26 +664,16 @@ class DomainEventFeedTest {
         feed.catchUpAll().doFinally(signal -> catchUpFinished.countDown()).subscribe();
         awaitUninterruptibly(parked);
 
-        // Subscribed before the stop, so the buffered acknowledgement is genuinely pending when stopCatchUp() runs.
-        AtomicReference<RoutingOutcome> outcomeRef = new AtomicReference<>();
-        CountDownLatch acceptCompleted = new CountDownLatch(1);
-        feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live")))
-                .doOnSuccess(outcome -> {
-                    outcomeRef.set(outcome);
-                    acceptCompleted.countDown();
-                })
-                .subscribe();
+        // Asked while the replay is still parked mid-fold, neither stopped nor finished. Refused immediately rather
+        // than waiting on either.
+        RoutingOutcome outcome = feed.acceptCloudEvent(converter.toCloudEvent(new Counted("live"))).block(Duration.ofSeconds(5));
 
-        feed.stopCatchUp();
+        assertThat(outcome).as("refused immediately, never buffered against a replay still in flight")
+                .isEqualTo(RoutingOutcome.DEFERRED);
+        assertThat(repo).doesNotContainKey("counter");
+
         proceed.countDown();
         assertThat(awaitBoolean(catchUpFinished, 5, TimeUnit.SECONDS)).isTrue();
-        assertThat(awaitBoolean(acceptCompleted, 5, TimeUnit.SECONDS)).isTrue();
-
-        assertThat(outcomeRef.get()).as("the event was buffered before the stop, but the stop resolved that "
-                        + "buffered acknowledgement as not delivered rather than leaving it to complete as though "
-                        + "the fold had run")
-                .isEqualTo(RoutingOutcome.NOT_DELIVERABLE);
-        assertThat(repo).doesNotContainKey("counter");
     }
 
     private static boolean awaitBoolean(CountDownLatch latch, long timeout, TimeUnit unit) {

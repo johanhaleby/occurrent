@@ -247,14 +247,14 @@ jobs:
           # event store and subscription model, so they need no container and cost almost nothing. `testing/mongodb`
           # is named separately in mongodb-native rather than riding along, because it does start a container. The
           # leaves are listed one by one for that reason, since the bare `testing` prefix would pull it back in here.
-          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck testing/junit-jupiter-blocking testing/junit-jupiter-reactor testing/spring-boot test-support broker/api/blocking broker/rabbitmq/blocking broker/kafka/blocking" }
+          - { name: misc,                        paths: "framework/spring-boot-starter-mongodb-reactive rewrite common deadline library cloudevents-extension tck testing/junit-jupiter-blocking testing/junit-jupiter-reactor testing/spring-boot test-support broker/api/blocking broker/rabbitmq/blocking broker/kafka/blocking broker/rabbitmq/spring-boot-starter broker/kafka/spring-boot-starter" }
           # example modules run real MongoDB replica-set containers with timing-sensitive
           # Awaitility subscription-catchup tests. A single example shard started 12 containers
           # sequentially on one runner, which tipped those waits over. Split by container load
           # (projection+forwarder ~5 vs domain ~7) to cut per-runner churn, keeping an in-run
           # retry as a backstop for residual timing flakiness.
           - { name: example-domain,              paths: "example/domain", args: "-Dsurefire.rerunFailingTestsCount=2" }
-          - { name: example-projection,          paths: "example/projection example/forwarder example/snapshot example/saga", args: "-Dsurefire.rerunFailingTestsCount=2" }
+          - { name: example-projection,          paths: "example/projection example/forwarder example/snapshot example/saga example/broker", args: "-Dsurefire.rerunFailingTestsCount=2" }
           - { name: subscription-util-blocking,  paths: "subscription/util/blocking subscription/synchronous/blocking subscription/push/blocking" }
           # `args` applies to every path in a shard, so the two `eventstore` lodgers are here rather
           # than in an `example` shard. Parking them next to a rerun flag they do not need would

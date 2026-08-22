@@ -17,6 +17,7 @@ Occurrent is a Maven multi-module JVM event-sourcing library built on CloudEvent
 - `dsl`: query, subscription, module, decider, Arrow decider, view, projection, DCB, snapshot, and saga DSLs.
 - `framework`: Spring Boot MongoDB starter and annotation support.
 - `deadline`: deadline scheduling API plus in-memory and JobRunr implementations.
+- `broker`: broker-transport bridges into the push feed (`api` for the shared contracts, `rabbitmq` and `kafka` for the transports, each of those two with its own Spring Boot starter), publishing and consuming CloudEvents and domain events over a message broker without Occurrent depending on any broker client. See ADR 133.
 - `library`: higher-level libraries, currently `hederlig`.
 - `bom`: published dependency-management BOM.
 - `example`: example applications, built by the default-enabled `examples-module` profile.

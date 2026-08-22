@@ -1,0 +1,527 @@
+schema_version: 1
+epic: rel34
+revision: 5
+updated_at: '2026-08-22T08:02:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U8 delivered PR 899, checks running)
+baseline:
+  repo: johanhaleby/occurrent
+  branch: main
+authority: 'see .context/orchestrator-policy.yml (standing merge auto_epic_prs, allow_one_equivalent_sibling
+  green, allow_reasoned_declines threads, memory checkpoints with [ci skip]); no session-scoped deviations.
+  Plan at /Users/johan/.claude/plans/rel34-0-34-0-release.md, PENDING Johan''s approval. Milestone 0.34.0
+  is number 3, existing, not created. Mode ATTENDED. ADR reservation ledger opens at 0134 (max across
+  origin/main and every remote branch is 0133, audited 2026-08-22T07:0xZ). Cross-epic: rel34''s sweeps
+  exclude #388, #421, #893, #896 (brk''s); brk''s sweeps exclude every rel34 unit; coordination only through
+  .context/ORCHESTRATOR.md. PLAN GATE CLOSED 2026-08-22T07:25Z by Johan''s four structured-ask rulings
+  (journal dec-0001 to dec-0004). C1 STOPPING RULE: MAJOR-AND-ABOVE reopens rel34''s scope after a clean
+  round, cap 3 rounds, remainder returns as ONE structured ask and reaching the cap is reported as reaching
+  the cap, never as convergence. Below major is filed as 0.35.0 issues. sdi (#721/#725) is a SIBLING epic,
+  not a rel34 unit, and R3 gates on it. #884 re-milestoned to 0.35.0, verified.'
+pending_actions:
+- id: act-001
+  type: message-session
+  target: rel34/U3 worker, ListAgents name peaceful-curran-e041e6-4a, relaying dec-0005
+  expected: 'U3 acknowledges and resumes coding. Observable as a push to rel34/u3-never-replays-warning-identity
+    touching OccurrentMongoAutoConfiguration.java, or a reply message. NOT safe to repeat: a second copy
+    of a ruling can read as a revised ruling.'
+  status: PENDING
+  attempts: 1
+  safe_to_repeat: false
+  issued_at: '2026-08-22T07:58:00+00:00'
+units:
+  U1:
+    issue: null
+    goal: 'Every prose surface describing PushObserver states the shipped contract: void observe(CloudEvent,
+      RoutingOutcome) with exactly six outcomes (DELIVERED, FILTERED, NOT_DELIVERABLE, DEFERRED, UNAVAILABLE,
+      REFUSED), written as settled fact. Four surfaces in one pass: changelog.md Highlights line, changelog.md
+      Changes entry (fold the development-history framing per AGENTS.md:75), the news post on docs/append-identity,
+      and pages/docs/docs.md on docs/802-push-observation-hook including the non-compiling boolean lambda
+      sample.'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: ListAgents name nervous-moore-59d6ac-5e, worktree nervous-moore-59d6ac, chip task_a3355294,
+      Sonnet/high
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: branch_pushed
+      ref: null
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: worker running, orchestrator waits for its PR or DELIVERY_RESULT
+    last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
+    observed:
+      dispatch:
+        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+          for its brief path, never by title
+        via: ListAgents plus transcript grep
+        at: '2026-08-22T07:48:00+00:00'
+    assessment: One invariant, four surfaces, two repos. The boolean-to-three fix already shipped once
+      and was stale on arrival; the enumeration is derived from RoutingOutcome.java, not from a findings
+      list. Takes PR 69's repair out of brk/U8's scope, recorded in ORCHESTRATOR.md. docs/append-identity
+      is ayi's branch and ayi's session is live, so the handover is recorded before this unit touches
+      it.
+  U2:
+    issue: 876
+    goal: 'updateEvent no longer rewrites the stored position as a BSON string and no longer drops dcbTags.
+      Invariant: a document round-tripped through convertToDocument preserves position as int64 and preserves
+      dcbTags, at all three write-back sites (SpringMongoEventStore:356, MongoEventStore:756, ReactorMongoEventStore:904).'
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: ListAgents name brave-sammet-c975a0-82, worktree brave-sammet-c975a0, chip task_8def816f,
+      Sonnet/high
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 876
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: worker running, orchestrator waits for its PR or DELIVERY_RESULT
+    last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
+    observed:
+      dispatch:
+        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+          for its brief path, never by title
+        via: ListAgents plus transcript grep
+        at: '2026-08-22T07:48:00+00:00'
+    assessment: Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
+      names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
+      (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
+  U3:
+    issue: 871
+    goal: The never-replays warning is bound to the composed model's identity rather than a context-wide
+      boolean, so a custom Subscriptions/StreamSubscriptions/DcbSubscriptions composition whose DEFAULT
+      does replay no longer gets a warning claiming it never replays. Mirror the reactor pattern, which
+      already carries owner facts on ComposedReplayPhase.
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: ListAgents name peaceful-curran-e041e6-4a, worktree peaceful-curran-e041e6, chip task_72a7f36a,
+      Sonnet/medium
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 871
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: worker resuming after dec-0005; verify the ack, then wait for its PR
+    last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
+    observed:
+      dispatch:
+        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+          for its brief path, never by title
+        via: ListAgents plus transcript grep
+        at: '2026-08-22T07:48:00+00:00'
+    assessment: 'Warning-only defect, recording itself stays correct. Fix shape agreed in the issue body.
+      Touches the blocking registrar, so U6 follows this unit rather than running beside it. OWNERSHIP
+      EXTENDED by dec-0005 (2026-08-22T07:58Z) to framework/spring-boot-starter-mongodb/.../OccurrentMongoAutoConfiguration.java,
+      scoped to occurrentComposedDefaultStartPosition() and the existing defaultBypassesCatchup() call
+      inside occurrentCompetingDurableSubscriptionModel(...), plus that module''s tests. The brief''s
+      original boundary was unreachable: the reactor pattern it names, ComposedCatchupModel.suppliedBy(Object),
+      is itself called from a starter module, so the fix is structurally cross-module. U6''s brief must
+      fence those two bean methods out.'
+  U4:
+    issue: 857
+    goal: AppliedAppendStore refuses blank collection names, bounds inMemory() growth, bounds the applied-append
+      write paths' retry so a store outage cannot block delivery forever, and gives the compound applied-append
+      index the same conflict recovery the TTL index has.
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 857
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 877
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 879
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch after plan approval
+    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    observed: {}
+    assessment: 'Three issues in one applied-append hardening pass: #857, #877, #879. File ownership against
+      U5 is fixed by a scoping read at dispatch, never assumed disjoint.'
+  U5:
+    issue: 878
+    goal: The blocking applied-append wait honours its deadline on a stalled connection, and a reactor
+      projection that applies an append always records it, so waitUntilApplied cannot time out on a write
+      that did land.
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 878
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 891
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch after plan approval
+    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    observed: {}
+    assessment: '#878 plus #891. #891 was ayi''s dec-0015 deferral, pulled into 0.34.0 by Johan at the
+      triage sweep because it is a hole in #740 on the reactor stack. Same family as U4, so the two are
+      serialized or split by verified-disjoint paths.'
+  U6:
+    issue: 837
+    goal: Transaction advice on subscription handler methods is no longer silently bypassed. Invariant
+      stated over the registrar's proxying path, then checked against every registrar surface in one pass.
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - U3
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 837
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch after plan approval
+    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    observed: {}
+    assessment: 'Shipped defect present in the occurrent-0.33.0 tag. Was routed into the #725 implementation
+      epic on 2026-08-17; the triage sweep made it a standalone 0.34.0 fix because sdi has not started.
+      Follows U3 on registrar file ownership.'
+  U7:
+    issue: 866
+    goal: RetryExecution's shutdown predicate is checked during the backoff sleep, not only before it,
+      so a shutdown during a long backoff is honoured.
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 866
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch after plan approval
+    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    observed: {}
+    assessment: Shipped defect confirmed present in the occurrent-0.33.0 tag. Bounded.
+  U8:
+    issue: 834
+    goal: MigrateSubscriptionEnabledFalseInYaml and TrueInYaml_0_32 are document-scoped rather than file-scoped,
+      so the recipe cannot rename an unrelated document's enabled key to an invalid mode value in a multi-document
+      YAML file.
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: ListAgents name relaxed-bardeen-0a12f8-4c, worktree relaxed-bardeen-0a12f8, chip task_b6a7ee0f,
+      Sonnet/medium
+    deliverables:
+    - check: pr_merged
+      ref: 899
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 834
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: wait for checks, then run the four-fact merge gate plus the adversarial verify pass
+    last_meaningful_progress_at: '2026-08-22T08:02:00+00:00'
+    observed:
+      dispatch:
+        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+          for its brief path, never by title
+        via: ListAgents plus transcript grep
+        at: '2026-08-22T07:48:00+00:00'
+      pr_899:
+        head: 27605d1553b6f46e8f3205d61a328a10b9f2bf51
+        note: 'opened non-draft 08:00:55Z from johan/relaxed-bardeen-0a12f8, Fixes #834, checks running.
+          Body reports the enumeration the brief demanded: only subscription-mode-0_32.yml and store-neutral-mongodb-config-0_34.yml
+          carry preconditions at all, and the latter uses FindProperties against .properties files which
+          have no multi-document concept, with its key renames running unconditionally. It also sharpened
+          the root cause past the issue''s framing: ChangePropertyValue IS value-scoped and correct, ChangePropertyKey
+          has no value check, which is the actual bug. TO VERIFY AT THE GATE: the claim that the shipped
+          recipe IDs are unchanged, since that is the compatibility promise the fix rests on.'
+        via: monitor bzqoo36k1 PR-OPENED plus gh pr view
+        at: '2026-08-22T08:02:00+00:00'
+    assessment: 'Shipped defect in rewrite/src/main/resources/META-INF/rewrite/subscription-mode-0_32.yml,
+      verified by git ls-tree against the tag. Same class as #828 (already closed), so read that fix first.'
+  U9:
+    issue: 753
+    goal: 'A non-final concrete declared event class is refused at registration rather than silently missing
+      its subclasses. Breaking change: changelog breaking-change entry, an upgrading-to-0.34.0 section
+      it links, and a recipe decision.'
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 753
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch after plan approval
+    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    observed: {}
+    assessment: Decided IN 0.34.0 by the orchestrator on Johan's conditional delegation at the triage
+      sweep, derivation recorded in ORCHESTRATOR.md. Do not re-ask. Reachability is low (records and Kotlin
+      data classes are implicitly final) but the failure is silent event loss with no log or exception,
+      and deferring only adds another release of undetectable loss before the same break arrives.
+  U10:
+    issue: 867
+    goal: The RabbitMQ bridge survives a transient broker outage at startup rather than failing the application
+      context.
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 867
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch after plan approval
+    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    observed: {}
+    assessment: 'Decided IN by derivation, not asked: AGENTS.md:120 requires every component to ship production
+      ready including surviving a transient outage of the store it talks to, and the broker modules ship
+      for the first time in 0.34.0. The earlier decline for PR 861 is one of the deferrals the triage
+      sweep superseded. Johan may reverse.'
+  R1:
+    issue: null
+    goal: 'The changelog is cut: ''### Changelog next version'' renamed to ''### 0.34.0 (<date>)'', Highlights/Changes/Breaking
+      changes verified truthful against merged main, every breaking entry linking its migration-guide
+      section, recipe coverage verified.'
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - C1
+    - U1
+    - U10
+    - U11
+    - U2
+    - U3
+    - U4
+    - U5
+    - U6
+    - U7
+    - U8
+    - U9
+    session: null
+    deliverables:
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch after plan approval
+    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    observed: {}
+    assessment: 'AGENTS.md:71-73: cutting a release renames the heading, it does not restructure the section.
+      Runs after the last gating merge and after C1 reaches fixpoint.'
+  R2:
+    issue: null
+    goal: 'Johan has a verified held-docs merge checklist: merge order (69 first because PR 74 is stacked
+      on it, then 68/70/71/74, then 73, then 72), the conflict map (js/_partials/main.js keep-all-three,
+      pages/docs/docs.md across six branches, the news-post add/add resolved in 73''s favour), the real
+      news date replacing the 2026-08-25 placeholder, the _config.yml occurrentversion bump, deletion
+      of the superseded docs/saga-step-conditions-added-tag branch, and preview/0.34.0 rebuilt and verified
+      per branch tip.'
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - U1
+    session: null
+    deliverables:
+    - check: manual_approval
+      ref: null
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch after plan approval
+    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    observed: {}
+    assessment: 'Seven PRs, not eight branches: docs/saga-step-conditions-added-tag adds a line docs main
+      already carries. preview/0.34.0 was behind docs/421-broker-modules by one commit at registration,
+      so preview is verified per branch rather than assumed current.'
+  R3:
+    issue: null
+    goal: 'The 0.34.0 tag is cut and the standing post-release checks are green: tag-pinned docs links
+      resolve, and the Sonatype Central Usage Center check at roughly 24 hours passes against all three
+      limits (80 MB, 1000 files, 7 releases per organization).'
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - R1
+    - R2
+    session: null
+    deliverables:
+    - check: manual_approval
+      ref: null
+      met: false
+      evidence: ''
+    blocking_on:
+    - the sdi sibling epic closing (dec-0001)
+    - the brk epic closing
+    next_action: dispatch after plan approval
+    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    observed: {}
+    assessment: Johan's manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
+      The orchestrator hands him the checklist and verifies the observable results. The 1000-file allowance
+      is the one to read carefully now that three broker modules ship.
+  R4:
+    issue: 740
+    goal: '#740 closed as shipped and #361 closed as its duplicate, milestone 0.34.0 drained of rel34-owned
+      issues, tracker scan clean from the registration lower bound, memory checkpointed, monitors retired,
+      sessions archived.'
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - R3
+    session: null
+    deliverables:
+    - check: issue_closed
+      ref: 740
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 361
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch after plan approval
+    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    observed: {}
+    assessment: 'ayi''s recorded ship-day acts (ORCHESTRATOR.md ayi section) are absorbed into this epic''s
+      DoD. #361 is never resolved separately, only as a duplicate of #740.'
+  C1:
+    issue: null
+    goal: A fresh-context adversarial review of rel34's complete increment, diff-bounded to the epic's
+      commits and read against current main rather than in isolation, returns nothing above the agreed
+      severity line. Findings above the line are fixed as addendum units and the review re-runs.
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on:
+    - U1
+    - U10
+    - U11
+    - U2
+    - U3
+    - U4
+    - U5
+    - U6
+    - U7
+    - U8
+    - U9
+    session: null
+    deliverables:
+    - check: manual_approval
+      ref: null
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch after plan approval
+    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
+    observed: {}
+    assessment: 'Stopping rule ruled by Johan at the plan gate (dec-0004): MAJOR-AND-ABOVE reopens rel34''s
+      scope, cap 3 rounds, remainder returns as one structured ask. Reaching the cap ENDS the loop and
+      is reported as reaching the cap, never folded into a clean fixpoint. Below major is filed as 0.35.0
+      issues. Johan chose the same line as brk/U9 after being shown that it produced #893 there, still
+      open and gating brk''s close.'
+  U11:
+    issue: 818
+    goal: A saga instance's event-path failure no longer blocks every other instance on the same subscription.
+      Durably quarantine the failing input for its own saga instance so the subscription's checkpoint
+      can advance past it without losing at-least-once delivery, and surface the quarantined instance
+      where an operator can find it. Carries ADR 0134.
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: manual_approval
+      ref: null
+      met: false
+      evidence: ''
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 818
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch as a plan-first chip, Opus/high, ADR 0134 as a resolved literal
+    last_meaningful_progress_at: '2026-08-22T07:25:00+00:00'
+    observed: {}
+    assessment: 'Johan ruled it IN 0.34.0 (dec-0002), overruling the recommendation to defer. Pre-existing:
+      predates ADR 123 and ADR 126, both of which accepted the tradeoff deliberately, and PR 816''s review
+      thread raised it against ADR 126. The event path has no equivalent of SagaExecution.pollTimers,
+      which already catches a failing timeout per instance and leaves it due for the next poll. The fix
+      touches the subscription''s redelivery and dedup guarantees for the quarantined instance, so it
+      is plan-first with a design gate, not a bounded fix. ADR 0134 is reserved as a resolved literal
+      in the brief; a collision is BLOCKED, never a self-renumber. This is the unit whose C1 findings
+      are most likely to be genuinely blocker-shaped.'
