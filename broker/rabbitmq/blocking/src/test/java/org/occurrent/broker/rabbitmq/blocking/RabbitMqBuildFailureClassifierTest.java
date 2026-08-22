@@ -21,8 +21,10 @@ import com.rabbitmq.client.ShutdownSignalException;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -126,5 +128,22 @@ class RabbitMqBuildFailureClassifierTest {
     void a_bug_shaped_runtime_exception_is_never_transient() {
         assertThat(RabbitMqBuildFailureClassifier.isTransient(new IllegalStateException("misconfigured"))).isFalse();
         assertThat(RabbitMqBuildFailureClassifier.isTransient(new NullPointerException())).isFalse();
+    }
+
+    // Throwable.initCause(...) is public API, so a caller of build() can hand the classifier a genuinely cyclic
+    // cause chain (two exceptions each other's cause) without reflection, whether by accident or through some
+    // library's own wrapping. assertTimeoutPreemptively, not assertTimeout: an unbounded cause-chain walk runs
+    // forever on the calling thread, so only a preemptive timeout, which runs the call on its own thread and
+    // abandons it, can turn a genuine hang into a failing assertion instead of a hung test run.
+    @Test
+    void a_cyclic_cause_chain_terminates_instead_of_looping_forever() {
+        RuntimeException a = new RuntimeException("A");
+        RuntimeException b = new RuntimeException("B", a);
+        a.initCause(b);
+        RabbitMqBridgeException cyclic = new RabbitMqBridgeException("cyclic", a);
+
+        boolean result = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> RabbitMqBuildFailureClassifier.isTransient(cyclic));
+
+        assertThat(result).isTrue();
     }
 }

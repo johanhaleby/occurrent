@@ -20,6 +20,10 @@ import com.rabbitmq.client.AMQP;
 import com.rabbitmq.client.Method;
 import com.rabbitmq.client.ShutdownSignalException;
 
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Set;
+
 /**
  * The transient-versus-permanent classification {@link RabbitMqCloudEventBridge.Builder#retryStrategy(org.occurrent.retry.RetryStrategy)}
  * and {@link org.occurrent.broker.rabbitmq.blocking.domain.RabbitMqDomainEventBridge.Builder#retryStrategy(org.occurrent.retry.RetryStrategy)}
@@ -46,6 +50,11 @@ import com.rabbitmq.client.ShutdownSignalException;
  * attempt. Retrying one anyway is exactly the operator error a retry loop can hide, so this refuses those five
  * outright and retries everything else, including a hard close this classification does not specifically
  * recognise, since an unrecognised one is far more likely to be transient than a silent new permanent failure mode.
+ * <p>
+ * {@link #isTransient(Throwable)} always returns, for any {@code throwable} a caller can construct, including one
+ * whose cause chain loops back on itself through {@link Throwable#initCause(Throwable)}. This is called from
+ * inside a retry loop, so a classification that never returns hangs {@code build()} with it, worse than either
+ * answer it could have given instead.
  */
 public final class RabbitMqBuildFailureClassifier {
 
@@ -61,8 +70,14 @@ public final class RabbitMqBuildFailureClassifier {
         return shutdown == null || isTransientReplyCode(shutdown.getReason());
     }
 
+    // A cause chain built through Throwable.initCause(...) can loop back on itself (a genuine cycle, not just a
+    // repeated equal-looking exception), and Throwable itself allows that, so the walk has to notice it has
+    // already visited a throwable before following its cause again, the same guard java.lang.Throwable's own
+    // printStackTrace() uses for the same reason. identity, not equals(), since two distinct exceptions with the
+    // same message are not the same node.
     private static ShutdownSignalException shutdownSignalIn(Throwable throwable) {
-        for (Throwable current = throwable; current != null; current = current.getCause()) {
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Throwable current = throwable; current != null && visited.add(current); current = current.getCause()) {
             if (current instanceof ShutdownSignalException shutdownSignalException) {
                 return shutdownSignalException;
             }
