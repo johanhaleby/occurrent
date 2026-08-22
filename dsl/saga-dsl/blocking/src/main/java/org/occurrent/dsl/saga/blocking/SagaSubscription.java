@@ -103,15 +103,14 @@ public final class SagaSubscription implements AutoCloseable {
     public void release(String sagaId) {
         requireNonNull(sagaId, "sagaId cannot be null");
         RepositionableSubscriptions repositionable = RepositionableSubscriptions.findIn(subscriptionModel)
-                .orElseThrow(() -> new UnsupportedOperationException("Cannot release saga instance '" + sagaId + "': the subscription model behind saga subscription '" + subscription.id() + "' does not implement RepositionableSubscriptions, so it cannot be resumed at the position the instance stopped at. The instance stays quarantined. Use SagaStateStore.delete(sagaId) to abandon it instead."));
-        // Paused and resumed on the model that owns the position, not through whatever wraps it. A wrapper's own
-        // bookkeeping is then untouched, because it believes the subscription is running throughout, which it is either side of
-        // the reposition. Going through an outer wrapper instead would leave it believing the subscription is paused
-        // while the model underneath it runs.
+                .orElseThrow(() -> new UnsupportedOperationException("Cannot release saga instance '" + sagaId + "' because the subscription model behind saga subscription '" + subscription.id() + "' does not implement RepositionableSubscriptions, so it cannot be resumed at the position the instance stopped at. The instance stays quarantined. Use SagaStateStore.delete(sagaId) to abandon it instead."));
+        // Paused and resumed on the model that owns the position, not through whatever wraps it, so a wrapper's own
+        // bookkeeping is untouched. Going through an outer wrapper instead would leave it believing the subscription
+        // is paused while the model underneath it runs.
         SubscriptionModelLifeCycle lifeCycle = repositionable.capability(SubscriptionModelLifeCycle.class)
-                .orElseThrow(() -> new UnsupportedOperationException("Cannot release saga instance '" + sagaId + "': the subscription model behind saga subscription '" + subscription.id() + "' can be repositioned but not paused, and a reposition needs both. The instance stays quarantined."));
+                .orElseThrow(() -> new UnsupportedOperationException("Cannot release saga instance '" + sagaId + "' because the subscription model behind saga subscription '" + subscription.id() + "' can be repositioned but not paused, and a reposition needs both. The instance stays quarantined."));
         if (!lifeCycle.isRunning(subscription.id())) {
-            throw new IllegalStateException("Cannot release saga instance '" + sagaId + "': saga subscription '" + subscription.id() + "' is not running on this node, so a replay started here would deliver nothing. On a competing-consumer deployment, release from the node holding this subscription's lock.");
+            throw new IllegalStateException("Cannot release saga instance '" + sagaId + "' because saga subscription '" + subscription.id() + "' is not running on this node, so a replay started here would deliver nothing. On a competing-consumer deployment, release from the node holding this subscription's lock.");
         }
 
         OptionalLong stoppedAt = quarantinedInstances.markReleased(sagaId);
@@ -126,12 +125,20 @@ public final class SagaSubscription implements AutoCloseable {
             lifeCycle.pauseSubscription(subscription.id());
             repositionable.resumeSubscription(subscription.id(), replayFrom);
         } catch (RuntimeException e) {
-            // Leave the instance exactly as it was found rather than released and waiting for a replay that never
-            // started, which would look like a release that worked and quietly never finish.
+            // Put both halves back. The instance goes back to plain quarantined rather than released and waiting for a
+            // replay that never started, and the subscription is resumed where it was, because a failed release must
+            // not leave this saga paused for every one of its instances.
             try {
                 quarantinedInstances.undoRelease(sagaId);
             } catch (RuntimeException undoFailure) {
                 e.addSuppressed(undoFailure);
+            }
+            try {
+                if (lifeCycle.isPaused(subscription.id())) {
+                    lifeCycle.resumeSubscription(subscription.id());
+                }
+            } catch (RuntimeException resumeFailure) {
+                e.addSuppressed(resumeFailure);
             }
             throw e;
         }

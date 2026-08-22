@@ -299,6 +299,27 @@ class SagaQuarantineTest {
         }
 
         @Test
+        void puts_both_halves_back_when_the_replay_cannot_be_started() {
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("2", POISON)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED));
+
+            model.refuseReposition();
+            assertThatThrownBy(() -> subscription.release(POISON)).hasMessageContaining("cannot be repositioned right now");
+
+            assertAll(
+                    // Not left released and waiting for a replay that never started.
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure().isReleased()).isFalse(),
+                    // And not left paused, which would have stopped this saga's other instances too.
+                    () -> assertThat(model.isRunning(subscription.id())).isTrue()
+            );
+        }
+
+        @Test
         void is_refused_on_a_subscription_model_that_cannot_be_resumed_at_a_chosen_position() {
             SagaSubscription subscription = run(CONFIG);
             write(POISON, new OrderPlaced("1", POISON));
@@ -370,8 +391,14 @@ class SagaQuarantineTest {
         // The 0-based index of the next event to deliver, which is the 1-based position of the previous one.
         private volatile int nextIndex;
 
+        private volatile boolean refuseReposition;
+
         void push(CloudEvent event) {
             log.add(event);
+        }
+
+        void refuseReposition() {
+            refuseReposition = true;
         }
 
         @Override
@@ -413,6 +440,9 @@ class SagaQuarantineTest {
 
         @Override
         public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            if (refuseReposition) {
+                throw new IllegalStateException("this subscription cannot be repositioned right now");
+            }
             nextIndex = (int) GlobalCheckpoint.positionOf(((StartAt.StartAtCheckpoint) startAt).checkpoint);
             running = true;
             return new ReplayableSubscription(subscriptionId);
