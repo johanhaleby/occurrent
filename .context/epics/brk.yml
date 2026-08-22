@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 168
+revision: 169
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -314,7 +314,7 @@ units:
     next_action: "DONE 2026-08-22T14:1xZ. Adjacent pre-existing cold-start gap (auto.offset.reset latest on a new group) filed as #893 item 34 for Johan's decision"
     last_meaningful_progress_at: 2026-08-22T14:10:00Z
   U17:
-    issue: 893
+    issue: 922
     goal: "Decide whether RabbitMqCloudEventBridgeConnectionRecoveryTest.a_held_deferred_delivery_tag_across_a_forced_connection_recovery (four sightings, #893 items 17 and 30, latest rel34 PR 914 misc java-21) is a real race in PR 895's recovery path (loss-class, fix in brk), a test racing its own fixture (fix the test), or infrastructure. The test pins the held-tag-survives-recovery guarantee, so a flake note is not an acceptable end state."
     phase: RUNNING
     health: PROGRESSING
@@ -324,7 +324,7 @@ units:
     deliverables:
       - {check: manual_approval, ref: "verdict with evidence chain and pass counts, and the fix merged if the verdict is race or fixture", met: false}
     blocking_on: []
-    next_action: "Opus worktree subagent investigating on origin/main since 2026-08-22T13:4xZ, adopted under the epic's own authority (brk wrote the code), rel34 informed"
+    next_action: "Opus worktree subagent investigating on origin/main since 2026-08-22T13:4xZ, adopted under the epic's own authority (brk wrote the code), rel34 informed. Tracking issue #922 (filed by a rel34 worker, milestone 0.34.0 set by brk), #893 items 17 and 30 point at it"
     last_meaningful_progress_at: 2026-08-22T13:45:00Z
   U9:
     issue: null
