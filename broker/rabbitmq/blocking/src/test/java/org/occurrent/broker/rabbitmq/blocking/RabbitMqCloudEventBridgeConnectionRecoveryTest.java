@@ -126,7 +126,8 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
             Thread.sleep(500);
 
             // Force the TCP connection closed from the broker side. The client's automatic recovery (enabled
-            // above) reconnects on a fresh channel with delivery tags restarting at 1.
+            // above) reconnects, resubscribes the consumer, and offsets the recovered channel's delivery tags past
+            // every tag the dead channel issued.
             forceCloseAllConnectionsOrFail();
 
             // Wait for the client to report the connection open again (automatic recovery completed).
