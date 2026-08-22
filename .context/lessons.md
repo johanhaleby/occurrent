@@ -2618,3 +2618,19 @@ overruled by a more careful reading of the wrong evidence.
 The cost of getting this backwards is not only wasted work. Sending a worker to hunt a defect in its
 own change, when the change is innocent, invites it to find a plausible cause and fix something that
 was never broken.
+
+## Re-running a workflow by run id is a stale-head trap
+
+rel34 read a CI failure, decided it was a flake, and re-ran the run it had been reading. That run
+belonged to a head the pull request had already moved past, so the re-run exercised code that was no
+longer the branch tip and its result would have said nothing about the PR. The current head's own
+matrix run was sitting `cancelled`, which is not a pass and which nothing would have corrected.
+
+This is the same shape as reading a stale review, one layer over. A run id, like a review, is bound
+to a commit, and neither announces that it is out of date. The habit that fixes both is identical:
+resolve the current head first, then find the run or review FOR that head, and never act on an
+artifact you fetched before the head moved.
+
+The practical sequence is `gh pr view --json headRefOid`, then query runs by `head_sha`, then re-run
+that run's id. Re-running the id you happen to be holding is how you get a green result for code
+nobody is proposing to merge.

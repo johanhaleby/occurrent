@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 73
-updated_at: '2026-08-22T17:25:25+00:00'
-updated_by: 'orchestrator rel34: 941''s failure is documented flake 870, retracted'
+revision: 74
+updated_at: '2026-08-22T17:27:21+00:00'
+updated_by: 'orchestrator rel34: re-ran a stale run, corrected onto 941''s current head'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -674,7 +674,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: await the shard re-run, nothing else outstanding
-    last_meaningful_progress_at: '2026-08-22T17:25:25+00:00'
+    last_meaningful_progress_at: '2026-08-22T17:27:21+00:00'
     observed:
       dispatched_plan_first:
         note: 'Dispatched PLAN FIRST rather than as an implementation, because #891''s own filer recorded
@@ -769,6 +769,18 @@ units:
           it. Shard re-run requested.'
         via: gh issue view 870
         at: '2026-08-22T17:25:25+00:00'
+      stale_rerun_corrected:
+        note: 'SECOND method error on this unit in one tick. I re-ran run 32586344244 to clear the flake,
+          and that run belonged to head cebedaaa3 while 941''s head had already moved to 1909d362b, so
+          the re-run exercised code that is not the branch tip and its result would have said nothing
+          about the PR. Meanwhile the CURRENT head''s own Java CI with Maven run was sitting completed/cancelled,
+          which is not a pass and which nothing would have corrected. Found by checking headRefOid against
+          the run''s head_sha. Re-ran run 32587441018, which is the matrix FOR the current head, now at
+          attempt 2. Same shape as reading a stale review, one layer over: a run id is bound to a commit
+          and does not announce that it is out of date. Resolve the head first, then find the run for
+          that head.'
+        via: gh pr view headRefOid compared against the run's head_sha
+        at: '2026-08-22T17:27:21+00:00'
     assessment: '#891 ALONE now; #878 moved to U4. Sequenced behind U12 rather than run beside it: #891''s
       fix path runs through framework/spring-boot-autoconfigure/reactor ProjectionAnnotationRegistrar.java
       and ComposedCatchupModel.java, the two files U12 owns. Give it to the U12 worker when U12 merges,
