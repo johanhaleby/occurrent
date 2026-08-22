@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 21
+revision: 22
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -31,11 +31,11 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: task_892b1fcb
+    session: "task_892b1fcb / local_75e86e26-ddb7-434e-866a-b339e804ef4a"
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "STARTED 2026-08-22T13:1xZ. Session running. Identity to be confirmed by the ⌁[sdi/U5] marker on first contact, never by title."
+    next_action: "RUNNING. Identity CONFIRMED by the ⌁[sdi/U5] marker in its own transcript, not by title. Worktree upbeat-fermat-722819."
     last_meaningful_progress_at: 2026-08-22T13:15:00Z
     observed: {}
     assessment: "Owns framework/annotations/** and rewrite/.../renames-annotations-0_34.yml. Carries its own changelog and migration-guide entries. UNFENCED: the only unit dispatchable at the gate. Sonnet/medium. Recipe precedent annotation-enums.yml:33-46."
@@ -189,11 +189,11 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: task_c9ada93f
+    session: "task_c9ada93f / local_f56f896e-3466-409a-bc7d-6c58a837eba5"
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "STARTED 2026-08-22T13:1xZ. Session running. Identity to be confirmed by the ⌁[sdi/U12] marker on first contact, never by title."
+    next_action: "RUNNING. Identity CONFIRMED by the ⌁[sdi/U12] marker in its own transcript, not by title. Worktree modest-keller-66e04f."
     last_meaningful_progress_at: 2026-08-22T13:15:00Z
     observed: {}
     assessment: "UNFENCED prose, and it goes FIRST because every downstream unit reads it. ADR 0127 is unreleased so AGENTS.md permits amending in place rather than writing a successor. The hole it closes: decision 4 rewrites the two SubscriptionAnnotationRegistrar classes, which execute through applicationContext.getBean(StreamSubscriptions.class).subscribe(..) at six call sites across both stacks, and the ADR never says what the descriptor path executes through. ADR 0029 recorded that Spring-bean dependency in 2026-06 and ADR 0119 lines 71-76 already name the Extensions-over-a-class-based-API shape as the convention the Kotlin sugar follows. ADR 0029's binary-compatibility constraint still binds: Subscriptions has been released since 0.20.4 and callers inject it, so it stays a real class. Written through /johan-writing. Sonnet/high."
