@@ -1,9 +1,10 @@
 schema_version: 1
 epic: rel34
-revision: 1
-updated_at: '2026-08-22T07:05:33+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (registration, plan presented for approval,
-  units U11 and sdi pending Johan's D1/D2 rulings)
+revision: 2
+updated_at: '2026-08-22T07:25:00+00:00'
+updated_by: 'orchestrator session rel34-epic-registration-8c2066 (plan gate closed, dec-0001 to dec-0004
+  ruled by Johan: sdi is a sibling epic gating R3, #818 is IN as U11 with ADR 0134, #884 re-milestoned
+  to 0.35.0, C1 stopping rule MAJOR-AND-ABOVE cap 3)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -13,7 +14,11 @@ authority: 'see .context/orchestrator-policy.yml (standing merge auto_epic_prs, 
   is number 3, existing, not created. Mode ATTENDED. ADR reservation ledger opens at 0134 (max across
   origin/main and every remote branch is 0133, audited 2026-08-22T07:0xZ). Cross-epic: rel34''s sweeps
   exclude #388, #421, #893, #896 (brk''s); brk''s sweeps exclude every rel34 unit; coordination only through
-  .context/ORCHESTRATOR.md.'
+  .context/ORCHESTRATOR.md. PLAN GATE CLOSED 2026-08-22T07:25Z by Johan''s four structured-ask rulings
+  (journal dec-0001 to dec-0004). C1 STOPPING RULE: MAJOR-AND-ABOVE reopens rel34''s scope after a clean
+  round, cap 3 rounds, remainder returns as ONE structured ask and reaching the cap is reported as reaching
+  the cap, never as convergence. Below major is filed as 0.35.0 issues. sdi (#721/#725) is a SIBLING epic,
+  not a rel34 unit, and R3 gates on it. #884 re-milestoned to 0.35.0, verified.'
 pending_actions: []
 units:
   U1:
@@ -298,7 +303,10 @@ units:
     health: PROGRESSING
     swept: false
     depends_on:
+    - C1
     - U1
+    - U10
+    - U11
     - U2
     - U3
     - U4
@@ -307,8 +315,6 @@ units:
     - U7
     - U8
     - U9
-    - U10
-    - C1
     session: null
     deliverables:
     - check: pr_merged
@@ -364,7 +370,9 @@ units:
       ref: null
       met: false
       evidence: ''
-    blocking_on: []
+    blocking_on:
+    - the sdi sibling epic closing (dec-0001)
+    - the brk epic closing
     next_action: dispatch after plan approval
     last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
     observed: {}
@@ -407,6 +415,8 @@ units:
     swept: false
     depends_on:
     - U1
+    - U10
+    - U11
     - U2
     - U3
     - U4
@@ -415,7 +425,6 @@ units:
     - U7
     - U8
     - U9
-    - U10
     session: null
     deliverables:
     - check: manual_approval
@@ -426,5 +435,44 @@ units:
     next_action: dispatch after plan approval
     last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
     observed: {}
-    assessment: This epic contains correctness fixes, so it closes on convergence rather than on delivery.
-      The severity line and the round cap are D4, asked at plan approval.
+    assessment: 'Stopping rule ruled by Johan at the plan gate (dec-0004): MAJOR-AND-ABOVE reopens rel34''s
+      scope, cap 3 rounds, remainder returns as one structured ask. Reaching the cap ENDS the loop and
+      is reported as reaching the cap, never folded into a clean fixpoint. Below major is filed as 0.35.0
+      issues. Johan chose the same line as brk/U9 after being shown that it produced #893 there, still
+      open and gating brk''s close.'
+  U11:
+    issue: 818
+    goal: A saga instance's event-path failure no longer blocks every other instance on the same subscription.
+      Durably quarantine the failing input for its own saga instance so the subscription's checkpoint
+      can advance past it without losing at-least-once delivery, and surface the quarantined instance
+      where an operator can find it. Carries ADR 0134.
+    phase: PLANNED
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+    - check: manual_approval
+      ref: null
+      met: false
+      evidence: ''
+    - check: pr_merged
+      ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 818
+      met: false
+      evidence: ''
+    blocking_on: []
+    next_action: dispatch as a plan-first chip, Opus/high, ADR 0134 as a resolved literal
+    last_meaningful_progress_at: '2026-08-22T07:25:00+00:00'
+    observed: {}
+    assessment: 'Johan ruled it IN 0.34.0 (dec-0002), overruling the recommendation to defer. Pre-existing:
+      predates ADR 123 and ADR 126, both of which accepted the tradeoff deliberately, and PR 816''s review
+      thread raised it against ADR 126. The event path has no equivalent of SagaExecution.pollTimers,
+      which already catches a failing timeout per instance and leaves it due for the next poll. The fix
+      touches the subscription''s redelivery and dedup guarantees for the quarantined instance, so it
+      is plan-first with a design gate, not a bounded fix. ADR 0134 is reserved as a resolved literal
+      in the brief; a collision is BLOCKED, never a self-renumber. This is the unit whose C1 findings
+      are most likely to be genuinely blocker-shaped.'
