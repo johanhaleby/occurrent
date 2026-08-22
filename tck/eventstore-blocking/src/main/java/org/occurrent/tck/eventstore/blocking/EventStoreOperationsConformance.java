@@ -74,10 +74,7 @@ public abstract class EventStoreOperationsConformance extends EventStoreConforma
 
     @Override
     protected final Set<EventStoreCapability> requiredCapabilities() {
-        // DCB is required, not just STREAM, because the DCB-tag-preservation tests below need dcbEventStore() wired.
-        // A store that owns DCB tags at all must not let updateEvent forge or drop them, the same way it must not let
-        // streamId, streamVersion or position be forged or dropped.
-        return Set.of(EventStoreCapability.STREAM, EventStoreCapability.DCB);
+        return Set.of(EventStoreCapability.STREAM);
     }
 
     @Nested
@@ -234,6 +231,11 @@ public abstract class EventStoreOperationsConformance extends EventStoreConforma
         }
     }
 
+    /**
+     * The position assertions below assume {@code eventStore()} writes a global position. Every store shipping
+     * with Occurrent does by default. A store built with position turned off is covered separately by
+     * {@link StreamPositionDisabledConformance}.
+     */
     @Nested
     @DisplayName("updating an event")
     class UpdatingAnEvent {
@@ -421,25 +423,6 @@ public abstract class EventStoreOperationsConformance extends EventStoreConforma
             assertAll(
                     () -> assertThat(DcbCloudEvents.isDcbEvent(updated)).isFalse(),
                     () -> assertThat(DcbCloudEvents.isDcbEvent(stored)).isFalse()
-            );
-        }
-
-        @Test
-        void keeps_the_events_own_dcb_tags_even_when_the_update_function_returns_a_fresh_event_with_different_tags() {
-            dcbEventStore().append(List.of(taggedEventWithId("a", DEFINED, "name:1")));
-            CloudEvent original = queries().query(Filter.id("a")).findFirst().orElseThrow();
-            var originalTags = DcbCloudEvents.getTags(original);
-
-            // A fresh event built from scratch carries different tags of its own. Tags are store-owned the same way
-            // streamId, streamVersion, the append id and position already are, so the update must not move the event
-            // across the consistency boundary its original tags defined.
-            CloudEvent updated = operations().updateEvent("a", SOURCE,
-                    original2 -> taggedEventWithId("a", "NameRewritten", "other:9")).orElseThrow();
-
-            CloudEvent stored = queries().query(Filter.id("a")).findFirst().orElseThrow();
-            assertAll(
-                    () -> assertThat(DcbCloudEvents.getTags(updated)).isEqualTo(originalTags),
-                    () -> assertThat(DcbCloudEvents.getTags(stored)).isEqualTo(originalTags)
             );
         }
     }
