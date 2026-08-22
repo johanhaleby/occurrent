@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 36
-updated_at: '2026-08-22T17:50:00+00:00'
-updated_by: 'orchestrator rel34: U10 held on a falsified adversarial pass, U16 delivered PR 928'
+revision: 37
+updated_at: '2026-08-22T18:10:00+00:00'
+updated_by: 'orchestrator rel34: U6 dispatched as a chip, cross-epic fence with sdi recorded'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -481,7 +481,7 @@ units:
     issue: 837
     goal: Transaction advice on subscription handler methods is no longer silently bypassed. Invariant
       stated over the registrar's proxying path, then checked against every registrar surface in one pass.
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on:
@@ -497,12 +497,39 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
-    assessment: 'Shipped defect present in the occurrent-0.33.0 tag. Was routed into the #725 implementation
-      epic on 2026-08-17; the triage sweep made it a standalone 0.34.0 fix because sdi has not started.
-      Follows U3 on registrar file ownership.'
+    next_action: 'await the worker''s claim on #837 and its first push'
+    last_meaningful_progress_at: '2026-08-22T18:10:00+00:00'
+    observed:
+      scope_derived_by_orchestrator:
+        note: 'Enumerated the invocation sites myself rather than trusting the issue text. The defect
+          is SIX handler-invocation sites in TWO files and THREE are already correct. Blocking SubscriptionAnnotationRegistrar
+          lines 95, 119, 189 pass the raw bean; lines 150-151 (processSynchronousSubscribeAnnotation)
+          already look the bean up by name INSIDE the handler lambda and carry a comment stating the whole
+          problem. Reactor file: same three defects at 106, 127, 200, same correct path at 163-164. The
+          lookup must stay inside the lambda, at event-delivery time, because during postProcessBeforeInitialization
+          the bean is unfinished. The three broken methods do not receive beanName today, so it must be
+          threaded down from registerSubscriptions / postProcessBeforeInitialization. OUT OF SCOPE and
+          verified, not assumed: Projection, Saga and Snapshot registrars on both stacks never invoke
+          a handler per event at all. They call SubscriptionAnnotations.invokeDescriptorFactory(..) ONCE
+          at registration and per-event work runs through the returned descriptor. That factory call does
+          use the raw bean, which is the sibling finding #837''s own body calls a separate issue, and
+          it belongs to sdi.'
+        via: grep over all five registrars and both bean post processors
+        at: '2026-08-22T18:10:00+00:00'
+      sdi_fence:
+        note: sdi's U6 (descriptor paths in both SubscriptionAnnotationRegistrar files, move to afterSingletonsInstantiated)
+          and its U7 (annotation-set normalization across the other five registrars and both BPPs) rewrite
+          these exact files, but BOTH are BLOCKED behind sdi's rename and annotation work, and sdi's only
+          open PR (924) touches framework/annotations and rewrite/ only. No file collision today. rel34/U6
+          owns the two SubscriptionAnnotationRegistrar files until it merges; sdi must preserve the by-name
+          lookup when it reworks them. Fence stated to sdi's orchestrator.
+        via: sdi epic state + gh pr view 924
+        at: '2026-08-22T18:10:00+00:00'
+    assessment: 'Dispatched 2026-08-22 as a chip after U3 merged. The 2026-08-17 deferral to the ADR 127
+      epic and my own 2026-08-22 supersede were BOTH argued on premises that did not survive. The deferral
+      assumed a large fix that the epic would rewrite immediately; the supersede assumed the epic had
+      not started, which Johan falsified hours later by starting sdi. The decision that holds is argued
+      from the code and is now the standing routing comment on #837.'
   U7:
     issue: 866
     goal: RetryExecution's shutdown predicate is checked during the backoff sleep, not only before it,
