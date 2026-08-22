@@ -2171,3 +2171,25 @@ file's history shows the commit never touched it. So: a passing validate proves 
 never that the CHANGE was committed. After any state write, confirm the field actually landed in
 the commit, with `git show HEAD:<path>` and not from the working tree.
 
+## The chip title gate fails at the call site, not in the generator
+
+rel34 sent nine chips. The eight composed by the brief generator all carried
+`⌁[rel34/<unit>#<issue>] <summary> · <Model>/<effort>`. The ninth, written by hand directly in the
+spawn call, went out as "Fix #837: @Transactional silently bypassed on subscription handlers". No
+sigil, no epic, no unit, no model suffix.
+
+The cause is not forgetfulness about the rule. The spawn tool's own parameter description asks for
+"an imperative action phrase (start with a verb), under 60 chars" and gives an example in exactly
+that shape, so a title composed while reading the tool's schema satisfies the tool and fails the
+fleet. SKILL.md:383 already says compose from the fleet rule first and check the length hint second,
+never the other way round, and it already records two brk chips failing the same way hours earlier.
+
+The practical fix is to keep chip titles out of hand-composition entirely. When a brief comes from a
+generator, take the title from the generator too. When a chip is one-off, run the two greps before
+the spawn call rather than after, because the after-the-fact remedy repairs the session list but
+cannot repair a model the user already picked.
+
+Worth knowing for the repair: the length cap counts characters, and `${#TITLE}` in a non-UTF-8 shell
+locale counts bytes, so a 59-character title reports as 62 and looks like a failure. Measure it in
+python, and trim the summary rather than the model suffix, since the suffix is the only part that
+reaches the person choosing the model.

@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 42
-updated_at: '2026-08-22T19:45:00+00:00'
-updated_by: 'orchestrator rel34: 901 held on a confirmed Copilot coverage finding, 914 rebased and mergeable'
+revision: 43
+updated_at: '2026-08-22T20:00:00+00:00'
+updated_by: 'orchestrator rel34: U6 chip title gate failed at spawn, retitled and session recorded'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -527,7 +527,8 @@ units:
     swept: false
     depends_on:
     - U3
-    session: null
+    session: local_53811444-7045-4edd-afdb-ec20a97a4ee1, worktree amazing-shannon-db71fe, branch johan/amazing-shannon-db71fe
+      off main. Launched on claude-sonnet-5 at effort high, read from session metadata rather than assumed.
     deliverables:
     - check: pr_merged
       ref: null
@@ -585,6 +586,26 @@ units:
           I derived myself from the registrars. Nothing to correct here.'
         via: grep over briefs/ and rel34.yml
         at: '2026-08-22T18:40:00+00:00'
+      chip_title_gate_failed:
+        note: 'PROCESS FAILURE, mine. The chip went out titled ''Fix #837: @Transactional silently bypassed
+          on subscription handlers'' with no sigil, no epic, no unit and no model suffix. SKILL.md:383
+          makes the title check a literal gate before every spawn and records this exact failure happening
+          to two brk chips earlier the same day. The mechanism is identical: the spawn tool''s own hint
+          asks for an imperative action phrase under 60 chars, I composed from that hint instead of from
+          the fleet rule, and never ran the gate. The skill says compose from the rule FIRST and only
+          then check the length hint. rel34''s other eight chips were correct because gen_briefs.py composed
+          their titles; this one was hand-written at the call site, which is where the tool''s hint wins.
+          COST: the Sonnet/high recommendation reached the worker via the brief but never reached Johan,
+          because a chip''s prompt is not shown in the UI. He picked the model with no recommendation
+          visible. It happened to launch on exactly claude-sonnet-5 / high, so nothing was lost this time,
+          which is luck rather than the gate working. REMEDY APPLIED per the skill: retitled the running
+          session to ''⌁[rel34/U6#837] Fix silent transaction bypass · Sonnet/high'' (59 chars, both gates
+          re-run and passing), and the actual launched model and effort read from session metadata and
+          recorded in this unit''s session field. First composition was 61 chars and failed the length
+          gate, so the summary was trimmed rather than the suffix, since the suffix is the part that must
+          survive.'
+        via: orchestrator self-check against SKILL.md:383
+        at: '2026-08-22T20:00:00+00:00'
     assessment: 'Dispatched 2026-08-22 as a chip after U3 merged. The 2026-08-17 deferral to the ADR 127
       epic and my own 2026-08-22 supersede were BOTH argued on premises that did not survive. The deferral
       assumed a large fix that the epic would rewrite immediately; the supersede assumed the epic had
