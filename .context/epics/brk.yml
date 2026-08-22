@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 171
+revision: 172
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -316,17 +316,17 @@ units:
   U17:
     issue: 922
     goal: "Decide whether RabbitMqCloudEventBridgeConnectionRecoveryTest.a_held_deferred_delivery_tag_across_a_forced_connection_recovery (four sightings, #893 items 17 and 30, latest rel34 PR 914 misc java-21) is a real race in PR 895's recovery path (loss-class, fix in brk), a test racing its own fixture (fix the test), or infrastructure. The test pins the held-tag-survives-recovery guarantee, so a flake note is not an acceptable end state."
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
       - {check: manual_approval, ref: "verdict with evidence chain and pass counts", met: true, evidence: "race in the recovery path, PR 895 fence drops the first post-recovery redelivery unacked, deterministic probe fails every run on main and passes with the fence neutralised, tags monotonic across recovery in every trace; dec-0025"}
-      - {check: pr_merged, ref: null, met: false}
+      - {check: pr_merged, ref: 930, met: true, evidence: "squash df0548bfa, CAS pin a16dc9f matched, branch deleted on tip match, #922 fixed; Maven workflow success on the head with 27 contexts, zero threads, Copilot body on the code head read (item 35, non-loss); Opus verify MERGE-SAFE across three heads, loss shown arithmetically impossible from the client offsets, regression tests red 3 of 3 on main sources and green 10 of 10 on the head, 112 module tests green, six worker mutations plus the verifier re-run of the fence restore"}
     blocking_on: []
-    next_action: "FIX in flight: Opus worktree subagent on brk/u17-recovery-fence, plan gate first (delete the fence, regression test from the probe), dispatched 2026-08-22T14:5xZ. Verdict posted on #922, rel34 told its tag waits"
-    last_meaningful_progress_at: 2026-08-22T12:16:56Z
+    next_action: "DONE. Epic closeout next"
+    last_meaningful_progress_at: 2026-08-22T14:39:49Z
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
