@@ -377,4 +377,63 @@ class ReactiveMongoAppliedAppendStoreBoundsTest {
         assertThat(ATTEMPTS).isLessThan(ReactiveMongoAppliedAppendStore.MAX_ATTEMPTS_CEILING);
         assertThat(attempts).hasValue(ATTEMPTS);
     }
+
+    /**
+     * The case the earlier tests missed. They covered a conflicting index and a read that succeeded, never an
+     * ordinary read that keeps failing while the deadline has already elapsed. With the shipped default policy that
+     * read used to run every attempt it allows, so a wait a caller asked to take no time at all took most of ten
+     * seconds. It gets one attempt, because a deadline that has passed leaves nothing to retry into.
+     */
+    @Test
+    void a_failing_read_under_an_already_elapsed_timeout_is_attempted_once_and_does_not_spend_the_retry_budget() {
+        AtomicInteger reads = new AtomicInteger();
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.exists(any(Query.class), anyString()))
+                .thenReturn(ReactiveMongoAppliedAppendStoreBoundsTest.<Boolean>failingAfterCounting(reads));
+        AppliedAppendStore store = storeWith(mongoOperations, ReactiveMongoAppliedAppendStore.defaultRetry());
+
+        Instant start = Instant.now();
+        boolean applied = store.waitUntilApplied("orders", AppendId.mint(), Duration.ZERO);
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(applied).isFalse();
+        assertThat(reads).hasValue(1);
+        assertThat(elapsed).isLessThan(Duration.ofSeconds(2));
+    }
+
+    /**
+     * The same shape one step along, where the deadline is real but far shorter than the policy's budget. The wait
+     * ends on its own deadline rather than on the policy running out.
+     */
+    @Test
+    void a_failing_read_stops_retrying_at_the_waits_deadline_rather_than_at_the_end_of_the_retry_budget() {
+        AtomicInteger reads = new AtomicInteger();
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.exists(any(Query.class), anyString()))
+                .thenReturn(ReactiveMongoAppliedAppendStoreBoundsTest.<Boolean>failingAfterCounting(reads));
+        AppliedAppendStore store = storeWith(mongoOperations, ReactiveMongoAppliedAppendStore.defaultRetry());
+        Duration timeout = Duration.ofMillis(300);
+
+        Instant start = Instant.now();
+        boolean applied = store.waitUntilApplied("orders", AppendId.mint(), timeout, Backoff.fixed(20));
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(applied).isFalse();
+        assertThat(elapsed).isLessThan(Duration.ofSeconds(3));
+    }
+
+    /**
+     * The asymmetry the interface javadoc names, written down so it is a decision rather than a surprise. This
+     * store stops waiting at the deadline, so a read slower than the time left makes it answer false about an
+     * append it would have found. The blocking store, given the same delay, answers true and overruns instead.
+     */
+    @Test
+    void a_read_slower_than_the_time_left_makes_this_store_answer_false_rather_than_overrun() {
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.exists(any(Query.class), anyString()))
+                .thenReturn(Mono.just(true).delayElement(Duration.ofMillis(300)));
+        AppliedAppendStore store = storeWith(mongoOperations, boundedRetry());
+
+        assertThat(store.waitUntilApplied("orders", AppendId.mint(), Duration.ofMillis(100), Backoff.fixed(20))).isFalse();
+    }
 }

@@ -273,10 +273,17 @@ above any configured value. The number of times a store reaches MongoDB for one 
 call starts on every path, which is the property this decision needs, and the configured limit is what decides it
 wherever the starters or the store's own defaults built the policy.
 
-A wait always reads at least once, before it looks at its deadline, so a timeout of zero or one that has already
-elapsed answers whether the append is applied rather than reporting that it is not. The interface default and both
-Mongo stores agree on that, since a store answering `false` about an append it holds is a wrong answer rather than
-a fast one.
+A wait always reads at least once before it honours its timeout, so a timeout of zero or one that has already
+elapsed asks the store rather than answering `false` without looking. The interface default and both Mongo stores
+agree on that much, and an already-elapsed timeout costs one read rather than a retry budget, because the deadline
+stops the retries as well as the reads.
+
+What a store does with a read slower than the time left is not shared, and this is the one place the two stacks
+behave differently rather than only being implemented differently. The blocking store cannot cancel a read it has
+started, so it lets that read finish and can return after the timeout has passed, answering correctly and late. The
+reactive store stops waiting at the deadline, so it returns on time and answers `false` for an append it would have
+found had it waited. The interface documents that difference rather than requiring one of them, since neither
+choice is free, and a caller who needs the answer more than the deadline reads `hasApplied` directly.
 
 ### 6. Nothing is recorded while a projection is reading history
 

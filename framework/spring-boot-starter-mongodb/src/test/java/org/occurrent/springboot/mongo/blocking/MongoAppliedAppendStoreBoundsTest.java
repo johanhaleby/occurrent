@@ -308,4 +308,47 @@ class MongoAppliedAppendStoreBoundsTest {
         assertThat(ATTEMPTS).isLessThan(MongoAppliedAppendStore.MAX_ATTEMPTS_CEILING);
         verify(mongoOperations, times(ATTEMPTS)).exists(any(Query.class), anyString());
     }
+
+    /**
+     * The blocking mirror of the reactive already-elapsed case, so the two stacks are held to the same number.
+     */
+    @Test
+    void a_failing_read_under_an_already_elapsed_timeout_is_attempted_once_and_does_not_spend_the_retry_budget() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
+        when(mongoOperations.exists(any(Query.class), anyString()))
+                .thenThrow(new RuntimeException("store outage"));
+        AppliedAppendStore store = new MongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7),
+                MongoAppliedAppendStore.defaultRetryStrategy(), Backoff.fixed(20));
+
+        Instant start = Instant.now();
+        boolean applied = store.waitUntilApplied("orders", AppendId.mint(), Duration.ZERO);
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(applied).isFalse();
+        verify(mongoOperations, times(1)).exists(any(Query.class), anyString());
+        assertThat(elapsed).isLessThan(Duration.ofSeconds(2));
+    }
+
+    /**
+     * The other half of the asymmetry. This store cannot cancel a read it has started, so a read slower than the
+     * time left runs to the end and the wait answers true after its timeout has passed. The reactive store, given
+     * the same delay, answers false on time instead.
+     */
+    @Test
+    void a_read_slower_than_the_time_left_makes_this_store_overrun_rather_than_answer_false() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
+        when(mongoOperations.exists(any(Query.class), anyString())).thenAnswer(invocation -> {
+            Thread.sleep(300);
+            return true;
+        });
+        AppliedAppendStore store = storeWith(mongoOperations, boundedRetry());
+
+        Instant start = Instant.now();
+        boolean applied = store.waitUntilApplied("orders", AppendId.mint(), Duration.ofMillis(100), Backoff.fixed(20));
+
+        assertThat(applied).isTrue();
+        assertThat(Duration.between(start, Instant.now())).isGreaterThanOrEqualTo(Duration.ofMillis(250));
+    }
 }

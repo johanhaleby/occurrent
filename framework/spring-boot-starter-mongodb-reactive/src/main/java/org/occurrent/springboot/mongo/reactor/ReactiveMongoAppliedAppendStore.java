@@ -273,10 +273,13 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
             return false;
         }
         try {
-            Mono<Boolean> read = existsWithIndexesEnsured(projectionId, appendId).retryWhen(retry);
+            // Retries stop at the deadline rather than running the policy's whole budget, which is what the blocking
+            // store gets from folding the deadline into its retry predicate. Without it, an already-elapsed timeout
+            // fell through to an unbounded block and a failing store cost every attempt the policy allowed.
+            Mono<Boolean> read = existsWithIndexesEnsured(projectionId, appendId).retryWhen(retryUntil(deadlineNanos));
             // The first read of a wait runs whatever the deadline says, so a timeout that has already elapsed still
-            // gets one answer rather than a false one. It blocks the way a plain hasApplied does, since there is no
-            // remaining time to bound it with, which is the one place a wait depends on the client's own timeout.
+            // gets one answer rather than a false one. With no remaining time to bound it, that single read blocks
+            // the way a plain hasApplied does, which is the one place a wait depends on the client's own timeout.
             Boolean applied = remainingNanos > 0 ? read.block(Duration.ofNanos(remainingNanos)) : read.block();
             return Boolean.TRUE.equals(applied);
         } catch (RuntimeException ignored) {
@@ -360,6 +363,27 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * that say back here rather than asking every caller to remember it. Erroring the companion is what stops
      * {@code retryWhen}, and every other failure reaches the wrapped policy unchanged.
      */
+    /**
+     * Wraps this store's {@link #retry} so it stops once {@code deadlineNanos} ({@link System#nanoTime()} scale)
+     * has passed, rather than spending attempts a wait has no time left for. Checked when an attempt fails and
+     * before the policy would sleep, the same position the blocking store's retry predicate checks it.
+     */
+    private Retry retryUntil(long deadlineNanos) {
+        Retry delegate = retry;
+        return new Retry() {
+            @Override
+            public Publisher<?> generateCompanion(Flux<RetrySignal> retrySignals) {
+                return delegate.generateCompanion(retrySignals.handle((signal, sink) -> {
+                    if (System.nanoTime() >= deadlineNanos) {
+                        sink.error(signal.failure());
+                    } else {
+                        sink.next(signal);
+                    }
+                }));
+            }
+        };
+    }
+
     private static Retry neverRetryingAConflictingIndex(Retry delegate) {
         return new Retry() {
             @Override
