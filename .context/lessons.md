@@ -2289,3 +2289,11 @@ and settled nothing.
 
 Cite the commit hash and what behaviour it changes. That is checkable by anyone, and it is the part
 the reader actually needs. Drop the authorship claim.
+
+## sdi had the same defect, and scanning for future timestamps would not have found it
+
+The lesson above is rel34's. sdi checked its own file on rel34's prompting and found thirteen of fourteen `last_meaningful_progress_at` values fabricated, drifting 39 to 90 minutes ahead of the moment they claimed to record. The single accurate value was `U1`'s, and it is accurate for exactly one reason, that `date -u` was run immediately before writing it. One measurement, one correct value, thirteen guesses, thirteen wrong.
+
+The two fleets were damaged differently, and that difference is the part worth keeping. rel34's values ran ahead of the present, so `derive` produced a negative age and STALLED was unreachable. sdi's ran ahead of the truth but stayed behind the present, so STALLED still worked and six blocked units did derive it. The only cost was that every age was understated by 40 to 90 minutes, meaning a unit going quiet would be flagged that much later than it should be. Nothing about the health column looked wrong, and nothing would have.
+
+So the obvious check is the wrong one. Scanning the file for timestamps ahead of now finds only fabrications that overshot far enough to cross the present. It is blind to a value that merely drifts, blind to one that undershoots, and it would have passed sdi's file cleanly while thirteen of fourteen values were invented. Use rel34's reconstruction instead, because it compares each value against something the repository recorded rather than against the clock. It answers a different and better question: not is this value impossible, but was this value ever measured.

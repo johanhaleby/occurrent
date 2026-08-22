@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 33
+revision: 34
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -44,7 +44,7 @@ units:
       - {check: pr_merged, ref: 924, met: true, evidence: "merged 2026-08-22T12:48:17Z as 6f47516c6, squash, CAS-pinned to 4abb58d11, post-merge head verified. Gate: Java CI with Maven completed/success at 26/26 contexts (authoritative run, not the rollup); 6 threads 0 unresolved; 3 Copilot rounds by LOGIN out of 9 entries, round 3 Approval recommended with no suppressed block; adversarial verify RAN and falsified the guide claim against main-today, routed to issue #929 plus a test requirement on U6/U7 rather than a change to U5; boundaries re-verified from the diff; mergeable re-read past a transient UNKNOWN."}
     blocking_on: []
     next_action: "DONE. Tier outcome: Sonnet/medium, no retry, three review rounds plus one adversarial pass, every finding real. Correct tier. Changelog text authored and parked in the PR 924 marker comment for the post-tag collected block."
-    last_meaningful_progress_at: 2026-08-22T13:15:00Z
+    last_meaningful_progress_at: 2026-08-22T11:53:26Z
     observed:
       pr_924: {head:  4abb58d11, files: 20, additions: 1948, deletions: 0, boundaries: "fence NOT touched, changelog.md NOT touched, no 0.34 artefact touched, all clean", content: "seven new Occurrent-prefixed types present; all seven old ones carry exactly '@Deprecated(forRemoval = true)', bare with no since, matching the twelve existing precedents; eventTypes absent from all four new subscription annotations; tags absent as an ATTRIBUTE on OccurrentDcbSubscription and present only inside a javadoc example as DcbSubscription.builder().tags(..), which is where ADR 0127 puts it; renames-annotations-0_35.yml, upgrade-0_35.yml and upgrading-to-0.35.0.md all created; three recipe tests including a Kotlin rename test", ci: "running at check time, not yet green", via: "git diff origin/main..branch, NOT git show", at: 2026-08-22T13:5xZ}
     assessment: "Owns framework/annotations/** and rewrite/.../renames-annotations-0_34.yml. Carries its own changelog and migration-guide entries. UNFENCED: the only unit dispatchable at the gate. Sonnet/medium. Recipe precedent annotation-enums.yml:33-46."
@@ -77,7 +77,7 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
     next_action: "Semantic gate CLEARED. Waits only on U1 now, which is still fenced on #871 and #837."
-    last_meaningful_progress_at: 2026-08-22T12:55:00Z
+    last_meaningful_progress_at: 2026-08-22T11:25:16Z
     observed:
       issue_753_resolved: {pr: 913, merged_sha: a86909f5d, merged_at: 2026-08-22T11:22:58Z, issue_state: CLOSED, contract: "EventTypeExpansion now REFUSES a concrete class that is neither final nor sealed. Up to 0.33.0 such a type was accepted with only itself in the filter, so a caller declaring class OrderPlaced and publishing a subclass of it never saw that subclass and got no warning. The four escapes the javadoc names: make the class final, seal the hierarchy, declare the concrete types, or SET AN EXPLICIT FILTER. expandWhatCanBeFound stays lenient and now counts a non-final concrete class as lenient-eligible.", via: "read the merge diff directly rather than waiting for rel34's promised delivery report", at: 2026-08-22T12:55:00Z}
     assessment: "Owns the new Java files it creates, named individually, plus the two Subscriptions.kt files inherited from U1. Developable before U1 merges, not mergeable before. WRITTEN AGAINST POST-#753 SEMANTICS: on(Class,..) inherits the refusal of a non-final non-sealed concrete class, and the tests must encode that rather than the 0.33.0 behaviour. CONVERGENCE WORTH THE BRIEF: #753's fourth named escape is an explicit filter, and an explicit filter with no typed handler is exactly the catch-all case dec-0005 added to the descriptor. Two independent requirements landed on one feature, which raises confidence the catch-all is right rather than expedient. Opus/high."
@@ -94,7 +94,7 @@ units:
     blocking_on:
       - {what: "TWO fences, and see U14 for the do-not-unify constraint that binds U3 equally. (a) U3's first deliverable extracts buildDcbCriteria out of framework/spring-boot-autoconfigure/common/.../SubscriptionAnnotations.java:226, inside the epic's own fence, which was unrecorded until 2026-08-22T09:30Z. (b) NEW 2026-08-22T10:5xZ, flagged by rel34: #912 changes how DcbCriteriaBuilder in dsl/dcb-dsl/common derives a type filter, adding EventTypeExpansion where there is none today. That is the same derivation U3 tags(..) must match, in a module U3 and U14 own, and it is a follow-on from #753 which already gates U2. Verified on the issue, not taken from the report.", since: 2026-08-22T09:30:00Z, recheck_after: 2026-08-22T14:30:00Z}
     next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
+    last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
     assessment: "Not the cheap unit it looked like: buildDcbCriteria is public static in framework/spring-boot-autoconfigure/common/.../SubscriptionAnnotations.java:226, a Spring module, and dsl/subscription-dsl/blocking declares no DCB dependency. Rewriting rather than extracting is the epic's highest-risk line. Needs occurrent-eventstore-api-dcb and a route to DcbSubscriptions, which lives in dsl/dcb-dsl. Sonnet/high."
   U4:
@@ -109,7 +109,7 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
     next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
+    last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
     assessment: "Returns SubscriptionHandle, hence the U1 edge. Sonnet/high."
   U6:
@@ -125,7 +125,7 @@ units:
     blocking_on:
       - {what: "REGISTRAR FENCE, NARROWED 2026-08-22T14:0xZ to ONE issue. #753 CLEARED (PR 913, a86909f5d). #871 CLEARED (PR 902, 4f12b2ffb, issue closed 12:23:30Z; note PR 908 was CLOSED UNMERGED so 902 carried it alone). **Only #837 remains**: OPEN on the tracker but RUNNING per rel34's own state file, unit rel34/U6, session local_53811444-7045-4edd-afdb-ec20a97a4ee1, worktree amazing-shannon-db71fe, branch johan/amazing-shannon-db71fe off main, sonnet-5 at high, awaiting the worker's claim and first push. An earlier sdi reading of not dispatched was wrong: it came from tracker signals, which lag dispatch until a worker claims. Read the sibling epic state file, never the tracker, for a sibling fleet's dispatch state. Surfaces still fenced: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T14:30:00Z}
     next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
+    last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
     assessment: "HARD CONSTRAINT from rel34/U6 (#837), which owns both SubscriptionAnnotationRegistrar files until it merges. Its fix makes the handler target whatever the application context yields FOR THE BEAN NAME, looked up INSIDE the handler lambda at EVENT-DELIVERY time, never the instance handed to the post processor. The lookup POINT matters as much as the lookup: during postProcessBeforeInitialization the bean is unfinished, so hoisting it to registration time is premature or circular. sdi U6 moving registration to afterSingletonsInstantiated changes exactly that timing and is therefore the moment this is most likely to be silently undone. U6 MUST carry a test that still FAILS if the target reverts to the raw bean. SECOND REQUIRED TEST, from the U5 adversarial pass and issue #929: the recipe tests rewrite hand-stubbed annotation classes and never load a Spring context, so a green suite is fully consistent with every projection silently failing to register. Whichever of U6 and U7 lands the wiring adds a test that registers a bean through a NEW annotation and asserts it actually receives events. Precedent already in both files: processSynchronousSubscribeAnnotation does it correctly today and carries a comment saying why. Split out of revision 1 oversized single registrar unit. The phase move is the same change as the descriptor path, not a follow-up. EXPLICITLY DOES NOT rewire ProjectionAnnotationRegistrar or SnapshotAnnotationRegistrar: those reach the runner transitively once U13 makes StreamSubscriptions.subscribe delegate to it, so touching them would be roughly 2300 lines of rewrite for no user-visible gain. Opus/high."
   U7:
@@ -141,7 +141,7 @@ units:
     blocking_on:
       - {what: "REGISTRAR FENCE, NARROWED 2026-08-22T14:0xZ to ONE issue. #753 CLEARED (PR 913, a86909f5d). #871 CLEARED (PR 902, 4f12b2ffb, issue closed 12:23:30Z; note PR 908 was CLOSED UNMERGED so 902 carried it alone). **Only #837 remains**: OPEN on the tracker but RUNNING per rel34's own state file, unit rel34/U6, session local_53811444-7045-4edd-afdb-ec20a97a4ee1, worktree amazing-shannon-db71fe, branch johan/amazing-shannon-db71fe off main, sonnet-5 at high, awaiting the worker's claim and first push. An earlier sdi reading of not dispatched was wrong: it came from tracker signals, which lag dispatch until a worker claims. Read the sibling epic state file, never the tracker, for a sibling fleet's dispatch state. Surfaces still fenced: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T14:30:00Z}
     next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
+    last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
     assessment: "OccurrentBlockingAnnotationBeanPostProcessor:115-149 passes the concrete annotation instance into registrar signatures, so this is a carrier change reaching every consumer, not a switch. MUST PRESERVE rel34/U6's #837 advice fix on the deprecated reflective paths, which outlive 0.34.0. Seven registrars total 3309 lines. Opus/high."
   U8:
@@ -157,7 +157,7 @@ units:
     blocking_on:
       - {what: "CHANGELOG GATE: no sdi unit writes changelog.md until the occurrent-0.34.0 tag exists, because a release cut RENAMES the 'Changelog next version' heading in place (4c04880e5 did exactly that for 0.33.0) and would publish sdi entries as 0.34.0 notes. U8 lands the collected block once the heading means 0.35.0. Units author their entries in their DELIVERY_RESULT meanwhile.", since: 2026-08-22T10:45:00Z, recheck_after: 2026-08-22T14:00:00Z}
     next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
+    last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
     assessment: "Refusals: any advice annotation on a @SynchronousSubscription handler, a checked throws, a mixed-stack application. Keeps the handler method and delegates to it, never moves the body. Opus/high."
   U9:
@@ -172,7 +172,7 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
     next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
+    last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
     assessment: "Haiku to enumerate, Sonnet to edit. The ADR's 35 test classes and 13 example files are stale by roughly four times."
   U10:
@@ -187,7 +187,7 @@ units:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
     next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
+    last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
     assessment: "Design work, not a sweep, and the best available proof that the Java descriptor API is usable from Kotlin. Sonnet/high."
   U12:
@@ -202,7 +202,7 @@ units:
       - {check: pr_merged, ref: 923, met: true, evidence: "merged 2026-08-22T12:38:27Z as 5ba3b9bfa, squash, CAS-pinned to d981dc44d. Gate: prose-only [ci skip] so the verdict carried by compare from base, four Copilot rounds all triaged, one unresolved thread carrying a concrete reasoned decline which policy allows, adversarial verify skipped per the prose exception, design gate closed by the unit handover."}
     blocking_on: []
     next_action: "DONE. Tier outcome: Sonnet/high, no retry, four review rounds each finding real content. Correct tier."
-    last_meaningful_progress_at: 2026-08-22T13:15:00Z
+    last_meaningful_progress_at: 2026-08-22T11:53:26Z
     observed:
       pr_923: {head: cdd9147db, opened_at: 2026-08-22T13:3xZ, files: 1, additions: 71, deletions: 0, scope: "ADR 0127 only, exactly the brief's ownership", ci_skip: "yes, on the head commit, so no matrix runs and the verdict carries by compare from the last code-bearing green state", runs: "Copilot Code Review queued, no Java CI by design", content_check: "all four ruled decisions present (catch-all PUBLIC on the builder, runner as single execution path incl DCB in 0.35.0, waitUntilStarted forwarded not moved, DSL stays a real class); ADR 0051 cited, 0029 cited, ADR 0119 correctly ABSENT", via: "gh pr view + git show of the branch diff", at: 2026-08-22T13:35:00Z}
     assessment: "UNFENCED prose, and it goes FIRST because every downstream unit reads it. ADR 0127 is unreleased so AGENTS.md permits amending in place rather than writing a successor. The hole it closes: decision 4 rewrites the two SubscriptionAnnotationRegistrar classes, which execute through applicationContext.getBean(StreamSubscriptions.class).subscribe(..) at six call sites across both stacks, and the ADR never says what the descriptor path executes through. ADR 0029 recorded that Spring-bean dependency in 2026-06 and ADR 0119 lines 71-76 already name the Extensions-over-a-class-based-API shape as the convention the Kotlin sugar follows. ADR 0029's binary-compatibility constraint still binds: Subscriptions has been released since 0.20.4 and callers inject it, so it stays a real class. Written through /johan-writing. Sonnet/high."
@@ -219,7 +219,7 @@ units:
     blocking_on:
       - {what: "REGISTRAR FENCE: also touches the starter bean methods occurrentStreamSubscriptionDsl and occurrentStreamSubscriptions, on rel34 U3's extended ownership", since: 2026-08-22T08:50:00Z, recheck_after: 2026-08-22T14:30:00Z}
     next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
+    last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
     assessment: "Signature-preserving by constraint: the inline/reified overloads and the @JvmName and @JvmOverloads surface are a released API since 0.20.4 and the starter exposes the type as a ConditionalOnMissingBean, so this changes bodies rather than shapes. waitUntilStarted and StartAt handling move to the runner, which is where ADR 0127 already puts them. MUST PRESERVE getSubscriptionModel(), which the census did not list and which ProjectionAnnotationRegistrar:525 depends on to resolve the recording phase from the exact model the subscription runs on. This unit is what puts @Projection and @Snapshot on the runner without touching their registrars. Sonnet/high."
   U14:
@@ -235,7 +235,7 @@ units:
     blocking_on:
       - {what: "#912, now rel34/U16 and IN 0.34.0, so it lands BEFORE this epic rather than after. It changes DcbCriteriaBuilder in dsl/dcb-dsl/common, which U14 owns. DO NOT UNIFY the two derivations that will then sit adjacent in that module: buildDcbCriteria (which U3 extracts there) narrows uniformly, while post-#912 DcbCriteriaBuilder is DIRECTION-DEPENDENT, type and includeTypes expand and refuse while excludeTypes takes a lenient expandWhatCanBeFound walk because a narrowed exclusion silently reads events the caller excluded. Two similar-looking helpers with opposite policies in one module is exactly the mechanically-fits reuse trap. Verified on the issue.", since: 2026-08-22T10:55:00Z, recheck_after: 2026-08-22T14:00:00Z}
     next_action: "Sequenced last. Nothing to do until U13 establishes the pattern."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
+    last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
     assessment: "Johan's dec-0005 ruling, chosen OVER the recommendation to leave DCB out of 0.35.0, so the ADR amendment claims single-path for the release rather than as a two-release goal. Covers the four dcbSubscriptions.subscribeWithMetadata(id, criteria, startAt, consumer) sites in the blocking and reactor Projection, Snapshot and Subscription registrars. Owns dsl/dcb-dsl, which U3 also touches for the buildDcbCriteria extraction, so U3 must land first and U14 inherits its extraction rather than repeating it. Uses the two DCB runners U4 builds. Longest dependency chain in the epic, so a slip here slips the release: flag early if U13 reveals the pattern does not transfer. Sonnet/high."
   U11:
@@ -251,6 +251,6 @@ units:
       - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
     blocking_on: []
     next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
+    last_meaningful_progress_at: 2026-08-22T10:55:39Z
     observed: {}
     assessment: "CORRECTED after dec-0001. ONE new branch off docs main, held for 0.35.0, and it must NOT touch the seven branches held for 0.34.0: those merge on 0.34.0 release day, so editing them would publish 0.35.0 API docs a release early against the AGENTS.md held-branch rule. The pages/docs/docs.md conflict against them is real and is resolved AFTER they merge. No 0.34.0 news post, this epic is not in that release. Sonnet/medium."
