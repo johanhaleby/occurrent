@@ -107,6 +107,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // Set by stop(), cleared by start(...). Read by the replay so stopping the model interrupts a replay in flight, not
     // just the live feed the replay has not handed over to yet.
     private volatile boolean stopped = false;
+    // Whether the most recent start(..) asked for subscriptions to be resumed automatically. A replay that a stop
+    // interrupted relaunches itself only when that answer is yes, since start(false) means the operator wants to
+    // pick each subscription back up through resumeSubscription rather than have them all come back at once.
+    private boolean startResumesSubscriptionsAutomatically = false;
     private volatile boolean shuttingDown = false;
     // Subscriptions whose replay is running. The live feed cannot answer for them: it knows the id (this model
     // registers there first) but it is buffering rather than delivering, so it would report a subscription that is
@@ -359,7 +363,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                 boolean startedWhileThisReplayWasStopping;
                 synchronized (CatchupThenPushSubscriptionModel.this) {
                     forget(subscriptionId, self.get());
-                    startedWhileThisReplayWasStopping = !stopped && !shuttingDown;
+                    startedWhileThisReplayWasStopping = !stopped && !shuttingDown && startResumesSubscriptionsAutomatically;
                 }
                 // Outside the monitor. relaunchInterruptedReplay takes it again and re-checks, so a start(true)
                 // racing this still cannot launch a second replay, and the replay this starts is free to take the
@@ -531,6 +535,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     @Override
     public synchronized void start(boolean resumeSubscriptionsAutomatically) {
         stopped = false;
+        startResumesSubscriptionsAutomatically = resumeSubscriptionsAutomatically;
         // Before the replays, so the registrations they hand over to are unpaused by the time one finishes.
         liveFeed.start(resumeSubscriptionsAutomatically);
         if (resumeSubscriptionsAutomatically) {

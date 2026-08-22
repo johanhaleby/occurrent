@@ -217,6 +217,10 @@ public final class ReactiveHandover<T> {
     // Offers waiting their turn at the sink, oldest first, so the order they were made is the order they reach it.
     private final java.util.Queue<PendingOffer> pendingOffers = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private final AtomicBoolean offerDrainRunning = new AtomicBoolean();
+    // Live payloads taken in and not yet delivered, wherever they are sitting. An offer waits in pendingOffers
+    // until the drain hands it to the sink, and then in the sink's own queue until its handler runs, so counting
+    // only one of the two would leave the other unbounded. maxBufferedEvents caps this, not either queue.
+    private final java.util.concurrent.atomic.AtomicInteger liveBacklog = new java.util.concurrent.atomic.AtomicInteger();
     private volatile boolean stopped = false;
     // Set once, right before the buffered live payloads are drained on a successful catch-up, and never cleared
     // afterwards, mirroring BlockingHandover's live field. acceptIfLive(..) reads this to refuse a payload outright,
@@ -382,8 +386,27 @@ public final class ReactiveHandover<T> {
     // any more. The handling below stays as defence, not as a path anything reaches today, which is why no test
     // drives it.
     private void offerToLiveSink(Item item, MonoSink<Boolean> ackSink) {
+        if (!reserveBacklogPlace()) {
+            ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents)));
+            return;
+        }
         pendingOffers.add(new PendingOffer(item, ackSink, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
         drainPendingOffers();
+    }
+
+    // Taken before the payload is queued, so a slow handler holding the drain cannot let callers pile up behind it
+    // without limit. Compare and set rather than a read followed by an increment, so two callers arriving together
+    // cannot both take the last place.
+    private boolean reserveBacklogPlace() {
+        while (true) {
+            int taken = liveBacklog.get();
+            if (taken >= maxBufferedEvents) {
+                return false;
+            }
+            if (liveBacklog.compareAndSet(taken, taken + 1)) {
+                return true;
+            }
+        }
     }
 
     private void drainPendingOffers() {
@@ -432,6 +455,7 @@ public final class ReactiveHandover<T> {
                 case FAIL_NON_SERIALIZED -> {
                     if (System.nanoTime() >= pending.deadline()) {
                         pendingOffers.poll();
+                        liveBacklog.decrementAndGet();
                         pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.concurrentEmission()));
                         continue;
                     }
@@ -443,10 +467,12 @@ public final class ReactiveHandover<T> {
                 // path, since that check runs first and catches every way the pipeline ends today.
                 case FAIL_TERMINATED, FAIL_CANCELLED -> {
                     pendingOffers.poll();
+                    liveBacklog.decrementAndGet();
                     pending.ack().success(false);
                 }
                 default -> {
                     pendingOffers.poll();
+                    liveBacklog.decrementAndGet();
                     pending.ack().error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents, result)));
                 }
             }
@@ -524,8 +550,11 @@ public final class ReactiveHandover<T> {
                 .then(Mono.fromRunnable(() -> {
                     drainedSource.set(source);
                     source.historyDone();
-                    // Taken after historyDone, so nothing that arrives from here on is counted as part of the drain.
-                    remainingInDrain.compareAndSet(-1L, liveBuffer.size());
+                    // Taken after historyDone, so nothing that arrives from here on is counted as part of the
+                    // drain. Read from the backlog rather than from the sink's own queue, because a payload taken
+                    // in while the history was being read can still be waiting for the drain to hand it over, and
+                    // leaving those out would end the drain while some of them were still to be delivered.
+                    remainingInDrain.compareAndSet(-1L, liveBacklog.get());
                 }))
                 .then(recordMarker)
                 .doOnSuccess(ignored -> {
@@ -625,7 +654,12 @@ public final class ReactiveHandover<T> {
     // Counted after the payload has been delivered rather than before it, so the last buffered one is still part of
     // the drain while it is being handled.
     private Mono<Void> deliver(Item item) {
-        return deliverItem(item).doFinally(signal -> countTowardsDrain());
+        return deliverItem(item).doFinally(signal -> {
+            if (item.ack() != null) {
+                liveBacklog.decrementAndGet();
+            }
+            countTowardsDrain();
+        });
     }
 
     private Mono<Void> deliverItem(Item item) {

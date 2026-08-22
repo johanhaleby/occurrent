@@ -165,12 +165,13 @@ class ReactiveHandoverTest {
 
         handover.accept("L1").subscribe();
 
+        // Refused before anything is offered to the sink, since the cap counts every payload taken in and not yet
+        // delivered, so there is no emit result to report.
         StepVerifier.create(handover.accept("L2"))
                 .verifyErrorSatisfies(error -> assertThat(error)
                         .isInstanceOf(IllegalStateException.class)
-                        .hasMessageStartingWith(HandoverMessages.bufferOverflow(1))
-                        .hasMessageContaining("(cap 1)")
-                        .hasMessageContaining("Emit result:"));
+                        .hasMessage(HandoverMessages.bufferOverflow(1))
+                        .hasMessageContaining("(cap 1)"));
     }
 
     /**
@@ -432,6 +433,63 @@ class ReactiveHandoverTest {
                 .isTrue();
         assertThat(failures).isEmpty();
         assertThat(delivered).hasSize(producers * perProducer);
+    }
+
+    /**
+     * A handler that takes its time holds the drain, so every offer that arrives meanwhile waits in the queue in
+     * front of the sink rather than in the sink's own queue. The cap counts both, so callers cannot pile up behind
+     * a slow handler without limit, and nothing already taken in is lost when a later one is refused.
+     */
+    @Test
+    void offers_waiting_in_front_of_the_sink_count_towards_the_cap() throws Exception {
+        int cap = 4;
+        CountDownLatch handlerEntered = new CountDownLatch(1);
+        CountDownLatch releaseHandler = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String> handover = ReactiveHandover.create(
+                payload -> Mono.fromRunnable(() -> {
+                    if (payload.equals("slow")) {
+                        handlerEntered.countDown();
+                        awaitLatchQuietly(releaseHandler);
+                    }
+                    delivered.add(payload);
+                }), payload -> payload,
+                new CatchupThenLiveOptions(CatchupThenLiveOptions.DEFAULT_DEDUP_CACHE_SIZE, cap), "test payload");
+        StepVerifier.create(handover.catchUp(source(List.of(), false))).expectNext(true).verifyComplete();
+
+        // Holds the drain, so nothing offered below reaches a handler until it is released.
+        Thread slow = Thread.ofVirtual().start(() -> handover.accept("slow").subscribe(ignored -> {
+        }, ignored -> {
+        }));
+        assertThat(handlerEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // "slow" already holds one of the cap's places, so three more fit and the fourth is refused.
+        List<Throwable> refusals = new CopyOnWriteArrayList<>();
+        for (int i = 0; i < cap; i++) {
+            handover.accept("queued-" + i).subscribe(ignored -> {
+            }, refusals::add);
+        }
+
+        assertThat(refusals)
+                .as("the cap counts what is waiting in front of the sink as well as what is in it")
+                .hasSize(1);
+        assertThat(refusals.get(0))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(HandoverMessages.bufferOverflow(cap));
+
+        releaseHandler.countDown();
+        slow.join();
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (delivered.size() < cap && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(delivered)
+                .as("nothing that was taken in was lost by refusing the one that did not fit")
+                .containsExactly("slow", "queued-0", "queued-1", "queued-2");
+
+        // The places are given back as the payloads are delivered, so the engine takes offers again.
+        StepVerifier.create(handover.acceptReportingDelivery("after")).expectNext(true).verifyComplete();
     }
 
     private static void awaitLatchQuietly(CountDownLatch latch) {

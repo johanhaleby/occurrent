@@ -525,17 +525,17 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
             return true;
         }
         if (outcome == RoutingOutcome.DEFERRED || outcome == RoutingOutcome.UNAVAILABLE) {
-            // DEFERRED and a lifecycle NOT_DELIVERABLE are paced identically, unconditionally, with no re-read of
-            // the model's own running state: see the class javadoc for why an earlier revision's re-read was
-            // removed. Bypasses DeliveryFailurePolicy (and any parking) entirely: nothing here is broken, only not
+            // DEFERRED and UNAVAILABLE are paced identically, unconditionally, with no re-read of the model's own
+            // running state. See the class javadoc for why an earlier revision's re-read was removed. Bypasses DeliveryFailurePolicy (and any parking) entirely: nothing here is broken, only not
             // ready yet, or paced behind the model's own lifecycle state. Returning false, without ever calling
             // failureAction.apply(record), reuses the same seek-back and throttledUntilNanos pacing processBatch(..)
             // already applies for a partition it stops early, exactly the mechanism the pre-existing
             // readinessSource-gated path already relied on.
             return false;
         }
-        // Defensive: RoutingOutcome is exhaustively DELIVERED, FILTERED, DEFERRED or NOT_DELIVERABLE today, so this
-        // is unreachable, kept only against a future outcome this bridge has not been taught yet.
+        // NOT_DELIVERABLE, the filter itself having failed to answer. It always arrives with the filter's own
+        // exception, which the catch above already routed, so reaching here means a future outcome this bridge has
+        // not been taught yet. Routed as a failure either way.
         log.debug("A record on topic \"{}\" partition {} offset {} reported an outcome this bridge does not " +
                 "recognize. Routing it as a failure.", record.topic(), record.partition(), record.offset());
         return resolve(record, toCommit, failureAction.apply(record));

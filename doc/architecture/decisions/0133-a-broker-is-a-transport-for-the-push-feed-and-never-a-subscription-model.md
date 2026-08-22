@@ -978,8 +978,10 @@ catch-up-then-live files, which are in the same change because they are the same
 the outcome.** That rule was true, but it was written down in two bridge class javadocs and in the amendment above,
 describing another module's control flow, and nothing in the type said it. The enum now has six values.
 `UNAVAILABLE` is the lifecycle answer, nothing registered, the model not running, or the sole subscription paused,
-and it never comes with an exception. `NOT_DELIVERABLE` narrows to the filter itself failing to answer.
-`REFUSED` is a registered action refusing before it attempted any dispatch.
+and it never comes with an exception. `NOT_DELIVERABLE` narrows to two things, both of which do come with one.
+The filter itself failing to answer is one. A registered action refusing before it attempted any dispatch, without
+promising that refusing is permanent, is the other, which is what a full live buffer during a replay gets.
+`REFUSED` is the same kind of refusal with that promise attached.
 
 **A bridge cannot decide on `REFUSED` alone unless the action says whether refusing is permanent.** A
 catch-up-then-live engine refuses for two reasons. Its catch-up has failed, which never clears, and its live buffer

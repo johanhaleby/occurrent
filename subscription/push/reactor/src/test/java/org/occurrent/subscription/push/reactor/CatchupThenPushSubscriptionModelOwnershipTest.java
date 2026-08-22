@@ -512,6 +512,61 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
                 .isTrue();
     }
 
+    /**
+     * start(false) says the operator wants to pick each subscription back up themselves. A replay that a stop
+     * interrupted must not bring itself back just because the model is running again, and must still be there for
+     * resumeSubscription to launch.
+     * <p>
+     * The start has to land after the replay has already decided to stop, or the replay simply carries on and
+     * never reaches the decision this is about. Stopping the replay cancels the history it was reading, so parking
+     * in that cancellation is what puts the start there.
+     */
+    @Test
+    void a_replay_a_stop_interrupted_does_not_relaunch_itself_after_start_false() throws Exception {
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        CountDownLatch cancelling = new CountDownLatch(1);
+        CountDownLatch releaseCancel = new CountDownLatch(1);
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1"), cloudEvent("2")).doOnCancel(() -> {
+            cancelling.countDown();
+            awaitLatch(releaseCancel);
+        }));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+
+        List<String> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
+            handled.add(ce.getId());
+            if (handled.size() == 1) {
+                replaying.countDown();
+                awaitLatch(releaseReplay);
+            }
+        }));
+        assertThat(replaying.await(5, TimeUnit.SECONDS)).isTrue();
+
+        model.stop();
+        releaseReplay.countDown();
+        assertThat(cancelling.await(5, TimeUnit.SECONDS))
+                .as("the replay has decided to stop and is unwinding, before its own re-check runs")
+                .isTrue();
+
+        // Started without asking for subscriptions back, while the replay is parked in that unwind.
+        model.start(false);
+        releaseCancel.countDown();
+
+        await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                assertThat(model.isCatchingUp("sub"))
+                        .as("start(false) leaves an interrupted replay for resumeSubscription to pick up")
+                        .isFalse());
+        assertThat(handled).as("nothing was replayed by the model itself").containsExactly("1");
+
+        var resumed = model.resumeSubscription("sub");
+        resumed.waitUntilStarted().block(Duration.ofSeconds(5));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(handled).as("resumeSubscription launches the replay start(false) left alone")
+                        .containsExactly("1", "1", "2"));
+    }
+
     private static void sleepQuietly(long millis) {
         try {
             Thread.sleep(millis);
