@@ -133,8 +133,14 @@ checkpoint.
 - It was reproduced against a single-node replica set. Under a secondary read preference or a sharded `mongos`,
   `operationTime` can lag committed oplog entries, which is the one case that would break the inference. This ADR
   claims the single-primary case and no more.
-- Nothing in the repository tests the exclusivity direction. The TCK conformance test asserts that a written event
-  is present, never that a pre-checkpoint event is absent.
+- Nothing tests the exclusivity of the checkpoint form this rests on. The repository does test exclusivity for a
+  resume token, in `SpringMongoSubscriptionModelTest`, where
+  `resuming_at_a_given_position_reopens_the_change_stream_there` reopens at the token carried by an already delivered
+  event and asserts that event arrives exactly once. That is MongoDB's `resumeAfter`, a different mechanism from the
+  `startAtOperationTime` with its increment raised by one that the reasoning above depends on. For that one the
+  subscription TCK asserts only that a written event is present, and `assertDeliversStartingFrom` says in its own
+  comment that a start position may be one the model replays from, so an earlier event arriving is tolerated rather
+  than refused.
 - The regression coverage is a pipeline unit test and a Mongo test that combines a small handover cache with a write
   committing during the replay, the case nothing covered before. Both reproduce the race by having the reader
   report a head above the last committed position, which ADR 84 permits since `currentPosition()` is a
