@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 28
+revision: 29
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -120,7 +120,7 @@ units:
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T11:35:00Z
     observed: {}
-    assessment: "Split out of revision 1's oversized single registrar unit. The phase move is the same change as the descriptor path, not a follow-up. EXPLICITLY DOES NOT rewire ProjectionAnnotationRegistrar or SnapshotAnnotationRegistrar: those reach the runner transitively once U13 makes StreamSubscriptions.subscribe delegate to it, so touching them would be roughly 2300 lines of rewrite for no user-visible gain. Opus/high."
+    assessment: "HARD CONSTRAINT from rel34/U6 (#837), which owns both SubscriptionAnnotationRegistrar files until it merges. Its fix makes the handler target whatever the application context yields FOR THE BEAN NAME, looked up INSIDE the handler lambda at EVENT-DELIVERY time, never the instance handed to the post processor. The lookup POINT matters as much as the lookup: during postProcessBeforeInitialization the bean is unfinished, so hoisting it to registration time is premature or circular. sdi U6 moving registration to afterSingletonsInstantiated changes exactly that timing and is therefore the moment this is most likely to be silently undone. U6 MUST carry a test that still FAILS if the target reverts to the raw bean. Precedent already in both files: processSynchronousSubscribeAnnotation does it correctly today and carries a comment saying why. Split out of revision 1 oversized single registrar unit. The phase move is the same change as the descriptor path, not a follow-up. EXPLICITLY DOES NOT rewire ProjectionAnnotationRegistrar or SnapshotAnnotationRegistrar: those reach the runner transitively once U13 makes StreamSubscriptions.subscribe delegate to it, so touching them would be roughly 2300 lines of rewrite for no user-visible gain. Opus/high."
   U7:
     issue: 721
     goal: "Annotation-set normalization across the other five registrars and both bean post processors, so the three new descriptor annotations are read beside the deprecated ones."
@@ -186,15 +186,15 @@ units:
   U12:
     issue: 725
     goal: "Amend ADR 0127 in place with the descriptor-execution decision (dec-0004): the runner is the single execution path across all 21 call sites within 0.35.0 (U13 for the sixteen stream, agnostic and synchronous ones, U14 for the five DCB ones), the descriptor gains a PUBLIC type-free catch-all handler paired with an explicit selector, waitUntilStarted is forwarded rather than moved, and the registrar descriptor path calls the runner rather than StreamSubscriptions.subscribe, and the Kotlin Subscriptions and StreamSubscriptions classes are reshaped into an idiom layer over descriptor plus runner while keeping their class identity and their Spring bean."
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: "task_c9ada93f / local_f56f896e-3466-409a-bc7d-6c58a837eba5"
     deliverables:
-      - {check: pr_merged, ref: 923, met: false, evidence: null}
+      - {check: pr_merged, ref: 923, met: true, evidence: "merged 2026-08-22T12:38:27Z as 5ba3b9bfa, squash, CAS-pinned to d981dc44d. Gate: prose-only [ci skip] so the verdict carried by compare from base, four Copilot rounds all triaged, one unresolved thread carrying a concrete reasoned decline which policy allows, adversarial verify skipped per the prose exception, design gate closed by the unit handover."}
     blocking_on: []
-    next_action: "PR 923 at head cdd9147db, four commits, all substantive. Scope extension and both decision-text corrections VERIFIED APPLIED from the diff, not assumed from the send. Holding for DELIVERY_RESULT before the merge gate: the worker may request a third review, and its brief makes a reasoned-decline round the final one."
+    next_action: "DONE. Tier outcome: Sonnet/high, no retry, four review rounds each finding real content. Correct tier."
     last_meaningful_progress_at: 2026-08-22T13:15:00Z
     observed:
       pr_923: {head: cdd9147db, opened_at: 2026-08-22T13:3xZ, files: 1, additions: 71, deletions: 0, scope: "ADR 0127 only, exactly the brief's ownership", ci_skip: "yes, on the head commit, so no matrix runs and the verdict carries by compare from the last code-bearing green state", runs: "Copilot Code Review queued, no Java CI by design", content_check: "all four ruled decisions present (catch-all PUBLIC on the builder, runner as single execution path incl DCB in 0.35.0, waitUntilStarted forwarded not moved, DSL stays a real class); ADR 0051 cited, 0029 cited, ADR 0119 correctly ABSENT", via: "gh pr view + git show of the branch diff", at: 2026-08-22T13:35:00Z}
