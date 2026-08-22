@@ -228,11 +228,15 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         // ReactorDurableSubscriptionModel wrapping it, since this stack's capability lookup does not unwrap
         // (ADR 132 decision 8, #842).
         composedCatchupModel.suppliedBy(catchupLayer);
-        // A default StartAt resolves to StartAt.subscriptionModelDefault() (see StartPositionSupport), which both
-        // the stream and DCB catch-up layers composeCatchupLayer can build classify as live, the same as a
-        // checkpoint that is neither global nor time-based, so a wiped checkpoint changes nothing for it either.
-        composedCatchupModel.defaultBypassesCatchup();
         ReactorDurableSubscriptionModel durableSubscriptionModel = new ReactorDurableSubscriptionModel(catchupLayer, storage, durableConfig);
+        // Told the exact bean this method is about to return, not catchupLayer: that is what
+        // AsynchronousSubscribables.resolve and a bare getBean(FluxSubscriptionModel.class) actually resolve to, and
+        // what a projection's own capability is compared against (issue 903). A default StartAt resolves to
+        // StartAt.subscriptionModelDefault() (see StartPositionSupport), which both the stream and DCB catch-up
+        // layers composeCatchupLayer can build classify as live, the same as a checkpoint that is neither global nor
+        // time-based, so a wiped checkpoint changes nothing for it either.
+        composedCatchupModel.identifiedAs(durableSubscriptionModel);
+        composedCatchupModel.defaultBypassesCatchup();
         if (occurrentProperties.getSubscription().resolveMode() != SubscriptionMode.AUTO) {
             // Stopped here rather than after the annotations are scanned, so every subscription is registered on a
             // model that is already stopped and none of them delivers anything until the application starts it. No

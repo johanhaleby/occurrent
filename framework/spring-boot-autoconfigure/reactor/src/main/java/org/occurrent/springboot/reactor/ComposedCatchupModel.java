@@ -19,6 +19,7 @@ package org.occurrent.springboot.reactor;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
+import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
 
 import java.util.Optional;
 
@@ -48,6 +49,7 @@ public final class ComposedCatchupModel {
     private volatile boolean supplied = false;
     private volatile @Nullable ReplayAwareSubscriptions replayAware;
     private volatile boolean defaultBypassesCatchup = false;
+    private volatile @Nullable Object composedModel;
 
     /**
      * Supplies the composed subscription model this instance answers for, {@code instanceof}-checked against
@@ -87,20 +89,37 @@ public final class ComposedCatchupModel {
      * Records, as a known fact, that {@link org.occurrent.annotation.StartPosition#DEFAULT} bypasses this
      * composition's catch-up layer unconditionally. {@code StartAt.subscriptionModelDefault()} never replays here,
      * the checkpoint is never consulted, so a wiped checkpoint changes nothing (ADR 132 decision 7). Called at most
-     * once, by the same bean method that calls {@link #suppliedBy}, since only the auto-configuration that composed
-     * this model actually knows how it resolves that marker. Never inferred here, and never assumed true for a
-     * composition an application supplied itself, whose own {@code DEFAULT} semantics are its own to declare.
+     * once, by the same bean method that calls {@link #suppliedBy} and {@link #identifiedAs}, since only the
+     * auto-configuration that composed this model actually knows how it resolves that marker. Never inferred here,
+     * and never assumed true for a composition an application supplied itself, whose own {@code DEFAULT} semantics
+     * are its own to declare.
      */
     public void defaultBypassesCatchup() {
         this.defaultBypassesCatchup = true;
     }
 
     /**
-     * Whether {@link #defaultBypassesCatchup} was called for this composition. {@code false} until then, including
-     * for a composition an application supplied itself, so a warning keyed on this answers honestly rather than by
-     * inferring composition-specific behavior it cannot verify.
+     * Identifies this holder with {@code durableModel}, the exact bean the auto-configuration's
+     * {@code occurrentDurableSubscriptionModel} method returns, and the same bean every DSL wrapping it (or a bare
+     * {@code getBean(FluxSubscriptionModel.class)} lookup) resolves to. {@link #isDefaultKnownLiveOnlyFor} compares
+     * a projection's own model against this reference, not against {@link #suppliedBy}'s {@code catchupLayer}: this
+     * stack's capability lookup is a direct {@code instanceof} with no unwrap (ADR 132 decision 8), so a projection
+     * never actually sees {@code catchupLayer}, only the durable wrapper around it. Called at most once, by the same
+     * bean method that calls {@link #suppliedBy} and {@link #defaultBypassesCatchup()}.
      */
-    public boolean isDefaultKnownLiveOnly() {
-        return defaultBypassesCatchup;
+    public void identifiedAs(Object durableModel) {
+        this.composedModel = requireNonNull(durableModel, "durableModel cannot be null");
+    }
+
+    /**
+     * Whether {@code candidate}, the model a particular projection actually runs on, is the exact composition
+     * {@link #identifiedAs} was given and {@link #defaultBypassesCatchup()} was recorded for. {@code false} until
+     * both were called, and {@code false} for any composition that is not that same instance, including one an
+     * application supplied itself by replacing the durable model or the {@code FluxSubscriptionModel} it also
+     * satisfies. A warning keyed on this answers honestly rather than by inferring composition-specific behavior it
+     * cannot verify.
+     */
+    public boolean isDefaultKnownLiveOnlyFor(@Nullable SubscriptionModelCapability candidate) {
+        return defaultBypassesCatchup && candidate != null && candidate == composedModel;
     }
 }

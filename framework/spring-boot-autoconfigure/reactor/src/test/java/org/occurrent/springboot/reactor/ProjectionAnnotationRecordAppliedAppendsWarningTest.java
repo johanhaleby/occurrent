@@ -35,8 +35,10 @@ import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.reactor.EventStore;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.api.reactor.FluxSubscriptionModel;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
 import org.occurrent.subscription.api.reactor.Subscribable;
+import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
 import org.occurrent.subscription.api.reactor.Subscription;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -108,6 +110,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .thenReturn(subscription);
         ComposedCatchupModel composedCatchupModel = new ComposedCatchupModel();
         composedCatchupModel.suppliedBy(model);
+        composedCatchupModel.identifiedAs(model);
         composedCatchupModel.defaultBypassesCatchup();
 
         new ApplicationContextRunner()
@@ -141,6 +144,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .thenReturn(subscription);
         ComposedCatchupModel composedCatchupModel = new ComposedCatchupModel();
         composedCatchupModel.suppliedBy(model);
+        composedCatchupModel.identifiedAs(model);
         composedCatchupModel.defaultBypassesCatchup();
         EventStore eventStore = mock(EventStore.class, withSettings().extraInterfaces(PositionOrderedReader.class));
         when(((PositionOrderedReader) eventStore).writesPosition()).thenReturn(true);
@@ -156,6 +160,108 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(warnings()).isEmpty();
+                });
+    }
+
+    @Test
+    void a_subscribable_replacement_that_genuinely_replays_does_not_inherit_the_starters_never_replays_fact() {
+        // Issue 903: the starter still built its own default composition (ComposedCatchupModel is supplied,
+        // identified, and marked defaultBypassesCatchup), but the application supplied its own Subscribable bean for
+        // this projection to run on, one that genuinely replays. isDefaultKnownLiveOnlyFor must compare identity
+        // against the model this projection's own capability resolves to, not just read the flag.
+        Subscribable starterModel = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
+        ComposedCatchupModel composedCatchupModel = new ComposedCatchupModel();
+        composedCatchupModel.suppliedBy(starterModel);
+        composedCatchupModel.identifiedAs(starterModel);
+        composedCatchupModel.defaultBypassesCatchup();
+
+        Subscribable customModel = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
+        doReturn(java.util.Optional.of((ReplayAwareSubscriptions) customModel)).when(customModel).capability(ReplayAwareSubscriptions.class);
+        when(((ReplayAwareSubscriptions) customModel).isCatchingUp(anyString())).thenReturn(true);
+        Subscription subscription = mock(Subscription.class);
+        when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
+        when(customModel.subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(subscription);
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("defaultStartPositionProjection", DefaultStartPositionProjection.class, DefaultStartPositionProjection::new)
+                .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
+                .withBean("subscribable", Subscribable.class, () -> customModel)
+                .withBean(ComposedCatchupModel.class, () -> composedCatchupModel)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).isEmpty();
+                });
+    }
+
+    @Test
+    void a_flux_subscription_model_replacement_that_genuinely_replays_does_not_inherit_the_starters_never_replays_fact() {
+        // Same defect, reached through the DcbProjection path instead: the app supplies its own FluxSubscriptionModel
+        // bean for this DCB projection, mismatching the identity ComposedCatchupModel was given for the starter's own
+        // composition. FluxSubscriptionModel does not extend SubscriptionModelCapability, so it also needs Subscribable
+        // for the DcbSubscriptionModel adapter's named subscribe to reach it.
+        Subscribable starterModel = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
+        ComposedCatchupModel composedCatchupModel = new ComposedCatchupModel();
+        composedCatchupModel.suppliedBy(starterModel);
+        composedCatchupModel.identifiedAs(starterModel);
+        composedCatchupModel.defaultBypassesCatchup();
+
+        FluxSubscriptionModel customModel = mock(FluxSubscriptionModel.class,
+                withSettings().extraInterfaces(Subscribable.class, ReplayAwareSubscriptions.class));
+        doReturn(java.util.Optional.of((ReplayAwareSubscriptions) customModel)).when((SubscriptionModelCapability) customModel).capability(ReplayAwareSubscriptions.class);
+        when(((ReplayAwareSubscriptions) customModel).isCatchingUp(anyString())).thenReturn(true);
+        Subscription subscription = mock(Subscription.class);
+        when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
+        when(((Subscribable) customModel).subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(subscription);
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("dcbDefaultStartPositionProjection", DcbDefaultStartPositionProjection.class, DcbDefaultStartPositionProjection::new)
+                .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
+                .withBean(FluxSubscriptionModel.class, () -> customModel)
+                .withBean(ComposedCatchupModel.class, () -> composedCatchupModel)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).isEmpty();
+                });
+    }
+
+    @Test
+    void a_flux_subscription_model_that_matches_the_starters_registered_model_still_warns() {
+        // Positive control for the test above: when the FluxSubscriptionModel bean is the exact model
+        // ComposedCatchupModel was told about, the warning still fires. Without this, the mismatch test alone could
+        // not tell "correctly silent because it verified identity" from "silent because this whole path stopped
+        // warning".
+        FluxSubscriptionModel model = mock(FluxSubscriptionModel.class,
+                withSettings().extraInterfaces(Subscribable.class, ReplayAwareSubscriptions.class));
+        doReturn(java.util.Optional.of((ReplayAwareSubscriptions) model)).when((SubscriptionModelCapability) model).capability(ReplayAwareSubscriptions.class);
+        when(((ReplayAwareSubscriptions) model).isCatchingUp(anyString())).thenReturn(false);
+        Subscription subscription = mock(Subscription.class);
+        when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
+        when(((Subscribable) model).subscribe(anyString(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(StartAt.class), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(subscription);
+        ComposedCatchupModel composedCatchupModel = new ComposedCatchupModel();
+        composedCatchupModel.suppliedBy(model);
+        composedCatchupModel.identifiedAs(model);
+        composedCatchupModel.defaultBypassesCatchup();
+
+        new ApplicationContextRunner()
+                .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
+                .withUserConfiguration(TestConfiguration.class)
+                .withBean("dcbDefaultStartPositionProjection", DcbDefaultStartPositionProjection.class, DcbDefaultStartPositionProjection::new)
+                .withBean(org.occurrent.dsl.projection.AppliedAppendStore.class, org.occurrent.dsl.projection.AppliedAppendStore::inMemory)
+                .withBean(FluxSubscriptionModel.class, () -> model)
+                .withBean(ComposedCatchupModel.class, () -> composedCatchupModel)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(warnings()).hasSize(1);
+                    assertThat(warnings().get(0).getFormattedMessage())
+                            .contains(PROJECTION_ID)
+                            .contains("never replays");
                 });
     }
 
@@ -347,6 +453,18 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                     .id(event -> "k")
                     .on(TestEvent.class, (state, event) -> state + 1)
                     .build();
+        }
+    }
+
+    static class DcbDefaultStartPositionProjection {
+        @Projection(id = PROJECTION_ID, recordAppliedAppends = true)
+        org.occurrent.dsl.projection.DcbProjection<Integer, TestEvent, String> projection() {
+            return new org.occurrent.dsl.projection.DcbProjection<>(
+                    org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                            .id(event -> "k")
+                            .on(TestEvent.class, (state, event) -> state + 1)
+                            .build(),
+                    org.occurrent.eventstore.api.dcb.DcbCriteria.all());
         }
     }
 
