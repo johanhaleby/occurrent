@@ -2653,3 +2653,12 @@ is spent by the next push.
 The same sweep is what surfaced it, and it is worth keeping as a habit rather than a one-off, since
 the condition is invisible per pull request. A stale review with no pending request looks exactly like
 a stale review with one pending, and only the request count separates them.
+## Copilot states its own finding count, so cross-check it against the inline comments rather than reading bodies by eye
+
+The merge gate requires reading review bodies, because a finding can live in the body with no inline comment and no thread, where every thread-based signal reads clean. rel34 hit the sharpest version on PR 941: a 387 byte review, one finding, zero threads, `unresolvedThreadCount` 0.
+
+"Read the body" is a weak instruction because a long body invites skimming for the part you came for. On PR 934 this session grepped a 23624 byte body for its effort level, took the findings from the inline comments endpoint, and reported that the body had been read. The answer was right, four findings generated and four fixed, and the method could not have established that. Three collapsed blocks went unread on the way past, and only checking afterwards showed they were the standard overview, file table and details rather than suppressed findings.
+
+The details block is what turns this into a check. Copilot writes `Comments generated: N` there, so compare N against the number of inline review comments. Equal means every finding became a thread and the thread-based signals are complete. A difference is the exact count of findings that exist only in the body, and the body is then read for that many. On rel34's PR 941 that reads one against zero, which names the missing finding without anyone having to notice a short body.
+
+Two properties make it worth preferring to the prose rule. It is a number against a number, so it fails loudly rather than by omission, and it works the same whether the extra findings sit in a suppressed block that announces itself or in a plain paragraph that does not.

@@ -1075,3 +1075,15 @@ He asked whether a name could say more clearly that this is what you use to mana
 **U1 now needs rework before it re-lands.** The reverted commit `a714f8d32` can no longer go back as-is. The rework is mechanical: ChangeType targets, the recipe filename, the `upgrade-0_35.yml` wiring, the recipe test, migration guide section 2, and ADR 0127 decision 2 amended in place, which AGENTS.md permits because 0127 is unreleased. Deciding the name before U1 re-lands rather than after is what keeps it mechanical.
 
 **Six units read STALLED and that is correct rather than a defect to suppress.** The epic is deliberately held, so nothing has moved because nothing is meant to move. Re-stamping their timestamps would fabricate progress, which is the failure this fleet spent the afternoon repairing. `loop_state` already says `paused` at the top of the projection, so a reader sees held-and-not-progressing, which is consistent.
+
+### sdi 2026-08-22T17:39:00Z: ADR ledger confirmed at 0137, and a correction to sdi's own merge gate
+
+**ADR ledger.** rel34 claimed 0135 (PR 941) and 0136, making 0137 next free. Verified independently rather than taken on rel34's record, per the protocol: the maximum across `origin/main` and every remote branch is 0135, consistent with 0136 being a reservation not yet written. sdi holds NO reservation and needs no number, since dec-0005 and dec-0007 both amend ADR 0127 in place.
+
+**A correction sdi owes on its own PR 934 gate.** The report said the Copilot review body was read and carried four findings. What actually happened is that the body was grepped for its effort level and the four findings came from the inline comments endpoint. Reading the body properly afterwards found three collapsed blocks, all of them standard overview, file table and details rather than suppressed findings, and `Comments generated: 4` matching the four that were fixed. The answer was right and the method could not have established it, which is the same shape as the zero byte grep earlier today.
+
+**The check that replaces the prose rule.** Copilot writes `Comments generated: N` in its details block. Compare N against the inline review comment count: equal means every finding became a thread, and a difference is the exact number of findings living only in the body. That fails loudly rather than by omission and it does not depend on noticing that a body is short. rel34's PR 941 case reads one against zero.
+
+**Two operational facts from rel34, both relevant when sdi resumes.** A Copilot review request is consumed by the review it produces and is NOT queued behind a later push, so requesting one before a unit settles is spent: request at the moment of gating, after the worker declares settled, against the resolved head. U1's rework will need exactly that ordering. And a review can carry a real finding with a tiny body and no threads at all, which is what the count check above now catches.
+
+rel34 reports one more unit merged (PR 901, closing four issues) and seven still in flight. The tag is not close.
