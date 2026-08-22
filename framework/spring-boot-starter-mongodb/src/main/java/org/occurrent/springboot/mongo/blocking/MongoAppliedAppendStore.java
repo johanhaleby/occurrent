@@ -183,22 +183,28 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
     public void recordApplied(String projectionId, AppendId appendId) {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(appendId, "appendId cannot be null");
+        AtomicInteger attempts = new AtomicInteger();
         Runnable write = () -> {
+            attempts.incrementAndGet();
             ensureIndexesOnce();
             mongoOperations.upsert(
                     query(where(PROJECTION_ID).is(projectionId).and(APPEND_ID).is(appendId.value().toString())),
                     new Update().setOnInsert(RECORDED_AT, new Date()),
                     collection);
         };
-        executeWithRetry(write, retryableUpToTheCeiling(), retryStrategy).run();
+        executeWithRetry(write, retryableWhileUnder(attempts), retryStrategy).run();
     }
 
     @Override
     public boolean hasApplied(String projectionId, AppendId appendId) {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(appendId, "appendId cannot be null");
-        Supplier<Boolean> read = () -> readOnce(projectionId, appendId);
-        return requireNonNull(executeWithRetry(read, retryableUpToTheCeiling(), retryStrategy).get());
+        AtomicInteger attempts = new AtomicInteger();
+        Supplier<Boolean> read = () -> {
+            attempts.incrementAndGet();
+            return readOnce(projectionId, appendId);
+        };
+        return requireNonNull(executeWithRetry(read, retryableWhileUnder(attempts), retryStrategy).get());
     }
 
     private boolean readOnce(String projectionId, AppendId appendId) {
@@ -228,9 +234,15 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
         // The deadline is checked inside the supplier as well as in the retry predicate, because the predicate runs
         // before the retry sleeps and that sleep can cross the deadline. The first read of a wait runs whatever the
         // deadline says, so a timeout that has already elapsed still gets one answer rather than a false one.
-        Supplier<Boolean> read = () -> (anyReadStarted.compareAndSet(false, true) || System.nanoTime() < deadlineNanos)
-                && readOnce(projectionId, appendId);
-        Predicate<Throwable> retryable = retryableUpToTheCeiling();
+        AtomicInteger attempts = new AtomicInteger();
+        Supplier<Boolean> read = () -> {
+            if (anyReadStarted.compareAndSet(false, true) || System.nanoTime() < deadlineNanos) {
+                attempts.incrementAndGet();
+                return readOnce(projectionId, appendId);
+            }
+            return false;
+        };
+        Predicate<Throwable> retryable = retryableWhileUnder(attempts);
         Predicate<Throwable> notShutdownAndBeforeDeadline = e -> retryable.test(e) && System.nanoTime() < deadlineNanos;
         try {
             return requireNonNull(executeWithRetry(read, notShutdownAndBeforeDeadline, retryStrategy).get());
@@ -242,11 +254,13 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
     @Override
     public void clear(String projectionId) {
         requireNonNull(projectionId, "projectionId cannot be null");
+        AtomicInteger attempts = new AtomicInteger();
         Runnable delete = () -> {
+            attempts.incrementAndGet();
             ensureIndexesOnce();
             mongoOperations.remove(query(where(PROJECTION_ID).is(projectionId)), collection);
         };
-        executeWithRetry(delete, retryableUpToTheCeiling(), retryStrategy).run();
+        executeWithRetry(delete, retryableWhileUnder(attempts), retryStrategy).run();
     }
 
     @Override
@@ -328,12 +342,13 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
     }
 
     /**
-     * One predicate per execution, since it counts that execution's attempts. Build it once and pass it to
-     * {@code executeWithRetry}, never per call to {@code test}.
+     * Reads {@code attempts} rather than counting them, because {@code executeWithRetry} tests this predicate more
+     * than once per attempt. It polls it during a backoff sleep so a shutdown does not have to wait the sleep out
+     * (#916), so a predicate that counted its own calls would stop the store at a fraction of the ceiling. The
+     * operation counts instead, since that is the thing that actually reaches MongoDB.
      */
-    private Predicate<Throwable> retryableUpToTheCeiling() {
-        AtomicInteger attempts = new AtomicInteger(1);
-        return e -> attempts.incrementAndGet() <= MAX_ATTEMPTS_CEILING && isRetryable(e);
+    private Predicate<Throwable> retryableWhileUnder(AtomicInteger attempts) {
+        return e -> attempts.get() < MAX_ATTEMPTS_CEILING && isRetryable(e);
     }
 
     /**
