@@ -784,7 +784,7 @@ is also what spares the user a session switch. This entry stays as the history o
 
 Recording this against myself because the mechanism is general and the damage was real: for a few
 minutes `origin/main` carried a `.context/epics/cdx33.yml` that did not parse, with
-`<<<<<<< HEAD` on line 3.
+` on line 3.
 
 The sequence. A checkpoint ran as one compound command that combined `git add`, a `git commit -q -m
 "..." --amend --no-edit`, a `|| git commit` fallback, a `git rebase`, and a `git push`, with stderr
@@ -1559,6 +1559,13 @@ Three tells that actually work, in order of reliability: the `<!-- orchestrator-
 means an orchestrator wrote it; a head SHA, unit id or fleet marker in the body means a worker; and
 first-person narration of an edit ("I qualified it", "Fixed in <sha>") means whichever session made
 the edit. Absence of all three is not proof a human wrote it.
+
+sdi's half adds one thing to that list, and it widens where you have to look. The stale
+recommendation on #753 is in the issue BODY as well as in the deferring comment, marked
+`⌁[cdx33/U12]`, so a reader who scans only the COMMENTS for markers still takes the stale reading
+straight from the body and never sees a marker at all. Read the whole item in date order and let the
+last routing decision win. A recommendation written before a ruling is history however plainly it is
+phrased, and the body is the part that looks most like the maintainer speaking.
 
 The cost is not academic. Reading an orchestrator's own prior reasoning as the maintainer's
 preference lets a fleet talk itself out of a decision the maintainer actually made, with no human
