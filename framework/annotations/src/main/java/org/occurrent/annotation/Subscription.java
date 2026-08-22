@@ -87,7 +87,17 @@ import java.lang.annotation.*;
  * rather than a domain stream id/version, the same values {@code EventMetadata.getStreamId()}/{@code getStreamVersion()}
  * expose there.
  * </p>
+ *
+ * @deprecated Replaced by {@link OccurrentSubscription}, which marks a factory method returning a
+ * {@code Subscription} descriptor rather than a {@code void} handler method, and which is named so it no longer
+ * takes the word a user needs for the {@code Subscription} it marks. The replacement has no {@code eventTypes},
+ * because the descriptor's own handlers say which events it wants. This annotation keeps behaving exactly as it does
+ * today until it is removed, so nothing has to change at once. See
+ * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md">the 0.35.0
+ * migration guide</a> for how to move a handler over, and for what {@code org.occurrent.UpgradeToOccurrent_0_35} does
+ * not rewrite for you.
  */
+@Deprecated(forRemoval = true)
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented

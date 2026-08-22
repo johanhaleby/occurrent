@@ -25,7 +25,7 @@ import java.lang.annotation.*;
  * issues, and fires its timeouts. For example:
  *
  * <pre lang="java">
- * &#64;Saga(id = "orderFulfillment")
+ * &#64;OccurrentSaga(id = "orderFulfillment")
  * Saga&lt;OrderEvent, OrderSagaState, OrderCommand&gt; orderFulfillment() {
  *     return Saga.&lt;OrderEvent, OrderSagaState, OrderCommand&gt;builder(OrderSagaState.EMPTY)
  *         .correlateAll(OrderEvent::orderId)
@@ -41,7 +41,7 @@ import java.lang.annotation.*;
  * The Kotlin equivalent is the {@code saga(...) { }} / flow {@code saga { }} block.
  * <p>
  * The method may live on any Spring bean: a {@code @Bean} in a {@code @Configuration}, or a method on a
- * {@code @Component}. This is a blocking-stack feature, the reactive starter does not register {@code @Saga}.
+ * {@code @Component}. This is a blocking-stack feature, the reactive starter does not register {@code @OccurrentSaga}.
  * <p>
  * The two input paths fail differently. A failing event propagates to the subscription, which redelivers and retries,
  * since that subscription is a single ordered channel shared by every instance of this saga, an event that keeps failing
@@ -67,18 +67,11 @@ import java.lang.annotation.*;
  * {@link #commandDispatcher()}/{@link #commandDispatcherName()} or the unique {@code CommandDispatcher} bean. There is no
  * default: a dispatcher is usually a lambda over an {@code ApplicationService}, with or without a decider.
  * </p>
- *
- * @deprecated Renamed to {@link OccurrentSaga}. Its attributes and the factory method it marks are unchanged, only
- * the annotation's own name moves, so it no longer takes the word a user needs for the {@code Saga} it marks. Run
- * {@code org.occurrent.UpgradeToOccurrent_0_35} to rewrite every use, or see
- * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md">the 0.35.0
- * migration guide</a>.
  */
-@Deprecated(forRemoval = true)
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
-public @interface Saga {
+public @interface OccurrentSaga {
     /**
      * The unique identifier of the saga (required, no default). It is the durable subscription/checkpoint key.
      */
@@ -147,7 +140,7 @@ public @interface Saga {
      * Where the saga reads its events from. {@link Source#EVENT_STORE} (the default) uses the framework's asynchronous
      * catch-up and durable subscription models. {@link Source#PUSH} feeds the saga from an external push feed
      * (RabbitMQ, Kafka, ...) instead, wrapped in a replay-then-push catch-up. Select the feed bean with
-     * {@link #subscriptionModel()} or {@link #subscriptionModelName()}. Unlike {@link Projection}, only a
+     * {@link #subscriptionModel()} or {@link #subscriptionModelName()}. Unlike {@link OccurrentProjection}, only a
      * {@code PushSubscriptionModel} is accepted, since a {@code DomainEventFeed} carries no stream metadata and a saga
      * needs it, see below.
      * <p>
