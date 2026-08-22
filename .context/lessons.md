@@ -1871,3 +1871,39 @@ round trips must be bounded whatever policy is supplied") invites a worker to ei
 wrong thing or spend a round pushing back. State the outcome and let the unit find the mechanism,
 and when a worker says an instruction is unimplementable, check its evidence rather than restating
 the instruction.
+
+## An adversarial pass can overstate the trigger while being right about the bug (rel34, 2026-08-22)
+
+A pass falsified PR 902 by wrapping the registered model in a Mockito `delegatesTo` proxy and
+showing the warning went silent. It described the trigger as "any `BeanPostProcessor` or Spring AOP
+auto-proxying", and the orchestrator relayed that wording to the worker, who built against it.
+
+The re-verify established that genuine Spring AOP proxies, which is what `@Transactional`, `@Async`
+and custom advisors actually produce, unwrap correctly through `AopProxyUtils.getSingletonTarget`
+and match. What does not unwrap is anything not implementing `Advised`: a Mockito mock, a
+hand-rolled `java.lang.reflect.Proxy`. So the defect was real and the fix closes the real-world
+case, while the characterisation of what triggers it was broader than the evidence supported.
+
+Two things follow. A falsification's REPRODUCTION is evidence; its description of the general case
+is a claim like any other and inherits no authority from the repro. Relay the repro and let the
+worker generalise from the code, or check the generalisation before relaying it.
+
+And the same discipline the passes apply to workers applies to the passes: state what was
+constructed, and do not let "I made this fail with X" become "anything of X's kind fails".
+
+## Three units, one epic, all overclaimed in prose rather than code (rel34, 2026-08-22)
+
+A 50 ms polling cadence described as an upper bound. A predicate "invoked exactly once per attempt"
+that is invoked zero times when a short-circuit fires. An unwrap covering "any BeanPostProcessor"
+that covers Spring's own framework only. Three separate units, three separate reviewers finding
+them, all in javadoc and changelog rather than in behaviour.
+
+The code was right in all three. What was wrong was the sentence next to it, and in two of the
+three the sentence shipped in a changelog, which is where an overclaim gets quoted back.
+
+So a correctness-bearing unit's invariant needs checking against the PROSE as well as the tests,
+and the check is the same question in both places: is there a reachable input for which this
+sentence is false? A test suite will not ask that of a javadoc.
+
+And when the fix is a rewording, check the REPLACEMENT against the same question. Two of these three
+rewordings were themselves the second attempt.
