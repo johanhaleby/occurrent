@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 59
-updated_at: '2026-08-22T16:23:11+00:00'
-updated_by: 'orchestrator rel34: U11 delivered PR 938, all five stopped workers woken'
+revision: 60
+updated_at: '2026-08-22T16:23:55+00:00'
+updated_by: 'orchestrator rel34: name the docs-repo identities the new validator requires'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -55,13 +55,14 @@ units:
         pass, and no workflow ran because markdown-only pushes are paths-ignored by design rather than
         because of the [ci skip] marker.'
     - check: branch_pushed
-      ref: null
+      ref: docs/802-push-observation-hook
       met: true
       evidence: Both held docs branches carry the corrections and are NOT merged, correctly. docs/append-identity's
         news post now names all six outcomes and splits them right (DELIVERED and FILTERED as a subscription
         seeing the event, the other four as nothing receiving it). docs/802-push-observation-hook has
         zero occurrences of the non-compiling (cloudEvent, matched) lambda. PR 74 still sits cleanly on
         69.
+      repo: occurrent-org/occurrent-org.github.io
     blocking_on: []
     next_action: none
     last_meaningful_progress_at: '2026-08-22T08:53:11+00:00'
@@ -1688,7 +1689,7 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 76
       met: true
       evidence: Held docs PR occurrent-org/occurrent-org.github.io#76 on branch docs/0.34.0-declared-event-types,
         head 0b9a7f7d0, non-draft, OPEN and HELD. NOT merged and not to be merged by the fleet. A new
