@@ -78,7 +78,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * <p>
  * Every call outside a wait blocks for as long as the underlying {@code Mono} takes to answer. A MongoDB client
  * left with no timeout of its own does not answer at all while a connection it has accepted stops responding, so
- * configure one on the client if these calls have to return, for example through {@code spring.data.mongodb.uri}.
+ * configure one on the client if these calls have to return, for example through {@code spring.mongodb.uri}.
  * {@link #waitUntilApplied(String, AppendId, Duration)} is the exception and needs no such setting, since it
  * blocks on the time it has left rather than indefinitely.
  */

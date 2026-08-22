@@ -234,7 +234,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      * answers. A MongoDB client left with no timeout of its own does not answer at all while a connection it has
      * accepted stops responding, so the timeout a caller asked for holds only as far as the client's own
      * {@code timeoutMS} or socket timeout holds. Configure one on the client if the wait's deadline has to be the
-     * one a caller gets, for example through {@code spring.data.mongodb.uri}. The reactive store bounds the same
+     * one a caller gets, for example through {@code spring.mongodb.uri}. The reactive store bounds the same
      * read with {@code block(Duration)}, which the blocking driver has no equivalent of.
      */
     @Override
