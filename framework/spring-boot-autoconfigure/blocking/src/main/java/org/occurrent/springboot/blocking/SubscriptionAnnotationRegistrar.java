@@ -34,11 +34,13 @@ import org.occurrent.springboot.common.SubscriptionAnnotations.StreamSubscriptio
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -62,14 +64,39 @@ class SubscriptionAnnotationRegistrar {
         this.startPositionSupport = startPositionSupport;
     }
 
-    // A startAt = BEGINNING, startupMode = WAIT_UNTIL_STARTED subscription replays its history synchronously
-    // inside this BeanPostProcessor, on the thread that is still creating beanName. Looking the bean up for such a
-    // delivery hangs, because the bean factory's lenient singleton locking re-enters bean creation on this
-    // delivering thread instead of blocking it. Falling back to the raw bean for that window matches this method's
-    // behavior before this fix. Every delivery after the bean finishes creation uses the proxy.
-    private Object resolveHandlerTarget(Object bean, String beanName) {
+    // Resolves the bean to invoke the handler on, and the Method to invoke on it, falling back to the raw bean
+    // whenever the proxy isn't something the handler can safely run on. Three such cases, and each one ran fine on
+    // the raw bean before this class started resolving the proxy at all, so falling back here never regresses that.
+    // A startAt = BEGINNING, startupMode = WAIT_UNTIL_STARTED subscription replays its history synchronously inside
+    // this BeanPostProcessor, on the thread that is still creating beanName, and looking that bean up hangs, because
+    // the bean factory's lenient singleton locking re-enters bean creation on this delivering thread instead of
+    // blocking it. A JDK interface proxy (spring.aop.proxy-target-class=false) may not implement the handler method
+    // at all, since method was captured from the concrete pre-proxy class, and invoking it on such a proxy throws.
+    // A private or final handler method is never overridden by a CGLIB proxy either, so invoking it there runs
+    // against the proxy's own uninitialized fields instead of the real bean's, since Spring builds that proxy
+    // without ever running its constructor.
+    private HandlerInvocation resolveHandlerInvocation(Object bean, String beanName, Method method) {
         boolean beanStillBeingCreated = ((ConfigurableApplicationContext) applicationContext).getBeanFactory().isCurrentlyInCreation(beanName);
-        return beanStillBeingCreated ? bean : applicationContext.getBean(beanName);
+        if (beanStillBeingCreated) {
+            return new HandlerInvocation(bean, method);
+        }
+        Object target = applicationContext.getBean(beanName);
+        if (target == bean) {
+            return new HandlerInvocation(target, method);
+        }
+        Method invocableMethod;
+        try {
+            invocableMethod = AopUtils.selectInvocableMethod(method, target.getClass());
+        } catch (IllegalStateException e) {
+            return new HandlerInvocation(bean, method);
+        }
+        if (Modifier.isFinal(invocableMethod.getModifiers())) {
+            return new HandlerInvocation(bean, method);
+        }
+        return new HandlerInvocation(target, invocableMethod);
+    }
+
+    private record HandlerInvocation(Object target, Method method) {
     }
 
     void registerSubscriptions(Object bean, String beanName) {
@@ -102,14 +129,10 @@ class SubscriptionAnnotationRegistrar {
         List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
         Filter filter = resolved.filter();
 
-        // Resolve the handler from the ApplicationContext lazily, at dispatch time, rather than closing over the raw
-        // bean instance captured here. This BeanPostProcessor runs in postProcessBeforeInitialization, before Spring
-        // wraps the bean in its AOP proxy, so the instance handed to us is the raw target. Invoking through it would
-        // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
-        // so a handler-side @Transactional is honored when the subscription's handler is invoked.
+        // See resolveHandlerInvocation for why this is not just applicationContext.getBean(beanName).
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            Object target = resolveHandlerTarget(bean, beanName);
-            invoke(method, target, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+            HandlerInvocation invocation = resolveHandlerInvocation(bean, beanName, method);
+            invoke(invocation.method(), invocation.target(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
 
@@ -132,14 +155,10 @@ class SubscriptionAnnotationRegistrar {
         List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
         Filter filter = resolved.filter();
 
-        // Resolve the handler from the ApplicationContext lazily, at dispatch time, rather than closing over the raw
-        // bean instance captured here. This BeanPostProcessor runs in postProcessBeforeInitialization, before Spring
-        // wraps the bean in its AOP proxy, so the instance handed to us is the raw target. Invoking through it would
-        // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
-        // so a handler-side @Transactional is honored when the subscription's handler is invoked.
+        // See resolveHandlerInvocation for why this is not just applicationContext.getBean(beanName).
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            Object target = resolveHandlerTarget(bean, beanName);
-            invoke(method, target, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+            HandlerInvocation invocation = resolveHandlerInvocation(bean, beanName, method);
+            invoke(invocation.method(), invocation.target(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
 
@@ -164,14 +183,10 @@ class SubscriptionAnnotationRegistrar {
         List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
         Filter filter = resolved.filter();
 
-        // Resolve the handler from the ApplicationContext lazily, at dispatch time, rather than closing over the raw
-        // bean instance captured here. This BeanPostProcessor runs in postProcessBeforeInitialization, before Spring
-        // wraps the bean in its AOP proxy, so the instance handed to us is the raw target. Invoking through it would
-        // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
-        // so a handler-side @Transactional is honored when the synchronous handler is invoked.
+        // See resolveHandlerInvocation for why this is not just applicationContext.getBean(beanName).
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            Object target = applicationContext.getBean(beanName);
-            invoke(method, target, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+            HandlerInvocation invocation = resolveHandlerInvocation(bean, beanName, method);
+            invoke(invocation.method(), invocation.target(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
 
@@ -206,16 +221,12 @@ class SubscriptionAnnotationRegistrar {
             throw new IllegalArgumentException("A @DcbSubscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
         }
 
-        // Resolve the handler from the ApplicationContext lazily, at dispatch time, rather than closing over the raw
-        // bean instance captured here. This BeanPostProcessor runs in postProcessBeforeInitialization, before Spring
-        // wraps the bean in its AOP proxy, so the instance handed to us is the raw target. Invoking through it would
-        // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
-        // so a handler-side @Transactional is honored when the subscription's handler is invoked.
+        // See resolveHandlerInvocation for why this is not just applicationContext.getBean(beanName).
         BiConsumer<DcbEventMetadata, E> consumer = (dcbMetadata, event) -> {
-            Object target = resolveHandlerTarget(bean, beanName);
+            HandlerInvocation invocation = resolveHandlerInvocation(bean, beanName, method);
             boolean hasDcbEventMetadataParam = parameters.stream().anyMatch(p -> p.type() == DcbEventMetadata.class);
             Object metadataArgument = hasDcbEventMetadataParam ? dcbMetadata : dcbMetadata.eventMetadata();
-            invoke(method, target, SubscriptionAnnotations.bindArguments(parameters, event, metadataArgument, dcbMetadata.eventMetadata()));
+            invoke(invocation.method(), invocation.target(), SubscriptionAnnotations.bindArguments(parameters, event, metadataArgument, dcbMetadata.eventMetadata()));
         };
 
         long startAtDcbPosition = annotation.startAtDcbPosition();
