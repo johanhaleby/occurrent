@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 16
-updated_at: '2026-08-22T10:10:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (PR 901 blocked on a suppressed-comment
-  defect, U12 filed 909)
+revision: 17
+updated_at: '2026-08-22T10:25:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U11 design gate on PR 911, U9 delivered
+  PR 913)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -482,14 +482,14 @@ units:
     goal: 'A non-final concrete declared event class is refused at registration rather than silently missing
       its subclasses. Breaking change: changelog breaking-change entry, an upgrading-to-0.34.0 section
       it links, and a recipe decision.'
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: chip task_e476989d, worktree refuse-non-final-concrete-event-type, Opus/high
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 913
       met: false
       evidence: ''
     - check: issue_closed
@@ -497,9 +497,19 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    next_action: 22 checks pending; then the four-fact gate plus an adversarial pass
+    last_meaningful_progress_at: '2026-08-22T10:25:00+00:00'
+    observed:
+      adr_immutability:
+        note: 'COMPLIANT, verified against the tag rather than assumed. ADR 0124 IS in the occurrent-0.33.0
+          tag, so it is shipped and immutable, and U9 added 6 lines with ZERO deletions, a forward-pointing
+          amendment note stating that everything else is unchanged. ADR 0126 is NOT in that tag, so it
+          is unreleased and could have been edited in place under AGENTS.md, and U9 added an amendment
+          note anyway, 11 lines, zero deletions. No decision text rewritten in either. The 0126 note is
+          notably candid: it records that the earlier decision to leave the exemption held while the loss
+          stayed invisible, and that this is what changed.'
+        via: git ls-tree occurrent-0.33.0 plus diff inspection
+        at: '2026-08-22T10:25:00+00:00'
     assessment: 'Decided IN 0.34.0 by the orchestrator on Johan''s conditional delegation at the triage
       sweep, derivation recorded in ORCHESTRATOR.md. Do not re-ask. Reachability is low (records and Kotlin
       data classes are implicitly final) but the failure is silent event loss with no log or exception,
@@ -700,14 +710,14 @@ units:
       Durably quarantine the failing input for its own saga instance so the subscription's checkpoint
       can advance past it without losing at-least-once delivery, and surface the quarantined instance
       where an operator can find it. Carries ADR 0134.
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: chip task_9dddd2de, worktree determined-euclid-f4836e, Opus/high
     deliverables:
     - check: manual_approval
-      ref: null
+      ref: 911
       met: false
       evidence: ''
     - check: pr_merged
@@ -719,9 +729,27 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch as a plan-first chip, Opus/high, ADR 0134 as a resolved literal
-    last_meaningful_progress_at: '2026-08-22T07:25:00+00:00'
-    observed: {}
+    next_action: premise verification running, then the design gate goes to Johan as one ask
+    last_meaningful_progress_at: '2026-08-22T10:25:00+00:00'
+    observed:
+      design_gate:
+        note: 'ADR 134 delivered as PR 911, Proposed, design only, no code. NOT merged on green: a plan-first
+          prose deliverable merges only when the design gate is explicitly closed by Johan. Read in full.
+          It establishes by reading the code that the situation is WORSE than #818 reported: the subscription
+          retries forever with exponential backoff and neither the in-memory nor the durable checkpoint
+          advances. Load-bearing insight: a timer is durable input the saga owns and is addressed by saga
+          id, while an event is on one ordered channel shared by every instance whose only handle is a
+          position belonging to all of them, so catch-and-move-on is complete for timers and half an answer
+          for events. Refuses to classify transient versus permanent by exception type and measures elapsed
+          duration, because an attempt count is meaningless when the RetryStrategy belongs to the subscription
+          rather than the saga. Answers the brief''s ownership question explicitly, rejecting three alternative
+          owners on what each type is FOR, and citing ADR 115''s own recorded fencing-token mistake. ADR
+          names ONE open question itself: adding QUARANTINED to SagaStatus is breaking, and the silent
+          half is that findByStatus(ACTIVE) stops returning the instances it was built to find; its recommendation
+          is a migration-guide section and no recipe. MY OWN GAP FOUND: no default value stated for the
+          quarantine time budget.'
+        via: read the full ADR from gh pr diff
+        at: '2026-08-22T10:25:00+00:00'
     assessment: 'Johan ruled it IN 0.34.0 (dec-0002), overruling the recommendation to defer. Pre-existing:
       predates ADR 123 and ADR 126, both of which accepted the tradeoff deliberately, and PR 816''s review
       thread raised it against ADR 126. The event path has no equivalent of SagaExecution.pollTimers,
