@@ -121,15 +121,39 @@ the cost is one store write per failing input rather than one per retry. When th
 that first write fails too, the executor rethrows, and the behaviour is exactly today's until the store recovers,
 which is correct, because a saga with no reachable store cannot make progress in any case.
 
+The failure write uses the same compare-and-set as every other write to the instance, and a lost one is meaningful
+rather than something to retry. Losing it means another input advanced the instance while it was failing, most
+likely a timer that fired successfully, so the failing input is now being applied to different state and may well
+succeed. The failure record is therefore discarded on a lost compare-and-set and the budget starts over.
+
 The identity of "the same input" is the redelivery key `EventMeta` already computes, the stream id with its version,
 or the global position. An input the saga cannot recognise a redelivery of is already refused or warned about by
 ADR 109's `RedeliveryDetection`, so nothing new is needed there.
 
-### 4. A quarantined instance is inert, and its watermarks stop moving
+### 4. An instance that has never started needs start detection to stop keying on document existence
+
+A start event whose `evolve` or `onStart` throws has no envelope to record anything against, so the first failure
+write has to insert one. That insert breaks the executor unless start detection changes with it.
+`SagaExecutionSupport.startEventOrNull` returns null whenever `current != null`, and that null is what gates
+`saga.onStart`. So once a quarantine-only document exists, the instance is permanently treated as already started, and
+after a release and a replay its start event is skipped and `onStart` never runs, with no error anywhere.
+
+The decision is that the executor keys start detection on an explicit marker of whether the instance has ever been
+started, rather than on whether a document exists for it. A quarantine-only envelope is then honestly what it is, a
+record that this instance failed before it began, and the replay after a release starts it properly.
+
+The alternative was to exclude start-event failures from quarantine and leave them on today's path. That was rejected
+because it is a hole in exactly the rule this decision exists to keep. A saga whose first event throws for one
+correlation id would still stop every other instance, and the isolation rule in AGENTS.md has no severity ladder.
+
+### 5. A quarantined instance is inert, and its watermarks stop moving
 
 While quarantined, the instance skips every event addressed to it and its due timers are not fired. Skipping reuses
-the existing `Outcome.skip()` path, and holding the timers reuses the existing `hasDueTimer` check that already
-excludes a completed instance.
+the existing `Outcome.skip()` path. The timers stop on their own, because `SpringMongoSagaStateStore.findWithDueTimers`
+filters on `STATUS = ACTIVE` in the query rather than on "not terminal", so a quarantined instance drops out of the
+poll with no change to that method. `SagaExecution.hasDueTimer` gains an explicit check as a second layer. That check
+is new code, not a reuse of the existing completed-instance check, which is worth saying plainly because the first
+draft of this decision claimed otherwise.
 
 The invariant that makes this safe is narrow enough to state as a property. **For an instance in `QUARANTINED`, no
 input advances `streamWatermarks` or `positionWatermark`, and no input dispatches a command.** If a skipped input
@@ -139,7 +163,7 @@ loss this design exists to avoid. The watermarks are what make the recorded posi
 Being inert also has a consequence worth naming, because it is what makes the next section possible. Nothing writes
 to a quarantined instance, so an external write to it races nothing.
 
-### 5. `SagaStatus` gains `QUARANTINED`, and `SagaInstance` gains one accessor
+### 6. `SagaStatus` gains `QUARANTINED`, and `SagaInstance` gains one accessor
 
 `SagaStatus` is documented as where an instance is in its lifecycle, and quarantine is a distinct position in it. An
 instance that no longer handles its events is not `ACTIVE`, and it has not reached a terminal state, so it is not
@@ -159,20 +183,37 @@ member with no exemption. The quarantine fields are stored as top-level document
 enumeration projections. An instance whose state cannot be decoded is exactly the instance an operator is looking
 for, so a quarantined instance must be enumerable without reading its state.
 
-### 6. Release clears the record and restarts the subscription at the recorded position
+### 7. Release clears the record and restarts the subscription at the recorded position
 
 Release is two things and both are needed. Clear the record alone and the instance handles new events against state
 with a gap in it. Restarting the subscription alone re-runs the quarantine.
 
-So it is one operation, on `SagaSubscription`, which is the only handle that owns both halves. It holds the live
-`Subscription`, and it was built by `SagaRunner` from the `Subscribable` and the saga's filter, so it can subscribe
-again from a chosen position. `SagaInstances` stays read-only.
+So it is one operation, on `SagaSubscription`, which is the closest thing to a handle that owns both halves.
+`SagaInstances` stays read-only. This needs new plumbing rather than a new method over what is already there.
+`SagaSubscription` holds the live `Subscription`, the timer poller and the instances, and `Subscription` itself
+exposes only `id()` and `waitUntilStarted(...)`. The `Subscribable`, the filter and the action `SagaRunner` used to
+build it are local variables that are never stored, so `SagaRunner` has to retain enough to subscribe again before
+release can exist at all.
 
 Restarting the shared subscription from one instance's recorded position replays events every other instance already
-handled, and that is safe rather than merely tolerable. The watermarks are per instance, so every other instance
-recognises those events as redeliveries, `process` returns `Outcome.skip()` before `react` runs, and no command is
-dispatched a second time. The cost is wasted reads, which is the trade ADR 57 already settled in favour of wasted
-work over loss.
+handled, and no command is dispatched a second time. The watermarks are per instance, so every other instance
+recognises those events as redeliveries and `process` returns `Outcome.skip()` before `react` runs.
+
+**Release also pauses the saga's subscription, and the first draft of this decision was wrong to call the cost
+wasted reads alone.** Repositioning a
+MongoDB subscription requires it to be paused first, since `doResumeSubscription` refuses a subscription that is
+already running. So a release stops delivery to every instance of that saga until the catch-up finishes. That is a
+real pause of the shared channel, which is the same property this decision exists to protect, and the difference that
+makes it acceptable is that it is finite and initiated by an operator who chose it, rather than indefinite and caused
+by one faulty instance. It is still a cost an operator has to be told about, and the trade behind accepting it is
+ADR 57's wasted work over loss.
+
+Running several nodes makes this harder and the design does not yet answer it. `CompetingConsumerSubscriptionModel`
+is a wrapper rather than a repositionable model itself, and its own javadoc says a cluster-wide pause means calling
+`pauseSubscription` on every node. Nothing in `SagaRunner` or `SagaSubscription` coordinates that today, and
+unwrapping to the delegate to reposition would go around the wrapper's own lock bookkeeping. Implementation has to
+settle whether release is restricted to the node holding the lease or whether it coordinates across nodes, and that
+is named here as open work rather than assumed to fall out.
 
 Release is refused, rather than silently doing half the job, on a saga whose subscription cannot replay history. A
 push-fed saga configured with `catchup = NONE` under ADR 96 has no local history to restart from, so releasing it
@@ -215,6 +256,9 @@ such. What the instance gets in exchange is that the property becomes explicit, 
 A long store outage quarantines instances. Past the budget the design cannot tell an outage from an input that will
 never succeed, so it treats it as the latter, and an outage longer than the budget quarantines a set of instances. They are all recoverable by release, so this is operational work rather than lost data, but it is a
 real cost and the budget's default has to be chosen with it in mind.
+
+Releasing an instance pauses the saga's subscription while the replay catches up, so it is an operation with a
+visible cost rather than a background one. See Decision point 7.
 
 Dispatch amplification is reduced rather than introduced. Today an input that will never succeed re-dispatches its
 whole command list on every one of the subscription's unlimited retries. Under the budget that stops when the
