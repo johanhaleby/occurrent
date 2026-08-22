@@ -1,10 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 2
-updated_at: '2026-08-22T07:25:00+00:00'
-updated_by: 'orchestrator session rel34-epic-registration-8c2066 (plan gate closed, dec-0001 to dec-0004
-  ruled by Johan: sdi is a sibling epic gating R3, #818 is IN as U11 with ADR 0134, #884 re-milestoned
-  to 0.35.0, C1 stopping rule MAJOR-AND-ABOVE cap 3)'
+revision: 3
+updated_at: '2026-08-22T07:48:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (Wave 1 started by Johan, four sessions
+  resolved by brief path in their transcripts)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -29,11 +28,12 @@ units:
       Changes entry (fold the development-history framing per AGENTS.md:75), the news post on docs/append-identity,
       and pages/docs/docs.md on docs/802-push-observation-hook including the non-compiling boolean lambda
       sample.'
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: ListAgents name nervous-moore-59d6ac-5e, worktree nervous-moore-59d6ac, chip task_a3355294,
+      Sonnet/high
     deliverables:
     - check: pr_merged
       ref: null
@@ -44,9 +44,14 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    next_action: worker running, orchestrator waits for its PR or DELIVERY_RESULT
+    last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
+    observed:
+      dispatch:
+        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+          for its brief path, never by title
+        via: ListAgents plus transcript grep
+        at: '2026-08-22T07:48:00+00:00'
     assessment: One invariant, four surfaces, two repos. The boolean-to-three fix already shipped once
       and was stale on arrival; the enumeration is derived from RoutingOutcome.java, not from a findings
       list. Takes PR 69's repair out of brk/U8's scope, recorded in ORCHESTRATOR.md. docs/append-identity
@@ -57,11 +62,12 @@ units:
     goal: 'updateEvent no longer rewrites the stored position as a BSON string and no longer drops dcbTags.
       Invariant: a document round-tripped through convertToDocument preserves position as int64 and preserves
       dcbTags, at all three write-back sites (SpringMongoEventStore:356, MongoEventStore:756, ReactorMongoEventStore:904).'
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: ListAgents name brave-sammet-c975a0-82, worktree brave-sammet-c975a0, chip task_8def816f,
+      Sonnet/high
     deliverables:
     - check: pr_merged
       ref: null
@@ -72,9 +78,14 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    next_action: worker running, orchestrator waits for its PR or DELIVERY_RESULT
+    last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
+    observed:
+      dispatch:
+        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+          for its brief path, never by title
+        via: ListAgents plus transcript grep
+        at: '2026-08-22T07:48:00+00:00'
     assessment: Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
@@ -84,11 +95,12 @@ units:
       boolean, so a custom Subscriptions/StreamSubscriptions/DcbSubscriptions composition whose DEFAULT
       does replay no longer gets a warning claiming it never replays. Mirror the reactor pattern, which
       already carries owner facts on ComposedReplayPhase.
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: ListAgents name peaceful-curran-e041e6-4a, worktree peaceful-curran-e041e6, chip task_72a7f36a,
+      Sonnet/medium
     deliverables:
     - check: pr_merged
       ref: null
@@ -99,9 +111,14 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    next_action: worker running, orchestrator waits for its PR or DELIVERY_RESULT
+    last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
+    observed:
+      dispatch:
+        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+          for its brief path, never by title
+        via: ListAgents plus transcript grep
+        at: '2026-08-22T07:48:00+00:00'
     assessment: Warning-only defect, recording itself stays correct. Fix shape agreed in the issue body.
       Touches the blocking registrar, so U6 follows this unit rather than running beside it.
   U4:
@@ -221,11 +238,12 @@ units:
     goal: MigrateSubscriptionEnabledFalseInYaml and TrueInYaml_0_32 are document-scoped rather than file-scoped,
       so the recipe cannot rename an unrelated document's enabled key to an invalid mode value in a multi-document
       YAML file.
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: ListAgents name relaxed-bardeen-0a12f8-4c, worktree relaxed-bardeen-0a12f8, chip task_b6a7ee0f,
+      Sonnet/medium
     deliverables:
     - check: pr_merged
       ref: null
@@ -236,9 +254,14 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    next_action: worker running, orchestrator waits for its PR or DELIVERY_RESULT
+    last_meaningful_progress_at: '2026-08-22T07:48:00+00:00'
+    observed:
+      dispatch:
+        note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
+          for its brief path, never by title
+        via: ListAgents plus transcript grep
+        at: '2026-08-22T07:48:00+00:00'
     assessment: 'Shipped defect in rewrite/src/main/resources/META-INF/rewrite/subscription-mode-0_32.yml,
       verified by git ls-tree against the tag. Same class as #828 (already closed), so read that fix first.'
   U9:
