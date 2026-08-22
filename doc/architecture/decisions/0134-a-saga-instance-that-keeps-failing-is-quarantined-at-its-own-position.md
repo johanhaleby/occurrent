@@ -4,11 +4,13 @@ Date: 2026-08-22
 
 ## Status
 
-Proposed. Proposes a resolution for #818 rather than resolving it, because this is the design and no code has
-changed. 0133 is the current maximum, re-audited across every remote branch at write time per the max-plus-one rule.
+Accepted at the design gate for #818, which this decides rather than closes, because the implementation is separate
+work. 0133 is the current maximum, re-audited across every remote branch at write time per the max-plus-one rule.
 
-One question in the Decision below is not settled here and needs a ruling before implementation starts. It is marked
-**Open** and repeated at the end of this file.
+The three questions this decision could not settle on its own were ruled at that gate and are recorded in
+**Rulings at the design gate** near the end of this file. One of them, the non-replayable source, ships as a
+narrowing rather than a closure, and [#918](https://github.com/johanhaleby/occurrent/issues/918) is its recorded
+path.
 
 ## Context
 
@@ -71,6 +73,13 @@ That distinction is what keeps the no-loss half of the isolation rule intact. Re
 keeping it somewhere else is a second copy with its own retention and its own failure modes. Recording where an
 instance stopped is a statement about the instance, and the events behind it stay under the event store's existing
 guarantees.
+
+**This reasoning holds only where the source can still hand the event back, and nothing in the sentences above
+says so.** It
+argues against a second copy on the ground that the first copy is still there. Where the source cannot replay, the
+first copy is not still there, so the argument does not reach that case and this section must not be read as closing
+it. Decision point 7 and [#918](https://github.com/johanhaleby/occurrent/issues/918) cover what happens there, and a
+holding area is a live option in that issue precisely because the reason it is rejected here does not apply.
 
 It also rules out an alternative that looks tempting and is wrong. A per-event holding area would let the instance keep
 handling later events while one earlier event sits aside. For a saga that is incorrect, not merely untidy. A saga is
@@ -150,9 +159,9 @@ which is correct, because a saga with no reachable store cannot make progress in
 The executor does not retry in process, it rethrows, so it depends on something else re-offering the input. A user
 who replaces a MongoDB model's `RetryStrategy` with a limited one has the same problem as the bare push feed above,
 and the runner should say so at startup where it can see the policy rather than discovering it during an incident.
-Whether the executor should instead own the retrying itself is the second question the implementation gate has to
-settle, and the reason to prefer the current answer is that owning it means holding the subscription thread for the
-whole budget, which is a shorter version of the block this decision exists to remove.
+The executor owning the retrying itself was the alternative, and it was ruled against at the design gate, because
+owning it means holding the subscription thread for the whole budget, which is a shorter version of the block this
+decision exists to remove.
 
 The failure write uses the same compare-and-set as every other write to the instance, and a lost one is meaningful
 rather than something to retry. Losing it means another input advanced the instance while it was failing, most
@@ -270,11 +279,25 @@ the transport differences in Decision point 3. A push feed behind the Kafka brid
 which is enough to reach the budget, and it is still not enough to release afterwards, because recording the
 quarantine is what stages the offset and moves past the record.
 
-So for such a source the executor keeps rethrowing and the instance keeps blocking, which is today's behaviour. The
-isolation rule stays broken for exactly that configuration, and it is named here rather than hidden, because the
-alternative on offer was a quiet loss and AGENTS.md ranks those the other way round. Closing it needs the quarantine
-record to hold the event itself for a non-replayable source, which is an extension of this design and is out of
-scope here.
+So for such a source the executor keeps rethrowing and the instance keeps blocking, which is today's behaviour.
+
+**For this configuration the two halves of the isolation rule cannot both hold, and this decision keeps the
+no-loss half.** AGENTS.md states the rule as both at once, no design may lose events and no consumer may be blocked
+by another being faulty. Here quarantining would break the first and refusing to quarantine breaks the second, so
+there is no answer that keeps both, and between them the loss is the one that cannot be undone afterwards.
+
+**That is a narrowing, not an end state, and recording it as settled is the move AGENTS.md specifically forbids.**
+The rule has no severity ladder, a loss window that is narrow, documented and warn-logged is still a loss, and a
+change that narrows one is a step on a recorded path to closing it rather than the accepted answer. Every other
+transport gains isolation from this decision and this transport does not, which makes the remaining gap smaller and no
+more acceptable. [#918](https://github.com/johanhaleby/occurrent/issues/918), milestone 0.35.0, is that recorded
+path. It holds the two candidate closings, holding the event for this case or refusing the topology the way ADR 90
+refused a shared acknowledgement, and choosing between them is its work rather than this decision's.
+
+**Until it closes, the limitation is stated at startup rather than discovered during an incident.** A saga wired to a
+source that cannot replay says so where an operator sees it when the application comes up. The difference between
+this configuration and every other one first matters in the middle of an outage, which is the worst moment to learn
+that quarantine was never available here.
 
 The replay boundary is inclusive of the recorded position, and this needs saying because the existing vocabulary
 points the other way. `GlobalCheckpoint.of(p)` means resume after `p`, so restarting from the position of the event
@@ -290,7 +313,7 @@ anywhere.
 `SagaStateStore.delete(sagaId)`, the escape hatch ADR 128 already names, stays available throughout. It abandons the
 instance deliberately instead of quietly.
 
-### Open: the migration treatment for the shipped API this breaks
+### 8. The migration treatment for the shipped API this breaks
 
 `SagaStatus`, `SagaEnvelope` and `SagaInstance` all shipped in `occurrent-0.33.0`, verified with `git ls-tree`
 against the tag rather than inferred, so this decision breaks shipped API in four places. A new `SagaEnvelope`
@@ -313,10 +336,11 @@ has no precedent for a search-only reporting recipe either. `org.openrewrite.*.s
 `subscription-mode-0_32.yml` and `store-neutral-mongodb-config-0_34.yml` only as a precondition on a recipe that then
 changes something.
 
-This is the exception the migration convention names, so it is a ruling rather than a guess. The recommendation is a
-section in `doc/migration/upgrading-to-0.34.0.md` covering all four breaks, and no recipe, on the grounds that
-AGENTS.md asks for a recipe ideally rather than always and a recipe that cannot do the work is worse than an honest
-note.
+This is the exception the migration convention names, so it was ruled at the design gate rather than guessed. **One
+section in `doc/migration/upgrading-to-0.34.0.md` covering all four breaks, and no recipe.** AGENTS.md asks for a
+recipe ideally rather than always, and a recipe that cannot do the work is worse than an honest note. That this
+repository has no precedent for a search-only reporting recipe is part of the answer rather than a footnote, since
+it is what makes no recipe a considered choice instead of an omission.
 
 ## Consequences
 
@@ -378,16 +402,19 @@ wall-clock time. See Decision point 3.
 **A per-instance holding area that lets the instance keep going.** Rejected in Decision point 1. It produces state
 derived from a gap, and nothing downstream can detect that.
 
-## Open questions repeated
+## Rulings at the design gate
 
-Three questions need a ruling before implementation starts, all covered above. The budget's default is not among
-them, it is decided at five minutes in Decision point 3.
+Three questions were left for the gate rather than decided in the drafting, and all three are now closed. The
+budget's default was never among them, it is decided at five minutes in Decision point 3.
 
-1. The migration treatment for the four shipped API breaks, meaning the `SagaEnvelope` component, the `SagaInstance`
-   accessor, the exhaustive switch over `SagaStatus`, and the silent change to what `findByStatus(ACTIVE, ...)`
-   returns. Recommendation is one migration-guide section covering all four, with no OpenRewrite recipe.
-2. Whether the executor keeps rethrowing and depends on the subscription re-delivering to reach the budget, refusing
-   a configuration that cannot, or owns the retrying itself and holds the subscription thread for the budget.
-   Recommendation is the first, because the second reintroduces a shorter version of the block being removed.
-3. Whether a non-replayable source is left blocking, as recommended here, or whether this decision grows to hold the
-   event itself for that case.
+1. **Migration.** One section in `doc/migration/upgrading-to-0.34.0.md` covering all four shipped breaks, meaning the
+   `SagaEnvelope` component, the `SagaInstance` accessor, the exhaustive switch over `SagaStatus` and the silent
+   change to what `findByStatus(ACTIVE, ...)` returns. No OpenRewrite recipe. Decision point 8.
+2. **Retrying.** The executor keeps rethrowing and depends on something else re-offering the input. Owning the
+   retrying itself would hold the subscription thread for the whole budget, which is a shorter version of the block
+   this decision removes. A transport that never re-offers the input therefore cannot reach the budget and keeps
+   today's behaviour, which Decision point 3 states rather than implies.
+3. **A non-replayable source.** The behaviour stands, meaning the quarantine is refused and the instance keeps
+   blocking. The framing does not. This ships as a narrowing of the isolation rule rather than as its end state, and
+   [#918](https://github.com/johanhaleby/occurrent/issues/918) on milestone 0.35.0 is the recorded path to closing
+   it. Decision point 7.
