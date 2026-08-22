@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 37
-updated_at: '2026-08-22T18:10:00+00:00'
-updated_by: 'orchestrator rel34: U6 dispatched as a chip, cross-epic fence with sdi recorded'
+revision: 38
+updated_at: '2026-08-22T18:25:00+00:00'
+updated_by: 'orchestrator rel34: PR 901 gate blocked, Copilot never reviewed the current head'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -126,9 +126,9 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: Java CI in progress on 39d9a6ef0; merge when it concludes, adversarial verdict already
-      HELD on this head
-    last_meaningful_progress_at: '2026-08-22T16:50:00+00:00'
+    next_action: await Copilot's review of 39d9a6ef0, then read its body and any suppressed block, then
+      merge
+    last_meaningful_progress_at: '2026-08-22T18:25:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -239,6 +239,19 @@ units:
           0.34.0 has grown a lot) stated on the issue. Johan''s call.'
         via: adversarial verify subagent, verified reproducible
         at: '2026-08-22T16:50:00+00:00'
+      gate_blocked_no_review_on_head:
+        note: 'MERGE BLOCKED again, on a different failure mode from last time. All three workflow runs
+          on 39d9a6ef0 are completed/success, unresolved review threads are ZERO, and the adversarial
+          verdict is HELD against this exact head. Still not mergeable, because Copilot''s most recent
+          review is on d9589f867, the head that was blocked for the suppressed finding, and the preservePosition
+          fix that answered it produced 39d9a6ef0 which Copilot has never seen. Checked by comparing each
+          review''s commit_id against the head rather than by counting reviews. Re-review requested via
+          GraphQL requestReviews with botIds. Copilot is absent from suggestedActors on this repository
+          (its only filters are CAN_BE_ASSIGNED and CAN_BE_AUTHOR), so the bot id came from an existing
+          review''s author via an ''... on Bot{id}'' fragment: BOT_kgDOCnlnWA. Request verified present
+          in reviewRequests afterwards, since a wrong id succeeds while requesting nobody.'
+        via: gh api pulls/901/reviews + graphql reviewRequests
+        at: '2026-08-22T18:25:00+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.

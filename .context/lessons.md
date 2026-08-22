@@ -2041,3 +2041,50 @@ the pattern can match at all before trusting a zero: I confirmed the same grep f
 The general rule was already written down here from a Haiku sweep that missed a Kotlin file, and it
 held again unchanged: **a read returning nothing is "not found by this method", never "not there".**
 The addition is that an improbable pattern of absence is itself the signal to distrust the method.
+
+## A fleet monitor that excludes by branch prefix does not exclude another fleet's chip PRs
+
+rel34's monitor watches open PRs "excluding brk/* and sdi/*". sdi's PR 924 arrived anyway, on
+`johan/upbeat-fermat-722819`, because sdi dispatched that unit as a chip and chips get an
+auto-generated branch name with no epic prefix. The exclusion works only for branches a worker
+names deliberately.
+
+Identify a PR's owning fleet from its content (files, linked issue, PR body) before acting, never
+from the branch prefix alone. The chip session name embeds the branch suffix, so
+`upbeat-fermat-722819-c4` in ListAgents and `johan/upbeat-fermat-722819` are the same unit, which
+is a quick way to attribute one.
+
+## A routing decision whose premise is "the other epic has not started" needs a recheck, because the user can falsify it that afternoon
+
+#837 was deferred to the ADR 127 epic in the morning, then pulled back into 0.34.0 by me with the
+written justification that the epic "has not started and is not close to starting". Johan started
+that epic a few hours later, in this same session, at his own request. The routing comment then
+stood on the record with a premise that was false.
+
+Two things follow. Any decision justified by another epic's state has to be rechecked when that
+state changes, and the completion-triggers-dispatch pass is the natural place. And when the premise
+dies, correct the standing comment in place rather than letting it stand, because the next reader
+takes it as the reasoning. The decision here survived, but on entirely different grounds, and
+those grounds had to be derived from the code.
+
+## Green CI plus a HELD adversarial verdict plus zero unresolved threads is still not the gate, because a review can be missing rather than clean
+
+PR 901 had three workflow runs completed and successful, zero unresolved review threads, and an
+adversarial verdict explicitly HELD against the current head. It was still not mergeable. Copilot's
+most recent review was on `d9589f867`, which was the head that got BLOCKED for a suppressed finding,
+and the fix for that finding produced a NEW head Copilot never saw.
+
+So the gate needs the review's `commit_id` compared against the current head, not merely the
+existence of a review or its state. "No review on this head" and "a clean review on this head" look
+identical in every rollup, every thread count, and every mergeability field.
+
+## Recovering the Copilot bot id when suggestedActors does not list it
+
+`suggestedActors` only accepts `CAN_BE_ASSIGNED` and `CAN_BE_AUTHOR` as filters, and Copilot appears
+under neither on this repository, so the documented lookup path returns nothing. When the bot has
+reviewed the PR before, its node id is available from the review author instead, querying
+`pullRequest.reviews.nodes.author` with an `... on Bot{id}` inline fragment. It came back as
+`BOT_kgDOCnlnWA`.
+
+Verify afterwards either way. A wrong id makes `requestReviews` return success while requesting
+nobody, so read `reviewRequests` back and confirm the bot is in it.
