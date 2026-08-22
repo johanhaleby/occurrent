@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 75
-updated_at: '2026-08-22T17:33:30+00:00'
-updated_by: 'orchestrator rel34: review requests do not survive a push, my verifier gave U5 a false claim'
+revision: 76
+updated_at: '2026-08-22T17:36:44+00:00'
+updated_by: 'orchestrator rel34: U13 plan approved, ADR 0136 allocated'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -1929,8 +1929,9 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: await the plan at the plan gate
-    last_meaningful_progress_at: '2026-08-22T17:20:35+00:00'
+    next_action: implement at Sonnet/high, ADR 0136 is allocated, fold the changelog plus one Highlights
+      line
+    last_meaningful_progress_at: '2026-08-22T17:36:44+00:00'
     observed:
       dispatched:
         note: Dispatched PLAN FIRST as a chip, title gated before the spawn at 59 chars. Plan-first because
@@ -1942,6 +1943,31 @@ units:
           an ADR number, since 0135 is taken by U5 and numbering is shared across three fleets.
         via: orchestrator
         at: '2026-08-22T17:20:35+00:00'
+      plan_approved:
+        note: 'Plan APPROVED. ADR 0136 GRANTED and verified free (main''s highest is 0134, 0135 is U5''s
+          on PR 941). The worker''s own calibration decided it: the position-backfill module never got
+          an ADR and a tool alone would not need one, but a PERMANENT check added to three published stores
+          for a defect window that closes does, because the removal criterion has no other home. Its ADR
+          45 precedent verified by reading, not taken: ADR 45 carries ''On-by-default carries an upgrade
+          hazard, mitigated with a startup guard and a migration module''. CHANGELOG: fold into the 901
+          entry AND add one Highlights line. The worker recommended folding and offered the counter that
+          a new published artifact gets buried. Both are right and AGENTS.md already resolves it, since
+          Highlights is one line per marquee feature pointing at its full entry. The stronger reason to
+          fold is that a reader who sees ''updateEvent no longer corrupts'' and stops reading is precisely
+          the affected user, and a separate entry would lose them. THE PLAN CHANGED WHAT THE UNIT IS,
+          in three ways. (1) Its 0.2 correction is better than the issue it corrects: MongoDB comparison
+          operators are TYPE BRACKETED, not sort-ordered, so a string position matches NEITHER bound rather
+          than only failing the upper one. Run on MongoDB 7, not reasoned. The conclusion got stronger.
+          (2) Its 0.3 enumeration makes this materially bigger than #906 states: the conditional-append
+          conflict query at native:521 uses the SAME query, so appendIf can ACCEPT an append that should
+          have conflicted, which is a correctness violation rather than a missing read, and the position-ordered
+          stream reads bite STREAM-ONLY users who never touched DCB. (3) Its section 4 keeps the tool
+          honest: shape B refuses to invent a lost position rather than guessing in _id order, and shape
+          C, a forged position, is undetectable by construction, so the claim is ''fully restores the
+          common shape and reports the rest'' rather than ''recovers your data''. Model Sonnet/high accepted
+          with the worker''s own escalation trigger.'
+        via: worker plan, ADR number and ADR 45 precedent verified by me
+        at: '2026-08-22T17:36:44+00:00'
     assessment: 'THE UNIT THAT DECIDES WHAT FIXING #876 MEANS. PR 901 stops the corruption going forward
       and does not touch a document already corrupted, so without this the release ships half a fix for
       exactly the users who already hit the bug, and their events stay invisible forever. Johan adopted
@@ -2393,3 +2419,8 @@ cross_epic:
       no pending request looks identical to one with a request pending, and only the request count separates
       them, so the fleet-wide sweep is the thing that finds it.'
     at: '2026-08-22T17:33:30+00:00'
+  adr_ledger:
+    note: ADR numbering across three fleets. 0135 CLAIMED by rel34/U5 on PR 941. 0136 CLAIMED by rel34/U13
+      for the detect-but-never-self-repair decision. Next free is 0137. sdi committed to taking a number
+      above 0135 and telling rel34 first, and must be told 0136 is now gone.
+    at: '2026-08-22T17:36:44+00:00'
