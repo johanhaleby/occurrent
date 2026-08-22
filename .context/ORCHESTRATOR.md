@@ -1012,3 +1012,13 @@ It was also misfiring by construction, which is worth recording because the desi
 The replacement watches the actual trigger and exits when it fires. It also reports PR 933 merging as a secondary signal, since that ungates U7 later, and distinguishes MERGED from CLOSED rather than treating them as one event. That distinction has already cost this fleet once today.
 
 sdi is idle by choice, holding a single watch on the one event that resumes it.
+
+### sdi 2026-08-22T15:22:11Z: two skill additions, and one defect that turned out not to be the skill's
+
+Skill re-read properly this time, by enumerating rather than by inferring: five prose commits since session start, seven script-only ones that need no re-read. Two of today's defects generalised past this repository and are now in `SKILL.md` as `e53828b5c`, announced to rel34 per the announce rule.
+
+**A constraint is computed the same way completion is, so it belongs in the field the deriver reads.** Added right after "Completion is computed, never declared", which is the sentence it mirrors. `blocking_on` appeared zero times in the entire skill before this, which is why the rule had nothing to attach to and why the failure was easy to reach: sdi wrote a re-land obligation into `next_action` while leaving `met: true`, and held a READY unit with a sentence in this file.
+
+**STALLED on a unit with no session is a claim about the orchestrator.** Appended to the sweep sentence that flips health to STALLED and prescribes a tail-read, because a tail-read presumes a worker and a blocked unit has none. Johan's question about stalled units is what surfaced it, and the honest count was two real out of five.
+
+**One thing deliberately not patched, recorded because the near miss is the useful part.** sdi's PR monitor computed its foreign set once at arming, so every PR opened afterwards emitted deltas forever. That looked like a defect in the tested pattern and the fix belonged in `references/fleet-monitor.md`. The word "foreign" does not occur in that reference at all. It was sdi's own addition on top of the shared pattern, so the lesson stays local and a shared reference was not edited for a bug it does not have. Checking before patching cost one grep.

@@ -1,9 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 53
-updated_at: '2026-08-22T15:14:59+00:00'
-updated_by: 'orchestrator rel34: U11 implementation dispatched after stall detection caught it, R2 hold
-  made machine-readable'
+revision: 58
+updated_at: '2026-08-22T15:30:25+00:00'
+updated_by: 'orchestrator rel34: U5 dispatched plan-first, U11 session recorded'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -130,6 +129,10 @@ units:
       ref: 927
       met: false
       evidence: ''
+    - check: issue_closed
+      ref: 907
+      met: false
+      evidence: ''
     blocking_on:
     - what: 'PR 901 held by the orchestrator gate. Clears when the worker pushes a test for an original
         with no tags whose updater forges some, proving the withoutExtension(TAGS) branch, plus #927''s
@@ -138,7 +141,7 @@ units:
       recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker adds the forged-tags-on-a-non-DCB-original test, verifies it fails with preserveTags
       reverted, then the gate re-runs
-    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:04:08+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
@@ -300,6 +303,26 @@ units:
           event rather than as a description of the problem, so a restart can tell whether it still holds.
         via: self-audit against epic-state.py's phase derivation
         at: '2026-08-22T15:11:32+00:00'
+      907_folded_in:
+        note: '#907 adopted into U2 on Johan''s ruling. ReactorMongoEventStore.updateEvent calls .log()
+          on the reactive pipeline that reads the event to update, so the full found document INCLUDING
+          ITS DATA PAYLOAD is logged at INFO. Filed by this unit''s own worker while working on #876.
+          Folded here rather than dispatched because it is one line on the same method PR 901 already
+          changes, and 901 must push again for its coverage test regardless. U2''s gate now covers four
+          issues: #876, #904, #927 and #907.'
+        via: Johan's structured-ask ruling
+        at: '2026-08-22T15:23:44+00:00'
+      timestamps_track_the_blocker:
+        note: 'sdi flagged the signature and it was present here: five BLOCKED units all shared last_meaningful_progress_at
+          2026-08-22T15:11:32 to the second, which is one write of mine adding blocking_on. On a BLOCKED
+          unit that field was therefore reporting MY attention rather than the blocker moving, so STALLED
+          would have been a claim about the orchestrator and not about the work. Repaired by setting each
+          held unit''s timestamp from its PR''s last commit date, read from gh. STALLED now means the
+          worker has not pushed, which is the signal worth having. The rule generalises: for a unit blocked
+          on someone else''s artifact, the progress timestamp comes from that artifact, never from the
+          orchestrator''s own bookkeeping write.'
+        via: sdi's shared-timestamp signature check + gh pr view commits
+        at: '2026-08-22T15:24:12+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
@@ -457,7 +480,7 @@ units:
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker answers three grouped defects on 914, then the gate re-runs from the top
-    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:53:20+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -551,12 +574,11 @@ units:
     issue: 878
     goal: A reactor projection that applies an append always records it, so waitUntilApplied cannot time
       out on a write that did land.
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
-    depends_on:
-    - U12
-    session: null
+    depends_on: []
+    session: chip task_ea20e8b3, plan-first, Opus/high
     deliverables:
     - check: pr_merged
       ref: null
@@ -567,9 +589,21 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch to the U12 worker once PR for U12 merges, it will own those reactor files
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    next_action: await the plan at the plan gate, do not expect code
+    last_meaningful_progress_at: '2026-08-22T15:30:25+00:00'
+    observed:
+      dispatched_plan_first:
+        note: 'Dispatched PLAN FIRST rather than as an implementation, because #891''s own filer recorded
+          that every fix they found decides by position and ADR 122 stands against deciding by position.
+          A blind implementation dispatch would have produced either a design decision taken by a worker
+          without a gate, or a stall. Kept in 0.34.0 on AGENTS.md line 109 rather than asked: a wait that
+          times out on a write that succeeded is a known hole in correctness, which that line says is
+          not a follow-up candidate. The brief says so explicitly and gives the worker room to report
+          back if the fix turns out disproportionate, which is a finding rather than a decision it may
+          take. The brief also forbids writing an ADR or taking a number unilaterally: 0135 is free and
+          shared across three fleets, so a claim goes through the orchestrator.'
+        via: orchestrator
+        at: '2026-08-22T15:30:25+00:00'
     assessment: '#891 ALONE now; #878 moved to U4. Sequenced behind U12 rather than run beside it: #891''s
       fix path runs through framework/spring-boot-autoconfigure/reactor ProjectionAnnotationRegistrar.java
       and ComposedCatchupModel.java, the two files U12 owns. Give it to the U12 worker when U12 merges,
@@ -604,7 +638,7 @@ units:
       recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker adds the no-regression floor to its resolve helper and routes the fourth call
       site through it
-    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
+    last_meaningful_progress_at: '2026-08-22T14:50:03+00:00'
     observed:
       scope_derived_by_orchestrator:
         note: 'Enumerated the invocation sites myself rather than trusting the issue text. The defect
@@ -974,7 +1008,7 @@ units:
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker fixes the non-terminating classifier, then the gate re-runs from the top
-    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:12:49+00:00'
     observed:
       gate_919:
         note: 'PR 919 opened, all ten dispatched units now have PRs. TWO FAILURES on test (example-projection)
@@ -1017,13 +1051,10 @@ units:
     - U1
     - U10
     - U11
-    - U12
     - U13
     - U14
     - U15
     - U16
-    - U17
-    - U18
     - U2
     - U3
     - U4
@@ -1072,6 +1103,20 @@ units:
           is the 0.33.0 precedent.'
         via: orchestrator decision under AGENTS.md
         at: '2026-08-22T10:38:17+00:00'
+      cancelled_deps_made_the_cut_unreachable:
+        note: 'STRUCTURAL DEFECT, found by auditing why units stayed PLANNED. R1 and C1 listed U12, U17
+          and U18 among their depends_on, and all three are CANCELLED. epic-state.py derives READY only
+          when EVERY dependency is DONE, and a cancelled unit never becomes DONE, so R1 (the changelog
+          cut) and C1 (the final adversarial review) could NEVER have derived READY no matter how much
+          real work finished. The release cut was unreachable by the graph. Removed the cancelled units
+          from every depends_on list: {''U5'': [''U12''], ''R1'': [''U12'', ''U17'', ''U18''], ''C1'':
+          [''U12'', ''U17'', ''U18''], ''U18'': [''U12'']}. U5''s case was the same defect with a real
+          consequence attached: it was sequenced behind U12 because U12 owned the two reactor files its
+          fix path runs through, and U12''s cancellation left that sequencing reason void while the dependency
+          kept it PLANNED. U5 is now dispatchable. Note this was invisible while the fabricated timestamps
+          disabled health derivation, since a unit that can never derive READY also never derives STALLED.'
+        via: self-audit of depends_on against phase
+        at: '2026-08-22T15:20:02+00:00'
     assessment: 'AGENTS.md:71-73: cutting a release renames the heading, it does not restructure the section.
       Runs after the last gating merge and after C1 reaches fixpoint.'
   R2:
@@ -1092,6 +1137,10 @@ units:
     deliverables:
     - check: manual_approval
       ref: null
+      met: false
+      evidence: ''
+    - check: issue_closed
+      ref: 421
       met: false
       evidence: ''
     blocking_on:
@@ -1185,6 +1234,14 @@ units:
           deliverable is met when Johan approves it.
         via: orchestrator
         at: '2026-08-22T12:50:59+00:00'
+      421_is_r2s:
+        note: '#421 (document broker-backed subscriptions on occurrent.org) was showing as a 0.34.0 milestone
+          item owned by no unit. It is R2''s: the work is the held docs branch docs/421-broker-modules,
+          tip 0ba67fd, which is PR 74 and one of the eight branches in R2''s verified merge order. It
+          closes when the docs merge on release day. Attached rather than asked, since the branch is already
+          in R2''s checklist.'
+        via: gh issue view 421 + the held docs branch
+        at: '2026-08-22T15:23:44+00:00'
     assessment: 'Seven PRs, not eight branches: docs/saga-step-conditions-added-tag adds a line docs main
       already carries. preview/0.34.0 was behind docs/421-broker-modules by one commit at registration,
       so preview is verified per branch rather than assumed current.'
@@ -1323,13 +1380,10 @@ units:
     - U1
     - U10
     - U11
-    - U12
     - U13
     - U14
     - U15
     - U16
-    - U17
-    - U18
     - U2
     - U3
     - U4
@@ -1363,7 +1417,8 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: chip task_61a17509, worktree via zealous-williamson-0ad901-c9, Opus/high, implementing ADR
+      134
     deliverables:
     - check: manual_approval
       ref: 911
@@ -1383,7 +1438,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: 'await the implementation worker''s claim on #818'
-    last_meaningful_progress_at: '2026-08-22T15:14:59+00:00'
+    last_meaningful_progress_at: '2026-08-22T15:30:25+00:00'
     observed:
       design_gate:
         note: 'ADR 134 delivered as PR 911, Proposed, design only, no code. NOT merged on green: a plan-first
@@ -1440,6 +1495,20 @@ units:
           3.'
         via: epic-state.py derive after the timestamp repair
         at: '2026-08-22T15:14:59+00:00'
+      adr_beats_my_done_when:
+        note: 'The worker found my brief''s done_when contradicting the ADR it told the worker was authoritative:
+          I listed an OpenRewrite recipe, and ADR 134 Decision 8 plus its design-gate rulings explicitly
+          say no recipe, because one cannot know what a user''s new ''case QUARANTINED'' branch should
+          do nor rewrite the intent of a findByStatus(ACTIVE, ..) call. The worker followed the ADR, which
+          is what the brief''s own instruction required, and asked rather than assuming. Ruled: ADR wins,
+          the recipe item is struck. It also found a FIFTH break the ADR missed. SagaRunnerConfig shipped
+          in 0.33.0 with four record components, VERIFIED AGAINST THE TAG rather than inferred, and the
+          quarantine budget needs a fifth, so the canonical constructor and the deconstruction pattern
+          each break. Being absorbed with a delegating four-argument constructor and covered in the same
+          migration section. ADR 134 is merged and therefore immutable, so per AGENTS.md a correction
+          goes in a new ADR amending it by reference, which I will route after this unit lands.'
+        via: worker message + ADR 134 Decision 8
+        at: '2026-08-22T15:30:25+00:00'
     assessment: 'Johan ruled it IN 0.34.0 (dec-0002), overruling the recommendation to defer. Pre-existing:
       predates ADR 123 and ADR 126, both of which accepted the tradeoff deliberately, and PR 816''s review
       thread raised it against ADR 126. The event path has no equivalent of SagaExecution.pollTimers,
@@ -1671,7 +1740,7 @@ units:
       recheck_after: '2026-08-22T15:56:57+00:00'
     next_action: worker restates the invariant's walk, corrects the excludeTypes javadoc, fixes the Kotlin
       enum advice
-    last_meaningful_progress_at: '2026-08-22T15:11:32+00:00'
+    last_meaningful_progress_at: '2026-08-22T13:00:03+00:00'
     observed:
       pr_opened:
         note: PR 928 on rel34/u16-type-filter-expansion, 8 files, touching ExecuteFilter, DcbCriteriaBuilder.kt,
@@ -1749,8 +1818,7 @@ units:
     phase: CANCELLED
     health: UNKNOWN
     swept: true
-    depends_on:
-    - U12
+    depends_on: []
     session: null
     deliverables:
     - check: pr_merged
@@ -1786,23 +1854,26 @@ units:
     goal: RetryStrategy.retryIf and mapRetryPredicate document that the predicate may be invoked more
       than once per attempt, is consulted during the backoff wait as well as on failure, and must therefore
       be free of side effects. Documentation only, no behaviour change.
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: 'loving-spence-127dc6-e8, chip session for #931, delivered PR 937'
+    session: null
     deliverables:
     - check: pr_merged
       ref: 937
-      met: false
-      evidence: ''
+      met: true
+      evidence: PR 937 MERGED 2026-08-22T15:27:52Z as squash d989dbfe6, CAS-pinned to the verified head
+        de158dbe0, branch deleted. Documents on all four public executeWithRetry overloads that shutdownPredicate
+        is polled every SHUTDOWN_POLL_INTERVAL_MILLIS while a backoff is being waited out, and must therefore
+        be free of side effects.
     - check: issue_closed
       ref: 931
-      met: false
-      evidence: ''
+      met: true
+      evidence: '#931 CLOSED 2026-08-22T15:27:52Z by PR 937.'
     blocking_on: []
-    next_action: gate PR 937 once CI concludes
-    last_meaningful_progress_at: '2026-08-22T15:11:57+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T15:28:18+00:00'
     observed:
       origin:
         note: 'Found by U4 the expensive way. ReactiveMongoAppliedAppendStore counted attempts inside
@@ -1842,6 +1913,23 @@ units:
           My filing error, caught by the worker before it wrote anything.'
         via: my read of RetryExecution + MongoAppliedAppendStore
         at: '2026-08-22T15:01:48+00:00'
+      four_claims_verified_against_the_code:
+        note: 'Gate: Java CI with Maven completed/success on de158dbe0, Copilot ''Approval recommended''
+          at Balanced on the current head with 0 comments and NO suppressed block, zero unresolved threads.
+          Instead of a subagent pass, I verified all four documented claims against RetryExecution myself,
+          since the change is documentation and the only adversarial question is whether the prose matches
+          the code. (1) Polled every SHUTDOWN_POLL_INTERVAL_MILLIS during backoff: matches sleepObservingShutdown.
+          (2) ''Only for a failed attempt that still has attempts left'': TRUE, the sleep call sits after
+          the !shouldRetryAgain early return. (3) ''The final, exhausted attempt''s failure never invokes
+          the predicate'': TRUE, and non-obvious. shouldRetryAgain is !isExhausted(..) && retry.retryPredicate.test(e),
+          and && short-circuits, so on the exhausted attempt the combined predicate holding shutdownPredicate
+          is never reached. (4) ''Nor any failure under DontRetry'': TRUE, executeWithRetry returns the
+          function unwrapped for DontRetry so no loop runs. Worth recording as a counterexample to today''s
+          recurring pattern: this worker documented exactly what holds, including two claims that are
+          true only because of && short-circuiting and statement ordering, where 914 and 928 both shipped
+          absolutes that were false.'
+        via: my own read of RetryExecution at pr937
+        at: '2026-08-22T15:28:18+00:00'
     assessment: Small and documentation only, but it closes a behaviour change this release introduces.
       Registered rather than folded into U4 so PR 914 can merge on its own gate.
 cross_epic:
@@ -1880,3 +1968,10 @@ cross_epic:
       name (the only remaining hits are in .context bookkeeping YAML), df0548bfa still an ancestor so
       brk''s fix survives, and upgrade-0_35.yml gone so the #929 hazard is off main.'
     at: '2026-08-22T15:01:48+00:00'
+  893_stays_with_johan:
+    note: '#893 (broker epic review round 2, roughly 35 follow-up items) STAYS on milestone 0.34.0 by
+      Johan''s ruling. He triages the items himself rather than re-milestoning on brk''s summary or spending
+      a rel34 dispatch on reading them. So it is NOT a rel34 unit and NOT an orchestrator action, but
+      it IS a milestone item, which means the milestone cannot reach zero open until he has ruled on it.
+      R4 must not treat that as a rel34 blocker.'
+    at: '2026-08-22T15:23:44+00:00'
