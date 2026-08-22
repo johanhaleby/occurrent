@@ -2193,3 +2193,27 @@ Worth knowing for the repair: the length cap counts characters, and `${#TITLE}` 
 locale counts bytes, so a 59-character title reports as 62 and looks like a failure. Measure it in
 python, and trim the summary rather than the model suffix, since the suffix is the only part that
 reaches the person choosing the model.
+## Hold your own questions to the bar you set for other people's (sdi, 2026-08-22)
+
+The orchestrator skill's routing rule for questions arriving FROM workers already required two
+things: answer directly when `AGENTS.md`, an ADR, the approved plan or a prior ruling settles it,
+and otherwise bring it to the user with a recommendation attached. Bucket C, which governs the
+orchestrator's OWN questions, required neither. It listed code, `ORCHESTRATOR.md` and a graph query
+as the things to check first and never mentioned the repository's conventions document at all.
+
+So a relayed question got more scrutiny than one I raised myself. The tell arrived when a design
+question I put to Johan came straight back as "investigate what the best solution is according to
+the principles of `AGENTS.md`". That is the user paying for a lookup I owed, and it is the same
+question I would have bounced had a worker sent it to me.
+
+The asymmetry has a cause worth naming, because it is not laziness. A relayed question arrives
+visibly as somebody else's and gets examined as an artefact. Your own arrives as the obvious next
+step in your own reasoning, already feeling like a decision that needs a human, and nothing marks
+it as a thing to check first.
+
+Fixed in the skill itself rather than here, since it generalises to any repository with a
+conventions document (`orchestrator` commit `e0c3eea93`). Standing practice from Johan, recorded
+because it binds this fleet immediately: **read the conventions document before asking, never
+after, and put every question through `AskUserQuestion` with a recommendation and the
+three-sentence preamble.**
+
