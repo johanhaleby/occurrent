@@ -1,8 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 24
-updated_at: '2026-08-22T13:00:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (ADR 134 merged, U11 planning phase DONE)
+revision: 25
+updated_at: '2026-08-22T13:20:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (all ten dispatched units have PRs, brk
+  down to PR 920)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -594,7 +595,7 @@ units:
     session: null
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 919
       met: false
       evidence: ''
     - check: issue_closed
@@ -603,8 +604,15 @@ units:
       evidence: ''
     blocking_on: []
     next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    last_meaningful_progress_at: '2026-08-22T13:20:00+00:00'
+    observed:
+      gate_919:
+        note: 'PR 919 opened, all ten dispatched units now have PRs. TWO FAILURES on test (example-projection)
+          on BOTH java-21 and java-25. That is NOT the #884 flake signature: both JDKs, and a different
+          shard from the Kafka one. Triage delegated. A both-JDK failure in one shard reads as a regression
+          from the change rather than infrastructure.'
+        via: gh pr view, gh run list, graphql reviewThreads
+        at: '2026-08-22T13:20:00+00:00'
     assessment: 'Decided IN by derivation, not asked: AGENTS.md:120 requires every component to ship production
       ready including surviving a transient outage of the store it talks to, and the broker modules ship
       for the first time in 0.34.0. The earlier decline for PR 861 is one of the deferrals the triage
@@ -737,10 +745,18 @@ units:
       met: false
       evidence: ''
     blocking_on:
-    - the brk epic closing (PRs 897 and 898, the U9 mechanical checklist, and U15's second PR)
+    - 'brk PR 920 (brk/u16-kafka-pattern-flake, the #884 fix, test-only) merging, after which brk closes'
     next_action: dispatch after plan approval
     last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    observed:
+      brk_gate:
+        note: 'brk''s closing condition is now EXACTLY ONE PR. PR 910 merged as cacdc25b9 closing brk
+          U9 and U15; PR 920 is the #884 and #893-item-21 flake fix on brk/u16-kafka-pattern-flake, test-only,
+          two test files, root cause is the test racing its own consumer group rebalance before publishing.
+          No production code, so nothing changes for rel34''s shard reading beyond one fewer flake. rel34''s
+          U17 was retired into this.'
+        via: brk orchestrator messages, cross-checked against the merge commit
+        at: '2026-08-22T13:20:00+00:00'
     assessment: 'Johan''s manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
       The orchestrator hands him the checklist and verifies the observable results. The 1000-file allowance
       is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z:
@@ -927,7 +943,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: worker implementing on a fresh branch
-    last_meaningful_progress_at: '2026-08-22T10:10:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T13:20:00+00:00'
     observed:
       pr_908:
         head: 2170cca7184b20dc7d90f2c3dd69466890db3f9c
@@ -956,6 +972,15 @@ units:
           so routing it was correct rather than folding it in. #909 needs a routing decision.'
         via: worker message
         at: '2026-08-22T10:10:00+00:00'
+      gate_908:
+        note: 'Green, Java CI completed/success, ONE unresolved thread which is a legitimate reasoned
+          decline under the policy: Copilot found the resolveCatchupModel gap, the worker agreed it is
+          real, explained it changes which model a recording projection listens to rather than the warning
+          its unit owns, and filed #909, now U18. HELD anyway: Copilot''s only review is on 2170cca7 while
+          the head is 2a0b03fef, and that delta IS the AOP proxy fix, so the substantive change is unreviewed.
+          Re-review requested.'
+        via: gh pr view, gh run list, graphql reviewThreads
+        at: '2026-08-22T13:20:00+00:00'
     assessment: Adopted by Johan at a structured ask, dec-0007, on U3's own routing recommendation after
       it found the gap while reviewing its own PR 902. Reactor twin of U3's fix, similar size. Pre-granted
       the OccurrentReactiveMongoAutoConfiguration bean-method extension up front, because dec-0005 already
