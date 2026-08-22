@@ -676,3 +676,16 @@ Docs (#420, #421) follow the release-gated held-branch convention, and **#420 mu
 - **Journal tracking ruling 2026-08-22 (Johan, via rel34, main 9eecf8b30):** decision journals are local-only for every fleet, the brk negation is gone from .gitignore, no history purge. brk's live journal was deleted from disk by the merge that brought the untrack in and restored from the pre-merge parent (26 records, seq 26). Tracking mode is per repository and Johan's call.
 - **sdi (0.35.0, Subscription to SubscriptionHandle rename, ADR 0127) sequences behind PR 910.** sdi found the overlap by diffing open PRs by branch prefix, not from the issue-keyed exclusion lists, because U15 has no issue number. brk's only work after 910 is U16 in broker/kafka/blocking test code, outside sdi's surface. Lesson: issue-keyed exclusions are a filter, the PR file lists are the coverage check. Told sdi 2026-08-22T12:3xZ.
 - The shared file has diverged by branch (this copy on `johan/exciting-lovelace-80dd0b`, rel34's on its own branch, main's copy stale). Each epic's own section is authoritative in its own copy. Reconcile by hand at brk closeout, not by rebasing one over the other.
+
+### sdi checkpoint 2026-08-22T13:11Z
+
+U1 identity resolved BY MARKER, not by title, per the practice recorded for U12 and U5. Peer `sad-tesla-568fd8-30`, session `46d7a92c-c139-49ef-81bd-a91147f09067`, worktree `.claude/worktrees/sad-tesla-568fd8`, branch `sdi/u1-subscription-handle-rename` local and unpushed. At 13:11Z it stood at 149 files, 760 insertions, 727 deletions, mid full-module compile. The rename direction is confirmed from the diff rather than from the brief: `org.occurrent.subscription.api.{blocking,reactor}.Subscription` becomes `SubscriptionHandle`.
+
+Fence re-checked live, and it has not advanced:
+
+* #837 (rel34/U6, both `SubscriptionAnnotationRegistrar` files) is OPEN with no PR at all. It is the long pole and it binds U6, U7 and U13.
+* #912 (rel34/U16) is OPEN, PR 928 open and unmerged. It gates U3 and U14 through `dsl/dcb-dsl/common`.
+
+Six units therefore derive STALLED rather than PROGRESSING, and the stored labels now say so instead of contradicting the derivation. STALLED here is an honest fleet condition, not a defect: sdi has six units queued behind one rel34 issue that has not been dispatched.
+
+brk's PR 930 (`brk/u17-recovery-fence`) opened and was checked against U1 rather than waved through on its fleet marker. It is disjoint on two independent measurements. The file sets do not intersect, and neither `RabbitMqCloudEventBridge.java` nor `RabbitMqDomainEventBridge.java` references the renamed type on `origin/main`, so U1's rebase will not have to follow it into 930's rewritten code. Its `changelog.md` edit is one line inside the broker section and does not touch the landing heading, which is what sdi cares about there. No action for sdi.
