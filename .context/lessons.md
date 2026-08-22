@@ -1503,3 +1503,15 @@ Rule: when verifying any claim about a pushed head, read `git show <sha>:<path>`
 Both active workers hit the backgrounded-wait trap in the same hour, one parking on a module suite mid-round for the second time, one parking mid-MUTATION with a deliberately broken test file on disk while waiting for a notification that never comes. The second case is the dangerous shape: a killed session there hands the next worker a mutation indistinguishable from real code.
 
 The brief rule ("run builds in the foreground") is evidently not enough on its own, because a long Testcontainers run tempts the worker to background it and "come back". Two mitigations that work: state in the brief that a turn has NO deadline and a twenty-minute foreground run is fine, and state the specific mutation rule, that a mutation cycle (break, red, restore, diff against the copy, green) is ATOMIC within one turn, never split across a wait. The orchestrator's fallback stays the same: any worker report ending with "waiting for the background run" gets an immediate wake-up naming the dead wait.
+
+## ayi U11, 2026-08-22: a sampled lifecycle cannot be made safe by adding guards
+A recorder that polls a subscription model's phase and reconstructs episodes from its own samples failed four review rounds the same way (stale attempt markers, two-call snapshots, generation reuse on relaunch, generation-to-0 at handover), and every mechanism added to make sampling safe became the next thing to defend. The design that converged pushes two signals from the model that owns the catch-up, each carrying the model's own per-attempt object as an identity token, announced inside the step that establishes ownership. Rule for the next phase-gated design: the owner pushes the boundary with its token, the receiver compares by identity, nothing samples. Generalizes beyond this repository, candidate for the orchestrator skill.
+
+## ayi U11, 2026-08-22: "lock-free" in a worker report means "check the lock, not the body"
+A worker reported two handlers as lock-free when they did no I/O but were synchronized on the lock the I/O path holds. Read the synchronization, not the method body, before accepting a promptness claim.
+
+## ayi U11, 2026-08-22: a regression test for a race must construct the overlap
+Two mutation proofs passed under their own mutation on first writing (a coin-flip timeout, a sequential re-enactment of a concurrent symptom). A test that re-enacts the symptom sequentially guards nothing once the fix changes what the symptom looks like. Hold the first attempt inside the step under test and let the second attempt's progress release it, so ordering decides the outcome rather than time.
+
+## ayi, 2026-08-21: cross-epic overlap on shared infrastructure files needs a pre-merge heads-up protocol
+brk and ayi shared the push handover and push model on both stacks without either coexistence note foreseeing it, which cost two mid-implementation reconciles. Once the overlap is known, the peer announces scope at PR open and again before merge, and the fleet with the larger rewrite lands first so the other writes against the merged shape.
