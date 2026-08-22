@@ -1,9 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 26
-updated_at: '2026-08-22T13:50:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U9 merged, the release's breaking change
-  is in)
+revision: 27
+updated_at: '2026-08-22T14:20:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (verify results recorded for a clean handover)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -243,8 +242,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker fixing the proxy-unwrapping defect; re-verify after
-    last_meaningful_progress_at: '2026-08-22T10:55:00+00:00'
+    next_action: worker narrowing the javadoc overclaim; head moving, diff the delta before merging
+    last_meaningful_progress_at: '2026-08-22T14:20:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -279,6 +278,33 @@ units:
           the first, and no path in this starter was found that calls it twice.'
         via: orchestrator adversarial verify subagent
         at: '2026-08-22T10:55:00+00:00'
+      reverify:
+        note: 'RE-VERIFY against 7d63c9c8b: FALSIFIED but against the CLAIM, not the code. AopProxyUtils.getSingletonTarget
+          only unwraps something implementing Advised, so genuine Spring AOP proxies (ProxyFactory, which
+          is what @Transactional and @Async auto-proxying produce) DO unwrap and match, while a Mockito
+          delegatesTo mock or a hand-rolled java.lang.reflect.Proxy does not. The fix therefore closes
+          the real-world case and the javadoc''s ''any BeanPostProcessor'' overclaims. Second case, already
+          named in the code as a deliberate tradeoff: an Advised proxy backed by a NON-singleton TargetSource
+          also returns null from getSingletonTarget, so the proxy is compared as-is rather than risking
+          a side-effecting getTarget(). Right tradeoff, wrong surrounding sentence. CORRECTION TO THE
+          ORIGINAL PASS: its repro used a Mockito proxy and it described the trigger as ''any BeanPostProcessor
+          or Spring AOP auto-proxying'', which the orchestrator relayed verbatim and the worker built
+          against. The bug was real; the generalisation was broader than the evidence. WHAT HELD: the
+          converse false positive is NOT reachable, which unwrapping was the one change that could have
+          broken; double proxies and one-sided proxies both correct; three states plus null plus the pre-fix
+          regression shape; and the once-only guard verified against the real call site as unreachable
+          twice.'
+        via: orchestrator re-verify subagent
+        at: '2026-08-22T14:20:00+00:00'
+      introduction_proxy:
+        note: 'A THIRD defect, found by the Copilot re-review the orchestrator insisted on for PR 908
+          and ported here proactively by the worker: a valid AOP INTRODUCTION proxy, one implementing
+          SubscriptionModelCapability whose target class does not, made ultimateTarget''s final cast throw
+          ClassCastException and fail projection registration outright. Worse than the warning bug being
+          fixed. ultimateTarget now stops unwrapping one layer short when the next target does not itself
+          implement the interface, with a DelegatingIntroductionInterceptor-backed test on both stacks.'
+        via: worker message, Copilot re-review on 908
+        at: '2026-08-22T14:20:00+00:00'
     assessment: 'Warning-only defect, recording itself stays correct. Fix shape agreed in the issue body.
       Touches the blocking registrar, so U6 follows this unit rather than running beside it. OWNERSHIP
       EXTENDED by dec-0005 (2026-08-22T07:58Z) to framework/spring-boot-starter-mongodb/.../OccurrentMongoAutoConfiguration.java,
@@ -431,7 +457,7 @@ units:
     blocking_on: []
     next_action: 'worker folding in the #917 javadoc correction, then pr-fix; gate needs the workflow-run
       check'
-    last_meaningful_progress_at: '2026-08-22T12:20:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T14:20:00+00:00'
     observed:
       self_review:
         note: The worker's own local review found TWO real design issues in its first pass, both fixed
@@ -452,6 +478,19 @@ units:
           and is fenced out of this one file.'
         via: orchestrator ruling
         at: '2026-08-22T12:20:00+00:00'
+      reverify:
+        note: 'FALSIFIED narrowly on one clause: ''the caller''s retryIf is invoked exactly once per attempt''
+          is false, because applyShutdownPredicate combines the two predicates with Predicate.and, which
+          short-circuits, so retryIf is invoked ZERO times on an attempt where shutdown alone answers
+          stop. Predates the PR, so not a regression, but the unit had a TEST asserting the exactly-once
+          claim that passed only because it never exercised the shutdown-active case. Worker narrowed
+          the claim, renamed that test, added one driving the zero-invocation case, narrowed a javadoc
+          carrying the same overclaim, and routed the short-circuit itself as #921 (0.35.0, deferred by
+          the orchestrator as a design question rather than a defect in behaviour this release changes).
+          THE OTHER THREE CLAUSES HELD across 12 scenarios plus the module''s 51 tests, including a backoff
+          shorter than the poll interval being polled once at 10ms rather than padded.'
+        via: orchestrator adversarial verify subagent
+        at: '2026-08-22T14:20:00+00:00'
     assessment: Shipped defect confirmed present in the occurrent-0.33.0 tag. Bounded.
   U8:
     issue: 834
