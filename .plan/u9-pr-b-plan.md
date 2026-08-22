@@ -82,7 +82,7 @@ step S3 (see the test table).
 | 5 | The whole `subscribe` tail is outside any monitor on both stacks | VERIFIED: blocking `:202` (live-feed registration) to `:229`, with only `:357` inside `synchronized (this)`; reactor `:151` to `:157` with nothing synchronized at all |
 | 6 | `pauseSubscription` is unsynchronized on both stacks | VERIFIED: blocking `:537-547`, reactor `:389-399`; the completion side is synchronized on blocking (`:405`) and unsynchronized on reactor |
 | 7 | Reactor `applyPendingPauseIfAny` lacks the `isRunning` guard | VERIFIED: reactor `:298-302` versus blocking `:443-447`, plus the failing demonstrator |
-| 8 | `ReactiveHandover` emits to a unicast sink with no serialisation and one message for every failure kind | VERIFIED: `ReactiveHandover.java:338-341`; `HandoverMessages.bufferOverflow(int, Object)` (`HandoverMessages.java:54-56`) appends the `EmitResult` but keeps the "rebuild offline" wording for all of them |
+| 8 | `ReactiveHandover` reports one message for every emit-failure kind, including two that are not overflows | VERIFIED: `ReactiveHandover.java:338-341`; `HandoverMessages.bufferOverflow(int, Object)` (`HandoverMessages.java:54-56`) appends the `EmitResult` but keeps the "rebuild offline" wording for all of them. **Corrected after the second review**: an earlier wording said the sink has "no serialisation". It has. `Sinks.many().unicast()` is the safe spec, so it is wrapped in `SinkManySerialized` and *rejects* a concurrent emitter with `FAIL_NON_SERIALIZED` rather than corrupting its queue. The defect is the misdiagnosis, not a data race |
 | 9 | A live-phase failure sets `terminalError` but reaches no log and no caller | VERIFIED: `ReactiveHandover.java:439` does set it, and `bufferOrDeliverLive:306-309` reads it, so round-2 finding 9's "every later `accept` errors with the wrong message forever" is **already closed**. What is open is only the missing log: `catchupDone.tryEmitError` at `:440` is a no-op once `:413` has emitted, and the module has no logger. The code says so itself at `:434-437` |
 | 10 | `subscription/api/reactor` has no slf4j dependency | VERIFIED: `subscription/api/reactor/pom.xml` lists core, inmemory-filter-matching, eventstore-api-dcb, reactor-core, jspecify, cloudevents-core plus test scope. `subscription/push/blocking/pom.xml:38-41` is the precedent for adding it |
 | 11 | `PARK` already applies to a genuine filter failure on the baseline | VERIFIED: a throwing matcher reports `NOT_DELIVERABLE` and then rethrows (`api/blocking/RegisteringSubscribable.java:404-417`); the exception reaches the bridge's `catch (RuntimeException \| AssertionError)` which calls `routeFailure` (`RabbitMqCloudEventBridge.java:461-467`, `KafkaCloudEventBridge.java:510-517`). Item G's stated motivation is therefore already satisfied; see the ruling |
@@ -152,11 +152,35 @@ guard that fires or not depending on whether anything was written during the rep
 private final ConcurrentMap<String, Sinks.One<Boolean>> catchupOwners = new ConcurrentHashMap<>();
 ```
 
-`catchupOwners` is written only under `synchronized (this)`: put in `launchReplay` beside the
-`replayingSubscriptions.put`, removed by `cancelSubscription`, by `shutdown`, and by each of the attempt's own
-three exit branches by identity. `replayingSubscriptions` keeps its existing meaning untouched, so `isCatchingUp`,
-`isRunning`, `isPaused`, `pauseSubscription`, `relaunchInterruptedReplay` and `awaitReplays` all read exactly what
-they read today. Every ownership question moves to `catchupOwners`.
+`catchupOwners` is written under `synchronized (this)` wherever the decision and the write have to be one step
+(the put in `launchReplay`, `cancelSubscription`'s remove, and `completeIfStillOwned`'s guarded body), and by
+identity everywhere else (each of the attempt's own three exit branches, and `shutdown`'s clear, which stays
+outside the monitor because `shutdown` waits for replays). The earlier draft claimed "written only under the
+monitor"; that was not true of the exit-branch removes and is corrected here, because risk 4's mitigation rests on
+the property being stated accurately.
+
+`replayingSubscriptions` keeps its existing meaning untouched, so `isCatchingUp`, `isRunning`, `pauseSubscription`
+and `awaitReplays` read exactly what they read today. `isPaused` was wrongly listed among them in an earlier
+draft: `push/reactor/...:378` reads `pauseRequestedDuringReplay` and the live feed, never the replay map, and
+`:385` says so. `relaunchInterruptedReplay` is the one reader that changes, and it changes for a reason the second review found
+rather than for tidiness.
+
+**The relaunch guard has to move to `catchupOwners`, and that widens item F.** The same ordering that forces the
+two maps also breaks the encoding item F depends on, on the reactor stack only. The reactor success branch removes
+the launcher at `:234`, *after* `liveDrained()` has already released the replaying entry, whereas the blocking
+twin removes the launcher at `:341` *before* its `completeIfStillOwned`. So the reactor model exposes "launcher
+present, nothing replaying" on a **successful** catch-up, for the whole window between `liveDrained()` and `:234`,
+and the file's own comment at `:242` names that state as meaning "stopped". The relaunch guard tests exactly it
+(`:273-274`), and it is reached unconditionally from `resumeSubscription` (`:404`) and from `start(true)`
+(`:337-339`). A resume or a start landing in that window relaunches a full replay over a handover that has already
+gone live. With a `catchupMarker` configured, `alreadyCaughtUp` (`:485`) absorbs it; with `catchupMarker == null`
+it does not, and the whole history is folded a second time, because the replay phase folds without consulting the
+de-dup cache.
+
+This is pre-existing on the baseline, not something this PR introduces. The fix is one line and falls out of the
+map this item already adds: `relaunchInterruptedReplay` gates on `catchupOwners.containsKey(subscriptionId)`,
+which outlives the drain, instead of `replayingSubscriptions.containsKey(subscriptionId)`, which does not. F1 is
+restated to cover the successful-completion interleaving and not only stop-then-start.
 
 The blocking model does **not** get this second map. It does not need one, and adding it there would be a
 speculative symmetry with no defect behind it.
@@ -195,12 +219,18 @@ speculative symmetry with no defect behind it.
   where U11 put it, already identity-scoped.
 * The stop branch (`:238-244`) and the failure branch (`:247-259`) each add `catchupOwners.remove(id, replayDone)`
   beside their existing `forget`.
-* `cancelSubscription`'s `replayingSubscriptions.remove` moves inside `synchronized (this)`, matching blocking
-  `:582-584`, and takes `catchupOwners.remove(id)` with it. The `catchupStarted` announcement moves out of
+* `cancelSubscription`'s `replayingSubscriptions.remove` moves inside `synchronized (this)` and takes
+  `catchupOwners.remove(id)` with it. Note that the target is item B's fully monitored `cancelSubscription`, not
+  blocking `:582-584`'s narrow `synchronized (this) { replayingSubscriptions.remove(subscriptionId); }`, which
+  item B replaces on both stacks. The `catchupStarted` announcement moves out of
   `computeIfPresent` into the same `synchronized (this)` block as the two puts, matching blocking `:357-365`. The
   `computeIfPresent` trick is then dead and goes; keeping both would be two mutually unaware serialisation schemes
   on the same state.
-* `shutdown` clears `catchupOwners` alongside the maps it already clears (`:453-457`).
+* `shutdown` clears `catchupOwners` alongside the maps it already clears (`:453-457`), outside the monitor, for
+  the reason item B gives.
+* The comment at `push/reactor/...:432`, "Removing it here is what stops a replay in flight: shouldKeepReplaying
+  reads this map", becomes false the moment `shouldKeepReplaying` reads `catchupOwners`. It is rewritten in the
+  same commit rather than left to contradict the code.
 
 ### B. The `subscribe` tail outside the monitor (#893 item 1, round-2 finding 5). FIX HERE, as stated in finding 5, not as stated in #893.
 
@@ -274,19 +304,31 @@ caller, because `catchupDone.tryEmitError` at `:440` is a no-op once `:413` emit
 
 **The change**:
 
-* Serialise the emission. `Sinks.many().unicast()` requires externally serialised producers and
-  `bufferOrDeliverLive` is called from every live thread. Wrap the `tryEmitNext` in a dedicated
-  `private final Object emitLock = new Object()`, not `Sinks.unsafe` plus a busy handler: the lock is held for one
-  queue offer, never across a fold, so it cannot serialise delivery, and a busy-spin handler would turn a genuine
-  overflow into a livelock.
+* **No `emitLock`.** An earlier draft wrapped `tryEmitNext` in a monitor, justified as "held for one queue offer,
+  never across a fold". The second fresh-context review falsified that from the Reactor sources:
+  `SinkManyUnicast.tryEmitNext` ends in `drain(t)`, which delivers inline on the emitting thread when it wins the
+  WIP race, so the monitor would have been held across the caller's fold. It would have serialised live delivery,
+  turned a non-blocking `accept` into a blocking one, and put application code under a lock B2 does not reason
+  about. Dropped.
+* **What the sink actually does, which changes the fix.** `Sinks.many().unicast()` comes from the *safe* spec, so
+  it is already wrapped in `SinkManySerialized`, whose `tryEmitNext` returns `FAIL_NON_SERIALIZED` rather than
+  corrupting anything when a second thread is emitting. Concurrent emission is therefore already rejected, not
+  already broken. What is wrong today is that `ReactiveHandover.java:340` turns that rejection into "Live event
+  buffer overflowed ... Rebuild offline from the event store instead" for a buffer that did not overflow. That is
+  a live misdiagnosis on the baseline, and it is the strongest reason to do item E at all.
+* **The fix is a bounded retry, not a lock.** On `FAIL_NON_SERIALIZED`, retry the `tryEmitNext` for a bounded
+  window (the shape `Sinks.EmitFailureHandler.busyLooping(Duration)` exists for), since the competing emitter
+  releases the claim as soon as its own offer returns. Only when the window is exhausted does the payload get
+  `HandoverMessages.concurrentEmission()`, which describes contention rather than telling an operator to rebuild a
+  read model offline. No lock, so nothing is held across a fold.
 * Classify the result rather than calling everything an overflow:
   * `FAIL_OVERFLOW` and `FAIL_ZERO_SUBSCRIBER`: the existing overflow refusal, unchanged.
   * `FAIL_TERMINATED` and `FAIL_CANCELLED`: `ackSink.success(false)`. The pipeline is gone, so nothing will fold
     this payload; that is the dropped-not-deferred answer `stopped` already gives two branches earlier, reached
     here only as a race against that same flag.
-  * `FAIL_NON_SERIALIZED`: with the lock above this is unreachable, so it gets its own message naming an engine
-    defect rather than telling an operator to rebuild a read model offline. A new
-    `HandoverMessages.concurrentEmission()` string, so the two reactor callers cannot drift.
+  * `FAIL_NON_SERIALIZED`: reachable today, and the case that motivates this item. Retried within a bounded
+    window; only an exhausted window refuses, with a new `HandoverMessages.concurrentEmission()` string naming
+    contention, so the two reactor callers cannot drift.
 * Give `subscription/api/reactor` an slf4j-api dependency (precedent: `subscription/push/blocking/pom.xml:38-41`)
   and log the live-phase error at error level in the `catchUp` error handler, replacing the "Known gap" comment at
   `:434-437` with what the code now does.
@@ -367,8 +409,10 @@ and argued the two CloudEvent bridges' `catch (BlockingHandover.PreDispatchRefus
 `outcome != NOT_DELIVERABLE` check (`RabbitMqCloudEventBridge.java:435-441`, `KafkaCloudEventBridge.java:486-494`)
 was exact enough. The fresh-context review showed it is not. A *matcher* that throws a
 `PreDispatchRefusalException` also reports `NOT_DELIVERABLE` and also rethrows
-(`api/blocking/RegisteringSubscribable.java:404-406`, `:416`), so it satisfies both halves of the bridge's test and
-the bridge stops permanently for a filter defect it should have parked. Item H's identity check does not reach
+(`api/blocking/RegisteringSubscribable.java:404-406`, `:416`), so it enters the same catch and then fails the
+`outcome != RoutingOutcome.NOT_DELIVERABLE` escape at `RabbitMqCloudEventBridge.java:441` (the escape routes to
+the failure policy; the permanent stop is what happens when it is *not* taken). The bridge therefore stops
+permanently for a filter defect it should have parked. Item H's identity check does not reach
 that branch, because it is on the action side. With `REFUSED`, the bridge tests `outcome == REFUSED`, which is
 reported at exactly one site per stack, and the matcher branch cannot satisfy it.
 
@@ -378,7 +422,10 @@ CloudEvent bridge needs `catch (BlockingHandover.PreDispatchRefusalException)` a
 `org.occurrent.subscription.api.blocking.internal` import goes with it.
 
 **What `REFUSED` actually implies at a bridge, checked rather than assumed.** `PreDispatchRefusalException` has
-three throw sites (`BlockingHandover.java:233` catch-up failed, `:256` buffer overflow, `:470` null dedup key). A
+**four** throw sites, not three as an earlier draft said: `BlockingHandover.java:233` (catch-up failed, inside
+`acceptReportingDelivery`), `:256` (buffer overflow, same method), `:291` (catch-up failed, inside `acceptIfLive`)
+and `:470` (null dedup key, inside `dedupKey`). The one a bridge reaches for a failed catch-up is `:291`, not
+`:233`. A
 bridge reaches the handover only through `acceptIfLive`, on all four bridges: the two CloudEvent bridges call
 `model.acceptRedeliverable(cloudEvent)` (`RabbitMqCloudEventBridge.java:430`, `KafkaCloudEventBridge.java:484`),
 which passes `bufferIfNotLive` false and so selects `acceptIfLive` (`push/blocking/...:205`); the two domain
@@ -452,6 +499,58 @@ neither of which is a consumer.
   running at all, is held and redelivered paced the same way `DEFERRED` already is". Both are edited in place
   rather than given a new entry, since none of this has shipped.
 
+### G-OPEN. One decision the second review reopened, routed to the orchestrator
+
+**The defect.** `REFUSED`'s proposed javadoc says the refusal "is not going to resolve by redelivery, so a caller
+stops". That is true of every refusal a *bridge* can see, because a bridge reaches the handover only through
+`acceptIfLive`, which never buffers and so never overflows. It is **not** true of every refusal
+`routeReportingMatch` can report. The in-process write path reaches it too when an observer is configured,
+`push/blocking/.../PushSubscriptionModel.java:168-172`:
+
+```
+    private void acceptEvent(CloudEvent cloudEvent) {
+        if (observing) {
+            routeReportingMatch(cloudEvent, true, this::notifyObserver);
+```
+
+`bufferIfNotLive` is `true` there, so the wrapped model calls `acceptReportingDelivery`
+(`CatchupThenPushSubscriptionModel.java:205`), which can throw the live-buffer overflow at
+`BlockingHandover.java:256`. That throw sets no `catchUpFailure` and clears itself the moment the replay drains.
+So a `PushObserver` following `REFUSED`'s javadoc would stop for a transient condition.
+
+**Why it cannot be fixed by javadoc alone.** `routeReportingMatch` has exactly two exception classifications:
+`RoutingAction.Refusal` and everything else. If the push models stop wrapping the overflow as a `Refusal` to keep
+`REFUSED` honest, the overflow falls into the everything-else branch and is reported `DELIVERED`, which is a worse
+lie: no handler ran. Any honest treatment of a third kind of failure needs a third classification.
+
+**Options, with the recommendation.**
+
+* **(A) Accept that `REFUSED` covers both, and scope the stop advice by call path.** No new API. Costs exactly what
+  item G exists to remove: the bridge's correctness would again rest on a prose invariant about another module's
+  call graph ("a bridge only ever reaches this through `acceptIfLive`, which cannot overflow").
+* **(B) Give `RoutingAction.Refusal` a permanence flag.** `routeReportingMatch` reports `REFUSED` for a permanent
+  refusal and `NOT_DELIVERABLE` for a transient one, both propagating the cause. The two push models set the flag
+  from their own handover. Total, honest, keeps the bridges' single-test stop, and both values are exercised by
+  this PR rather than speculative. Costs one boolean on an unreleased public class, and it reinstates the engine
+  accessor the review told me to drop for want of a consumer, now that it has one. Named `refusesPermanently()`
+  rather than `hasFailedCatchUp()`, on both engines, because on the reactor side `terminalError` is set for a
+  live-phase failure too and the catch-up name would overclaim. `DomainEventFeed`'s accessor takes the same name,
+  which also improves item H2's read.
+* **(C) Drop `REFUSED`, ship `UNAVAILABLE` alone.** Reverts to the first draft, which the second review showed is
+  inexact: a matcher throwing a `PreDispatchRefusalException` still stops a healthy bridge, and the `internal`
+  import stays.
+
+**Recommendation: (B).** It is the option that makes the bridge decide from the outcome alone without a prose
+invariant, which is the whole point of item G, and its cost is a boolean and one renamed accessor on an API that
+has not shipped. (A) is cheaper but re-creates the defect the item was raised to fix. (C) leaves a confirmed defect
+open.
+
+If (B) is taken, the deltas to sections 5 and 6 are: `RoutingAction.Refusal` gains a permanent-or-not constructor
+argument on both stacks; `BlockingHandover.hasFailedCatchUp()` and `DomainEventFeed.hasFailedCatchUp()` are named
+`refusesPermanently()` instead; `ReactiveHandover.refusesPermanently()` is added back; and invariant G2 gains
+"reports `NOT_DELIVERABLE` for a refusal the action does not promise is permanent", with the write-path overflow
+as its falsifier.
+
 ### H. The refusal carries its owner (#893 items 5 and 13). FIX HERE, split in two, because the two halves need different mechanisms.
 
 **H1, #893 item 5, the push models' `Refusal` wrap.** Blocking `push/blocking/...:206` catches
@@ -459,7 +558,10 @@ neither of which is a consumer.
 handler touched is wrapped as `Refusal` and reported `NOT_DELIVERABLE` although this handler genuinely ran. The
 reactor twin has the same defect in a different spelling: `onErrorMap(ReactiveHandover.PreDispatchRefusalException.class, Refusal::new)`
 at `push/reactor/...:150`. With item G in place this misclassification is what makes a CloudEvent bridge stop
-permanently on a failure that is not its own, so H1 is a prerequisite for G rather than a nicety.
+permanently on a failure that is not its own, so H1 is a prerequisite for G rather than a nicety. **That is why H1
+moves into S1**, not S2: an earlier sequencing shipped `REFUSED` and the bridges' new single test in S1 while
+leaving the type-based wrap until S2, which would have left one commit in which a nested foreign refusal still
+stops a healthy bridge, contradicting this paragraph. H2, which is bridge-side and independent, stays in S2.
 
 The change: both `PreDispatchRefusalException`s carry the handover that threw them, and gain
 `public boolean thrownBy(BlockingHandover<?> handover)` (reactor: `ReactiveHandover<?>`), comparing by identity.
@@ -541,11 +643,12 @@ Each row is a property over interleavings, followed by every surface it is check
 | B2 | **Reasoned, not tested.** No thread holds the model monitor while waiting for a fold or a replay to finish. A virtual-thread start and a `subscribeOn`-deferred `subscribe` under the monitor are permitted, because neither joins; `relaunchInterruptedReplay` already does both on the baseline. Every path that holds the monitor and reaches the live feed takes `registrationLock` second, and no path takes `registrationLock` first | Read of every `synchronized` method against `RegisteringSubscribable`'s five `registrationLock` acquisitions (`api/blocking/RegisteringSubscribable.java:212, 236, 253, 327, 342`), none of which calls caller-supplied code; `shutdown()` left unsynchronized. The merged `...never_deadlock_on_the_models_monitor` test is a deadlock guard, not a monitor-extent guard: it catches a violation that deadlocks and nothing else, and the plan does not claim more from it |
 | C1 | A pause requested for `id` is either applied to the live feed or still pending in `pauseRequestedDuringReplay`; it is never both dropped and reported by `isPaused(id)` | `pauseSubscription` and `resumeSubscription` synchronized on both stacks; a new falsifier per stack parking the pause against the completion |
 | D1 | A pending pause is applied only when the live feed reports the subscription running, so a completed catch-up is never reported failed because the pause threw | reactor `applyPendingPauseIfAny` guard; reactor pause-stop demonstrator |
-| E1 | **Reasoned, not tested.** Every `tryEmitNext` on the live sink is serialised against every other, so `FAIL_NON_SERIALIZED` is unreachable | `emitLock` is the only path to `tryEmitNext`, which is a read of one method. A concurrent-emit test is added as a smoke check but is explicitly **not** this row's falsifier: removing `emitLock` would not reliably turn it red, so claiming it as a mutation-proven test would be false |
-| E2 | A live payload is refused with a message that names what actually failed, and a terminated sink completes the ack `false` rather than erroring with an overflow diagnosis | the `switch` on `EmitResult`; one test per branch driving the sink into each state |
+| E1 | A concurrent live emission is never reported as a buffer overflow. It is retried within a bounded window, and only an exhausted window refuses, with a message naming contention | Testable, unlike the earlier lock-based formulation: drive N threads through `acceptReportingDelivery` during a replay and assert no payload's refusal carries the overflow message. Falsifier: revert the `EmitResult` switch so `FAIL_NON_SERIALIZED` falls into the overflow branch |
+| E2 | A live payload is refused with a message that names what actually failed, and a terminated or cancelled sink completes the ack `false` rather than erroring with an overflow diagnosis | the `switch` on `EmitResult`. Not every branch is drivable: nothing calls `tryEmitComplete`/`tryEmitError` on `liveSink`, so `FAIL_TERMINATED` is defensive-only and `FAIL_CANCELLED` is its reachable sibling. Tests cover `FAIL_CANCELLED`, `FAIL_NON_SERIALIZED` and the overflow pair; `FAIL_TERMINATED` is named as defensive, the same honesty E1 used to need |
 | E3 | A live-phase failure is logged at error exactly once and every later payload is refused with the catch-up-failed message | the new logger plus the already-present `terminalError`; a test asserting both |
-| F1 | For any interleaving of `stop()`, a replay's own decision to stop, and `start(true)`, the end state is never "launcher present, nothing replaying, model started". Exactly one relaunch happens | the monitor-guarded clear-then-recheck plus `start`'s flag write under the same monitor; blocking stop-start demonstrator plus a reactor twin |
-| G1 | A `RoutingOutcome` reported without a propagating exception is `DELIVERED`, `FILTERED`, `DEFERRED` or `UNAVAILABLE`, never `NOT_DELIVERABLE` | both `routeReportingMatch` tests, extended to assert the value **and** whether an exception propagated, for every reporting branch on each stack: paused, matcher declined, matcher threw, action refused, action threw, action landed, action declined, and the not-running fallthrough |
+| F1 | For any interleaving of `stop()`, a replay's own decision to stop, and `start(true)`, the end state is never "launcher present, nothing owning the id, model started", and exactly one relaunch happens | the monitor-guarded clear-then-recheck plus `start`'s flag write under the same monitor; blocking stop-start demonstrator plus a reactor twin |
+| F2 | A replay is never relaunched for an id whose catch-up completed successfully, on either stack. On reactor that is not implied by F1, because `liveDrained()` releases the replaying entry before the success branch drops the launcher | `relaunchInterruptedReplay` gates on `catchupOwners` on the reactor stack; a new reactor falsifier that resumes inside the window with `catchupMarker == null` and asserts the history is folded once. Falsifier mutation: revert the guard to `replayingSubscriptions.containsKey` |
+| G1 | A `RoutingOutcome` reported without a propagating exception is `DELIVERED`, `FILTERED`, `DEFERRED` or `UNAVAILABLE`, never `NOT_DELIVERABLE` and never `REFUSED`. Both of those always propagate (blocking `:416` and `:439 throw cause;`), which is what makes the bridges' defensive `else` unreachable | both `routeReportingMatch` tests, extended to assert the value **and** whether an exception propagated, for every reporting branch on each stack: paused, matcher declined, matcher threw, action refused, action threw, action landed, action declined, and the not-running fallthrough |
 | G2 | A bridge acknowledges only on `DELIVERED` or `FILTERED`, holds on `DEFERRED` or `UNAVAILABLE`, stops permanently only on `REFUSED`, and applies its failure policy on everything else | the four bridges' existing outcome tests, extended for `UNAVAILABLE` and `REFUSED` |
 | G3 | A matcher that throws a `PreDispatchRefusalException` never makes a CloudEvent bridge stop permanently | a new test per CloudEvent bridge whose `DataFieldReader` throws that exact type from the matcher; must park or redeliver, never stop |
 | H1 | A `PreDispatchRefusalException` is wrapped as `RoutingAction.Refusal` only by the handover that threw it | `thrownBy` identity check on both stacks; the two adopted nested-refusal bridge tests plus a unit test per push model |
@@ -609,7 +712,9 @@ boolean hasFailedCatchUp();
 **New, in `subscription/push/reactor` `CatchupThenPushSubscriptionModel`:** nothing public. The `catchupOwners` map
 item A adds is private.
 
-**Changed signatures:** none. **Removed:** none. **Behaviour changes visible to a caller:** `routeReportingMatch`
+**Changed public signatures:** none. Both `PreDispatchRefusalException` constructors gain a parameter, but they
+are package-private (`BlockingHandover.java:146`, `:150`), so no caller outside the engine can name them.
+**Removed:** none. **Behaviour changes visible to a caller:** `routeReportingMatch`
 reports `UNAVAILABLE` where it previously reported `NOT_DELIVERABLE` at two call sites per stack covering three
 states (paused; model not running; nothing registered), and `REFUSED` at one call site per stack. Everything else
 is a refinement of when an existing value is reported.
@@ -621,7 +726,7 @@ Every addition above has a caller inside this PR, so item J's "no consumer, drop
 
 Each step leaves the tree buildable and its own tests green. Each is one commit.
 
-**S1. `RoutingOutcome.UNAVAILABLE` and `REFUSED`, and every consumer named in item G.** The two constants and the
+**S1. `RoutingOutcome.UNAVAILABLE` and `REFUSED`, every consumer named in item G, and H1.** The two constants and the
 enum's own javadoc first, then both `routeReportingMatch` implementations, both `PushObserver` javadocs, both
 `RoutingOutcomeChannel` javadocs, `RabbitMqDeliveryFailureAction`'s javadoc, both `DomainEventFeed` javadocs, both
 domain bridges' javadocs and unreachability comments, the two starters' javadoc mentions, the example bootstrap,
@@ -631,11 +736,15 @@ their `catch (BlockingHandover.PreDispatchRefusalException)` and the `internal` 
 permanent stop from the outcome. Buildable throughout because the enum grows rather than changes and no consumer
 switches over it.
 
-**S2. The refusal carries its owner (H1), and the domain bridges' gate (H2).** Both handovers' exception gains its
-owner and `thrownBy`; both push models' `Refusal` wrap identity-checks; `BlockingHandover.hasFailedCatchUp()`, the
-blocking `CatchupProjectionFeed` pass-through and the blocking `DomainEventFeed` accessor; both domain bridges drop
-their type-based catch for the gated one. Adopt the two nested-refusal bridge tests from `verifier-895-tests.patch`,
-add the two domain twins, and add the G3 matcher test. Ordered after S1 because the G3 test asserts on `REFUSED`.
+H1 rides in S1 because item G's correctness argument depends on it: both handovers' exception gains its owner and
+`thrownBy`, and both push models' `Refusal` wrap identity-checks, in the same commit that gives the bridges their
+single `outcome == REFUSED` test. Shipping the two apart would leave one commit in which a nested foreign refusal
+still stops a healthy bridge. The two nested-refusal bridge tests from `verifier-895-tests.patch` and the G3
+matcher test land here too, since both assert on `REFUSED`.
+
+**S2. The domain bridges' gate (H2).** `BlockingHandover.hasFailedCatchUp()`, the blocking `CatchupProjectionFeed`
+pass-through and the blocking `DomainEventFeed` accessor; both domain bridges drop their type-based catch for the
+gated one. Two new domain-bridge nested-refusal twins. Independent of S1 except for reading better after it.
 
 **S3. The reactor ownership work (A) plus the reactor monitor (B, C reactor half, F reactor half).** One step
 because they are the same monitor: introducing `synchronized (this)` on the reactor model without also moving
@@ -682,7 +791,8 @@ pretending otherwise.
 | ownership falsifier: an empty live buffer still evicts the launcher and applies the pause | reactor | A | new | gate the success branch on `replayingSubscriptions` instead of `catchupOwners` (the exact defect the first draft of this plan had) |
 | `CatchupThenPushSubscriptionModelPauseStopRaceVerificationTest` | reactor | D | adopted, fails today | drop `&& liveFeed.isRunning(id)` |
 | `CatchupThenPushSubscriptionModelStopStartRaceVerificationTest` | blocking | F | adopted, fails today | remove the `!stopped` recheck from the stop path |
-| stop-start race twin | reactor | F | new | same |
+| stop-start race twin | reactor | F1 | new | same |
+| a resume inside the post-drain window does not relaunch a completed catch-up, with `catchupMarker == null` | reactor | F2 | new | revert `relaunchInterruptedReplay` to gate on `replayingSubscriptions.containsKey` |
 | subscribe-tail cancel falsifier | both | B | new | remove `synchronized` from `cancelSubscription` |
 | pause-during-completion falsifier | both | C | new | remove `synchronized` from `pauseSubscription` |
 | `RabbitMqCloudEventBridgeNestedRefusalRedeliverTest`, `KafkaCloudEventBridgeNestedRefusalRedeliverTest` | blocking | H1 | adopted from `verifier-895-tests.patch` | drop the `thrownBy` check from the push model's `Refusal` wrap |
@@ -767,7 +877,10 @@ bridge tests that use Testcontainers; the shared-file tests do not need it.
    every write to either happens under `synchronized (this)` in the same block, and that each map answers exactly
    one question: `replayingSubscriptions` answers "is a replay in flight", read by `isCatchingUp`, `isRunning`,
    `isPaused`, `pauseSubscription`, `relaunchInterruptedReplay` and `awaitReplays`; `catchupOwners` answers "which
-   attempt owns this id", read only by the ownership guards. No reader consults both. The alternative, one map, is
+   attempt owns this id", read by the ownership guards and, deliberately, by `relaunchInterruptedReplay`, which
+   needs the answer that outlives the drain (invariant F2). No reader consults both maps for the same question.
+   An earlier draft claimed "no reader consults both" flatly and listed `relaunchInterruptedReplay` under
+   `replayingSubscriptions`; both were wrong and are corrected. The alternative, one map, is
    what the first draft of this plan tried, and item A shows why it cannot work on the reactor stack.
 5. **Test flakiness from the adopted demonstrators.** The reactor ownership test uses a fixed `Thread.sleep(1500)`.
    It is kept as adopted for this PR, since it currently fails deterministically, and the four new falsifiers that
@@ -835,6 +948,25 @@ another round rather than this worker deciding it alone.
 implementation, a missed in-scope defect, an unsafe sequence, or a wrong public API decision. Below the line is
 wording, ordering preference and optional coverage.
 
+### Second fresh-context pass (run at the orchestrator's condition on dec-0015)
+
+Same brief shape as the first, scoped to the five revised areas. Verdict: `VERDICT: 5 findings above the line, 2 of
+which change the public API or the invariant table`, plus nine below.
+
+Confirmed correct by it, independently: the `liveDrained`-before-`tryEmitValue` claim and therefore the two-map
+departure; the five `registrationLock` sites on the blocking stack and the five matching ones on the reactor stack
+(`api/reactor/RegisteringSubscribable.java:206, 230, 308, 323, 336`), which the plan had not cited; no lock-order
+inversion and no hold-while-waiting in the widened monitor; `shutdown()` waiting and correctly left unsynchronized
+on both stacks; `terminalError` already closing round-2 finding 9's second half; `FAIL_ZERO_SUBSCRIBER` correctly
+grouped with `FAIL_OVERFLOW`; `FAIL_TERMINATED`/`FAIL_CANCELLED` to `success(false)` losing no event; the six-value
+split assigning every reporting branch exactly once on both stacks; and every bridge line number.
+
+Folded in: findings 1, 2, 3 and 5, and all nine below-the-line items. Finding 1 added invariant F2 and moved the
+relaunch guard onto `catchupOwners`. Findings 2 and 3 removed `emitLock` entirely, because
+`SinkManyUnicast.tryEmitNext` drains inline and the lock would have been held across a fold, and because the safe
+unicast spec already rejects a concurrent emitter rather than corrupting anything. Finding 5 moved H1 from S2 into
+S1. Finding 4 is not folded: it is the open decision in section G-OPEN.
+
 ### Known, not acting
 
 * Moving the marker write off the model monitor, on either stack. Reason in item J.
@@ -860,28 +992,67 @@ javadoc, which is the PR's public API surface, and splitting the run across tier
 G in different heads. The failure this guards against is the one the fresh-context review just caught: a guard
 specified in good faith that never fires because the engine's contract released the state first.
 
-## 12. The documentation site, found during the approval round
+## 12. The documentation site: reported, never written
 
-AGENTS.md line 80 onwards makes the separate Jekyll repository part of this change, not follow-up work: "A change
-that affects what a user can do needs both: the changelog entry in this repository, and in the docs repository the
-reference documentation in `pages/docs/docs.md`". Adding two `RoutingOutcome` values is such a change.
+AGENTS.md line 80 onwards makes the separate Jekyll repository part of this change. It is **not** written by this
+worker. The held branch `docs/421-broker-modules` is written only by the orchestrator through the GitHub contents
+API under a specific authorization, after a direct write was permission-denied once in this epic. So this section
+is a report, and the DELIVERY_RESULT carries it as its own line for the orchestrator to route.
 
-Checked, in `/Users/johan/devtools/java/projects/occurrent-org.github.io`:
+Repository: `johanhaleby/occurrent-org.github.io`, branch `docs/421-broker-modules` (remote-only; not checked out
+locally). File: `pages/docs/docs.md`. Four `RoutingOutcome` occurrences, found with
+`git grep -n "RoutingOutcome" origin/docs/421-broker-modules -- pages/docs/docs.md`. Two of them are already stale
+against code that shipped before this PR, which is why they are listed even though this PR did not cause them.
 
-* `git grep -c "RoutingOutcome" origin/docs/421-broker-modules -- pages/docs/docs.md` returns 5. That is the held
-  branch for this epic's feature, and it is the one to patch.
-* `docs/802-push-observation-hook` has no hits, so it needs nothing from this item.
-* Two of the five hits are already stale independently of this PR: `:3267` says `outcome` "is one of three values"
-  and that the observer "runs once per event, before delivery is attempted", both of which PR 889 and PR 894
-  already falsified. `:3508` documents the acknowledgement rule in terms of `accept(...)` and three outcomes.
+**1. Line 3261, inside a `PushObserver` code sample.** Currently:
 
-Phase 2 therefore adds, on `docs/421-broker-modules` and never on `main`: the six values, the corrected "told once
-the matched registration's action has run" wording, and the acknowledgement rule as it actually is (acknowledge on
-`DELIVERED` and `FILTERED`; hold and pace on `DEFERRED` and `UNAVAILABLE`; failure policy on `NOT_DELIVERABLE`;
-stop on `REFUSED`). Written as settled fact, with no "not yet released" framing, per the same section. The two
-pre-existing staleness items are corrected in the same pass rather than left, since AGENTS.md says a correction is
-complete only when every surface carrying the claim is corrected together.
+```
+            if (outcome == RoutingOutcome.NOT_DELIVERABLE) {
+```
 
-This is a second repository and a second pull request. It does not enter this PR's diff, which is exactly why
-AGENTS.md warns it gets forgotten, so it is listed in the DELIVERY_RESULT as its own line rather than folded into
-the item rulings.
+Replace with:
+
+```
+            if (outcome == RoutingOutcome.UNAVAILABLE) {
+```
+
+The surrounding sample logs "No subscription could receive event ...", which is the lifecycle case, so after the
+split the value it should test is `UNAVAILABLE`.
+
+**2. Line 3267, the paragraph explaining the observer.** Two independent errors plus this PR's change.
+
+Stale already (PR 894): "The observer runs once per event, **before delivery is attempted**, whether or not a
+handler ends up running". Replace with: "The observer runs once per event, once the matched registration's action
+has run, whether or not a handler ends up running".
+
+Stale already (PR 889, which added `DEFERRED`): "`outcome` is **one of three values** rather than a boolean".
+Replace with: "`outcome` is one of six values rather than a boolean".
+
+Changed by this PR: "`RoutingOutcome.NOT_DELIVERABLE` covers every case where no safe-to-acknowledge answer
+exists, whether because no running, unpaused subscription was there to reach the event at all (nothing registered,
+the model stopped, or the subscription paused), or because the filter itself failed before it could decide."
+Replace that sentence with: "`RoutingOutcome.UNAVAILABLE` means no running, unpaused subscription was there to
+reach the event at all, whether nothing is registered, the model is stopped, or the subscription is paused, and
+nothing was thrown. `RoutingOutcome.NOT_DELIVERABLE` means the filter itself failed before it could decide, and
+its exception propagates. `RoutingOutcome.DEFERRED` means a catch-up-then-live target is not ready yet, so the
+event is always safe to offer again. `RoutingOutcome.REFUSED` means a registered action refused the event before
+attempting dispatch, and its cause propagates."
+
+And the closing sentence, "It must never acknowledge on `NOT_DELIVERABLE`", becomes: "It must never acknowledge on
+`UNAVAILABLE`, `NOT_DELIVERABLE`, `DEFERRED` or `REFUSED`."
+
+**3. Line 3497** mentions `RoutingOutcomeChannel` only, in prose about how a bridge reads the outcome. No stale
+claim, no edit needed. Listed so the count reconciles.
+
+**4. Line 3508, the acknowledgement rule.** Currently: "The bridge acknowledges a message once `accept(...)`
+returns normally with `RoutingOutcome.DELIVERED` or `RoutingOutcome.FILTERED`. On
+`RoutingOutcome.NOT_DELIVERABLE`, or when `accept(...)` throws, it does not acknowledge on the spot."
+
+Two errors: the bridge calls `acceptRedeliverable(...)`, not `accept(...)` (stale since PR 889), and the outcome
+list is short. Replace with: "The bridge acknowledges a message once `acceptRedeliverable(...)` returns normally
+with `RoutingOutcome.DELIVERED` or `RoutingOutcome.FILTERED`. It does not acknowledge on the spot for any other
+outcome, nor when `acceptRedeliverable(...)` throws: it holds and paces `DEFERRED` and `UNAVAILABLE`, applies its
+configured `DeliveryFailurePolicy` to `NOT_DELIVERABLE`, and stops consuming for good on `REFUSED`."
+
+All replacements are written as settled fact with no "not yet released" framing, per the same AGENTS.md section,
+and go through the `/johan-writing` gate before they are handed over.
