@@ -16,10 +16,13 @@ One question in the Decision below is not settled here and needs a ruling before
 `saga.evolve(previousState, input)` and then `saga.react(nextState, input)` with nothing catching either, so a
 throwing `evolve`, a throwing `react` or a throwing command dispatcher reaches the subscription model unchanged.
 
-What the subscription model then does is worse than the plain redelivery the issue describes. Every blocking model
-wraps the handler in `executeWithRetry`, and the default retry strategy on both MongoDB models backs off
-exponentially from 100 ms to 2 seconds and never stops. So the failing event is retried forever on the subscription's
-own cursor thread. In `NativeMongoSubscriptionModel` the `currentStartAt.set(...)` call sits after the handler call in
+What the subscription model then does is worse than the plain redelivery the issue describes, on the models most
+sagas actually run on. `NativeMongoSubscriptionModel`, `SpringMongoSubscriptionModel` and `InMemorySubscription` are
+the only blocking models that wrap the handler in `executeWithRetry`. The default on both MongoDB models backs off
+exponentially from 100 ms to 2 seconds and never stops, so the failing event is retried forever on the
+subscription's own cursor thread. `DurableSubscriptionModel`, `CompetingConsumerSubscriptionModel` and the catchup
+models add no retrying of their own, but `DurableSubscriptionModel` can only wrap a `CheckpointAwareSubscriptionModel`
+and the only two implementations of that are the MongoDB models, so behind it the retrying happens anyway. In `NativeMongoSubscriptionModel` the `currentStartAt.set(...)` call sits after the handler call in
 the same lambda, so the in-memory position does not move either, and `DurableSubscriptionModel` writes its checkpoint
 only after the action returns, so the durable checkpoint does not move. One instance whose input will never succeed
 stops the whole subscription, and a saga has exactly one subscription, so it stops every other instance of that saga.
@@ -78,17 +81,23 @@ and no later reaction can tell that the gap is there. Suspension is per instance
 
 The question to answer first is what `SagaEnvelope` is for, not whether a field would fit on it.
 
-`SagaEnvelope` is the one durable record of everything the executor needs to run a single instance safely under
-at-least-once delivery. Its components are the instance's state, its lifecycle status, the optimistic-lock version,
-`timers()`, which is input the executor still owes work on, and `streamWatermarks()` and `positionWatermark()`, which
-are what the instance has already consumed. Its javadoc already says the delivery bookkeeping exists so the executor
-is safe under at-least-once delivery and means nothing outside it.
+`SagaEnvelope` is the whole durable record of one instance, and its eleven components fall into four groups rather
+than the two an earlier draft of this section claimed. Identity is `sagaId`. Lifecycle is `status`, `createdAt`,
+`updatedAt` and `completedAt`. The saga's own data is `state`. The executor's delivery bookkeeping is `version`,
+`timers`, `streamWatermarks` and `positionWatermark`. And then there is `currentStep`, which is none of those. It is
+denormalised out of `state` so that an operator can read which step an instance sits in without the store decoding
+the state at all.
 
-A quarantine record is both of those categories at once. It is input the executor still owes work on, and it is a
-statement about what the instance has and has not consumed. It is the same kind of thing as a timer entry, kept for
-the same reason, and it has to be written in the same compare-and-set as the decision not to advance. Write it
-separately and there are two failure windows, one where the event was skipped with no record, which is loss, and one
-where the record exists but the instance moved on, which is a false report of a stuck instance.
+That last one decides this question, and it is worth being clear that it looked at first like a counter-example.
+`currentStep` is a field the envelope holds purely so an observation query can answer an operational question
+cheaply, kept correct by the compact constructor re-deriving it from `state`. A quarantine record works the same way.
+Its position and version are delivery bookkeeping, its status is lifecycle, and its reason exists so an operator can
+see why an instance stopped without loading anything. Every one of those groups is already on this type, and the
+observation group is on it for exactly the reason quarantine needs.
+
+The record also has to be written in the same compare-and-set as the decision not to advance. Write it separately and
+there are two failure windows, one where the event was skipped with no record, which is loss, and one where the
+record exists but the instance moved on, which is a false report of a stuck instance.
 
 Three other owners were considered and rejected on what the type is for.
 
@@ -110,10 +119,27 @@ Every later failure of the same input compares the elapsed time against a config
 while it is under it. Only past the budget does the executor record the quarantine, stop rethrowing, and let the
 position advance.
 
-The budget is a `Duration` rather than an attempt count, and the reason is that the retry cadence is not the saga's
-to see. It belongs to the subscription model's own `RetryStrategy`, which defaults to unlimited attempts with
-exponential backoff, and a user can replace it. Ten attempts is an unknown amount of wall-clock time under a strategy
-the saga did not choose, while five minutes means five minutes under any of them.
+The budget is a `Duration` rather than an attempt count, and the reason is stronger than the retry cadence being
+tunable. **The retry loop is not always Occurrent's at all.** On the MongoDB models it is a `RetryStrategy` the user
+can replace. Behind the shipped Kafka bridge it is not a `RetryStrategy` in any form. Under the default `REDELIVER`
+policy `KafkaCloudEventBridge` catches the exception, declines to stage the offset, seeks the consumer back to that
+record and pauses the partition for roughly one poll timeout before offering it again, without limit. Those two are
+unrelated mechanisms running at unrelated rates, so an attempt count means a different amount of time on each, while
+five minutes means five minutes on both.
+
+**The default budget is five minutes.** Once the MongoDB backoff saturates it retries every two seconds, so five
+minutes is on the order of a hundred and fifty attempts, which is ample evidence that an input is not going to
+succeed. It also spans the failures worth surviving without quarantining anything. A replica-set election takes
+seconds and a rolling restart takes a minute or two, and both finish well inside it. Against that, it holds the block
+on the rest of the saga's instances to five minutes instead of forever.
+
+**A transport that never re-offers the input cannot be quarantined by this mechanism, and the design does not pretend
+otherwise.** `PushSubscriptionModel` has no retrying, no checkpoint and no position, and its javadoc says a handler
+exception propagates to the caller. Fed by a bare in-process `accept(...)` with nothing retrying behind it, the first
+failure is also the last, no second failure ever arrives, and a budget measured across repeated failures never
+elapses. Such a saga keeps today's behaviour. Quarantine is available on the transports that re-offer the input,
+which is the MongoDB models, the in-memory model, and a push feed behind a bridge that redelivers, and it is
+unavailable on the ones that do not.
 
 Two details keep the budget cheap. The elapsed time is measured from a value already read, because `process` loads
 the envelope on every attempt anyway, so no extra read is needed. And only the first failure of an input writes, so
@@ -121,15 +147,12 @@ the cost is one store write per failing input rather than one per retry. When th
 that first write fails too, the executor rethrows, and the behaviour is exactly today's until the store recovers,
 which is correct, because a saga with no reachable store cannot make progress in any case.
 
-The budget only works while something keeps re-delivering the input, and that is a constraint rather than a
-detail. The executor does not retry in process, it rethrows, so it reaches the budget only because the subscription
-retries. A user who replaces the subscription's `RetryStrategy` with a limited one, or a broker whose own redelivery
-policy runs out first, stops the input arriving before the budget elapses, and then nothing ever records a
-quarantine. The saga runner therefore refuses a configuration it can see will not reach the budget, and where it
-cannot see the redelivery policy it says so rather than assuming one. This is the second question the implementation
-gate has to settle, since the alternative is for the executor to own the retrying itself and hold the subscription
-thread for the whole budget, which trades the dependency for a shorter version of the block this decision exists to
-remove.
+The executor does not retry in process, it rethrows, so it depends on something else re-offering the input. A user
+who replaces a MongoDB model's `RetryStrategy` with a limited one has the same problem as the bare push feed above,
+and the runner should say so at startup where it can see the policy rather than discovering it during an incident.
+Whether the executor should instead own the retrying itself is the second question the implementation gate has to
+settle, and the reason to prefer the current answer is that owning it means holding the subscription thread for the
+whole budget, which is a shorter version of the block this decision exists to remove.
 
 The failure write uses the same compare-and-set as every other write to the instance, and a lost one is meaningful
 rather than something to retry. Losing it means another input advanced the instance while it was failing, most
@@ -169,6 +192,10 @@ The invariant that makes this safe is narrow enough to state as a property. **Fo
 input advances `streamWatermarks` or `positionWatermark`, and no input dispatches a command.** If a skipped input
 advanced a watermark, a later replay would treat it as already handled and skip it a second time, and that is the
 loss this design exists to avoid. The watermarks are what make the recorded position meaningful.
+
+The same no-loss property holds on the transports that are not checkpoint-based, enforced by the transport rather
+than by a checkpoint. Under the Kafka bridge's default `REDELIVER` policy the offset is not staged for a record whose
+handler threw, so the record stays available for exactly as long as the instance keeps failing on it.
 
 Being inert also has a consequence worth naming, because it is what makes the next section possible. Nothing writes
 to a quarantined instance, so an external write to it races nothing.
@@ -238,6 +265,11 @@ rather than at the release. Returning normally acknowledges the input to the sou
 configured with `catchup = NONE` under ADR 96 there is no local history holding it, so on a queue it can be gone
 immediately. Nothing later can replay what was never retained.
 
+This turns on whether the source retains history, not on which retry loop re-offers the input, so it is unchanged by
+the transport differences in Decision point 3. A push feed behind the Kafka bridge does re-offer a failing record,
+which is enough to reach the budget, and it is still not enough to release afterwards, because recording the
+quarantine is what stages the offset and moves past the record.
+
 So for such a source the executor keeps rethrowing and the instance keeps blocking, which is today's behaviour. The
 isolation rule stays broken for exactly that configuration, and it is named here rather than hidden, because the
 alternative on offer was a quiet loss and AGENTS.md ranks those the other way round. Closing it needs the quarantine
@@ -265,8 +297,13 @@ against the tag rather than inferred, so this decision breaks shipped API in fou
 component changes its canonical constructor and record-pattern arity. A new `SagaInstance` accessor breaks anyone
 implementing that interface. And the new `SagaStatus` constant breaks in two further ways of its own.
 
-The visible half is that an exhaustive Java `switch` or Kotlin `when` over `SagaStatus` stops compiling. The silent
-half is worse. `findByStatus(ACTIVE, ...)` is the documented way to find instances that have stopped moving, and
+The visible half is that an exhaustive Java `switch` or Kotlin `when` over `SagaStatus` stops compiling. Nothing in
+this repository does that, every reference here is an equality comparison or a `findByStatus` call, so the compile
+break is hypothetical for code written outside it. That matters when judging the break, and it is not
+evidence that nobody writes such a switch, because the library rule in AGENTS.md says the callers are not
+observable from here.
+
+The silent half is worse. `findByStatus(ACTIVE, ...)` is the documented way to find instances that have stopped moving, and
 after this change the instances it was built to find are the ones it no longer returns.
 
 An `org.occurrent.UpgradeToOccurrent_*` recipe cannot reach either. It cannot know what a user's new
@@ -341,9 +378,10 @@ wall-clock time. See Decision point 3.
 **A per-instance holding area that lets the instance keep going.** Rejected in Decision point 1. It produces state
 derived from a gap, and nothing downstream can detect that.
 
-## Open question repeated
+## Open questions repeated
 
-Three questions need a ruling before implementation starts, all covered above.
+Three questions need a ruling before implementation starts, all covered above. The budget's default is not among
+them, it is decided at five minutes in Decision point 3.
 
 1. The migration treatment for the four shipped API breaks, meaning the `SagaEnvelope` component, the `SagaInstance`
    accessor, the exhaustive switch over `SagaStatus`, and the silent change to what `findByStatus(ACTIVE, ...)`
