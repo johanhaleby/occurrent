@@ -53,11 +53,13 @@ public final class ComposedDefaultStartPosition {
      * Supplies the composed subscription model {@link #isDefaultKnownLiveOnlyFor(SubscriptionModelCapability)}
      * later compares a projection's own model against, by reference rather than by type or capability, since two
      * different compositions can both expose {@code ReplayAwareSubscriptions}. Unwrapped to its ultimate AOP target
-     * first (a fixed-singleton proxy only), since a projection's own capability lookup can see either the raw bean
-     * this method was given or a proxy Spring wraps around it afterwards ({@code @Transactional}, a metrics or retry
-     * aspect, any {@code BeanPostProcessor}), and the two would otherwise never compare equal. Called at most once,
-     * by the same auto-configuration bean method that calls {@link #defaultBypassesCatchup()}, since only it knows
-     * both facts about the model it just composed.
+     * first, since a projection's own capability lookup can see either the raw bean this method was given or a proxy
+     * Spring's own AOP auto-proxying wraps around it afterward ({@code @Transactional}, {@code @Async}, a metrics or
+     * retry advisor), and the two would otherwise never compare equal. That unwrap only reaches a genuine Spring AOP
+     * proxy backed by a fixed singleton target, which is what the framework's own auto-proxying produces. A wrapper
+     * built outside that framework, or one backed by a prototype- or pool-scoped target source, is compared as the
+     * wrapper it is. Called at most once, by the same auto-configuration bean method that calls
+     * {@link #defaultBypassesCatchup()}, since only it knows both facts about the model it just composed.
      */
     public void suppliedBy(SubscriptionModelCapability composedModel) {
         requireNonNull(composedModel, "composedModel cannot be null");
@@ -85,9 +87,9 @@ public final class ComposedDefaultStartPosition {
      * instance, including one an application supplied itself by replacing {@code Subscriptions},
      * {@code StreamSubscriptions} or {@code DcbSubscriptions} independently of the model this holder was told about.
      * {@code candidate} is unwrapped to its ultimate AOP target first, the same way {@link #suppliedBy} already
-     * unwraps what it is given, so a proxy around either side still compares equal to the raw target the other side
-     * holds. A warning keyed on this answers honestly rather than by inferring composition-specific behavior it
-     * cannot verify.
+     * unwraps what it is given (see that method for which proxies this reaches and which it does not), so a genuine
+     * Spring AOP proxy around either side still compares equal to the raw target the other side holds. A warning
+     * keyed on this answers honestly rather than by inferring composition-specific behavior it cannot verify.
      */
     public boolean isDefaultKnownLiveOnlyFor(@Nullable SubscriptionModelCapability candidate) {
         return defaultBypassesCatchup && candidate != null && ultimateTarget(candidate) == composedModel;
