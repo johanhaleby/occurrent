@@ -198,8 +198,9 @@ public class OccurrentMongoAutoConfiguration<E> {
         OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend = occurrentProperties.getProjection().getAppliedAppend();
         OccurrentProperties.ProjectionProperties.AppliedAppendProperties.WaitBackoffProperties waitBackoff = appliedAppend.getWaitBackoff();
         Backoff pollBackoff = Backoff.exponential(waitBackoff.getInitial(), waitBackoff.getMax(), waitBackoff.getMultiplier());
-        return new MongoAppliedAppendStore(mongoTemplate, appliedAppend.getCollection(), appliedAppend.getRetention(),
-                RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f), pollBackoff);
+        RetryStrategy storeRetry = RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f)
+                .maxAttempts(appliedAppend.getMaxAttempts());
+        return new MongoAppliedAppendStore(mongoTemplate, appliedAppend.getCollection(), appliedAppend.getRetention(), storeRetry, pollBackoff);
     }
 
     /**

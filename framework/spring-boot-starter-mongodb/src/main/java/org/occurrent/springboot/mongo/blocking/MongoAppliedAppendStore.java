@@ -62,10 +62,17 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * <p>
  * Two different mechanisms pace two different things here, and they do not overlap. The {@link RetryStrategy}
  * retries a read or a write that failed, so a transient store error neither fails {@link #recordApplied(String, AppendId)}
- * nor a plain {@link #hasApplied(String, AppendId)} call. {@link #waitUntilApplied(String, AppendId, Duration)} is
- * the one exception. Its own reads retry on the same {@link RetryStrategy}, but only until the wait's own deadline,
- * so a sustained store outage still surfaces as a timeout rather than a block with no limit. The {@link Backoff}
- * decides how long a wait sleeps between polls that succeeded and simply found the append not yet applied.
+ * nor a plain {@link #hasApplied(String, AppendId)} call. It gives up after {@link #DEFAULT_MAX_ATTEMPTS} attempts
+ * and throws, so a store that stays unreachable stops a projection's delivery thread rather than holding it for as
+ * long as the outage lasts, which is what lets a clear that keeps failing stop its recorder (ADR 132 decision 7).
+ * {@link #waitUntilApplied(String, AppendId, Duration)} is the one exception. Its own reads retry on the same
+ * {@link RetryStrategy}, but only until the wait's own deadline, and a read still failing when the deadline arrives
+ * answers {@code false}, so a sustained store outage ends a wait as a timeout rather than as a failure. The
+ * {@link Backoff} decides how long a wait sleeps between polls that succeeded and simply found the append not yet
+ * applied.
+ * <p>
+ * An index whose options this store can neither match nor alter is the one failure it does not retry at all, since
+ * error 85 never becomes anything but error 85.
  */
 @NullMarked
 public class MongoAppliedAppendStore implements AppliedAppendStore {
@@ -76,6 +83,15 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
     private static final String PROJECTION_ID_APPEND_ID_INDEX = "projectionId_appendId";
     private static final String RECORDED_AT_TTL_INDEX = "recordedAt_ttl";
     private static final String INDEX_OPTIONS_CONFLICT = "IndexOptionsConflict";
+
+    /**
+     * How many times a read or a write is attempted before it gives up, 20. With this store's own 100 ms to 2 s
+     * backoff that spans about 31 seconds, deliberately just past the MongoDB driver's 30 second default server
+     * selection timeout, so an ordinary primary failover is ridden out rather than turned into a failure. A store
+     * that stays unreachable past that stops blocking the projection's delivery thread instead of retrying for as
+     * long as the outage lasts.
+     */
+    public static final int DEFAULT_MAX_ATTEMPTS = 20;
 
     private final MongoOperations mongoOperations;
     private final String collection;
@@ -95,9 +111,12 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
     }
 
     /**
+     * @param collection   rejected if blank, for the same reason a negative {@code retention} is. MongoDB rejects
+     *                     the name, and a permanent configuration error belongs at startup rather than on every
+     *                     read and write this store makes.
      * @param retention    rejected if negative, since MongoDB would then reject the TTL index this store creates
-     *                      from it, and the default unbounded {@code RetryStrategy} would retry that permanent
-     *                      configuration error forever rather than fail once at startup.
+     *                      from it, and a {@code RetryStrategy} would otherwise retry that permanent
+     *                      configuration error rather than fail once at startup.
      * @param pollBackoff  rejected the same way {@link #waitUntilApplied(String, AppendId, Duration, Backoff)}
      *                     rejects one, so a {@code pollBackoff} that would busy-loop the store fails here, when the
      *                     bean is built, rather than at the first wait a caller happens to make.
@@ -105,6 +124,9 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
     public MongoAppliedAppendStore(MongoOperations mongoOperations, String collection, Duration retention, RetryStrategy retryStrategy, Backoff pollBackoff) {
         this.mongoOperations = requireNonNull(mongoOperations, "mongoOperations cannot be null");
         this.collection = requireNonNull(collection, "collection cannot be null");
+        if (collection.isBlank()) {
+            throw new IllegalArgumentException("collection cannot be blank, MongoDB rejects the name and this store would retry that permanent error on every read and write rather than failing once when the bean is built.");
+        }
         requireNonNull(retention, "retention cannot be null");
         if (retention.isNegative()) {
             throw new IllegalArgumentException("retention cannot be negative, a TTL index cannot expire a document before it was inserted.");
@@ -141,7 +163,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
                     new Update().setOnInsert(RECORDED_AT, new Date()),
                     collection);
         };
-        executeWithRetry(write, __ -> !shutdown, retryStrategy).run();
+        executeWithRetry(write, retryableFailure(), retryStrategy).run();
     }
 
     @Override
@@ -149,7 +171,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(appendId, "appendId cannot be null");
         Supplier<Boolean> read = () -> readOnce(projectionId, appendId);
-        return requireNonNull(executeWithRetry(read, __ -> !shutdown, retryStrategy).get());
+        return requireNonNull(executeWithRetry(read, retryableFailure(), retryStrategy).get());
     }
 
     private boolean readOnce(String projectionId, AppendId appendId) {
@@ -159,8 +181,9 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
 
     /**
      * A read for {@link #waitUntilApplied(String, AppendId, Duration, Backoff)} whose retries stop once
-     * {@code deadlineNanos} ({@link System#nanoTime()} scale) passes, rather than continuing on
-     * {@link #retryStrategy}'s own schedule, which otherwise keeps retrying with no limit. {@link #readOnce} also
+     * {@code deadlineNanos} ({@link System#nanoTime()} scale) passes, rather than running out
+     * {@link #retryStrategy}'s own attempts, which take about half a minute by default and can be configured to
+     * take much longer. {@link #readOnce} also
      * ensures the indexes exist, so a fresh store whose index setup fails during an outage is retried, and limited
      * to this same deadline, exactly like a failing read, rather than throwing out of a method documented to never
      * throw.
@@ -176,7 +199,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      */
     private boolean readOnceBoundedBy(String projectionId, AppendId appendId, long deadlineNanos) {
         Supplier<Boolean> read = () -> readOnce(projectionId, appendId);
-        Predicate<Throwable> notShutdownAndBeforeDeadline = __ -> !shutdown && System.nanoTime() < deadlineNanos;
+        Predicate<Throwable> notShutdownAndBeforeDeadline = e -> retryableFailure().test(e) && System.nanoTime() < deadlineNanos;
         try {
             return requireNonNull(executeWithRetry(read, notShutdownAndBeforeDeadline, retryStrategy).get());
         } catch (RuntimeException e) {
@@ -191,7 +214,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
             ensureIndexesOnce();
             mongoOperations.remove(query(where(PROJECTION_ID).is(projectionId)), collection);
         };
-        executeWithRetry(delete, __ -> !shutdown, retryStrategy).run();
+        executeWithRetry(delete, retryableFailure(), retryStrategy).run();
     }
 
     @Override
@@ -201,13 +224,18 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
 
     /**
      * Overrides {@link AppliedAppendStore}'s default loop so each poll's read retries against {@link #retryStrategy}
-     * only until this wait's own deadline, rather than on {@link #retryStrategy}'s own schedule, which otherwise
-     * keeps retrying with no limit. Without this, a sustained store outage keeps a single read retrying forever and
-     * the wait never reaches the deadline check that is supposed to end it. The loop shape (read, check, sleep, grow
+     * only until this wait's own deadline, rather than running out its own attempts first. Without this, a
+     * sustained store outage keeps a single read retrying past a deadline shorter than the retry budget, and the
+     * wait never reaches the deadline check that is supposed to end it. The loop shape (read, check, sleep, grow
      * the backoff) otherwise matches the interface default. Only the read is store-specific.
      * <p>
-     * The deadline is checked before a retried read sleeps, not after, so the last in-flight attempt can run past
-     * the deadline by up to one of {@link #retryStrategy}'s own backoff intervals before the wait gives up.
+     * The deadline bounds the retries, not the individual read. It is checked before a retried read sleeps, so the
+     * last attempt can already be in flight when the deadline passes, and this method returns once that attempt
+     * answers. A MongoDB client left with no timeout of its own does not answer at all while a connection it has
+     * accepted stops responding, so the timeout a caller asked for holds only as far as the client's own
+     * {@code timeoutMS} or socket timeout holds. Configure one on the client if the wait's deadline has to be the
+     * one a caller gets, for example through {@code spring.data.mongodb.uri}. The reactive store bounds the same
+     * read with {@code block(Duration)}, which the blocking driver has no equivalent of.
      */
     @Override
     public boolean waitUntilApplied(String projectionId, AppendId appendId, Duration timeout, Backoff backoff) {
@@ -249,12 +277,41 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
     }
 
     private static RetryStrategy defaultRetryStrategy() {
-        return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f);
+        return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f).maxAttempts(DEFAULT_MAX_ATTEMPTS);
+    }
+
+    /**
+     * Retries anything except a shutdown and an index whose options this store can neither match nor alter. Error
+     * 85 on the compound index never becomes anything else, so retrying it turns a configuration mistake into a
+     * call that never returns, which is the whole reason a permanent error is told apart from a transient one here.
+     */
+    private Predicate<Throwable> retryableFailure() {
+        return e -> !shutdown && !(e instanceof ConflictingIndexException);
+    }
+
+    /**
+     * Thrown rather than retried, so a compound index this store cannot create fails the call that needed it
+     * instead of being attempted again on a schedule.
+     */
+    public static final class ConflictingIndexException extends IllegalStateException {
+        ConflictingIndexException(String message, Throwable cause) {
+            super(message, cause);
+        }
     }
 
     private static void ensureIndexes(MongoOperations mongoOperations, String collection, Duration retention) {
         IndexOperations indexOps = mongoOperations.indexOps(collection);
-        indexOps.ensureIndex(new Index().on(PROJECTION_ID, Direction.ASC).on(APPEND_ID, Direction.ASC).named(PROJECTION_ID_APPEND_ID_INDEX).unique());
+        try {
+            indexOps.ensureIndex(new Index().on(PROJECTION_ID, Direction.ASC).on(APPEND_ID, Direction.ASC).named(PROJECTION_ID_APPEND_ID_INDEX).unique());
+        } catch (DataAccessException e) {
+            if (!isIndexOptionsConflict(e)) {
+                throw e;
+            }
+            // No collMod for this one, unlike the TTL index. collMod changes expireAfterSeconds and hidden, and it
+            // cannot change a partial filter or a collation at all, so there is nothing to alter this index into.
+            // An operator drops it, and the message says so rather than leaving error 85 to be retried.
+            throw new ConflictingIndexException("Collection '" + collection + "' already has an index named '" + PROJECTION_ID_APPEND_ID_INDEX + "' whose options differ from the unique index on " + PROJECTION_ID + " and " + APPEND_ID + " this store needs. Drop that index and let this store create its own.", e);
+        }
         try {
             indexOps.ensureIndex(new Index().on(RECORDED_AT, Direction.ASC).named(RECORDED_AT_TTL_INDEX).expire(retention));
         } catch (DataAccessException e) {

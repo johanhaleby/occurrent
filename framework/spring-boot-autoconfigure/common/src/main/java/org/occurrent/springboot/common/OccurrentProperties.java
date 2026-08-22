@@ -792,6 +792,21 @@ public class OccurrentProperties {
             private Duration retention = Duration.ofDays(7);
 
             /**
+             * How many times the Mongo-backed {@code AppliedAppendStore} calls the store for one read or one write
+             * before it gives up and fails the caller. With the store's own 100 ms to 2 s backoff, the default of
+             * 20 spans about 31 seconds, just past the MongoDB driver's own 30 second default server selection
+             * timeout, so an ordinary primary failover is ridden out rather than turned into a failure.
+             * <p>
+             * A projection that records applied appends calls the store on the thread that delivers its events, so
+             * this is also how long an unreachable store holds that delivery up. Raising it rides out a longer
+             * outage and holds deliveries up for longer, and 1 means one attempt and no retry at all.
+             * <p>
+             * {@code AppliedAppendStore.waitUntilApplied(..)} is unaffected. Its reads stop at the caller's own
+             * timeout and answer that the append is not applied yet, whichever limit it reaches first.
+             */
+            private int maxAttempts = 20;
+
+            /**
              * How {@code AppliedAppendStore.waitUntilApplied(..)} paces its polls.
              */
             private WaitBackoffProperties waitBackoff = new WaitBackoffProperties();
@@ -822,6 +837,14 @@ public class OccurrentProperties {
 
             public void setRetention(Duration retention) {
                 this.retention = retention;
+            }
+
+            public int getMaxAttempts() {
+                return maxAttempts;
+            }
+
+            public void setMaxAttempts(int maxAttempts) {
+                this.maxAttempts = maxAttempts;
             }
 
             public WaitBackoffProperties getWaitBackoff() {

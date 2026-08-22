@@ -182,11 +182,12 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend = occurrentProperties.getProjection().getAppliedAppend();
         OccurrentProperties.ProjectionProperties.AppliedAppendProperties.WaitBackoffProperties waitBackoff = appliedAppend.getWaitBackoff();
         Backoff pollBackoff = Backoff.exponential(waitBackoff.getInitial(), waitBackoff.getMax(), waitBackoff.getMultiplier());
-        // Long.MAX_VALUE attempts, matching ReactiveMongoAppliedAppendStore.defaultRetry(), because ADR 132
-        // decision 5 requires both stacks to retry a transient outage with no limit, and this bean builds its own
-        // Retry rather than reusing that private default.
-        Retry storeRetry = Retry.backoff(Long.MAX_VALUE, Duration.ofMillis(100))
+        // Retry.backoff counts retries rather than total calls, so one less than the configured attempts is what
+        // makes this match the blocking starter. The filter keeps an index this store can never create from being
+        // attempted again on a schedule, the same as ReactiveMongoAppliedAppendStore.defaultRetry().
+        Retry storeRetry = Retry.backoff(appliedAppend.getMaxAttempts() - 1L, Duration.ofMillis(100))
                 .maxBackoff(Duration.ofSeconds(2))
+                .filter(e -> !(e instanceof ReactiveMongoAppliedAppendStore.ConflictingIndexException))
                 .onRetryExhaustedThrow((spec, signal) -> signal.failure());
         return new ReactiveMongoAppliedAppendStore(mongo, appliedAppend.getCollection(), appliedAppend.getRetention(), storeRetry, pollBackoff);
     }
