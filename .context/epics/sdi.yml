@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 26
+revision: 27
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -51,7 +51,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on:
-      - {what: "REGISTRAR FENCE: rel34 U3 (#871), U6 (#837), U9 (#753) must merge first, then rebase. Surfaces: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T13:00:00Z}
+      - {what: "REGISTRAR FENCE, NARROWED 2026-08-22T14:0xZ to ONE issue. #753 CLEARED (PR 913, a86909f5d). #871 CLEARED (PR 902, 4f12b2ffb, issue closed 12:23:30Z; note PR 908 was CLOSED UNMERGED so 902 carried it alone). **Only #837 remains**: OPEN, no assignee, no label, no branch, no PR, not dispatched, so it is the long pole and its start is not visible yet. Surfaces still fenced: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T13:00:00Z}
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T11:35:00Z
     observed:
@@ -116,7 +116,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on:
-      - {what: "REGISTRAR FENCE: rel34 U3 (#871), U6 (#837), U9 (#753) must merge first, then rebase. Surfaces: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T13:00:00Z}
+      - {what: "REGISTRAR FENCE, NARROWED 2026-08-22T14:0xZ to ONE issue. #753 CLEARED (PR 913, a86909f5d). #871 CLEARED (PR 902, 4f12b2ffb, issue closed 12:23:30Z; note PR 908 was CLOSED UNMERGED so 902 carried it alone). **Only #837 remains**: OPEN, no assignee, no label, no branch, no PR, not dispatched, so it is the long pole and its start is not visible yet. Surfaces still fenced: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T13:00:00Z}
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T11:35:00Z
     observed: {}
@@ -132,7 +132,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on:
-      - {what: "REGISTRAR FENCE: rel34 U3 (#871), U6 (#837), U9 (#753) must merge first, then rebase. Surfaces: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T13:00:00Z}
+      - {what: "REGISTRAR FENCE, NARROWED 2026-08-22T14:0xZ to ONE issue. #753 CLEARED (PR 913, a86909f5d). #871 CLEARED (PR 902, 4f12b2ffb, issue closed 12:23:30Z; note PR 908 was CLOSED UNMERGED so 902 carried it alone). **Only #837 remains**: OPEN, no assignee, no label, no branch, no PR, not dispatched, so it is the long pole and its start is not visible yet. Surfaces still fenced: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T13:00:00Z}
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T11:35:00Z
     observed: {}
