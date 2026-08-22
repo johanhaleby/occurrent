@@ -566,7 +566,10 @@ public class InMemoryEventStore implements EventStore, EventStoreOperations, Eve
                     if (updatedCloudEvent == null) {
                         throw UpdateEventFunctionValidator.updateFunctionReturnedNull();
                     }
+                    updatedCloudEvent = OccurrentCloudEventExtension.preserveStreamIdentity(currentCloudEvent.get(), updatedCloudEvent);
                     updatedCloudEvent = OccurrentCloudEventExtension.preserveAppendId(currentCloudEvent.get(), updatedCloudEvent);
+                    updatedCloudEvent = OccurrentCloudEventExtension.preservePosition(currentCloudEvent.get(), updatedCloudEvent);
+                    updatedCloudEvent = DcbCloudEvents.preserveTags(currentCloudEvent.get(), updatedCloudEvent);
                     if (Objects.equals(updatedCloudEvent, currentCloudEvent.get())) {
                         result.set(currentCloudEvent.get());
                         return events;
