@@ -131,6 +131,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // subscribe(), and kept for the id's whole lifetime (a stop-then-relaunch reuses the same handover), removed only
     // by cancelSubscription and shutdown.
     private final ConcurrentMap<String, BlockingHandover<CloudEvent>> handoversBySubscriptionId = new ConcurrentHashMap<>();
+    // Runs just before a successful catch-up's guarded completion step. Exists so a test can stand there, which
+    // nothing outside this model can.
+    private volatile Runnable beforeCompletingCatchup = () -> {
+    };
+    // Runs between the live feed being asked whether it is running and being told to pause. Exists so a test can
+    // put a stop exactly there, which nothing outside this model can.
+    private volatile Runnable betweenPauseCheckAndPause = () -> {
+    };
 
     /**
      * @param reader          Reads the projection's history in position order for the catch-up replay.
@@ -367,6 +375,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             // cancelSubscription(id) plus subscribe(id, ...) landing between the post-loop keepReplaying() check
             // inside catchUp(..) and here still finds this replay's ownership already gone and does neither.
             interruptibleReplays.remove(subscriptionId, ownLaunch.get());
+            // Package-private and a no-op in production. Lets a test stand immediately before the guarded
+            // completion step, which is where a lifecycle call racing it has to be ordered against it.
+            beforeCompletingCatchup.run();
             completeIfStillOwned(subscriptionId, self.get(), () -> {
                 // Through forget, so this replay's catch-up state goes with its registration. Removing only the
                 // registration leaves the reconciliation marker behind, and a later replay for the same id would
@@ -436,6 +447,17 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         }
     }
 
+    // Package-private for the test that stands where the field describes. Not public, and not part of this
+    // model's contract.
+    void runBeforeCompletingCatchup(Runnable hook) {
+        this.beforeCompletingCatchup = Objects.requireNonNull(hook, "hook cannot be null");
+    }
+
+    // Package-private for the test that stands where the field describes.
+    void runBetweenPauseCheckAndPause(Runnable hook) {
+        this.betweenPauseCheckAndPause = Objects.requireNonNull(hook, "hook cannot be null");
+    }
+
     private boolean isAlreadyCaughtUp(String subscriptionId) {
         return catchupMarker != null && catchupMarker.exists(subscriptionId);
     }
@@ -470,6 +492,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // as a failure.
     private void applyPendingPauseIfAny(String subscriptionId) {
         if (pauseRequestedDuringReplay.remove(subscriptionId) != null && liveFeed.isRunning(subscriptionId)) {
+            // Stands between the check and the call it guards, which is the only place a stop could get between
+            // them. A no-op in production.
+            betweenPauseCheckAndPause.run();
             liveFeed.pauseSubscription(subscriptionId);
         }
     }
@@ -489,7 +514,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * {@code start(..)}.
      */
     @Override
-    public void stop() {
+    public synchronized void stop() {
         stopped = true;
         liveFeed.stop();
     }

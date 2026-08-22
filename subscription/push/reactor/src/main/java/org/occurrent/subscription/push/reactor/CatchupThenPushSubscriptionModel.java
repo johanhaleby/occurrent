@@ -127,6 +127,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // the launcher is not yet. Exists so a test can stand in that window, which nothing else can reach.
     private volatile Runnable beforeCompletingCatchup = () -> {
     };
+    // Runs between the live feed being asked whether it is running and being told to pause. Exists so a test can
+    // put a stop exactly there, which nothing outside this model can.
+    private volatile Runnable betweenPauseCheckAndPause = () -> {
+    };
 
     public CatchupThenPushSubscriptionModel(PositionOrderedReader reader, PushSubscriptionModel liveFeed, @Nullable CheckpointStorage catchupMarker) {
         this(reader, liveFeed, catchupMarker, CatchupThenLiveOptions.defaults());
@@ -239,9 +243,15 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
             @Override
             public Mono<Void> markCaughtUp() {
+                // Released on the way out of this step, never in a doFinally. A doFinally runs after the terminal
+                // signal has gone downstream, and downstream is the engine completing the catch-up, which hands
+                // this attempt's own subscriber the id back and takes its ownership away. The release would then
+                // find no owner and keep the record, so a marker this attempt wrote and finished would be
+                // distrusted by every later attempt for the id.
                 return Mono.defer(() -> claimMarkerWrite(subscriptionId, replayDone)
                         ? CatchupThenPushSubscriptionModel.this.markCaughtUp(subscriptionId)
-                        .doFinally(signal -> releaseMarkerWrite(subscriptionId, replayDone))
+                        .doOnSuccess(ignored -> releaseMarkerWrite(subscriptionId, replayDone))
+                        .doOnError(error -> releaseMarkerWrite(subscriptionId, replayDone))
                         : Mono.empty());
             }
 
@@ -396,6 +406,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // finished as a failure.
     private void applyPendingPauseIfAny(String subscriptionId) {
         if (pauseRequestedDuringReplay.remove(subscriptionId) != null && liveFeed.isRunning(subscriptionId)) {
+            // Stands between the check and the call it guards, which is the only place a stop could get between
+            // them. A no-op in production.
+            betweenPauseCheckAndPause.run();
             liveFeed.pauseSubscription(subscriptionId);
         }
     }
@@ -414,7 +427,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * {@code start(..)}.
      */
     @Override
-    public void stop() {
+    public synchronized void stop() {
         stopped = true;
         liveFeed.stop();
     }
@@ -588,6 +601,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // this model's contract.
     void runBeforeCompletingCatchup(Runnable hook) {
         this.beforeCompletingCatchup = Objects.requireNonNull(hook, "hook cannot be null");
+    }
+
+    // Package-private for the test that stands where the field describes.
+    void runBetweenPauseCheckAndPause(Runnable hook) {
+        this.betweenPauseCheckAndPause = Objects.requireNonNull(hook, "hook cannot be null");
     }
 
     private Mono<Boolean> alreadyCaughtUp(String subscriptionId) {

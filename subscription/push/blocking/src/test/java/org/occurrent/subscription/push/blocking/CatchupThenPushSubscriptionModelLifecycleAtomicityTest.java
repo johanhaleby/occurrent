@@ -131,6 +131,62 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
         }
     }
 
+    /**
+     * A stop landing between the live feed being asked whether it is running and being told to pause must not turn
+     * a catch-up that finished into one that failed. The live feed refuses a pause once it is stopped, and that
+     * refusal used to escape from inside the completion step and reach whoever waited on the catch-up.
+     */
+    @Test
+    void a_stop_landing_between_the_pause_check_and_the_pause_still_completes_the_catch_up() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(() -> Stream.of(cloudEvent("1")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        AtomicReference<Thread> stopper = new AtomicReference<>();
+        // Fired from the one gap a stop could get into. It takes the same monitor this step holds, so it waits
+        // there rather than landing in the gap.
+        model.runBetweenPauseCheckAndPause(() -> {
+            stopper.set(Thread.ofVirtual().start(model::stop));
+            sleepQuietly(200);
+        });
+
+        var subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            replaying.countDown();
+            awaitLatch(releaseReplay);
+        });
+        assertThat(replaying.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Asked for while the replay is still running, so it is held for the completion to hand over.
+        model.pauseSubscription("sub");
+        assertThat(model.isPaused("sub")).isTrue();
+
+        releaseReplay.countDown();
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (stopper.get() == null && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(stopper.get()).as("the completion reached the gap the stop was fired from").isNotNull();
+        stopper.get().join();
+
+        assertThat(subscription.waitUntilStarted(Duration.ofSeconds(5)))
+                .as("the catch-up read its history and finished, so its handle answers true rather than throwing")
+                .isTrue();
+        assertThat(model.isPaused("sub"))
+                .as("the pause either reached the live feed or the stop paused everything, never neither")
+                .isTrue();
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private static void awaitLatch(CountDownLatch latch) {
         try {
             if (!latch.await(10, TimeUnit.SECONDS)) {

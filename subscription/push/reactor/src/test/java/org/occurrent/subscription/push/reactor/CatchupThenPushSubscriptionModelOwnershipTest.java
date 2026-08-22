@@ -40,6 +40,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -432,6 +433,91 @@ class CatchupThenPushSubscriptionModelOwnershipTest {
                 assertThat(handled)
                         .as("the catch-up succeeded, so the resume must not replay its history a second time")
                         .containsExactly("1", "2"));
+    }
+
+    /**
+     * The ordinary case, which the record of an in-flight marker write must not spoil. A catch-up that finishes
+     * its own write while it still owns the id leaves nothing behind, so the next catch-up for that id trusts the
+     * marker and skips the history rather than reading it all again.
+     */
+    @Test
+    void a_catch_up_that_finishes_its_own_marker_write_leaves_the_marker_trusted() {
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1"), cloudEvent("2")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
+
+        List<String> firstHandled = new CopyOnWriteArrayList<>();
+        var first = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+                ce -> Mono.fromRunnable(() -> firstHandled.add(ce.getId())));
+        first.waitUntilStarted().block(Duration.ofSeconds(5));
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(firstHandled).containsExactly("1", "2"));
+        assertThat(marker.read("sub").hasElement().block()).as("the catch-up marked itself complete").isTrue();
+
+        model.cancelSubscription("sub");
+
+        List<String> secondHandled = new CopyOnWriteArrayList<>();
+        var second = model.subscribe("sub", null, StartAt.subscriptionModelDefault(),
+                ce -> Mono.fromRunnable(() -> secondHandled.add(ce.getId())));
+        second.waitUntilStarted().block(Duration.ofSeconds(5));
+
+        await().during(Duration.ofSeconds(1)).atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(secondHandled)
+                        .as("the marker was written by an attempt that owned the id from start to finish, so the "
+                                + "next catch-up trusts it and reads no history")
+                        .isEmpty());
+    }
+
+    /**
+     * A stop landing between the live feed being asked whether it is running and being told to pause must not turn
+     * a catch-up that finished into one that failed. The live feed refuses a pause once it is stopped, and that
+     * refusal used to escape from inside the completion step and leave nothing to complete the catch-up's handle.
+     */
+    @Test
+    void a_stop_landing_between_the_pause_check_and_the_pause_still_completes_the_catch_up() throws Exception {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1")));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
+
+        CountDownLatch replaying = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        AtomicReference<Thread> stopper = new AtomicReference<>();
+        // Fired from the one gap a stop could get into. It takes the same monitor this step holds, so it waits
+        // there rather than landing in the gap.
+        model.runBetweenPauseCheckAndPause(() -> {
+            stopper.set(Thread.ofVirtual().start(model::stop));
+            sleepQuietly(200);
+        });
+
+        var subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> Mono.fromRunnable(() -> {
+            replaying.countDown();
+            awaitLatch(releaseReplay);
+        }));
+        assertThat(replaying.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Asked for while the replay is still running, so it is held for the completion to hand over.
+        model.pauseSubscription("sub");
+        assertThat(model.isPaused("sub")).isTrue();
+
+        releaseReplay.countDown();
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(stopper.get()).isNotNull());
+        stopper.get().join();
+
+        assertThat(subscription.waitUntilStarted().block(Duration.ofSeconds(5)))
+                .as("the catch-up read its history and finished, so its handle completes rather than erroring")
+                .isNull();
+        assertThat(model.isPaused("sub"))
+                .as("the pause either reached the live feed or the stop paused everything, never neither")
+                .isTrue();
+    }
+
+    private static void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static void awaitLatch(CountDownLatch latch) {
