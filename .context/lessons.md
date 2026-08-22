@@ -1676,3 +1676,4 @@ Two supporting habits from the same pass. Ask for at least one independently re-
 as which files a diff touches, so the report can be spot-checked without rerunning it. And ask what
 the pass could NOT verify: this one surfaced that `suppliedBy` has no once-only guard and that it
 had not constructed the double-call scenario, which is a real gap nobody had named.
+- 2026-08-22 brk: a checkpoint merge commit without the `[ci skip]` prefix pushed to main triggers a workflow run and cancels main's in-flight run for the real merge (56c215729's Maven run was cancelled by 2c7079739). Merge main into the session branch with `git merge --no-edit -m "[ci skip] brk: merge main" origin/main` before every checkpoint push.
