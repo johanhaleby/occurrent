@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 151
+revision: 152
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -296,7 +296,7 @@ units:
     deliverables:
       - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
     blocking_on: []
-    next_action: "PR 896 FINAL HEAD 1dae92cc5 2026-08-22T~14:3xZ, CI green. Worker DELIVERY_RESULT for f9c49515a received (invariants A1 to J1 plus offer ordering, API as shipped, C1 mutation survives and is carried, docs lines recorded); the final-round delivery for 1dae92cc5 pending. Re-verifier a3b7b7611b68aadfe (Sonnet) on the delta (marker release ordering, stop() under the monitor). Squash message composed and gated. On MERGE-SAFE plus the worker delivery plus Copilot on the head read under dec-0013 and dec-0017: CAS merge pinned to 1dae92cc5, then the docs lines on docs/421-broker-modules, then the round-3 review. Monitor bkc4p3e8e active"
+    next_action: "PR 896 ROUND 5 2026-08-22T~15:2xZ under dec-0017: Copilot on 1dae92cc5 found an unbounded pendingOffers queue (PR-introduced), the stop-path re-check relaunching after start(false) on both stacks (PR-introduced), an ADR self-contradiction and stale Kafka comments; all routed to the worker. LAST ROUND: a further PR-introduced defect on the next head stops the loop and goes to Johan as a structured ask. Re-verifier a3b7b7611b68aadfe on the 1dae92cc5 delta still running (its verdict carries; the next head gets one more small re-verify of the backlog bound and the start-mode gate). Squash message gated. Then CAS merge, docs lines, round 3. Monitor bkc4p3e8e active"
     last_meaningful_progress_at: 2026-08-21T05:50:00Z
     observed: {}
     assessment: "Not a chip. Findings above the stopping line become addendum units reviewed against the complete current state, never in isolation. Journaled fixpoint inputs from U12's verify pass: the durable model's fallback double-save path on read-lagged storage is pre-existing and untested (carried forward, not a regression); the blocking starter's property characterization test is gated off by subscription.enabled=false and proves only binder population; the reactive starter has zero characterization coverage for ANY property. From U2's pass: DomainEventForwarder metadata test now asserts all four extensions (fixed pre-merge). From U3's pass (all MINOR, merged as-is): no shortstr 255-byte validation on derived routing keys and exchange names, so an oversized value fails at basicPublish with poor diagnostics instead of at destination construction; the ShutdownSignalException catch neither retires the channel nor retries under the default predicate, so with connection auto-recovery off the sink fails permanently until rebuilt (liveness, not a false success); mapper test gaps (time attribute never asserted as a header, no OffsetDateTime, URI or Integer typed extension fixtures)."
