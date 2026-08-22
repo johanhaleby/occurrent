@@ -2217,3 +2217,25 @@ because it binds this fleet immediately: **read the conventions document before 
 after, and put every question through `AskUserQuestion` with a recommendation and the
 three-sentence preamble.**
 
+## Never suppress rebase output, and never verify a push by ancestry alone (sdi, 2026-08-22)
+
+Three times in one session `git rebase origin/main >/dev/null 2>&1 && git push` reported success
+while the rebase had actually stopped on a conflict. The pipeline exits 0 because `tail` does, or
+because the redirect swallows the failure, and the `&&` chain sails on. The push then pushes HEAD,
+which mid-rebase is somebody ELSE's commit, so it succeeds and pushes nothing of mine.
+
+The verification made it worse rather than catching it. `git merge-base --is-ancestor HEAD
+origin/main` returns TRUE trivially in that state, because HEAD really is an ancestor: it is another
+fleet's commit that is already on main. The test I adopted to replace equality has its own blind
+spot, and it is exactly the state a failed rebase leaves behind.
+
+Two rules, and the second is the one that actually catches it:
+
+Never redirect or pipe `git rebase` output. Read it, and check `git rev-parse --git-path
+rebase-merge` for a directory afterwards, which is the unambiguous signal that one is still running.
+
+**Verify a push by CONTENT, not by ancestry or equality.** Grep `git show origin/main:<path>` for a
+string unique to the change just made. That is the only check that distinguishes "my work is on
+main" from "some commit is on main", and it costs one command. Every ancestry or equality check
+answers a question adjacent to the one that matters.
+
