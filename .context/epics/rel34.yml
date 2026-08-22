@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 66
-updated_at: '2026-08-22T16:58:50+00:00'
-updated_by: 'orchestrator rel34: U5 delivered PR 941 with ADR 0135, all four required additions present'
+revision: 67
+updated_at: '2026-08-22T17:01:27+00:00'
+updated_by: 'orchestrator rel34: fresh reviews landed on five PRs, 933 holds on a documented exception'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -702,9 +702,9 @@ units:
         routes through that same helper rather than its own bare getBean.
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: worker adds the no-regression floor to its resolve helper and routes the fourth call
-      site through it
-    last_meaningful_progress_at: '2026-08-22T14:50:03+00:00'
+    next_action: worker documents the startup-replay exception in the changelog and at the fallback, then
+      the gate re-runs
+    last_meaningful_progress_at: '2026-08-22T17:01:27+00:00'
     observed:
       scope_derived_by_orchestrator:
         note: 'Enumerated the invocation sites myself rather than trusting the issue text. The defect
@@ -830,6 +830,24 @@ units:
           already supports multi-document transactions.'
         via: 'worker DELIVERY_RESULT + my own read of pr933 and #935'
         at: '2026-08-22T15:01:48+00:00'
+      hang_fix_reintroduces_837_in_one_configuration:
+        note: 'Fresh Copilot review of 6c65f6160 is ''Needs a closer look'' with TWO suppressed comments,
+          the same finding at both stacks (blocking :72, reactor :79). It is right. The isCurrentlyInCreation
+          fallback invokes the RAW bean, so a @Transactional handler with startAt=BEGINNING and startupMode=WAIT_UNTIL_STARTED
+          has its advice silently bypassed for the ENTIRE startup history replay. That is #837''s own
+          defect reintroduced by the fix for the startup hang the same worker found. RULED: the fallback
+          STAYS. Without it that configuration hangs Spring Boot forever, which is strictly worse than
+          losing advice, and the worker declared the trade honestly in its own invariant. What is wrong
+          is that a user reading a changelog entry saying the bypass is fixed will believe it applies
+          to them when it does not, and this is not a narrow window in event count, it is all of history
+          for that subscription. So the exception gets documented where a user meets it: the changelog
+          names the configuration, and the javadoc at the fallback says why the trade exists so the next
+          reader does not tidy the guard away and reintroduce the hang. Keeping the advice AND avoiding
+          the deadlock needs the afterSingletonsInstantiated move sdi owns, which this unit is fenced
+          out of. SECOND TIME TODAY an absolute claim outlived its exception INSIDE the fix for something
+          else.'
+        via: gh api pulls/933/reviews on the current head
+        at: '2026-08-22T17:01:27+00:00'
     assessment: 'Dispatched 2026-08-22 as a chip after U3 merged. The 2026-08-17 deferral to the ADR 127
       epic and my own 2026-08-22 supersede were BOTH argued on premises that did not survive. The deferral
       assumed a large fix that the epic would rewrite immediately; the supersede assumed the epic had
@@ -2166,3 +2184,14 @@ cross_epic:
       and do not let it be mistaken for a regression from the release commit. Left at 0.35.0 where Johan
       already triaged it.'
     at: '2026-08-22T16:43:44+00:00'
+  stale_review_sweep_worked:
+    note: 'The fleet-wide re-review request cleared the ambiguity. Before: four of six PRs had STALE reviews
+      saying ''Changes recommended'' with one to four suppressed comments each, indistinguishable from
+      live findings. After: five of seven carry CURRENT reviews. 919 flipped from a stale ''Changes recommended''
+      with FOUR suppressed to a current ''Approval recommended'' with ZERO, which confirms those findings
+      were already fixed and that reading the stale verdict as live was the error rather than the finding
+      being real. 901 is current with Approval recommended, zero suppressed, zero unresolved. 933 is current
+      with a genuine new finding. 914 and 928 are current with one suppressed each. The sweep is worth
+      more than gating them one at a time, because the condition was fleet-wide rather than a property
+      of any unit.'
+    at: '2026-08-22T17:01:27+00:00'
