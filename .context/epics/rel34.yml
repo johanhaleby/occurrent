@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 76
-updated_at: '2026-08-22T17:36:44+00:00'
-updated_by: 'orchestrator rel34: U13 plan approved, ADR 0136 allocated'
+revision: 77
+updated_at: '2026-08-22T17:40:00+00:00'
+updated_by: 'orchestrator rel34: U14 delivered PR 942 with the TCK test the unit existed for'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -1991,7 +1991,7 @@ units:
     session: chip dispatched, awaiting the worker's claim
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 942
       met: false
       evidence: ''
     - check: issue_closed
@@ -1999,8 +1999,9 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: 'await the worker''s claim on #905'
-    last_meaningful_progress_at: '2026-08-22T17:20:35+00:00'
+    next_action: await CI and the worker's report, then gate; the key check is whether the new TCK test
+      passes for the Mongo stores too
+    last_meaningful_progress_at: '2026-08-22T17:40:00+00:00'
     observed:
       widened_by_the_901_pass:
         note: 'WIDENED from #905''s position-only scope by the adversarial pass on PR 901, which found
@@ -2029,6 +2030,23 @@ units:
           report rather than a test to weaken.'
         via: orchestrator
         at: '2026-08-22T17:20:35+00:00'
+      pr_942_opened:
+        note: 'PR 942 on rel34/u14-inmemory-update-event-identity, THREE files, +123/-2. Exactly the shape
+          the unit was briefed for: the InMemory fix, the TCK conformance test, and one changelog entry.
+          Nothing else touched. THE TCK TEST IS THE POINT AND IT IS THERE. Two new tests in EventStoreOperationsConformance
+          beside the existing append-id one: keeps_the_events_own_stream_identity_even_when_the_update_function_returns_a_fresh_event
+          and rejects_a_forged_stream_identity_and_keeps_the_original. Both assert the RETURNED event
+          and the STORED one rather than either alone, which is the cross-check discipline PR 901 had
+          to learn the hard way, and both assert eventStore().read(STREAM_ID).version(), which is the
+          value stream-level optimistic concurrency reads and the exact thing the adversarial pass showed
+          a forged update corrupts. The fix is three preserve* calls added to InMemoryEventStore mirroring
+          what 901 established: preserveStreamIdentity, preservePosition and DcbCloudEvents.preserveTags.
+          That covers all three instances the pass found, against the single preserveAppendId the store
+          had. NOT YET GATED. The decisive question is whether the new conformance tests pass for the
+          three MongoDB stores as well, since every implementer now has to satisfy them. A failure there
+          is a FIFTH instance to report, not a test to weaken, and the brief says so.'
+        via: gh pr view 942 and reading the diff
+        at: '2026-08-22T17:40:00+00:00'
     assessment: 'Fourth store, same defect class. Small. Shipping #876 fixed on three of four stores is
       an asymmetry the changelog would have to caveat, and InMemoryEventStore is what people write their
       tests against, so the gap is most visible exactly where users are trying to prove their code works.
