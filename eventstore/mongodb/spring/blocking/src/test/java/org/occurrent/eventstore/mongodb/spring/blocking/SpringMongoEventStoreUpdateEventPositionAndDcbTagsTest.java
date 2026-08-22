@@ -31,6 +31,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
@@ -63,9 +64,11 @@ import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
  * {@link org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper#convertToDocument}, which
  * round-trips {@code position} through the general CloudEvent extension writer (no {@code Long} overload, so it
  * coerces to a string) and never writes the indexed {@code dcbTags} array at all (issue #876). The round trip this
- * verifies: reading a stored event and writing it back through {@code updateEvent} leaves {@code position} at its
- * original BSON type and value, and leaves {@code dcbTags} at its original content, for a plain stream event and for
- * a DCB event alike.
+ * verifies: reading a stored event and writing it back through {@code updateEvent} leaves {@code position},
+ * {@code dcbTags}, {@code streamId} and {@code streamVersion} at their original values, on the stored document AND
+ * on the CloudEvent {@code updateEvent} returns, for a plain stream event and for a DCB event alike (issues #876,
+ * #904, #927). Every assertion here checks the returned event against the document read back in the same test,
+ * not each independently against the original, since that was what let the position defect ship once already.
  */
 @Testcontainers
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -143,7 +146,6 @@ class SpringMongoEventStoreUpdateEventPositionAndDcbTagsTest {
     void updating_a_dcb_event_with_a_fresh_replacement_event_keeps_the_original_dcb_tags_on_both_the_document_and_the_returned_event() {
         SpringMongoEventStore eventStore = newEventStore(STREAM, DCB);
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
-        Document before = rawDocument("a");
 
         // A fresh event built from scratch, not derived from "original", carries none of the original's extensions
         // and, here, a different tag ("other:9" instead of "name:1"). Tags are store-owned the same way streamId,
@@ -153,23 +155,50 @@ class SpringMongoEventStoreUpdateEventPositionAndDcbTagsTest {
 
         Document after = rawDocument("a");
         assertAll(
-                () -> assertThat(after.get(OccurrentCloudEventExtension.POSITION))
-                        .as("position must stay a BSON int64 after an update, not be coerced to a string")
-                        .isInstanceOf(Long.class)
-                        .isEqualTo(before.get(OccurrentCloudEventExtension.POSITION)),
-                () -> assertThat(after.getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
-                        .as("the indexed dcbTags array must keep the original tags, not the replacement event's")
-                        .isEqualTo(before.getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class)),
-                () -> assertThat(after.getString(DcbCloudEvents.TAGS))
-                        .as("the dcbtags extension field on the document must match the indexed array, not the replacement event's tags")
-                        .isEqualTo(before.getString(DcbCloudEvents.TAGS)),
-                () -> assertThat(DcbCloudEvents.getTags(updated))
-                        .as("the CloudEvent updateEvent returns must carry the original tags too, not the replacement event's")
-                        .containsExactlyElementsOf(DcbCloudEvents.getTags(taggedEvent("a", "Defined", "name:1"))),
-                () -> assertThat(OccurrentCloudEventExtension.getPosition(updated))
-                        .as("the CloudEvent updateEvent returns must carry the original position too, not drop it")
-                        .isEqualTo(((Number) before.get(OccurrentCloudEventExtension.POSITION)).longValue()),
-                () -> assertThat(after.getString("type")).isEqualTo("Renamed")
+                () -> assertThat(after.getString("type")).isEqualTo("Renamed"),
+                () -> assertReturnedEventMatchesStoredDocument(updated, after)
+        );
+    }
+
+    @Test
+    void updating_a_stream_event_with_a_fresh_replacement_event_keeps_the_original_stream_identity_on_both_the_document_and_the_returned_event() {
+        SpringMongoEventStore eventStore = newEventStore(STREAM);
+        eventStore.write("stream:1", List.of(event("a", "Defined")));
+
+        // A fresh event built from scratch carries no streamId or streamVersion of its own. Both are store-owned
+        // the same way position, the append id and DCB tags already are, so the update must not lose them or let
+        // an updater move the event to a stream it does not belong to.
+        CloudEvent updated = eventStore.updateEvent("a", SOURCE, original -> event("a", "Renamed")).orElseThrow();
+
+        Document after = rawDocument("a");
+        assertAll(
+                () -> assertThat(after.getString("type")).isEqualTo("Renamed"),
+                () -> assertReturnedEventMatchesStoredDocument(updated, after)
+        );
+    }
+
+    @Test
+    void updating_an_event_with_a_forged_stream_identity_keeps_the_original() {
+        SpringMongoEventStore eventStore = newEventStore(STREAM);
+        eventStore.write("stream:1", List.of(event("a", "Defined")));
+        Document before = rawDocument("a");
+        String originalStreamId = before.getString(OccurrentCloudEventExtension.STREAM_ID);
+        long originalStreamVersion = before.getLong(OccurrentCloudEventExtension.STREAM_VERSION);
+
+        // The updater forges a different streamId and streamVersion onto a fresh event. Both are store-owned, so
+        // the update must not let an updater move the event into a stream, or a version, it does not belong to.
+        CloudEvent updated = eventStore.updateEvent("a", SOURCE, original -> CloudEventBuilder.v1(event("a", "Renamed"))
+                        .withExtension(OccurrentCloudEventExtension.STREAM_ID, "forged-stream")
+                        .withExtension(OccurrentCloudEventExtension.STREAM_VERSION, 999L)
+                        .build())
+                .orElseThrow();
+
+        Document after = rawDocument("a");
+        assertAll(
+                () -> assertThat(after.getString("type")).isEqualTo("Renamed"),
+                () -> assertThat(after.getString(OccurrentCloudEventExtension.STREAM_ID)).isEqualTo(originalStreamId),
+                () -> assertThat(after.getLong(OccurrentCloudEventExtension.STREAM_VERSION)).isEqualTo(originalStreamVersion),
+                () -> assertReturnedEventMatchesStoredDocument(updated, after)
         );
     }
 
@@ -196,13 +225,31 @@ class SpringMongoEventStoreUpdateEventPositionAndDcbTagsTest {
 
         Document after = rawDocument("a");
         assertAll(
-                () -> assertThat(OccurrentCloudEventExtension.getPosition(updated))
-                        .as("the CloudEvent updateEvent returns must not carry a forged position")
-                        .isZero(),
-                () -> assertThat(after.containsKey(OccurrentCloudEventExtension.POSITION))
-                        .as("the stored document must not gain a forged position")
-                        .isFalse(),
-                () -> assertThat(after.getString("subject")).isEqualTo("rewritten")
+                () -> assertThat(after.getString("subject")).isEqualTo("rewritten"),
+                () -> assertReturnedEventMatchesStoredDocument(updated, after)
+        );
+    }
+
+    @Test
+    void updating_a_stream_event_with_no_tags_and_a_forged_tag_keeps_it_tagless() {
+        SpringMongoEventStore eventStore = newEventStore(STREAM, DCB);
+        eventStore.write("stream:1", List.of(event("a", "Defined")));
+        Document before = rawDocument("a");
+        assertThat(before.containsKey(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD))
+                .as("the original event must carry no DCB tags to begin with")
+                .isFalse();
+
+        // DCB tags are store-owned the same way position, streamId, streamVersion and the append id already are,
+        // so an updater forging one onto a plain stream event that never had any must not let it through. This is
+        // preserveTags's other branch, CloudEventBuilder.v1(updated).withoutExtension(TAGS).build(), which the
+        // fresh-replacement-event test above does not exercise since that original already carries tags.
+        CloudEvent updated = eventStore.updateEvent("a", SOURCE,
+                original -> taggedEvent("a", "Renamed", "forged:1")).orElseThrow();
+
+        Document after = rawDocument("a");
+        assertAll(
+                () -> assertThat(after.getString("type")).isEqualTo("Renamed"),
+                () -> assertReturnedEventMatchesStoredDocument(updated, after)
         );
     }
 
@@ -243,6 +290,46 @@ class SpringMongoEventStoreUpdateEventPositionAndDcbTagsTest {
         MongoDatabase database = mongoClient.getDatabase(databaseName);
         MongoCollection<Document> collection = database.getCollection(EVENT_COLLECTION);
         return requireNonNull(collection.find(new Document("id", id).append("source", SOURCE.toString())).first());
+    }
+
+    /**
+     * Cross-checks the CloudEvent {@code updateEvent} returns against the document it actually wrote, rather than
+     * each against the original independently. Checking them separately is what let the returned event's position
+     * go unfixed even after the stored document was already correct.
+     */
+    private static void assertReturnedEventMatchesStoredDocument(CloudEvent returned, Document storedDocument) {
+        assertAll(
+                () -> assertThat(returned.getExtension(OccurrentCloudEventExtension.STREAM_ID))
+                        .as("the returned event's streamId must match the stored document's")
+                        .isEqualTo(storedDocument.getString(OccurrentCloudEventExtension.STREAM_ID)),
+                () -> assertThat(OccurrentExtensionGetter.getStreamVersion(returned))
+                        .as("the returned event's streamVersion must match the stored document's")
+                        .isEqualTo(storedDocument.getLong(OccurrentCloudEventExtension.STREAM_VERSION)),
+                () -> {
+                    Object storedPosition = storedDocument.get(OccurrentCloudEventExtension.POSITION);
+                    if (storedPosition == null) {
+                        assertThat(returned.getExtension(OccurrentCloudEventExtension.POSITION))
+                                .as("the returned event must have no position when the stored document has none")
+                                .isNull();
+                    } else {
+                        assertThat(OccurrentCloudEventExtension.getPosition(returned))
+                                .as("the returned event's position must match the stored document's")
+                                .isEqualTo(((Number) storedPosition).longValue());
+                    }
+                },
+                () -> {
+                    List<String> storedTags = storedDocument.getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class);
+                    if (storedTags == null) {
+                        assertThat(DcbCloudEvents.isDcbEvent(returned))
+                                .as("the returned event must carry no DCB tags when the stored document has none")
+                                .isFalse();
+                    } else {
+                        assertThat(DcbCloudEvents.getTags(returned).stream().map(Tag::canonical).sorted().toList())
+                                .as("the returned event's tags must match the stored document's indexed dcbTags")
+                                .isEqualTo(storedTags.stream().sorted().toList());
+                    }
+                }
+        );
     }
 
     private static CloudEvent taggedEvent(String id, String type, String... tags) {
