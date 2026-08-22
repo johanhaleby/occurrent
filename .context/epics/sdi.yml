@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 18
+revision: 19
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -59,19 +59,19 @@ units:
   U2:
     issue: 725
     goal: "Subscription<E> and ReactiveSubscription<E> in JAVA with builders, plus shared selector logic in dsl/subscription-dsl/common beside SubscriptionFilters.kt. Projection.Builder.on dispatch rule verbatim; sealed expansion through EventTypeExpansion, never a copy of ProjectionFilters."
-    phase: BLOCKED
+    phase: PLANNED
     health: PROGRESSING
     swept: false
     depends_on: [U1]
     session: null
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
-    blocking_on:
-      - {what: "SEMANTIC EDGE: #753 RESOLVED, which includes rel34 deciding not to fix it. #753 may change EventTypeExpansion in common/filter, which the descriptor selector must call, and one of its own remedies (refusing a non-final concrete declared event type) would change what a descriptor accepts. Its author recommended leaving it unfixed, so a decline clears this gate as cleanly as a merge does. No shared file, so a path fence cannot see it.", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T13:00:00Z}
-    next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
-    observed: {}
-    assessment: "Owns the new Java files it creates, named individually, plus the two Subscriptions.kt files inherited from U1. Developable before U1 merges, not mergeable before. Opus/high."
+    blocking_on: []
+    next_action: "Semantic gate CLEARED. Waits only on U1 now, which is still fenced on #871 and #837."
+    last_meaningful_progress_at: 2026-08-22T12:55:00Z
+    observed:
+      issue_753_resolved: {pr: 913, merged_sha: a86909f5d, merged_at: 2026-08-22T11:22:58Z, issue_state: CLOSED, contract: "EventTypeExpansion now REFUSES a concrete class that is neither final nor sealed. Up to 0.33.0 such a type was accepted with only itself in the filter, so a caller declaring class OrderPlaced and publishing a subclass of it never saw that subclass and got no warning. The four escapes the javadoc names: make the class final, seal the hierarchy, declare the concrete types, or SET AN EXPLICIT FILTER. expandWhatCanBeFound stays lenient and now counts a non-final concrete class as lenient-eligible.", via: "read the merge diff directly rather than waiting for rel34's promised delivery report", at: 2026-08-22T12:55:00Z}
+    assessment: "Owns the new Java files it creates, named individually, plus the two Subscriptions.kt files inherited from U1. Developable before U1 merges, not mergeable before. WRITTEN AGAINST POST-#753 SEMANTICS: on(Class,..) inherits the refusal of a non-final non-sealed concrete class, and the tests must encode that rather than the 0.33.0 behaviour. CONVERGENCE WORTH THE BRIEF: #753's fourth named escape is an explicit filter, and an explicit filter with no typed handler is exactly the catch-all case dec-0005 added to the descriptor. Two independent requirements landed on one feature, which raises confidence the catch-all is right rather than expedient. Opus/high."
   U3:
     issue: 725
     goal: "DcbSubscription<E> and ReactiveDcbSubscription<E>. FIRST deliverable is extracting buildDcbCriteria out of the Spring module so tags(..) narrows exactly as it does today, with the Spring caller delegating to the extraction."
