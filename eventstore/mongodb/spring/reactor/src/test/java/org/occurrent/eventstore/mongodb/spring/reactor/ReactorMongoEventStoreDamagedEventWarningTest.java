@@ -77,7 +77,7 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
             ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     @RegisterExtension
-    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.droppingTheDatabaseIn(MongoTestDatabase.of(mongoDBContainer));
+    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     private ReactiveMongoTemplate mongoTemplate;
     private ReactiveMongoTransactionManager transactionManager;

@@ -26,6 +26,10 @@ final class UpdateEventRepairCheckpoint {
     static final String CHECKPOINT_DOCUMENT_ID = "updateEventRepair";
     static final String FIELD_LAST_PROCESSED_ID = "lastProcessedId";
     static final String FIELD_PROCESSED_COUNT = "processedCount";
+    // Carried across a resume so a run that continues an earlier one still reports the damage that earlier one
+    // found. Without it a resumed run walks only the events after the checkpoint and reports zero unrecoverable
+    // while the events before it are still damaged.
+    static final String FIELD_UNRECOVERABLE_COUNT = "unrecoverableCount";
 
     private UpdateEventRepairCheckpoint() {
     }

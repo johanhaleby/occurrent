@@ -33,9 +33,11 @@ import java.util.List;
  *                                {@code 0}, since the repair only touches events that still look damaged.
  * @param unrecoverableEventCount How many events hold damage this tool cannot undo. Counts every one, whether or not
  *                                it fitted in {@code unrecoverableEvents}.
- * @param unrecoverableEvents     Up to {@link UpdateEventRepairOptions#maxReportedUnrecoverable()} of those events.
- *                                Every one of them is also logged at WARN when it is found, so a truncated list
- *                                never means a lost report.
+ * @param unrecoverableEvents     Up to {@link UpdateEventRepairOptions#maxReportedUnrecoverable()} of the events
+ *                                THIS call found. A run that resumed an interrupted one lists only what it saw
+ *                                itself, while {@code unrecoverableEventCount} covers the earlier part too, since
+ *                                that count is carried in the checkpoint. Every event is logged at WARN when it is
+ *                                found, so neither a truncated list nor a resume means a lost report.
  */
 @NullMarked
 public record UpdateEventRepairResult(long eventsRepaired, long unrecoverableEventCount,

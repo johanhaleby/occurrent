@@ -74,7 +74,7 @@ class MongoEventStoreDamagedEventWarningTest {
             ReplicaSetReadyMongoDBContainer.withDefaultVersion().withReuse(true);
 
     @RegisterExtension
-    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.droppingTheDatabaseIn(MongoTestDatabase.of(mongoDBContainer));
+    OccurrentMongoFlush flushMongoDBExtension = OccurrentMongoFlush.everyCollectionIn(MongoTestDatabase.of(mongoDBContainer));
 
     private MongoClient mongoClient;
     private String databaseName;

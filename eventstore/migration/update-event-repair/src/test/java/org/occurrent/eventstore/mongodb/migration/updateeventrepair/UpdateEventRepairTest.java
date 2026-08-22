@@ -32,6 +32,7 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
@@ -41,6 +42,7 @@ import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
+import org.occurrent.filter.Filter;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.testing.mongodb.OccurrentMongoFlush;
 import org.occurrent.testsupport.mongodb.MongoTestDatabase;
@@ -159,15 +161,20 @@ class UpdateEventRepairTest {
         eventStore.write("stream:1", List.of(event("b", "Renamed")));
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
 
-        assertThat(dcbEventIds(DcbCriteria.all()))
+        assertThat(eventIdsInPositionOrder())
                 .as("a damaged stream event must be missing from a position ordered read")
-                .doesNotContain("a");
+                .containsExactly("b");
 
         newRepair().run();
 
-        assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
-                .as("a repaired stream event's position must be a BSON int64 again")
-                .isInstanceOf(Long.class);
+        assertAll(
+                () -> assertThat(eventIdsInPositionOrder())
+                        .as("a position ordered read must return the repaired event again, in position order")
+                        .containsExactly("a", "b"),
+                () -> assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
+                        .as("a repaired stream event's position must be a BSON int64 again")
+                        .isInstanceOf(Long.class)
+        );
     }
 
     @Test
@@ -396,6 +403,53 @@ class UpdateEventRepairTest {
                         .as("every repaired event must be visible to a DCB read again")
                         .hasSize(4)
         );
+    }
+
+    @Test
+    void a_resumed_run_still_reports_the_unrepairable_damage_the_interrupted_run_found() {
+        // The first event cannot get its position back, the rest can. Repairing one event per batch and stopping
+        // after the first puts that finding behind the checkpoint, where a resumed run never looks again.
+        eventStore.append(List.of(taggedEvent("event-0", "Defined", "name:0")));
+        damageTheWayUpdateEventUsedTo("event-0", original -> taggedEvent("event-0", "Renamed", "name:0"));
+        for (int i = 1; i < 3; i++) {
+            String id = "event-" + i;
+            eventStore.append(List.of(taggedEvent(id, "Defined", "name:" + i)));
+            damageTheWayUpdateEventUsedTo(id, original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        }
+
+        UpdateEventRepair oneBatchOnly = new UpdateEventRepair(database, EVENT_COLLECTION,
+                UpdateEventRepairOptions.defaults().withBatchSize(1).withThrottleMillis(60_000));
+        Thread runner = new Thread(oneBatchOnly::run);
+        runner.start();
+        waitUntilCheckpointExists();
+        runner.interrupt();
+
+        UpdateEventRepairResult resumed = newRepair().run();
+
+        assertThat(resumed.unrecoverableEventCount())
+                .as("a resumed run must carry the count the interrupted run already found, otherwise it reports a clean repair over damage that is still there")
+                .isEqualTo(1);
+    }
+
+    private void waitUntilCheckpointExists() {
+        for (int attempt = 0; attempt < 200; attempt++) {
+            if (database.getCollection(EVENT_COLLECTION + "_update_event_repair_checkpoint").countDocuments() > 0) {
+                return;
+            }
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+        }
+        throw new AssertionError("The throttled repair never wrote a checkpoint, so there was nothing to resume from");
+    }
+
+    private List<String> eventIdsInPositionOrder() {
+        try (var events = eventStore.readInPositionOrder(Filter.all(), PositionRange.fromBeginning())) {
+            return events.map(CloudEvent::getId).toList();
+        }
     }
 
     /**

@@ -35,11 +35,14 @@ import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
+import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Supplier;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
@@ -50,6 +53,7 @@ import static com.mongodb.client.model.Filters.type;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toCollection;
 import static org.occurrent.cloudevents.OccurrentCloudEventExtension.POSITION;
+import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
 
 /**
  * Repairs events that Occurrent's own {@code updateEvent} damaged before 0.34.0, so they become visible to DCB reads
@@ -100,12 +104,27 @@ public final class UpdateEventRepair {
 
     private final String eventStoreCollectionName;
     private final UpdateEventRepairOptions options;
+    private final RetryStrategy retryStrategy;
 
     private final MongoCollection<Document> eventCollection;
     private final MongoCollection<Document> checkpointCollection;
 
+    /**
+     * Retries every MongoDB operation with exponential backoff from 100 ms up to 2 seconds, so a transient outage
+     * does not abandon a repair that may have hours of collection left to walk.
+     */
     public UpdateEventRepair(MongoDatabase database, String eventStoreCollectionName, UpdateEventRepairOptions options) {
+        this(database, eventStoreCollectionName, options, defaultRetryStrategy());
+    }
+
+    /**
+     * @param retryStrategy How to retry a MongoDB operation that fails. A repair walks a whole collection, so a
+     *                      strategy that gives up immediately turns a momentary outage into a run an operator has
+     *                      to notice and restart.
+     */
+    public UpdateEventRepair(MongoDatabase database, String eventStoreCollectionName, UpdateEventRepairOptions options, RetryStrategy retryStrategy) {
         requireNonNull(database, "database cannot be null");
+        this.retryStrategy = requireNonNull(retryStrategy, "retryStrategy cannot be null");
         this.eventStoreCollectionName = requireNonNull(eventStoreCollectionName, "eventStoreCollectionName cannot be null");
         this.options = requireNonNull(options, "options cannot be null");
         this.eventCollection = database.getCollection(eventStoreCollectionName);
@@ -121,9 +140,9 @@ public final class UpdateEventRepair {
      * @return how many events the repair would touch, and how many of those have a position it cannot restore.
      */
     public UpdateEventRepairReport report() {
-        long needingRepair = eventCollection.countDocuments(damagedEventFilter());
-        long lostPosition = eventCollection.countDocuments(and(exists(DcbCloudEvents.TAGS), exists(POSITION, false)));
-        log.info("Repair report for collection '{}': {} events need repair, {} of them have a position that cannot be restored.",
+        long needingRepair = withRetry(() -> eventCollection.countDocuments(damagedEventFilter()));
+        long lostPosition = withRetry(() -> eventCollection.countDocuments(and(exists(DcbCloudEvents.TAGS), exists(POSITION, false))));
+        log.info("Repair report for collection '{}': {} events need repair. Separately, {} events have a position that cannot be restored.",
                 eventStoreCollectionName, needingRepair, lostPosition);
         return new UpdateEventRepairReport(needingRepair, lostPosition);
     }
@@ -135,20 +154,22 @@ public final class UpdateEventRepair {
      * @return what was repaired, and what could not be.
      */
     public UpdateEventRepairResult run() {
-        Object lastProcessedId = loadCheckpoint();
+        Document checkpoint = loadCheckpoint();
+        Object lastProcessedId = checkpoint == null ? null : checkpoint.get(UpdateEventRepairCheckpoint.FIELD_LAST_PROCESSED_ID);
+        long unrecoverableCount = checkpoint == null ? 0 : numberOrZero(checkpoint.get(UpdateEventRepairCheckpoint.FIELD_UNRECOVERABLE_COUNT));
         if (lastProcessedId != null) {
             log.info("Resuming the repair of collection '{}' after _id {}, from an earlier run that did not finish. Drop the '{}' collection to start from the beginning instead.",
                     eventStoreCollectionName, lastProcessedId, checkpointCollectionName(eventStoreCollectionName));
         }
         long repaired = 0;
-        long unrecoverableCount = 0;
         List<UnrecoverableEvent> unrecoverable = new ArrayList<>();
 
         while (true) {
-            List<Document> batch = eventCollection.find(and(damagedEventFilter(), afterFilter(lastProcessedId)))
+            Object resumeAfter = lastProcessedId;
+            List<Document> batch = withRetry(() -> eventCollection.find(and(damagedEventFilter(), afterFilter(resumeAfter)))
                     .sort(Sorts.ascending(ID))
                     .limit(options.batchSize())
-                    .into(new ArrayList<>());
+                    .into(new ArrayList<>()));
             if (batch.isEmpty()) {
                 break;
             }
@@ -173,7 +194,7 @@ public final class UpdateEventRepair {
             // Advance past the whole batch, including events nothing could be done about. They keep matching the
             // damaged-event filter, so without this the next batch would return them again and the run would not end.
             lastProcessedId = batch.getLast().get(ID);
-            checkpoint(lastProcessedId, batch.size());
+            checkpoint(lastProcessedId, batch.size(), unrecoverableCount);
             log.info("Repaired {} of {} events in this batch of collection '{}', {} repaired so far.",
                     repairedInBatch, batch.size(), eventStoreCollectionName, repaired);
 
@@ -255,43 +276,59 @@ public final class UpdateEventRepair {
             return false;
         }
 
-        try {
-            return eventCollection.updateOne(eq(ID, eventId), Updates.combine(updates)).getModifiedCount() > 0;
-        } catch (MongoWriteException e) {
-            if (ErrorCategory.fromErrorCode(e.getError().getCode()) != ErrorCategory.DUPLICATE_KEY) {
-                throw e;
+        // The duplicate key is caught inside the retried block, so a deterministic rejection returns rather than
+        // throwing, and the retry only ever sees a transient failure. Re-running the same $set is harmless.
+        return withRetry(() -> {
+            try {
+                return eventCollection.updateOne(eq(ID, eventId), Updates.combine(updates)).getModifiedCount() > 0;
+            } catch (MongoWriteException e) {
+                if (ErrorCategory.fromErrorCode(e.getError().getCode()) != ErrorCategory.DUPLICATE_KEY) {
+                    throw e;
+                }
+                // Another event already holds this position as a number, and the unique position index refuses a
+                // second claim on it. The update was rejected whole, so the event is exactly as it was found.
+                unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN, String.valueOf(storedPosition)));
+                return false;
             }
-            // Another event already holds this position as a number, and the unique position index refuses a second
-            // claim on it. The update was rejected whole, so the event is exactly as it was found.
-            unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN, String.valueOf(storedPosition)));
-            return false;
-        }
+        });
     }
 
-    private @Nullable Object loadCheckpoint() {
-        Document checkpoint = checkpointCollection.find(eq(ID, UpdateEventRepairCheckpoint.CHECKPOINT_DOCUMENT_ID)).first();
-        return checkpoint == null ? null : checkpoint.get(UpdateEventRepairCheckpoint.FIELD_LAST_PROCESSED_ID);
+    private @Nullable Document loadCheckpoint() {
+        return withRetry(() -> checkpointCollection.find(eq(ID, UpdateEventRepairCheckpoint.CHECKPOINT_DOCUMENT_ID)).first());
+    }
+
+    private static long numberOrZero(@Nullable Object value) {
+        return value instanceof Number number ? number.longValue() : 0;
     }
 
     private static Bson afterFilter(@Nullable Object lastProcessedId) {
         return lastProcessedId == null ? new Document() : gt(ID, lastProcessedId);
     }
 
-    private void checkpoint(Object lastProcessedId, int batchSize) {
-        checkpointCollection.findOneAndUpdate(
+    private void checkpoint(Object lastProcessedId, int batchSize, long unrecoverableCount) {
+        withRetry(() -> checkpointCollection.findOneAndUpdate(
                 eq(ID, UpdateEventRepairCheckpoint.CHECKPOINT_DOCUMENT_ID),
                 Updates.combine(
                         Updates.set(UpdateEventRepairCheckpoint.FIELD_LAST_PROCESSED_ID, lastProcessedId),
+                        Updates.set(UpdateEventRepairCheckpoint.FIELD_UNRECOVERABLE_COUNT, unrecoverableCount),
                         Updates.inc(UpdateEventRepairCheckpoint.FIELD_PROCESSED_COUNT, batchSize)
                 ),
                 new FindOneAndUpdateOptions().upsert(true)
-        );
+        ));
     }
 
     // Remove the checkpoint once the whole collection has been walked, so a finished repair leaves no state behind
     // and a later run starts from the beginning and finds nothing to do.
     private void deleteCheckpoint() {
-        checkpointCollection.deleteOne(eq(ID, UpdateEventRepairCheckpoint.CHECKPOINT_DOCUMENT_ID));
+        withRetry(() -> checkpointCollection.deleteOne(eq(ID, UpdateEventRepairCheckpoint.CHECKPOINT_DOCUMENT_ID)));
+    }
+
+    private <T> T withRetry(Supplier<T> mongoOperation) {
+        return executeWithRetry(mongoOperation, __ -> true, retryStrategy).get();
+    }
+
+    private static RetryStrategy defaultRetryStrategy() {
+        return RetryStrategy.exponentialBackoff(Duration.ofMillis(100), Duration.ofSeconds(2), 2.0f);
     }
 
     private static String checkpointCollectionName(String eventStoreCollectionName) {
