@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 166
+revision: 167
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -313,6 +313,19 @@ units:
     blocking_on: []
     next_action: "dispatched 2026-08-22T12:0xZ as a Sonnet worktree subagent off origin/main, dec-0024. #884 is the same test (rel34 U17 retired in favour of this unit 2026-08-22T12:5xZ), the PR closes #884 and clears #893 item 21"
     last_meaningful_progress_at: 2026-08-22T12:00:00Z
+  U17:
+    issue: 893
+    goal: "Decide whether RabbitMqCloudEventBridgeConnectionRecoveryTest.a_held_deferred_delivery_tag_across_a_forced_connection_recovery (four sightings, #893 items 17 and 30, latest rel34 PR 914 misc java-21) is a real race in PR 895's recovery path (loss-class, fix in brk), a test racing its own fixture (fix the test), or infrastructure. The test pins the held-tag-survives-recovery guarantee, so a flake note is not an acceptable end state."
+    phase: RUNNING
+    health: PROGRESSING
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: manual_approval, ref: "verdict with evidence chain and pass counts, and the fix merged if the verdict is race or fixture", met: false}
+    blocking_on: []
+    next_action: "Opus worktree subagent investigating on origin/main since 2026-08-22T13:4xZ, adopted under the epic's own authority (brk wrote the code), rel34 informed"
+    last_meaningful_progress_at: 2026-08-22T13:45:00Z
   U9:
     issue: null
     goal: "Epic-end fresh-context review fixpoint over the complete brk increment, plus the mechanical checklist: mvn_local_snapshot.sh artifact proof, required-test-images.sh warning-free with both broker images, shard-timing read, cross-transport API symmetry, #414 thinness re-check"
