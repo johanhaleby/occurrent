@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 57
-updated_at: '2026-08-22T15:28:18+00:00'
-updated_by: 'orchestrator rel34: U19 DONE, PR 937 merged as d989dbfe6'
+revision: 58
+updated_at: '2026-08-22T15:30:25+00:00'
+updated_by: 'orchestrator rel34: U5 dispatched plan-first, U11 session recorded'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -574,11 +574,11 @@ units:
     issue: 878
     goal: A reactor projection that applies an append always records it, so waitUntilApplied cannot time
       out on a write that did land.
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: chip task_ea20e8b3, plan-first, Opus/high
     deliverables:
     - check: pr_merged
       ref: null
@@ -589,9 +589,21 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch now, the U12 sequencing reason is void
-    last_meaningful_progress_at: '2026-08-22T15:20:02+00:00'
-    observed: {}
+    next_action: await the plan at the plan gate, do not expect code
+    last_meaningful_progress_at: '2026-08-22T15:30:25+00:00'
+    observed:
+      dispatched_plan_first:
+        note: 'Dispatched PLAN FIRST rather than as an implementation, because #891''s own filer recorded
+          that every fix they found decides by position and ADR 122 stands against deciding by position.
+          A blind implementation dispatch would have produced either a design decision taken by a worker
+          without a gate, or a stall. Kept in 0.34.0 on AGENTS.md line 109 rather than asked: a wait that
+          times out on a write that succeeded is a known hole in correctness, which that line says is
+          not a follow-up candidate. The brief says so explicitly and gives the worker room to report
+          back if the fix turns out disproportionate, which is a finding rather than a decision it may
+          take. The brief also forbids writing an ADR or taking a number unilaterally: 0135 is free and
+          shared across three fleets, so a claim goes through the orchestrator.'
+        via: orchestrator
+        at: '2026-08-22T15:30:25+00:00'
     assessment: '#891 ALONE now; #878 moved to U4. Sequenced behind U12 rather than run beside it: #891''s
       fix path runs through framework/spring-boot-autoconfigure/reactor ProjectionAnnotationRegistrar.java
       and ComposedCatchupModel.java, the two files U12 owns. Give it to the U12 worker when U12 merges,
@@ -1405,7 +1417,8 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: chip task_61a17509, worktree via zealous-williamson-0ad901-c9, Opus/high, implementing ADR
+      134
     deliverables:
     - check: manual_approval
       ref: 911
@@ -1425,7 +1438,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: 'await the implementation worker''s claim on #818'
-    last_meaningful_progress_at: '2026-08-22T15:14:59+00:00'
+    last_meaningful_progress_at: '2026-08-22T15:30:25+00:00'
     observed:
       design_gate:
         note: 'ADR 134 delivered as PR 911, Proposed, design only, no code. NOT merged on green: a plan-first
@@ -1482,6 +1495,20 @@ units:
           3.'
         via: epic-state.py derive after the timestamp repair
         at: '2026-08-22T15:14:59+00:00'
+      adr_beats_my_done_when:
+        note: 'The worker found my brief''s done_when contradicting the ADR it told the worker was authoritative:
+          I listed an OpenRewrite recipe, and ADR 134 Decision 8 plus its design-gate rulings explicitly
+          say no recipe, because one cannot know what a user''s new ''case QUARANTINED'' branch should
+          do nor rewrite the intent of a findByStatus(ACTIVE, ..) call. The worker followed the ADR, which
+          is what the brief''s own instruction required, and asked rather than assuming. Ruled: ADR wins,
+          the recipe item is struck. It also found a FIFTH break the ADR missed. SagaRunnerConfig shipped
+          in 0.33.0 with four record components, VERIFIED AGAINST THE TAG rather than inferred, and the
+          quarantine budget needs a fifth, so the canonical constructor and the deconstruction pattern
+          each break. Being absorbed with a delegating four-argument constructor and covered in the same
+          migration section. ADR 134 is merged and therefore immutable, so per AGENTS.md a correction
+          goes in a new ADR amending it by reference, which I will route after this unit lands.'
+        via: worker message + ADR 134 Decision 8
+        at: '2026-08-22T15:30:25+00:00'
     assessment: 'Johan ruled it IN 0.34.0 (dec-0002), overruling the recommendation to defer. Pre-existing:
       predates ADR 123 and ADR 126, both of which accepted the tradeoff deliberately, and PR 816''s review
       thread raised it against ADR 126. The event path has no equivalent of SagaExecution.pollTimers,
