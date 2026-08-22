@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 74
-updated_at: '2026-08-22T17:27:21+00:00'
-updated_by: 'orchestrator rel34: re-ran a stale run, corrected onto 941''s current head'
+revision: 75
+updated_at: '2026-08-22T17:33:30+00:00'
+updated_by: 'orchestrator rel34: review requests do not survive a push, my verifier gave U5 a false claim'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -673,8 +673,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: await the shard re-run, nothing else outstanding
-    last_meaningful_progress_at: '2026-08-22T17:27:21+00:00'
+    next_action: await CI and the Copilot review on 0bccf6041, then the adversarial pass
+    last_meaningful_progress_at: '2026-08-22T17:33:30+00:00'
     observed:
       dispatched_plan_first:
         note: 'Dispatched PLAN FIRST rather than as an implementation, because #891''s own filer recorded
@@ -781,6 +781,24 @@ units:
           that head.'
         via: gh pr view headRefOid compared against the run's head_sha
         at: '2026-08-22T17:27:21+00:00'
+      my_verifier_gave_it_a_false_claim:
+        note: 'MY ADVERSARIAL PASS HANDED THIS UNIT A FALSE CLAIM AND IT RECORDED IT. My verifier reported
+          that nothing in the repository tests the exclusivity direction, citing only the TCK conformance
+          test asserting presence. I relayed that as a required addition and U5 wrote it into ADR 0135''s
+          ''Limits of the evidence'' section. Copilot caught it. SpringMongoSubscriptionModelTest.resuming_at_a_given_position_reopens_the_change_stream_there
+          asserts containsExactly(first, second, second, third) after reopening at a checkpoint, which
+          IS an absence assertion about a pre-checkpoint event. U5 NARROWED RATHER THAN DECLINED, and
+          the narrowing is better than either the original claim or a retraction. That test''s checkpoint
+          is the resume token carried by an already delivered event, which is MongoDB resumeAfter. The
+          mechanism ADR 0135 depends on is startAtOperationTime with the increment raised by one. Different
+          semantics, so the gap is real but confined to the operation-time form, and the bullet now says
+          exactly that. It also re-checked the subscription TCK itself rather than by report: assertDeliversStartingFrom
+          asserts only .contains(event.getId()) and its own comment tolerates an earlier event arriving.
+          The shape is the day''s recurring one at its most recursive: an overclaim inside a section whose
+          entire purpose is stating limits honestly. It re-audited the remaining five never/always/every
+          claims in that ADR and reports all five are statements about what the code does, each verified.'
+        via: worker report, verified against Copilot's finding
+        at: '2026-08-22T17:33:30+00:00'
     assessment: '#891 ALONE now; #878 moved to U4. Sequenced behind U12 rather than run beside it: #891''s
       fix path runs through framework/spring-boot-autoconfigure/reactor ProjectionAnnotationRegistrar.java
       and ComposedCatchupModel.java, the two files U12 owns. Give it to the U12 worker when U12 merges,
@@ -2364,3 +2382,14 @@ cross_epic:
       read as a regression from the release commit. Neither is a defect in rel34''s work and neither was
       pulled into 0.34.0.'
     at: '2026-08-22T17:25:25+00:00'
+  copilot_request_lifecycle:
+    note: 'OPERATIONAL MECHANIC, learned the expensive way and fleet-wide. A Copilot review request is
+      CONSUMED by the review it produces and does NOT survive a subsequent push. It is not queued behind
+      the push. rel34 requested fresh reviews on four PRs to clear a stale-review problem; each produced
+      one review, each worker pushed again, and a later sweep found FIVE OF SIX PRs with a stale review
+      and ZERO pending requests, a state that would never resolve on its own. The rule: request at the
+      moment of gating, after the worker declares settled and against the resolved current head. Anything
+      earlier is spent by the next push. The condition is invisible per PR, since a stale review with
+      no pending request looks identical to one with a request pending, and only the request count separates
+      them, so the fleet-wide sweep is the thing that finds it.'
+    at: '2026-08-22T17:33:30+00:00'
