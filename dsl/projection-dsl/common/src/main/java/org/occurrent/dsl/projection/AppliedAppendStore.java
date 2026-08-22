@@ -135,6 +135,11 @@ public interface AppliedAppendStore {
      * polling toward its deadline rather than ending it, the same absorb-and-poll behavior the Mongo stores
      * establish with their own {@code RetryStrategy}.
      * <p>
+     * A wait always reads at least once, so a {@code timeout} of zero, or one a caller computed from a budget that
+     * has already run out, still answers whether the append is applied instead of reporting that it is not. Every
+     * implementation owes that, since a store answering {@code false} about an append it holds is a wrong answer
+     * rather than a fast one.
+     * <p>
      * The deadline is checked between polls, never during one, so this method returns after {@code timeout} plus
      * however long the {@link #hasApplied(String, AppendId)} call already in flight takes to answer. For
      * {@link #inMemory()} that is a map lookup and the difference is nothing. For an implementation that calls a

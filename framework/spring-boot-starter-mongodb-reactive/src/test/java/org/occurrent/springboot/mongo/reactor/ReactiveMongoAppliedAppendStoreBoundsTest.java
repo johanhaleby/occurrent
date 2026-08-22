@@ -308,4 +308,73 @@ class ReactiveMongoAppliedAppendStoreBoundsTest {
 
         assertThat(indexAttempts).hasValue(1);
     }
+
+    /**
+     * The reactive mirror. A timeout that has already run out must not turn a true answer into a false one.
+     */
+    @Test
+    void a_wait_whose_timeout_has_already_elapsed_still_answers_that_an_applied_append_is_applied() {
+        AtomicInteger reads = new AtomicInteger();
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.exists(any(Query.class), anyString()))
+                .thenReturn(Mono.fromSupplier(() -> {
+                    reads.incrementAndGet();
+                    return true;
+                }));
+        AppliedAppendStore store = storeWith(mongoOperations, boundedRetry());
+
+        assertThat(store.waitUntilApplied("orders", AppendId.mint(), Duration.ZERO)).isTrue();
+        assertThat(store.waitUntilApplied("orders", AppendId.mint(), Duration.ofSeconds(-1))).isTrue();
+
+        assertThat(reads).hasValue(2);
+    }
+
+    @Test
+    void a_wait_whose_timeout_has_already_elapsed_reads_once_and_gives_up_when_the_append_is_not_applied() {
+        AtomicInteger reads = new AtomicInteger();
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.exists(any(Query.class), anyString()))
+                .thenReturn(Mono.fromSupplier(() -> {
+                    reads.incrementAndGet();
+                    return false;
+                }));
+        AppliedAppendStore store = storeWith(mongoOperations, boundedRetry());
+
+        assertThat(store.waitUntilApplied("orders", AppendId.mint(), Duration.ZERO)).isFalse();
+
+        assertThat(reads).hasValue(1);
+    }
+
+    /**
+     * The reactive mirror. `Retry.indefinitely()` never gives up and a `Retry` exposes no way to ask, so the store
+     * stops the call itself rather than trusting the policy it was handed.
+     */
+    @Test
+    void a_retry_policy_that_never_gives_up_is_still_stopped_by_the_store() {
+        AtomicInteger attempts = new AtomicInteger();
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
+                .thenReturn(failingAfterCounting(attempts));
+        AppliedAppendStore store = storeWith(mongoOperations, Retry.indefinitely());
+
+        assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
+                .isInstanceOf(RuntimeException.class);
+
+        assertThat(attempts).hasValue(ReactiveMongoAppliedAppendStore.MAX_ATTEMPTS_CEILING);
+    }
+
+    @Test
+    void the_ceiling_never_shortens_a_policy_the_caller_actually_chose() {
+        AtomicInteger attempts = new AtomicInteger();
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.exists(any(Query.class), anyString()))
+                .thenReturn(ReactiveMongoAppliedAppendStoreBoundsTest.<Boolean>failingAfterCounting(attempts));
+        AppliedAppendStore store = storeWith(mongoOperations, boundedRetry());
+
+        assertThatThrownBy(() -> store.hasApplied("orders", AppendId.mint()))
+                .isInstanceOf(RuntimeException.class);
+
+        assertThat(ATTEMPTS).isLessThan(ReactiveMongoAppliedAppendStore.MAX_ATTEMPTS_CEILING);
+        assertThat(attempts).hasValue(ATTEMPTS);
+    }
 }

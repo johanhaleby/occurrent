@@ -241,4 +241,71 @@ class MongoAppliedAppendStoreBoundsTest {
 
         verify(indexOperations, times(1)).ensureIndex(any());
     }
+
+    /**
+     * A timeout that has already run out must not turn a true answer into a false one. The interface default reads
+     * once before it looks at the deadline, so a store that skipped the read entirely disagreed with the interface
+     * it implements, and told a caller that an append it holds is not applied.
+     */
+    @Test
+    void a_wait_whose_timeout_has_already_elapsed_still_answers_that_an_applied_append_is_applied() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
+        when(mongoOperations.exists(any(Query.class), anyString())).thenReturn(true);
+        AppliedAppendStore store = storeWith(mongoOperations, boundedRetry());
+
+        assertThat(store.waitUntilApplied("orders", AppendId.mint(), Duration.ZERO)).isTrue();
+        assertThat(store.waitUntilApplied("orders", AppendId.mint(), Duration.ofSeconds(-1))).isTrue();
+
+        verify(mongoOperations, times(2)).exists(any(Query.class), anyString());
+    }
+
+    @Test
+    void a_wait_whose_timeout_has_already_elapsed_reads_once_and_gives_up_when_the_append_is_not_applied() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
+        when(mongoOperations.exists(any(Query.class), anyString())).thenReturn(false);
+        AppliedAppendStore store = storeWith(mongoOperations, boundedRetry());
+
+        assertThat(store.waitUntilApplied("orders", AppendId.mint(), Duration.ZERO)).isFalse();
+
+        verify(mongoOperations, times(1)).exists(any(Query.class), anyString());
+    }
+
+    /**
+     * A caller can build a `RetryStrategy` that never gives up, and no public API on it reports that, so the store
+     * cannot reject one at construction the way it rejects a blank collection. It stops the call itself instead, so
+     * the number of times it reaches MongoDB is still decided before the call starts rather than by how long the
+     * outage lasts.
+     */
+    @Test
+    void a_retry_policy_that_never_gives_up_is_still_stopped_by_the_store() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
+        when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
+                .thenThrow(new RuntimeException("store outage"));
+        RetryStrategy neverGivesUp = RetryStrategy.retry().backoff(Backoff.fixed(1));
+        AppliedAppendStore store = storeWith(mongoOperations, neverGivesUp);
+
+        assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
+                .isInstanceOf(RuntimeException.class);
+
+        verify(mongoOperations, times(MongoAppliedAppendStore.MAX_ATTEMPTS_CEILING))
+                .upsert(any(Query.class), any(UpdateDefinition.class), anyString());
+    }
+
+    @Test
+    void the_ceiling_never_shortens_a_policy_the_caller_actually_chose() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
+        when(mongoOperations.exists(any(Query.class), anyString()))
+                .thenThrow(new RuntimeException("store outage"));
+        AppliedAppendStore store = storeWith(mongoOperations, boundedRetry());
+
+        assertThatThrownBy(() -> store.hasApplied("orders", AppendId.mint()))
+                .isInstanceOf(RuntimeException.class);
+
+        assertThat(ATTEMPTS).isLessThan(MongoAppliedAppendStore.MAX_ATTEMPTS_CEILING);
+        verify(mongoOperations, times(ATTEMPTS)).exists(any(Query.class), anyString());
+    }
 }

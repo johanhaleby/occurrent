@@ -34,6 +34,7 @@ import reactor.util.retry.Retry;
 
 import java.time.Duration;
 import java.util.Date;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.util.Objects.requireNonNull;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -102,6 +103,17 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * the same reason a wait needs one, so configure one there when the wall clock is what matters. The same number the blocking store uses.
      */
     public static final int DEFAULT_MAX_ATTEMPTS = 10;
+
+    /**
+     * The most attempts this store will ever make for one read or write, 1000, whatever {@link Retry} it was given.
+     * A {@link Retry} is an abstract class with no accessor reporting whether it stops on its own, so a store handed
+     * {@code Retry.indefinitely()} or a {@code Retry.backoff(Long.MAX_VALUE, ..)} cannot reject it at construction
+     * and would otherwise call MongoDB for as long as an outage lasted. This is two orders of magnitude above
+     * {@link #DEFAULT_MAX_ATTEMPTS}, so no configured value reaches it and it never quietly shortens a policy a
+     * caller chose. It exists so that a policy which never stops still stops. The same number the blocking store
+     * uses.
+     */
+    public static final int MAX_ATTEMPTS_CEILING = 1000;
 
     private final ReactiveMongoOperations mongoOperations;
     private final String collection;
@@ -254,15 +266,18 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * {@link #existsWithIndexesEnsured} runs it in the same chain as the read, retried and limited to the same
      * deadline.
      */
-    private boolean readOnceBoundedBy(String projectionId, AppendId appendId, long deadlineNanos) {
+    private boolean readOnceBoundedBy(String projectionId, AppendId appendId, long deadlineNanos, AtomicBoolean anyReadStarted) {
         long remainingNanos = deadlineNanos - System.nanoTime();
-        if (remainingNanos <= 0) {
+        boolean firstRead = anyReadStarted.compareAndSet(false, true);
+        if (remainingNanos <= 0 && !firstRead) {
             return false;
         }
         try {
-            Boolean applied = existsWithIndexesEnsured(projectionId, appendId)
-                    .retryWhen(retry)
-                    .block(Duration.ofNanos(remainingNanos));
+            Mono<Boolean> read = existsWithIndexesEnsured(projectionId, appendId).retryWhen(retry);
+            // The first read of a wait runs whatever the deadline says, so a timeout that has already elapsed still
+            // gets one answer rather than a false one. It blocks the way a plain hasApplied does, since there is no
+            // remaining time to bound it with, which is the one place a wait depends on the client's own timeout.
+            Boolean applied = remainingNanos > 0 ? read.block(Duration.ofNanos(remainingNanos)) : read.block();
             return Boolean.TRUE.equals(applied);
         } catch (RuntimeException ignored) {
             return false;
@@ -304,8 +319,9 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
             case Backoff.Exponential exponential -> exponential.initial.toNanos();
             case Backoff.None ignored -> throw new IllegalStateException("unreachable, rejected above");
         };
+        AtomicBoolean anyReadStarted = new AtomicBoolean();
         while (true) {
-            if (readOnceBoundedBy(projectionId, appendId, deadlineNanos)) {
+            if (readOnceBoundedBy(projectionId, appendId, deadlineNanos, anyReadStarted)) {
                 return true;
             }
             long remainingNanos = deadlineNanos - System.nanoTime();
@@ -337,8 +353,9 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     }
 
     /**
-     * Wraps a {@link Retry} so a {@link ConflictingIndexException} ends the call instead of being repeated, whatever
-     * the wrapped policy would have done with it. Reactor takes the retry policy as one object and gives a store no
+     * Wraps a {@link Retry} so a {@link ConflictingIndexException} ends the call instead of being repeated, and so
+     * no policy runs past {@link #MAX_ATTEMPTS_CEILING} attempts, whatever the wrapped policy would have done with
+     * either. Reactor takes the retry policy as one object and gives a store no
      * separate say in which failures it repeats, unlike the blocking {@code executeWithRetry}, so the store takes
      * that say back here rather than asking every caller to remember it. Erroring the companion is what stops
      * {@code retryWhen}, and every other failure reaches the wrapped policy unchanged.
@@ -348,7 +365,8 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
             @Override
             public Publisher<?> generateCompanion(Flux<RetrySignal> retrySignals) {
                 return delegate.generateCompanion(retrySignals.handle((signal, sink) -> {
-                    if (signal.failure() instanceof ConflictingIndexException) {
+                    if (signal.failure() instanceof ConflictingIndexException
+                            || signal.totalRetries() >= MAX_ATTEMPTS_CEILING - 1L) {
                         sink.error(signal.failure());
                     } else {
                         sink.next(signal);

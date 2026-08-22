@@ -33,6 +33,8 @@ import org.springframework.data.mongodb.core.query.Update;
 
 import java.time.Duration;
 import java.util.Date;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
@@ -92,6 +94,17 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      * the same reason a wait needs one, so configure one there when the wall clock is what matters.
      */
     public static final int DEFAULT_MAX_ATTEMPTS = 10;
+
+    /**
+     * The most attempts this store will ever make for one read or write, 1000, whatever {@link RetryStrategy} it
+     * was given. No public API on {@link RetryStrategy} reports whether a policy stops on its own, so a store
+     * handed one built by {@code RetryStrategy.retry()} or {@code exponentialBackoff(..)} without
+     * {@code maxAttempts(..)} cannot reject it at construction and would otherwise call MongoDB for as long as an
+     * outage lasted. This is two orders of magnitude above {@link #DEFAULT_MAX_ATTEMPTS}, so no configured value
+     * reaches it and it never quietly shortens a policy a caller chose. It exists so that a policy which never
+     * stops still stops.
+     */
+    public static final int MAX_ATTEMPTS_CEILING = 1000;
 
     private final MongoOperations mongoOperations;
     private final String collection;
@@ -177,7 +190,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
                     new Update().setOnInsert(RECORDED_AT, new Date()),
                     collection);
         };
-        executeWithRetry(write, this::isRetryable, retryStrategy).run();
+        executeWithRetry(write, retryableUpToTheCeiling(), retryStrategy).run();
     }
 
     @Override
@@ -185,7 +198,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
         requireNonNull(projectionId, "projectionId cannot be null");
         requireNonNull(appendId, "appendId cannot be null");
         Supplier<Boolean> read = () -> readOnce(projectionId, appendId);
-        return requireNonNull(executeWithRetry(read, this::isRetryable, retryStrategy).get());
+        return requireNonNull(executeWithRetry(read, retryableUpToTheCeiling(), retryStrategy).get());
     }
 
     private boolean readOnce(String projectionId, AppendId appendId) {
@@ -211,12 +224,14 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      * rather than propagating the {@code RuntimeException} {@code RetryExecution} wraps that interrupt in. Any
      * interrupt flag is already restored by {@code RetryExecution} before this method ever sees the exception.
      */
-    private boolean readOnceBoundedBy(String projectionId, AppendId appendId, long deadlineNanos) {
-        // Checked inside the supplier as well as in the retry predicate, because the predicate runs before the
-        // retry sleeps and the sleep can cross the deadline. Answering false there keeps a read that would start
-        // after the deadline from starting at all.
-        Supplier<Boolean> read = () -> System.nanoTime() < deadlineNanos && readOnce(projectionId, appendId);
-        Predicate<Throwable> notShutdownAndBeforeDeadline = e -> isRetryable(e) && System.nanoTime() < deadlineNanos;
+    private boolean readOnceBoundedBy(String projectionId, AppendId appendId, long deadlineNanos, AtomicBoolean anyReadStarted) {
+        // The deadline is checked inside the supplier as well as in the retry predicate, because the predicate runs
+        // before the retry sleeps and that sleep can cross the deadline. The first read of a wait runs whatever the
+        // deadline says, so a timeout that has already elapsed still gets one answer rather than a false one.
+        Supplier<Boolean> read = () -> (anyReadStarted.compareAndSet(false, true) || System.nanoTime() < deadlineNanos)
+                && readOnce(projectionId, appendId);
+        Predicate<Throwable> retryable = retryableUpToTheCeiling();
+        Predicate<Throwable> notShutdownAndBeforeDeadline = e -> retryable.test(e) && System.nanoTime() < deadlineNanos;
         try {
             return requireNonNull(executeWithRetry(read, notShutdownAndBeforeDeadline, retryStrategy).get());
         } catch (RuntimeException e) {
@@ -231,7 +246,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
             ensureIndexesOnce();
             mongoOperations.remove(query(where(PROJECTION_ID).is(projectionId)), collection);
         };
-        executeWithRetry(delete, this::isRetryable, retryStrategy).run();
+        executeWithRetry(delete, retryableUpToTheCeiling(), retryStrategy).run();
     }
 
     @Override
@@ -246,9 +261,10 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      * wait never reaches the deadline check that is supposed to end it. The loop shape (read, check, sleep, grow
      * the backoff) otherwise matches the interface default. Only the read is store-specific.
      * <p>
-     * The deadline stops a read from starting, not one already running. No attempt begins once the deadline has
-     * passed, but the one already in flight when it passes runs on, and this method returns once that attempt
-     * answers. A MongoDB client left with no timeout of its own does not answer at all while a connection it has
+     * The deadline stops a read from starting, not one already running. After the first read, no attempt begins
+     * once the deadline has passed, and the one already in flight when it passes runs on, so this method returns
+     * once that attempt answers. The first read always runs, so a {@code timeout} of zero or one that has already
+     * elapsed still answers whether the append is applied rather than reporting that it is not. A MongoDB client left with no timeout of its own does not answer at all while a connection it has
      * accepted stops responding, so the timeout a caller asked for holds only as far as the client's own
      * {@code timeoutMS} or socket timeout holds. Configure one on the client if the wait's deadline has to be the
      * one a caller gets, for example through {@code spring.mongodb.uri}. The reactive store bounds the same
@@ -267,8 +283,9 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
             case Backoff.Exponential exponential -> exponential.initial.toNanos();
             case Backoff.None ignored -> throw new IllegalStateException("unreachable, rejected above");
         };
+        AtomicBoolean anyReadStarted = new AtomicBoolean();
         while (true) {
-            if (readOnceBoundedBy(projectionId, appendId, deadlineNanos)) {
+            if (readOnceBoundedBy(projectionId, appendId, deadlineNanos, anyReadStarted)) {
                 return true;
             }
             long remainingNanos = deadlineNanos - System.nanoTime();
@@ -308,6 +325,15 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      */
     private boolean isRetryable(Throwable e) {
         return !shutdown && !(e instanceof ConflictingIndexException);
+    }
+
+    /**
+     * One predicate per execution, since it counts that execution's attempts. Build it once and pass it to
+     * {@code executeWithRetry}, never per call to {@code test}.
+     */
+    private Predicate<Throwable> retryableUpToTheCeiling() {
+        AtomicInteger attempts = new AtomicInteger(1);
+        return e -> attempts.incrementAndGet() <= MAX_ATTEMPTS_CEILING && isRetryable(e);
     }
 
     /**

@@ -373,4 +373,21 @@ class AppliedAppendStoreTest {
 
         assertThat(store.hasApplied("orders", appendId)).isFalse();
     }
+
+    @Test
+    void a_wait_whose_timeout_has_already_elapsed_still_answers_that_an_applied_append_is_applied() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppendId appendId = AppendId.mint();
+        store.recordApplied("orders", appendId);
+
+        assertThat(store.waitUntilApplied("orders", appendId, Duration.ZERO)).isTrue();
+        assertThat(store.waitUntilApplied("orders", appendId, Duration.ofSeconds(-1))).isTrue();
+    }
+
+    @Test
+    void a_wait_whose_timeout_has_already_elapsed_answers_false_for_an_append_that_was_never_recorded() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+
+        assertThat(store.waitUntilApplied("orders", AppendId.mint(), Duration.ZERO)).isFalse();
+    }
 }

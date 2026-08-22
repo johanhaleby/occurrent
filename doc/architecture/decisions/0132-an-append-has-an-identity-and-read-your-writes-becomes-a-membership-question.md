@@ -266,6 +266,18 @@ That attempt limit applies outside a wait too, where `recordApplied`, `hasApplie
 calling a store for as long as an outage lasts. Decision 7 depends on it, since the clear it expects to stop a
 recorder can only stop if the retry behind that clear ends.
 
+An application can also construct either store directly and hand it a retry policy of its own, and neither
+`RetryStrategy` nor reactor's `Retry` reports whether a policy stops on its own, so the store cannot reject one that
+does not the way it rejects a blank collection name. Each store therefore stops the call itself after a ceiling far
+above any configured value. The number of times a store reaches MongoDB for one read or write is decided before the
+call starts on every path, which is the property this decision needs, and the configured limit is what decides it
+wherever the starters or the store's own defaults built the policy.
+
+A wait always reads at least once, before it looks at its deadline, so a timeout of zero or one that has already
+elapsed answers whether the append is applied rather than reporting that it is not. The interface default and both
+Mongo stores agree on that, since a store answering `false` about an append it holds is a wrong answer rather than
+a fast one.
+
 ### 6. Nothing is recorded while a projection is reading history
 
 A recorder records an identifier only when its projection is past the history its replay set out to read. While that
