@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 156
+revision: 157
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -288,11 +288,11 @@ units:
   U15:
     issue: null
     goal: "Durable fence on the catch-up marker write on both stacks (dec-0018): a checkpoint save from a replay attempt that lost its subscription id must not be trusted after a process restart, closing the window PR 896 narrowed from always to across-a-restart. Plan gate first (CheckpointWriteCondition keyed by the attempt token, or a durable delete of a marker written after ownership was lost), then implement, ships in 0.34.0."
-    phase: READY
+    phase: RUNNING
     health: UNKNOWN
     swept: false
     depends_on: []
-    session: null
+    session: "sharp-mirzakhani-1aa911-14 (local_d141f048)"
     deliverables:
       - {check: manual_approval, ref: "plan approved at the orchestrator plan gate before implementation", met: false}
       - {check: pr_merged, ref: null, met: false}
@@ -306,7 +306,7 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: [U7, U8, U10, U12]
-    session: "friendly-meninsky-bcc054-06"
+    session: "ecstatic-dubinsky-bf9908-4e (local_621ec131), round 3 review; earlier friendly-meninsky-bcc054-06 for PR 889"
     deliverables:
       - {check: manual_approval, ref: "fixpoint clean under the major-and-above cap-3 stopping rule, or the cap reached and remainders routed as one structured ask; mechanical checklist executed with pasted output", met: false, evidence: null}
     blocking_on: []
