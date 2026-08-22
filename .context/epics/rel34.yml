@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 31
-updated_at: '2026-08-22T16:10:00+00:00'
-updated_by: 'orchestrator session rel34-epic-registration-8c2066 (#922 verdict: a production stall in
-  shipped-to-main code, tag waits on brk''s fix)'
+revision: 32
+updated_at: '2026-08-22T16:50:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (901 re-verify HELD, streamid finding
+  filed as 927)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -126,9 +126,9 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: worker fixing the returned-CloudEvent position defect; re-verify after, earlier HELD
-      verdicts do not cover it
-    last_meaningful_progress_at: '2026-08-22T10:10:00+00:00'
+    next_action: Java CI in progress on 39d9a6ef0; merge when it concludes, adversarial verdict already
+      HELD on this head
+    last_meaningful_progress_at: '2026-08-22T16:50:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -213,6 +213,32 @@ units:
           attempt constructed one.'
         via: gh api pulls/901/reviews body plus reading MongoEventStore.updateEvent
         at: '2026-08-22T10:10:00+00:00'
+      reverify_preserve_position:
+        note: 'HELD against 39d9a6ef0, the head carrying the preservePosition fix that the earlier verdict
+          did not cover. Real Mongo via Testcontainers across all three stores, and it ran the check that
+          would have caught the ORIGINAL defect: comparing the RETURNED CloudEvent against the stored
+          BSON reconstructed via DcbDocumentMapper.toCloudEvent in the SAME test, rather than each against
+          the original independently, which is what let the first defect through. Cases: original with
+          a position updated to none; original with NO position whose updater FORGES one, the exact prior
+          regression; an empty tag set distinguished from an absent one on both sides; a non-DCB original
+          whose updater invents tags; a DCB original whose updater drops them; two consecutive adversarial
+          updates; and cross-store agreement on every case. Also established statically that chaining
+          preserveAppendId then preservePosition then preserveTags cannot undo an earlier step, since
+          each rebuilds targeting only its own named extension.'
+        via: orchestrator adversarial verify subagent
+        at: '2026-08-22T16:50:00+00:00'
+      routed_927:
+        note: 'INCIDENTAL out-of-scope finding, filed as #927: when an updater returns an event built
+          from scratch, updateEvent''s RETURNED event never regains streamid and streamversion. Those
+          are baked into the stored document through convertToDocument''s parameters and never reapplied
+          to the object handed back. Pre-existing and untouched by this PR, but it is the THIRD instance
+          of the same shape on the same method: PR 901 closes the position instance (#876) and the DCB-tags
+          instance (#904), and the pass confirmed position, tags and appendId all agree between returned
+          event and document in every case, so this is what is left. Orchestrator recommends ADOPTING
+          into 0.34.0 on the symmetry argument, with the counter-argument (genuinely pre-existing, and
+          0.34.0 has grown a lot) stated on the issue. Johan''s call.'
+        via: adversarial verify subagent, verified reproducible
+        at: '2026-08-22T16:50:00+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
