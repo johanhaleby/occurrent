@@ -1695,11 +1695,19 @@ workflow only concludes once every shard job it spawned has finished, so the par
 unambiguous at the workflow level while being invisible at the context level. It needs no magic
 number and survives any matrix change.
 
-Measured live on three heads: PR 913 rollup 27 contexts all green and the run `completed/success`,
-genuinely done. PR 916 rollup 26 with 2 pending and the run `in_progress`, consistent. PR 914 rollup
-THREE contexts, zero pending, zero failing, and "Java CI with Maven" ABSENT from its runs entirely,
-so the matrix had not started at all for that head. The third case passes both the naive gate and
-the counting gate's spirit while being nowhere near green.
+Measured live. PR 913 rollup 27 contexts all green and the run `completed/success`, genuinely done.
+PR 916 is the real evidence: its monitor event read `0fail DONE` and the immediate next read showed
+`contexts=6 pending=6` with "Java CI with Maven" QUEUED, so the flag fired on an EMPTY context set,
+not merely a partial one.
+
+AND THE COROLLARY THAT COST ME A WRONG CLAIM. An ABSENT "Java CI with Maven" run is not by itself a
+red flag. The workflow carries `paths-ignore: '**/*.md'`, so a markdown-only push produces no run BY
+DESIGN and the verdict carries by compare from the last code-bearing green head. PR 914 was exactly
+that case, its delta from the previous head being one ADR file, and I reported it to three parties as
+a matrix that had never started. So the rule is two-part: require `completed/success` for the head,
+OR establish that every file changed since the last `completed/success` head is markdown. Checking
+only the first half turns a documented exception into a false alarm, which is the same error shape as
+trusting the rollup, made in the safe direction instead of the dangerous one.
 
 AND THE SAME DEFECT IS IN THE SHARED WORK-ITEM MONITOR. The v7 pattern derives its DONE flag from
 `statusCheckRollup` with exactly the "zero contexts still pending" test, so on PR 914's partial head
@@ -1786,3 +1794,36 @@ about to merge on a partial matrix without first asking what their gate reads. I
 workflow, not the rollup, and was never exposed. Ask what a peer's mechanism actually is before
 telling them it is broken, because the fleet's shared lesson describes the mechanism SOMEONE used,
 not the one they use.
+
+## The v7 work-item monitor's DONE flag is not a readiness signal (sdi with rel34, 2026-08-22)
+
+The shared monitor pattern in the orchestrator skill's `references/fleet-monitor.md` derives its
+flag at line 23 as:
+
+```
+if ([.statusCheckRollup[] | select(.status != "COMPLETED")] | length) == 0 then "DONE" else "running"
+```
+
+That is "no context is still pending", which is a different claim from "CI finished". On a head
+whose matrix has not spawned, the rollup holds only the few fast contexts, all of them complete,
+so the monitor emits `0fail DONE` for a pull request whose test matrix never started.
+
+Measured live on rel34's PR 914: `contexts=3`, all three SUCCESS, zero pending, a perfectly green
+rollup, while `gh run list --commit <sha>` shows "Java CI with Maven" ABSENT from the run list
+entirely. rel34 had reported that PR green forty minutes earlier against its previous head and
+would have merged it.
+
+Two consequences, and the first is the one to act on:
+
+**A monitor DONE is an invitation to check, never a merge signal.** The cheap fix costs no extra
+API calls and is not a rewrite: the flag is a fine CHANGE DETECTOR, so keep the derivation and fix
+the LABEL, which is what actually misleads. Call it `nopending` rather than `DONE`, and let the
+merge gate ask the authoritative question per PR, where it already runs one call anyway. Monitor
+emits transitions cheaply; the gate verifies.
+
+**The authoritative question is about the run, not the contexts.** `gh run list --commit <sha>`
+with "Java CI with Maven" `completed`/`success`. See the sibling lesson on why that beats counting
+contexts.
+
+This is a defect in shared tooling rather than in one fleet's use of it: all three fleets on this
+repository run the v7 pattern, so all three inherit it.

@@ -1,9 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 22
-updated_at: '2026-08-22T11:50:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (seeding decided, U4 delivered, 915 granted
-  into U4, partial-matrix gate rule)
+revision: 23
+updated_at: '2026-08-22T12:20:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U17 retired to brk, U7 delivered, 917
+  folded into U7)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -414,14 +414,14 @@ units:
     issue: 866
     goal: RetryExecution's shutdown predicate is checked during the backoff sleep, not only before it,
       so a shutdown during a long backoff is honoured.
-    phase: PLANNED
+    phase: RUNNING
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: null
+    session: ListAgents name nice-lumiere-52493e-8f, chip task_296e445e, Sonnet/medium
     deliverables:
     - check: pr_merged
-      ref: null
+      ref: 916
       met: false
       evidence: ''
     - check: issue_closed
@@ -429,9 +429,29 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch after plan approval
-    last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
-    observed: {}
+    next_action: 'worker folding in the #917 javadoc correction, then pr-fix; gate needs the workflow-run
+      check'
+    last_meaningful_progress_at: '2026-08-22T12:20:00+00:00'
+    observed:
+      self_review:
+        note: The worker's own local review found TWO real design issues in its first pass, both fixed
+          with regression tests BEFORE the PR opened. The shutdown poll loop was re-testing the combined
+          retry-plus-shutdown predicate rather than the raw shutdown predicate, which risks over-invoking
+          a caller's possibly stateful retryIf; and a mid-sleep shutdown double-fired onAfterRetryListener
+          for one attempt. Both are the kind a passing test suite would not have surfaced, since neither
+          changes the returned value.
+        via: worker message
+        at: '2026-08-22T12:20:00+00:00'
+      issue_917:
+        note: '#917, RabbitMqCloudEventSink.close()''s javadoc describes the before-only shutdown check
+          and goes stale the moment #916 merges. FOLDED INTO PR 916 rather than taken as a follow-up,
+          on the #915 precedent: a unit corrects the surfaces its own change invalidates, and the ADR-and-docs
+          reservation exists to stop units minting numbers and rewriting shipped decisions rather than
+          to stop this. Folded into the SAME PR rather than after it, because a follow-up leaves main
+          carrying a javadoc that contradicts its own code in between. U10 (#867) owns broker/rabbitmq/blocking/**
+          and is fenced out of this one file.'
+        via: orchestrator ruling
+        at: '2026-08-22T12:20:00+00:00'
     assessment: Shipped defect confirmed present in the occurrent-0.33.0 tag. Bounded.
   U8:
     issue: 834
@@ -1059,9 +1079,9 @@ units:
   U17:
     issue: 884
     goal: KafkaCloudEventBridgeTest stops failing under Testcontainers on the parking-topic metadata race.
-    phase: PLANNED
-    health: PROGRESSING
-    swept: false
+    phase: CANCELLED
+    health: UNKNOWN
+    swept: true
     depends_on: []
     session: null
     deliverables:
@@ -1074,15 +1094,22 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: dispatch
-    last_meaningful_progress_at: '2026-08-22T11:15:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T12:20:00+00:00'
     observed: {}
     assessment: 'Brought back into 0.34.0 by dec-0009 after failing three unrelated PRs in under three
       hours across both JDKs in a module none of them touched (PR 902 java-25, PR 908 java-21, a main
       run carrying a broker PR on java-21). Each cost a full matrix rerun and delayed a merge gate. brk
       records a third sighting as its #893 item 21 and is asking Johan whether the fix lands inside brk
       before it closes; COORDINATE rather than duplicating, since rel34''s tag reads main''s shards and
-      brk may already own the fix.'
+      brk may already own the fix. RETIRED 2026-08-22T12:2xZ. Johan ruled #884 into brk (brk dec-0024,
+      unit U16) an hour after ruling it into 0.34.0 here, and a brk worker is already on it investigate-then-fix,
+      test-only unless it proves a readiness gap in pattern subscriptions. Retired rather than run in
+      parallel: #884 and #893 item 21 are the same test, and two epics fixing one flake is the duplication
+      the cross-epic fence exists to prevent. brk will name the PR when it opens and will tell rel34 BEFORE
+      widening if the investigation finds a production gap, since that would touch starters rel34 reads.
+      The issue keeps milestone 0.34.0; only the owning epic changed, and its routing comment was updated
+      IN PLACE to say so with both superseded states kept as history.'
   U18:
     issue: 909
     goal: resolveCatchupModel compares the holder's model against the projection's actual capability instead
