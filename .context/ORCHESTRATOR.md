@@ -857,3 +857,15 @@ Three of the four are the annotation-rename defect in a different disguise. Wher
 **The instruction that produced the incomplete fix was mine and it was underspecified.** It said an `@` prefix means the annotation and that bare-word occurrences in prose are suspect, then named three `@` lines as the examples. The worker implemented the examples rather than the rule, which is the predictable outcome when a rule and its illustration disagree in scope. Re-sent with all three meanings enumerated and with the sweep restated as a question to ask of each line rather than a pattern to match.
 
 Also handed over rather than adjudicated here: two added lines read `and "subscription" mode ({@link SubscriptionHandle})`, which describe a mode named subscription rather than the handle type. The worker has the surrounding code and this session does not, so it decides them.
+
+### sdi checkpoint 2026-08-22T14:21:54Z: three of four gate facts met on PR 934, and what the review fact actually means
+
+New head `d2a622f0e`. All four Copilot findings verified fixed by reading the pushed branch, not the worker's report: the three model javadoc lines now read "This subscription model doesn't maintain the checkpoint", and `CancelledSubscription` dropped the repeated noun.
+
+**The two lines this session flagged as candidates were false positives and the worker was right to decline them.** `CatchupSubscriptionModelConfig` imports `org.occurrent.subscription.api.blocking.Subscription`, so `{@link Subscription}` there resolved to the API type and MUST rename or the javadoc link breaks. The sentence contrasts catch-up mode, linked to `EventStoreQueries`, against subscription mode, linked to the live delivery type. It is an associative link rather than a claim that the mode is the handle, and it reads identically before and after. Recording it as a false positive in the same place it was raised, for the same reason the dec-0006 doubt was retracted rather than dropped.
+
+**Gate state, three facts of four met.** Unresolved threads counted with `isResolved == false` alone: zero. Review bodies read: Copilot at effort Balanced, four findings, all addressed. `reviewDecision`: empty. `Java CI with Maven`: `in_progress`, so the merge is refused on CI alone.
+
+**What empty `reviewDecision` means here was measured rather than assumed, and the answer changes how the gate reads.** `main` is not branch protected, and both sdi PRs that have already merged today, 924 and 923, merged with `reviewDecision` empty. So the second gate fact is "not `CHANGES_REQUESTED`", never "is `APPROVED`". Read as requiring an approval it would refuse every PR in this repository forever, including the two that already landed.
+
+One trap avoided that the lessons file already warned about. PR 934 now lists four `johanhaleby | COMMENTED | body 0` reviews. Those are the empty review shells a thread reply creates, not a human re-review and not an approval. Counting reviews, or filtering them by body length, would read them as human sign-off on a PR no human has looked at. They were identified by `.user.login` and by `reviewDecision` staying empty.
