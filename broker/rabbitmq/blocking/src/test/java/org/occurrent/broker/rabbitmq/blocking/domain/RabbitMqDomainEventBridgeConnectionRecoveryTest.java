@@ -98,27 +98,30 @@ class RabbitMqDomainEventBridgeConnectionRecoveryTest {
         adminChannel.queueDeclare(queue, false, false, false, null);
         adminChannel.queueBind(queue, exchange, TestOrderPlaced.class.getName());
 
+        // The two halves of a handshake between the recovered consumer and the connection's recovery listeners,
+        // so neither side depends on how fast the other one got there. The order-2 delivery announces itself, the
+        // listeners run only then, and the delivery finishes only once they have. A bridge that invalidated a
+        // delivery tag from a recovery listener would therefore always decide order-2's fate after the
+        // invalidation, and drop it.
+        CountDownLatch order2Started = new CountDownLatch(1);
         CountDownLatch recoveryComplete = new CountDownLatch(1);
         List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
         DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
         feed.register("proj", event -> {
             handled.add(event);
             if (event.orderId().equals("order-2")) {
-                // Held until the recovery listener below has finished, so the delivery this projection is handling
-                // is still in flight when the last recovery listener runs. A bridge that invalidated a delivery
-                // tag from a recovery listener would decide this delivery's fate after that, and drop it.
+                order2Started.countDown();
                 awaitLatch(recoveryComplete);
             }
         }, Filter.type(TestOrderPlaced.class.getName()));
         feed.goLive("proj");
 
         // Registered before the bridge is built, and recovery listeners run in registration order, so this one
-        // holds every later listener back for two seconds after the recovered consumer has already been handed the
-        // next message.
+        // holds every later listener back until order-2 is being handled.
         ((Recoverable) connection).addRecoveryListener(new RecoveryListener() {
             @Override
             public void handleRecovery(Recoverable recoverable) {
-                sleep(Duration.ofSeconds(2));
+                awaitLatch(order2Started);
                 recoveryComplete.countDown();
             }
 
@@ -137,6 +140,8 @@ class RabbitMqDomainEventBridgeConnectionRecoveryTest {
             forceCloseAllConnectionsOrFail();
             await().atMost(Duration.ofSeconds(20)).until(() -> connection.isOpen());
 
+            // Published after the connection is back, so both land on the recovered consumer. The handshake above
+            // is what orders them against the recovery listeners, not this call's own timing.
             publish("order-2");
             publish("order-3");
 
@@ -164,15 +169,6 @@ class RabbitMqDomainEventBridgeConnectionRecoveryTest {
     private static void awaitLatch(CountDownLatch latch) {
         try {
             assertThat(latch.await(30, TimeUnit.SECONDS)).as("latch reached within the timeout").isTrue();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException(e);
-        }
-    }
-
-    private static void sleep(Duration duration) {
-        try {
-            Thread.sleep(duration.toMillis());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException(e);
