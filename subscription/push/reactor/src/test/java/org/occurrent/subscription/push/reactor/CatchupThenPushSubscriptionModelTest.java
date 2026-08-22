@@ -175,14 +175,15 @@ class CatchupThenPushSubscriptionModelTest {
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(delivered).containsExactly("1", "2", "late"));
     }
 
-    // A cancel and a fresh subscribe can land between an attempt taking the id and announcing its catch-up. If the
-    // announce sits outside the step that takes the id, the stale attempt's start arrives after its replacement's,
-    // the recorder adopts a catch-up that is already over, and the replacement's own boundary is then ignored, so
-    // everything the replacement records is lost.
+    // A cancel and a fresh subscribe can run between an attempt taking the subscription id and announcing its
+    // catch-up. If the announce sits outside the step that takes the id, the stale attempt's start arrives after its
+    // replacement's, the recorder adopts a catch-up that is already over, and the replacement's own boundary is then
+    // ignored, so everything the replacement records is lost.
     //
-    // The first announce is held for a moment so the cancel and resubscribe run while it is in flight, which is the
-    // interleaving itself rather than a hope of hitting it. Holding it inside the step that takes the id is what
-    // makes the cancel wait, so the second announce cannot overtake the first.
+    // No sleep decides anything here. The first attempt is held inside its own announce until the second one
+    // announces, so under a broken ordering the second is recorded first, deterministically. Under a correct one the
+    // second cannot announce at all while the first holds the id, so the first attempt's wait runs out instead and
+    // the two are recorded in the order they were announced.
     @Test
     void a_start_is_never_announced_by_an_attempt_that_has_lost_the_id() throws Exception {
         PositionOrderedReader reader = reader(() -> Flux.just(cloudEvent("1", "Created")), 1);
@@ -190,16 +191,22 @@ class CatchupThenPushSubscriptionModelTest {
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, null);
 
         List<Object> announced = new CopyOnWriteArrayList<>();
-        AtomicBoolean holdFirstAnnounce = new AtomicBoolean(true);
+        AtomicReference<Object> firstToEnter = new AtomicReference<>();
+        AtomicBoolean firstEntry = new AtomicBoolean(true);
+        CountDownLatch firstAnnounceEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirstAnnounce = new CountDownLatch(1);
+
         model.listenForCatchup("proj", new CatchupListener() {
             @Override
             public void catchupStarted(Object episode) {
-                if (holdFirstAnnounce.compareAndSet(true, false)) {
-                    try {
-                        Thread.sleep(300);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
+                if (firstEntry.compareAndSet(true, false)) {
+                    firstToEnter.set(episode);
+                    firstAnnounceEntered.countDown();
+                    // Released by whichever attempt announces next, and otherwise given up on, since a correct
+                    // ordering means no other attempt can announce while this one holds the id.
+                    awaitAtMost(releaseFirstAnnounce, Duration.ofSeconds(1));
+                } else {
+                    releaseFirstAnnounce.countDown();
                 }
                 announced.add(episode);
             }
@@ -209,27 +216,26 @@ class CatchupThenPushSubscriptionModelTest {
             }
         });
 
-        CountDownLatch firstSubscribeReturned = new CountDownLatch(1);
-        Thread first = new Thread(() -> {
-            model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
-            firstSubscribeReturned.countDown();
-        });
+        Thread first = new Thread(() -> model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty()));
         first.start();
+        assertThat(firstAnnounceEntered.await(5, TimeUnit.SECONDS))
+                .as("the first attempt reached its announce")
+                .isTrue();
 
-        // Long enough that the first attempt is inside its announce, short enough that it has not left it.
-        Thread.sleep(100);
-        model.cancelSubscription("proj");
-        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        Thread replacement = new Thread(() -> {
+            model.cancelSubscription("proj");
+            model.subscribe("proj", null, StartAt.subscriptionModelDefault(), __ -> Mono.empty());
+        });
+        replacement.start();
 
-        assertThat(firstSubscribeReturned.await(5, TimeUnit.SECONDS)).isTrue();
-        first.join(TimeUnit.SECONDS.toMillis(5));
+        replacement.join(TimeUnit.SECONDS.toMillis(10));
+        first.join(TimeUnit.SECONDS.toMillis(10));
 
-        // Whatever order the two attempts ran in, the last catch-up announced is the one that owns the id, so a
-        // recorder listening to this ends up holding the live attempt's episode rather than a finished one's.
         assertThat(announced).hasSize(2);
-        assertThat(model.isCatchingUp("proj")).isTrue();
-        Object lastAnnounced = announced.get(announced.size() - 1);
-        assertThat(announced.get(0)).isNotSameAs(lastAnnounced);
+        assertThat(announced.get(0))
+                .as("the attempt that reached its announce first is the one announced first, so a start never "
+                        + "arrives behind the start of the attempt that replaced it")
+                .isSameAs(firstToEnter.get());
     }
 
     // isCatchingUp answers for the whole catch-up, marker included, so it must not turn false while the marker
@@ -720,6 +726,15 @@ class CatchupThenPushSubscriptionModelTest {
             }
             episodes.add(episode);
             return episodes.size() - 1;
+        }
+    }
+
+    private static void awaitAtMost(CountDownLatch latch, Duration timeout) {
+        try {
+            latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
         }
     }
 
