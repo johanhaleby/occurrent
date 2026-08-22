@@ -361,7 +361,7 @@ The work this ADR describes, listed so it can be scoped as its own epic:
    reflective path, which the deprecated annotations still need and which is deleted with them a release later.
 5. Seven new annotation types, seven deprecations, and normalization of both sets in the bean post processors.
 6. Recipes, declarative for the type and annotation renames, a Java visitor for the body rewrite with its three refusal cases.
-7. A section in `doc/migration/upgrading-to-0.34.0.md`, changelog entries, and a docs branch.
+7. A section in `doc/migration/upgrading-to-0.35.0.md`, changelog entries, and a docs branch.
 8. Updating 35 test classes, 13 example files, and the 79 lines of the documentation site's reference page on `main`
    that mention one of these annotations.
 
