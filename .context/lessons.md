@@ -1937,3 +1937,44 @@ model is gated on `SubscriptionModel.class` while the `Subscriptions` DSL bean i
 on `Subscriptions.class`. Two independent conditions instead of one shared one, so an application
 replaces the DSL bean alone and the starter still fills the holder. Same feature, same fleet, one
 reachable and one not, decided by which types share a condition.
+
+## Before rerunning a known flake, check whether its fix landed on main (rel34, 2026-08-22)
+
+PR 902 failed `test (misc, java-21)` on a test its diff does not touch. The orchestrator read the
+shard and the JDK, matched the pattern to a different broker flake under investigation, and flagged
+it as a possible fifth sighting of that one. Another fleet read the actual job log: it was #884's
+test, not the other, and #884's fix had merged to main about an hour earlier. The PR's head predated
+it.
+
+So the correct action was a REBASE, which fixes it deterministically, not a rerun, which is a coin
+toss on a test that is already fixed upstream.
+
+Two things worth keeping. A rerun is the reflex for a red shard on an untouched module, and it is
+the wrong one whenever the flake has a landed fix the branch has not picked up; check the merge
+history for the test's issue before spending a rerun. And pattern-matching a failure by shard and
+JDK is a hypothesis, not an identification: the orchestrator had two candidate flakes in the same
+shard and picked the wrong one. Flagging it as unconfirmed is what kept it cheap, and reading the
+log is what settled it.
+
+## A conflict flag generates no event, so an event-driven loop never sees it (rel34, 2026-08-22)
+
+PR 901 sat `CONFLICTING` and untouched for over six hours. Its CI was green, its worker was alive
+and idle, and the orchestrator had told it not to push again. Nothing in that state emits anything:
+the work-item monitor fires on head, mergeable, review and check transitions, and the transition
+into CONFLICTING had already happened and been reported once, hours earlier, while the orchestrator
+was mid-exchange on something else.
+
+What made it invisible was running the loop on events alone. Every tick had something to react to,
+so the unit table was never walked, and a PR that is green and idle looks identical to a PR that is
+green and finished.
+
+So the periodic sweep is not optional even when the event stream is busy, and it must iterate the
+UNIT TABLE rather than the open-PR set: for each unit with an unmet deliverable, when did its PR
+last change, is it mergeable, and is anyone acting on it. Six hours of a live worker idling is the
+cost of skipping it, and the user noticing before the orchestrator would have been the same
+detection defect one step worse.
+
+The related habit that caused it: telling a worker "do not push again unless I ask" is correct for
+getting a settled head to verify against, and it transfers responsibility for the next move to the
+orchestrator. Any such instruction needs a matching entry on the sweep list, because the worker will
+now correctly do nothing forever.

@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 20
+revision: 23
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -11,7 +11,7 @@ pending_actions:
     type: dispatch-chip
     target: "U12, chip task_c9ada93f, title '⌁[sdi/U12#725] Amend ADR 0127 · Sonnet/high', brief inlined in the chip"
     expected: "a session appears carrying the marker ⌁[sdi/U12], and a branch off 02bd5c6c5 touching only ADR 0127"
-    status: PENDING
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-22T11:55:00Z
@@ -19,7 +19,7 @@ pending_actions:
     type: dispatch-chip
     target: "U5, chip task_892b1fcb, title '⌁[sdi/U5#721] Prefix seven annotations · Sonnet/medium', brief inlined in the chip"
     expected: "a session appears carrying the marker ⌁[sdi/U5], and a branch off 02bd5c6c5 adding seven annotation types in framework/annotations"
-    status: PENDING
+    status: VERIFIED
     attempts: 1
     safe_to_repeat: false
     issued_at: 2026-08-22T11:55:00Z
@@ -31,12 +31,12 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: task_892b1fcb
+    session: "task_892b1fcb / local_75e86e26-ddb7-434e-866a-b339e804ef4a"
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatched as chip task_892b1fcb, Sonnet/medium. Awaiting the user click that starts it."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
+    next_action: "RUNNING. Identity CONFIRMED by the ⌁[sdi/U5] marker in its own transcript, not by title. Worktree upbeat-fermat-722819."
+    last_meaningful_progress_at: 2026-08-22T13:15:00Z
     observed: {}
     assessment: "Owns framework/annotations/** and rewrite/.../renames-annotations-0_34.yml. Carries its own changelog and migration-guide entries. UNFENCED: the only unit dispatchable at the gate. Sonnet/medium. Recipe precedent annotation-enums.yml:33-46."
   U1:
@@ -189,13 +189,14 @@ units:
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: task_c9ada93f
+    session: "task_c9ada93f / local_f56f896e-3466-409a-bc7d-6c58a837eba5"
     deliverables:
-      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: pr_merged, ref: 923, met: false, evidence: null}
     blocking_on: []
-    next_action: "Dispatched as chip task_c9ada93f, Sonnet/high. Awaiting the user click that starts it."
-    last_meaningful_progress_at: 2026-08-22T11:35:00Z
-    observed: {}
+    next_action: "PR 923 open and to brief. NOT merging: Copilot review is queued and the worker is still in its pr-fix loop. Merge gate runs on its DELIVERY_RESULT, and includes the review-body read plus any suppressed-comment block."
+    last_meaningful_progress_at: 2026-08-22T13:15:00Z
+    observed:
+      pr_923: {head: 3bc60a12b, opened_at: 2026-08-22T13:3xZ, files: 1, additions: 71, deletions: 0, scope: "ADR 0127 only, exactly the brief's ownership", ci_skip: "yes, on the head commit, so no matrix runs and the verdict carries by compare from the last code-bearing green state", runs: "Copilot Code Review queued, no Java CI by design", content_check: "all four ruled decisions present (catch-all PUBLIC on the builder, runner as single execution path incl DCB in 0.35.0, waitUntilStarted forwarded not moved, DSL stays a real class); ADR 0051 cited, 0029 cited, ADR 0119 correctly ABSENT", via: "gh pr view + git show of the branch diff", at: 2026-08-22T13:35:00Z}
     assessment: "UNFENCED prose, and it goes FIRST because every downstream unit reads it. ADR 0127 is unreleased so AGENTS.md permits amending in place rather than writing a successor. The hole it closes: decision 4 rewrites the two SubscriptionAnnotationRegistrar classes, which execute through applicationContext.getBean(StreamSubscriptions.class).subscribe(..) at six call sites across both stacks, and the ADR never says what the descriptor path executes through. ADR 0029 recorded that Spring-bean dependency in 2026-06 and ADR 0119 lines 71-76 already name the Extensions-over-a-class-based-API shape as the convention the Kotlin sugar follows. ADR 0029's binary-compatibility constraint still binds: Subscriptions has been released since 0.20.4 and callers inject it, so it stays a real class. Written through /johan-writing. Sonnet/high."
   U13:
     issue: 725
