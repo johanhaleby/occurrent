@@ -110,6 +110,7 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     private final Backoff pollBackoff;
 
     private volatile boolean indexesEnsured = false;
+    private volatile ConflictingIndexException indexConflict;
 
     /**
      * Retries a failing read or write with backoff from 100 ms up to 2 seconds, {@link #DEFAULT_MAX_ATTEMPTS}
@@ -173,19 +174,35 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
             if (indexesEnsured) {
                 return Mono.empty();
             }
+            ConflictingIndexException conflict = indexConflict;
+            if (conflict != null) {
+                return Mono.error(conflict);
+            }
             ReactiveIndexOperations indexOps = mongoOperations.indexOps(collection);
             // No collMod for this one, unlike the TTL index. collMod changes expireAfterSeconds and hidden, and it
             // cannot change a partial filter or a collation at all, so there is nothing to alter this index into.
             // An operator drops it, and the message says so rather than leaving error 85 to be retried.
             Mono<Void> uniqueIndex = indexOps.ensureIndex(new Index().on(PROJECTION_ID, Direction.ASC).on(APPEND_ID, Direction.ASC).named(PROJECTION_ID_APPEND_ID_INDEX).unique()).then()
                     .onErrorMap(ReactiveMongoAppliedAppendStore::isIndexOptionsConflict,
-                            e -> new ConflictingIndexException("Collection '" + collection + "' already has an index named '" + PROJECTION_ID_APPEND_ID_INDEX + "' whose options differ from the unique index on " + PROJECTION_ID + " and " + APPEND_ID + " this store needs. Drop that index and let this store create its own.", e));
+                            e -> remember(new ConflictingIndexException("Collection '" + collection + "' already has an index named '" + PROJECTION_ID_APPEND_ID_INDEX + "' whose options differ from the unique index on " + PROJECTION_ID + " and " + APPEND_ID + " this store needs. Drop that index and let this store create its own.", e)));
             Mono<Void> ttlIndex = indexOps.ensureIndex(new Index().on(RECORDED_AT, Direction.ASC).named(RECORDED_AT_TTL_INDEX).expire(retention)).then()
                     .onErrorResume(e -> isIndexOptionsConflict(e)
                             ? indexOps.alterIndex(RECORDED_AT_TTL_INDEX, IndexOptions.expireAfter(retention))
                             : Mono.error(e));
             return uniqueIndex.then(ttlIndex).doOnSuccess(ignored -> indexesEnsured = true);
         });
+    }
+
+    /**
+     * Remembers an index whose options MongoDB will never accept, the same way success is remembered, so the answer
+     * costs one attempt per process rather than one per call. A wait polls, so without that memory a permanent
+     * index conflict would be re-attempted on every poll and the number of calls this store makes would depend on
+     * how long the caller waits. Dropping the conflicting index therefore needs a restart to take effect, which is
+     * the same lifetime the successful case already had.
+     */
+    private ConflictingIndexException remember(ConflictingIndexException conflict) {
+        indexConflict = conflict;
+        return conflict;
     }
 
     @Override

@@ -41,6 +41,7 @@ import reactor.util.retry.Retry;
 import reactor.util.retry.RetryBackoffSpec;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -269,5 +270,42 @@ class ReactiveMongoAppliedAppendStoreBoundsTest {
                 .isInstanceOf(RuntimeException.class);
 
         assertThat(attempts).hasValue(3);
+    }
+
+    /**
+     * The reactive mirror of the invariant test. One index attempt per process, however long the caller waits.
+     */
+    @Test
+    void a_wait_attempts_a_conflicting_index_once_however_long_the_caller_waits() {
+        AtomicInteger indexAttempts = new AtomicInteger();
+        ReactiveMongoOperations mongoOperations = mongoOperationsWhoseIndexSetupConflicts(indexAttempts);
+        when(mongoOperations.exists(any(Query.class), anyString())).thenReturn(Mono.just(true));
+        AppliedAppendStore store = storeWith(mongoOperations, ReactiveMongoAppliedAppendStore.defaultRetry());
+        Duration timeout = Duration.ofMillis(400);
+
+        Instant start = Instant.now();
+        boolean applied = store.waitUntilApplied("orders", AppendId.mint(), timeout, Backoff.fixed(20));
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(applied).isFalse();
+        assertThat(elapsed).isGreaterThanOrEqualTo(timeout.minusMillis(50));
+        assertThat(indexAttempts).hasValue(1);
+    }
+
+    @Test
+    void a_call_after_a_conflicting_index_fails_without_calling_the_store_again() {
+        AtomicInteger indexAttempts = new AtomicInteger();
+        ReactiveMongoOperations mongoOperations = mongoOperationsWhoseIndexSetupConflicts(indexAttempts);
+        when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
+                .thenReturn(Mono.just(mock(UpdateResult.class)));
+        when(mongoOperations.exists(any(Query.class), anyString())).thenReturn(Mono.just(true));
+        AppliedAppendStore store = storeWith(mongoOperations, ReactiveMongoAppliedAppendStore.defaultRetry());
+
+        assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
+                .isInstanceOf(ReactiveMongoAppliedAppendStore.ConflictingIndexException.class);
+        assertThatThrownBy(() -> store.hasApplied("orders", AppendId.mint()))
+                .isInstanceOf(ReactiveMongoAppliedAppendStore.ConflictingIndexException.class);
+
+        assertThat(indexAttempts).hasValue(1);
     }
 }

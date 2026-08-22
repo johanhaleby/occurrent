@@ -101,6 +101,7 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
 
     private volatile boolean shutdown = false;
     private volatile boolean indexesEnsured = false;
+    private volatile ConflictingIndexException indexConflict;
 
     /**
      * Retries a failing read or write with exponential backoff from 100 ms up to 2 seconds, the same default
@@ -139,7 +140,11 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
 
     /**
      * Ensures the compound unique index and the TTL index exist, once, the first time this store is actually asked
-     * to do anything. Synchronized rather than a lock-free check-then-act, since a race here would mean two threads
+     * to do anything. An index whose options MongoDB will never accept is remembered the same way success is, so
+     * the answer costs one attempt per process rather than one per call. A wait polls, so without that memory a
+     * permanent index conflict would be re-attempted on every poll and the number of calls this store makes would
+     * depend on how long the caller waits. Dropping the conflicting index therefore needs a restart to take
+     * effect, which is the same lifetime the successful case already had. Synchronized rather than a lock-free check-then-act, since a race here would mean two threads
      * both attempting index creation concurrently, which is at worst wasted work and at best exactly the
      * {@code IndexOptionsConflict} path {@link #ensureIndexes} already handles, but is not worth risking on a
      * one-time setup step.
@@ -148,7 +153,16 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
         if (indexesEnsured) {
             return;
         }
-        ensureIndexes(mongoOperations, collection, retention);
+        ConflictingIndexException conflict = indexConflict;
+        if (conflict != null) {
+            throw conflict;
+        }
+        try {
+            ensureIndexes(mongoOperations, collection, retention);
+        } catch (ConflictingIndexException e) {
+            indexConflict = e;
+            throw e;
+        }
         indexesEnsured = true;
     }
 

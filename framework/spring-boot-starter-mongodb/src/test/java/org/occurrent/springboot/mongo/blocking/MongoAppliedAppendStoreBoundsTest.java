@@ -37,6 +37,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.UpdateDefinition;
 
 import java.time.Duration;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -197,5 +198,47 @@ class MongoAppliedAppendStoreBoundsTest {
                 .append("codeName", new BsonString("IndexOptionsConflict"))
                 .append("errmsg", new BsonString("Index already exists with different options"));
         return new UncategorizedMongoDbException("index setup failed", new MongoCommandException(response, new ServerAddress()));
+    }
+
+    /**
+     * The invariant, stated as a test. A wait polls, so if the store re-attempted an index it can never create on
+     * every poll, the number of calls it makes would be a function of the caller's timeout. It attempts it once per
+     * process instead, and the wait still runs to its own deadline, which is what ADR 132 decision 5 requires of a
+     * store that cannot be read.
+     */
+    @Test
+    void a_wait_attempts_a_conflicting_index_once_however_long_the_caller_waits() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        IndexOperations indexOperations = mock(IndexOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(indexOperations);
+        when(indexOperations.ensureIndex(any())).thenThrow(indexOptionsConflict());
+        AppliedAppendStore store = storeWith(mongoOperations, boundedRetry());
+        Duration timeout = Duration.ofMillis(400);
+
+        Instant start = Instant.now();
+        boolean applied = store.waitUntilApplied("orders", AppendId.mint(), timeout, Backoff.fixed(20));
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(applied).isFalse();
+        assertThat(elapsed).isGreaterThanOrEqualTo(timeout.minusMillis(50));
+        verify(indexOperations, times(1)).ensureIndex(any());
+    }
+
+    @Test
+    void a_call_after_a_conflicting_index_fails_without_calling_the_store_again() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        IndexOperations indexOperations = mock(IndexOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(indexOperations);
+        when(indexOperations.ensureIndex(any())).thenThrow(indexOptionsConflict());
+        AppliedAppendStore store = storeWith(mongoOperations, boundedRetry());
+
+        assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
+                .isInstanceOf(MongoAppliedAppendStore.ConflictingIndexException.class);
+        assertThatThrownBy(() -> store.hasApplied("orders", AppendId.mint()))
+                .isInstanceOf(MongoAppliedAppendStore.ConflictingIndexException.class);
+        assertThatThrownBy(() -> store.clear("orders"))
+                .isInstanceOf(MongoAppliedAppendStore.ConflictingIndexException.class);
+
+        verify(indexOperations, times(1)).ensureIndex(any());
     }
 }
