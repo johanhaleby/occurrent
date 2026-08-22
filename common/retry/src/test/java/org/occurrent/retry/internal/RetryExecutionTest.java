@@ -90,6 +90,65 @@ class RetryExecutionTest {
     }
 
     @Test
+    void the_retry_predicate_is_tested_once_per_attempt_even_though_the_backoff_after_it_is_polled_many_times() {
+        AtomicInteger retryPredicateInvocations = new AtomicInteger();
+        AtomicInteger sleptChunks = new AtomicInteger();
+
+        RetryExecution.Sleeper sleeper = millis -> sleptChunks.incrementAndGet();
+
+        RetryStrategy retryStrategy = RetryStrategy.fixed(20 * POLL_INTERVAL_MILLIS)
+                .maxAttempts(2)
+                .retryIf(e -> {
+                    retryPredicateInvocations.incrementAndGet();
+                    return true;
+                });
+        Runnable failingAction = () -> {
+            throw new IllegalStateException("always fails");
+        };
+
+        Runnable retrying = RetryExecution.executeWithRetry(failingAction, __ -> true, retryStrategy, sleeper);
+
+        assertThatThrownBy(retrying::run).isInstanceOf(IllegalStateException.class);
+
+        // The backoff was polled 20 times, but the caller's own retry predicate is a separate, potentially
+        // stateful thing: it must be asked once per failed attempt, the same as before this fix, not once per poll.
+        assertThat(sleptChunks).hasValue(20);
+        assertThat(retryPredicateInvocations).hasValue(1);
+    }
+
+    @Test
+    void the_after_retry_listener_fires_only_once_for_an_attempt_that_shutdown_interrupts_mid_backoff() {
+        AtomicInteger afterRetryInvocations = new AtomicInteger();
+        AtomicBoolean shutdownRequested = new AtomicBoolean(false);
+        AtomicInteger sleptChunks = new AtomicInteger();
+        int chunksPerBackoff = 20;
+
+        // The first attempt's backoff (20 chunks) runs to completion undisturbed. Shutdown is only requested on
+        // the first chunk of the second attempt's backoff, once that attempt's own after-retry call has already
+        // fired, so this proves shutdown does not cause a second, duplicate after-retry call for that attempt.
+        RetryExecution.Sleeper sleeper = millis -> {
+            if (sleptChunks.incrementAndGet() > chunksPerBackoff) {
+                shutdownRequested.set(true);
+            }
+        };
+
+        RetryStrategy retryStrategy = RetryStrategy.fixed(chunksPerBackoff * POLL_INTERVAL_MILLIS)
+                .maxAttempts(1000)
+                .onAfterRetry(__ -> afterRetryInvocations.incrementAndGet());
+        Runnable failingAction = () -> {
+            throw new IllegalStateException("always fails");
+        };
+
+        Runnable retrying = RetryExecution.executeWithRetry(failingAction, __ -> !shutdownRequested.get(), retryStrategy, sleeper);
+
+        assertThatThrownBy(retrying::run).isInstanceOf(IllegalStateException.class);
+
+        // The listener already reported the second attempt as failed-and-retrying right before its backoff
+        // started. Shutdown cutting that backoff short must not report the same attempt a second time.
+        assertThat(afterRetryInvocations).hasValue(1);
+    }
+
+    @Test
     void an_interrupted_backoff_sleep_restores_the_interrupt_status_instead_of_swallowing_it() {
         RetryExecution.Sleeper sleeper = millis -> {
             throw new InterruptedException("interrupted mid-backoff");

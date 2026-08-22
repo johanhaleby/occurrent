@@ -47,7 +47,7 @@ public class RetryExecution {
     private static final long SHUTDOWN_POLL_INTERVAL_MILLIS = 50;
 
     /**
-     * Seam for injecting a fake backoff sleep in tests. Production code always uses {@link #DEFAULT_SLEEPER}.
+     * Lets a test replace the backoff sleep with a fake one. Production code always uses {@link #DEFAULT_SLEEPER}.
      */
     interface Sleeper {
         void sleep(long millis) throws InterruptedException;
@@ -68,7 +68,7 @@ public class RetryExecution {
             return function;
         }
         RetryImpl retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
-        return executeWithRetry(function, retry, convertToDelayStream(retry.backoff), DEFAULT_SLEEPER);
+        return executeWithRetry(function, retry, convertToDelayStream(retry.backoff), shutdownPredicate, DEFAULT_SLEEPER);
     }
 
     public static Runnable executeWithRetry(Runnable runnable, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
@@ -76,7 +76,7 @@ public class RetryExecution {
             return runnable;
         }
         RetryImpl retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
-        return executeWithRetry(runnable, retry, convertToDelayStream(retry.backoff), DEFAULT_SLEEPER);
+        return executeWithRetry(runnable, retry, convertToDelayStream(retry.backoff), shutdownPredicate, DEFAULT_SLEEPER);
     }
 
     public static <T1> Consumer<T1> executeWithRetry(Consumer<T1> fn, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
@@ -84,19 +84,19 @@ public class RetryExecution {
             return fn;
         }
         RetryImpl retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
-        return executeWithRetry(fn, retry, convertToDelayStream(retry.backoff), DEFAULT_SLEEPER);
+        return executeWithRetry(fn, retry, convertToDelayStream(retry.backoff), shutdownPredicate, DEFAULT_SLEEPER);
     }
 
     /**
-     * Test-only seam: same as the {@code Runnable} overload above but lets a test swap in a fake backoff sleep, so a
-     * mid-sleep shutdown can be proven deterministically instead of racing a wall-clock sleep.
+     * Same as the {@code Runnable} overload above, for test use only, but lets a test swap in a fake backoff sleep
+     * so a mid-sleep shutdown can be proven deterministically instead of racing a wall-clock sleep.
      */
     static Runnable executeWithRetry(Runnable runnable, Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy, Sleeper sleeper) {
         if (retryStrategy instanceof DontRetry) {
             return runnable;
         }
         RetryImpl retry = applyShutdownPredicate(shutdownPredicate, retryStrategy);
-        return executeWithRetry(runnable, retry, convertToDelayStream(retry.backoff), sleeper);
+        return executeWithRetry(runnable, retry, convertToDelayStream(retry.backoff), shutdownPredicate, sleeper);
     }
 
     private static RetryImpl applyShutdownPredicate(Predicate<Throwable> shutdownPredicate, RetryStrategy retryStrategy) {
@@ -104,24 +104,25 @@ public class RetryExecution {
         return retry.retryIf(shutdownPredicate.and(retry.retryPredicate));
     }
 
-    private static Runnable executeWithRetry(Runnable runnable, RetryImpl retry, Iterator<Long> delay, Sleeper sleeper) {
+    private static Runnable executeWithRetry(Runnable runnable, RetryImpl retry, Iterator<Long> delay, Predicate<Throwable> shutdownPredicate, Sleeper sleeper) {
         return () -> executeWithRetry(__ -> {
             runnable.run();
             return null;
-        }, retry, delay, sleeper).apply(firstAttemptRetryInfo());
+        }, retry, delay, shutdownPredicate, sleeper).apply(firstAttemptRetryInfo());
     }
 
-    private static <T1> Consumer<T1> executeWithRetry(@NonNull Consumer<T1> fn, @NonNull RetryImpl retry, @NonNull Iterator<Long> delay, Sleeper sleeper) {
+    private static <T1> Consumer<T1> executeWithRetry(@NonNull Consumer<T1> fn, @NonNull RetryImpl retry, @NonNull Iterator<Long> delay, Predicate<Throwable> shutdownPredicate, Sleeper sleeper) {
         return t1 -> executeWithRetry(retryInfo -> {
             fn.accept(t1);
             return null;
-        }, retry, delay, sleeper).apply(firstAttemptRetryInfo());
+        }, retry, delay, shutdownPredicate, sleeper).apply(firstAttemptRetryInfo());
     }
 
     private static <T1 extends @Nullable Object> Function<RetryInfo, T1> executeWithRetry(
             Function<RetryInfo, T1> fn,
             RetryImpl retry,
             Iterator<Long> delay,
+            Predicate<Throwable> shutdownPredicate,
             Sleeper sleeper
     ) {
         return (ignored) -> {
@@ -163,12 +164,10 @@ public class RetryExecution {
                     }
 
                     long backoffMillis = currentBackoff.toMillis();
-                    if (backoffMillis > 0 && !sleepObservingShutdown(sleeper, backoffMillis, retry.retryPredicate, e)) {
-                        // Shutdown was observed partway through the backoff: stop now, the same way exhaustion or a
-                        // non-retryable error would, instead of sleeping out the rest of a backoff nobody wants.
-                        if (isRetryAttempt) {
-                            retry.onAfterRetryListener.accept(new AfterRetryInfoImpl(retryInfoWithPrevBackoff, new ResultOfRetryAttempt.Failed(e), null), lastErr);
-                        }
+                    if (backoffMillis > 0 && !sleepObservingShutdown(sleeper, backoffMillis, shutdownPredicate, e)) {
+                        // Shutdown was observed partway through the backoff: stop now instead of sleeping out the
+                        // rest of a backoff nobody wants. The after-retry listener already fired above for this
+                        // attempt, so it is not fired again here.
                         return SafeExceptionRethrower.safeRethrow(retry.errorMapper.apply(e));
                     }
 
@@ -182,10 +181,13 @@ public class RetryExecution {
     }
 
     /**
-     * Sleeps up to {@code totalMillis}, polling {@code shutdownPredicate} every {@link #SHUTDOWN_POLL_INTERVAL_MILLIS}
+     * Sleeps up to {@code totalMillis}, polling the caller's own {@code shutdownPredicate} (not the combined
+     * retry-and-shutdown predicate {@code retry.retryPredicate} holds) every {@link #SHUTDOWN_POLL_INTERVAL_MILLIS}
      * so a shutdown signaled during the sleep is observed within that bound instead of only after the full backoff
-     * has elapsed. Returns {@code false} the moment shutdown is observed, leaving any remaining backoff unslept, or
-     * {@code true} once the full duration has elapsed without shutdown being observed.
+     * has elapsed. Testing only the raw shutdown predicate here, rather than the combined one, means the caller's
+     * retry predicate is invoked once per attempt as before, not once per poll. Returns {@code false} the moment
+     * shutdown is observed, leaving any remaining backoff unslept, or {@code true} once the full duration has
+     * elapsed without shutdown being observed.
      * <p>
      * An interrupted sleep restores the thread's interrupt status before rethrowing, so a caller's own interrupt
      * handling (e.g. an executor shutting down its worker threads) is preserved rather than swallowed here.
