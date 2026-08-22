@@ -38,8 +38,12 @@ db.events.countDocuments({ position: { $type: "string" } })
 
 `0` means no event kept a damaged position. Replace `events` with your event collection name.
 
-**Read your startup log.** From 0.34.0, a store that writes position looks for one such event when it starts and
-logs a warning naming this tool. A store with no damage logs nothing.
+**Read your startup log.** From 0.34.0, a store that writes position runs that same query when it starts and logs a
+warning naming this tool. A store with no damage logs nothing.
+
+The startup check runs only the query above, because it is the one that costs nothing. It does not look for an event
+whose tag array is missing but whose position is fine, since that needs a collection scan. So a silent startup rules
+out a damaged position, not every kind of damage. The tool checks both.
 
 **Ask the tool.** `report()` counts the damage and the part of it that cannot be repaired, and writes nothing.
 
@@ -66,6 +70,13 @@ position mapper and tag decoder, so a repaired event is what a running store wou
 - **Atomic per event.** Both fields are written in one update, so an event is never left with a restored position
   and a missing tag array, or the other way round.
 - **Throttled.** You can make it sleep between batches so it does not compete with production traffic.
+
+Run one instance at a time. Two concurrent runs share one checkpoint document, and the first to finish deletes it
+while the other is still going, so a later resume would start from the wrong place. If you run this as a Kubernetes
+Job, make sure a retry cannot overlap the run it is retrying.
+
+`report()` writes nothing, but it is not cheap. Finding an event whose tag array is missing cannot use an index, so
+both `report()` and `run()` read the whole collection. On a large store, run them during a quiet period.
 
 ## What the tool cannot do
 
@@ -122,8 +133,10 @@ java -jar eventstore/migration/update-event-repair/target/eventstore-mongodb-upd
   "mongodb://localhost:27017" my-database events report
 ```
 
-Pass `repair` once you have read the report and want the events fixed. For a large collection, run it as a
-long-lived job (a Kubernetes Job or a one-off ECS task) rather than a script on your laptop.
+Pass `repair` once you have read the report and want the events fixed. A repair that could not fix every event
+exits with status `2`, so a job scheduler does not record it as a clean run when a person still has to look at
+something. For a large collection, run it as a long-lived job (a Kubernetes Job or a one-off ECS task) rather than a
+script on your laptop.
 
 ## Options
 

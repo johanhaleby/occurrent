@@ -72,7 +72,20 @@ position, the write-back always turned it into a string, so anything that kept a
 Anything that lost its position entirely has no `position` field and trips the existing un-backfilled events check,
 which already warns today, although it names the wrong remedy. The upgrade guide says so.
 
-### 3. The warning cannot be escalated to a startup failure
+### 3. The damage check runs before the un-backfilled check
+
+Order matters here, and getting it wrong is worse than not checking at all.
+
+`requireBackfilledPosition(true)` makes the un-backfilled check throw. An event whose position `updateEvent` dropped
+has no `position` field, so it reaches that check looking like history that predates position, and the only remedy
+that check names is the position backfill. Running the backfill on such an event gives it a position it never had,
+which is exactly what this tool refuses to do and which nothing can undo.
+
+So the damage check goes first, and its warning is out before anything can refuse to start. Both
+`PositionBackfillValidator` messages also point at the repair runbook for a caller that used `updateEvent`, because
+the ordering alone does not help an event that has no string position to find.
+
+### 4. The warning cannot be escalated to a startup failure
 
 `requireBackfilledPosition` exists for the un-backfilled case and there is deliberately no equivalent here.
 
@@ -82,14 +95,14 @@ different. It is finite and already done, no new event can acquire it now that P
 repair ends it. Refusing to start would take an application down over history rather than protect anything still
 being written.
 
-### 4. This is not the un-backfilled position check wearing a different hat
+### 5. This is not the un-backfilled position check wearing a different hat
 
 The two conditions are mechanically similar and are kept apart on purpose. `PositionBackfillValidator` says a store
 predates position. `UpdateEventRepairValidator` says a store's events were damaged by a defect this project shipped.
 Different cause, different remedy, different thing for an operator to do next, so separate wording and separate
 checks rather than a widened predicate on the existing one.
 
-### 5. The repair restores what survived and reports the rest
+### 6. The repair restores what survived and reports the rest
 
 The tool rebuilds `position` from the string still in the document and rebuilds `dcbTags` from the `dcbtags`
 CloudEvent extension, which is a genuine string and so came through the coercion intact. It reuses the store's own
@@ -111,7 +124,7 @@ replacement event without the `dcbtags` extension left a document that no longer
 nothing distinguishes it from an ordinary stream event. Where `dcbtags` was replaced rather than dropped, the repair
 faithfully rebuilds the array from the wrong tags. The upgrade guide states both plainly.
 
-### 6. When this check may be removed
+### 7. When this check may be removed
 
 This is the reason the decision is recorded rather than left in a module README.
 

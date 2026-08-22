@@ -306,6 +306,56 @@ class UpdateEventRepairTest {
     }
 
     @Test
+    void an_event_whose_position_string_is_not_a_number_still_gets_its_tag_array_back() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "a"),
+                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, "not-a-number")));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .as("the tag array does not depend on the position, so an unreadable position must not cost the event its tags too")
+                        .containsExactly("name:1"),
+                () -> assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
+                        .as("a position that cannot be read must be left exactly as it was found")
+                        .isEqualTo("not-a-number")
+        );
+    }
+
+    @Test
+    void one_unreadable_event_does_not_stop_the_rest_of_the_collection_being_repaired() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        damageTheWayUpdateEventUsedTo("b", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        // Nothing Occurrent writes produces a non-string dcbtags, so this stands in for a document edited outside
+        // the library. Reading it throws, and the run has to carry on to the events after it.
+        events().updateOne(new Document("id", "a"),
+                new Document("$set", new Document(DcbCloudEvents.TAGS, 42)));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.UNREADABLE),
+                () -> assertThat(result.eventsRepaired())
+                        .as("the readable event must still be repaired")
+                        .isEqualTo(1),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:2"))))
+                        .as("an event after the unreadable one must be visible again")
+                        .containsExactly("b")
+        );
+    }
+
+    @Test
     void a_killed_run_leaves_a_readable_collection_and_a_later_run_finishes_the_job() throws Exception {
         for (int i = 0; i < 4; i++) {
             String id = "event-" + i;

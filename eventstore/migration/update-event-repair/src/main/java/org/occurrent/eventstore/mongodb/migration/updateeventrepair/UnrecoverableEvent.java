@@ -57,6 +57,13 @@ public record UnrecoverableEvent(Object eventId, Reason reason, String detail) {
          * out of it. Nothing in the known {@code updateEvent} defect produces this, so it points at damage from
          * somewhere else.
          */
-        POSITION_NOT_A_NUMBER
+        POSITION_NOT_A_NUMBER,
+        /**
+         * The event could not be read well enough to repair it. Its {@code dcbtags} is not a string, or does not
+         * decode to a tag set. Nothing Occurrent writes produces either shape, so it points at a document that was
+         * edited outside the library. The run continues past it rather than stopping, so one such event cannot hold
+         * up the repair of a whole collection.
+         */
+        UNREADABLE
     }
 }
