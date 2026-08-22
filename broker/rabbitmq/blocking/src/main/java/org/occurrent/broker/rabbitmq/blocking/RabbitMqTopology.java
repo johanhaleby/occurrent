@@ -42,10 +42,10 @@ public final class RabbitMqTopology {
                                                                 @Nullable Set<RabbitMqDestination> bindings) {
         if (bindings != null) {
             if (bindings.isEmpty()) {
-                throw new IllegalStateException("An explicit bindings(Set.of()) declares zero bindings, so the " +
-                        "queue is created and bound to nothing, receiving no events while still reporting " +
-                        "healthy. Use declareTopology(false) if a platform team owns the queue and its bindings " +
-                        "already, or pass a non-empty bindings(...) set.");
+                throw new IllegalStateException("An explicit bindings(Set.of()) would bind the queue to nothing, " +
+                        "receiving no events while still reporting healthy, so this is refused instead. Use " +
+                        "declareTopology(false) if a platform team owns the queue and its bindings already, or " +
+                        "pass a non-empty bindings(...) set.");
             }
             return bindings;
         }

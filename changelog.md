@@ -3,7 +3,7 @@
 #### Highlights
 
 * Declaring a sealed event supertype now matches every concrete type it permits, in projections, DSL subscriptions, queries and snapshot views alike, the same way sagas already did.
-* `PushSubscriptionModel` takes an optional `PushObserver`, told the full six-valued `RoutingOutcome` for each event `accept(...)` is asked to deliver, so you can acknowledge a broker message safely instead of guessing from a single match flag.
+* `PushSubscriptionModel` takes an optional `PushObserver` that tells you whether each delivered event was delivered, filtered out by a subscription, or not deliverable at all, so you can acknowledge a broker message safely instead of guessing from a single match flag.
 * The flow saga's deprecated `join` is removed. The `org.occurrent.UpgradeToOccurrent_0_34` recipe rewrites the mechanical call sites to `on(allOf(...))` for you.
 * Forwarding stored events to a broker at least once no longer needs a shipped transport, or you can use the new RabbitMQ and Kafka ones. `CloudEventForwarder` holds its checkpoint back until your `CloudEventSink` confirms delivery, so an application with its own publisher wrapper gets that guarantee at the forwarder's default start position, and `occurrent-broker-rabbitmq-blocking` and `occurrent-broker-kafka-blocking` now give you a `CloudEventSink` for each broker that keeps the same guarantee.
 

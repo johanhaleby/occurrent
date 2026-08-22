@@ -50,10 +50,11 @@ public final class KafkaTopology {
                                                             @Nullable Set<KafkaDestination> topics) {
         if (topics != null) {
             if (topics.isEmpty()) {
-                throw new IllegalStateException("An explicit bindings(Set.of()) subscribes to zero topics. " +
+                throw new IllegalStateException("An explicit bindings(Set.of()) would subscribe to zero topics. " +
                         "Kafka's consumer.subscribe(Set.of()) is an unsubscribe, not \"bind everything,\" so this " +
-                        "bridge stops consuming while still reporting healthy. Pass a non-empty bindings(...) " +
-                        "set, or omit bindings() so a resolver or the catch-all destination applies.");
+                        "is refused instead, rather than building a bridge that stops consuming while still " +
+                        "reporting healthy. Pass a non-empty bindings(...) set, or omit bindings() so a resolver " +
+                        "or the catch-all destination applies.");
             }
             return topics;
         }
