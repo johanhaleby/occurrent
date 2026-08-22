@@ -36,6 +36,11 @@ data class KotlinSealedSubtype(val orderId: String) : KotlinPartlyOpenEvent
 // Kotlin lets a sealed interface permit a plain abstract class, and anything extending this one is invisible to the walk.
 abstract class KotlinReopenedBase : KotlinPartlyOpenEvent
 
+// A Kotlin class is final unless it says open, so open is how a Kotlin caller reaches the shape #753 is about.
+open class KotlinOpenOrderPlaced(val orderId: String)
+
+class KotlinSpecialOrderPlaced(orderId: String) : KotlinOpenOrderPlaced(orderId)
+
 @DisplayName("EventTypeExpansion over Kotlin types")
 @DisplayNameGeneration(ReplaceUnderscores::class)
 class EventTypeExpansionKotlinTest {
@@ -57,6 +62,20 @@ class EventTypeExpansionKotlinTest {
             .isInstanceOf(IllegalArgumentException::class.java)
             .hasMessageContaining(KotlinPartlyOpenEvent::class.java.name)
             .hasMessageContaining("cannot be expanded")
+    }
+
+    @Test
+    fun `a Kotlin open class is refused`() {
+        assertThatThrownBy { EventTypeExpansion.expand<Any>(setOf(KotlinOpenOrderPlaced::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") } }
+            .isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining(KotlinOpenOrderPlaced::class.java.name)
+    }
+
+    @Test
+    fun `a Kotlin class extending an open class is accepted on its own`() {
+        val expanded = EventTypeExpansion.expand<Any>(setOf(KotlinSpecialOrderPlaced::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") }
+
+        assertThat(expanded).containsExactly(KotlinSpecialOrderPlaced::class.java)
     }
 
     @Test
