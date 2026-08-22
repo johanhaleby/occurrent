@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 58
-updated_at: '2026-08-22T15:30:25+00:00'
-updated_by: 'orchestrator rel34: U5 dispatched plan-first, U11 session recorded'
+revision: 59
+updated_at: '2026-08-22T16:23:11+00:00'
+updated_by: 'orchestrator rel34: U11 delivered PR 938, all five stopped workers woken'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -1429,7 +1429,7 @@ units:
         review with NO suppressed block, ADR number unchanged at 0134. No further review round requested,
         deliberately.'
     - check: pr_merged
-      ref: null
+      ref: 938
       met: false
       evidence: ''
     - check: issue_closed
@@ -1437,8 +1437,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: 'await the implementation worker''s claim on #818'
-    last_meaningful_progress_at: '2026-08-22T15:30:25+00:00'
+    next_action: await the worker's settled report and CI, then gate with an adversarial pass
+    last_meaningful_progress_at: '2026-08-22T16:23:11+00:00'
     observed:
       design_gate:
         note: 'ADR 134 delivered as PR 911, Proposed, design only, no code. NOT merged on green: a plan-first
@@ -1509,6 +1509,15 @@ units:
           goes in a new ADR amending it by reference, which I will route after this unit lands.'
         via: worker message + ADR 134 Decision 8
         at: '2026-08-22T15:30:25+00:00'
+      pr_938_opened:
+        note: PR 938 on rel34/u11-quarantine-failing-saga-instance, 22 files, +1834/-35. Includes changelog.md
+          and doc/migration/upgrading-to-0.34.0.md and NO rewrite recipe, which is consistent with the
+          ruling that ADR 134 Decision 8 beats my brief's done_when. SagaRunnerConfig.java is present,
+          which is the FIFTH break the worker found that the ADR missed, verified against the 0.33.0 tag
+          rather than inferred. New types QuarantinedInstances and SagaFailure. Touches both the saga
+          DSL and SagaAnnotationRegistrar. Not yet gated, CI pending.
+        via: gh pr view 938
+        at: '2026-08-22T16:23:11+00:00'
     assessment: 'Johan ruled it IN 0.34.0 (dec-0002), overruling the recommendation to defer. Pre-existing:
       predates ADR 123 and ADR 126, both of which accepted the tradeoff deliberately, and PR 816''s review
       thread raised it against ADR 126. The event path has no equivalent of SagaExecution.pollTimers,
@@ -1975,3 +1984,17 @@ cross_epic:
       it IS a milestone item, which means the milestone cannot reach zero open until he has ruled on it.
       R4 must not treat that as a rel34 blocker.'
     at: '2026-08-22T15:23:44+00:00'
+  all_five_workers_had_stopped:
+    note: 'MAJOR PROCESS FINDING. A check prompted by sdi''s advice to prefer a mechanism over a memory
+      turned up that ALL FIVE held-PR worker sessions were isRunning:false, last active between 12:07
+      and 14:57. Every hold I posted went onto a PR comment AFTER its worker had already stopped, so none
+      of them had been read and no work was in progress on any of the five. I had been reading ''no push''
+      as ''working'' when it meant ''ended''. The durable trace existed and had no reader, which is the
+      finding-routing protocol''s own failure mode one layer up: a PR comment cannot forget, and it also
+      cannot act. All five woken by message with their specific outstanding work: U2 on 901 (coverage
+      test plus #927 plus #907), U4 on 914 (three grouped defects, one only in the suppressed block),
+      U6 on 933 (the no-regression floor), U10 on 919 (the non-terminating classifier), U16 on 928 (the
+      javadoc overclaim and the Kotlin enum advice). The mechanism this argues for is checking session
+      liveness whenever a unit is held on a worker, rather than inferring activity from the absence of
+      a push.'
+    at: '2026-08-22T16:23:11+00:00'
