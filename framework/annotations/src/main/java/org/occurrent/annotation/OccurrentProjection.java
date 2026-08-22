@@ -24,7 +24,7 @@ import java.lang.annotation.*;
  * persistent, framework-managed read model. For example:
  *
  * <pre lang="java">
- * &#64;Projection(id = "orderStatus")
+ * &#64;OccurrentProjection(id = "orderStatus")
  * Projection&lt;OrderStatus, OrderEvent, String&gt; orderStatusProjection() {
  *     return Projection.&lt;OrderStatus, OrderEvent, String&gt;builder(OrderStatus.EMPTY)
  *         .id(OrderEvent::orderId)
@@ -72,24 +72,17 @@ import java.lang.annotation.*;
  * must carry an id equal to the projection's {@code id}. A {@code ViewStateRepository} bean is the store-agnostic
  * option when you need full control over how the id maps to the stored key.
  * </p>
- *
- * @deprecated Renamed to {@link OccurrentProjection}. Its attributes and the factory method it marks are unchanged,
- * only the annotation's own name moves, so it no longer takes the word a user needs for the {@code Projection} it
- * marks. Run {@code org.occurrent.UpgradeToOccurrent_0_35} to rewrite every use, or see
- * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md">the 0.35.0
- * migration guide</a>.
  */
-@Deprecated(forRemoval = true)
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
-public @interface Projection {
+public @interface OccurrentProjection {
     /**
      * The unique identifier of the projection (required, no default). It is the durable checkpoint key and the
      * namespace for the zero-config store, and must be unique across all subscriptions, projections, and snapshots.
      * <p>
      * For a single-instance projection it is also the key the one view state is stored under, since such a projection
-     * has no id function to derive a key from. So a read model declared {@code @Projection(id = "is-username-claimed")}
+     * has no id function to derive a key from. So a read model declared {@code @OccurrentProjection(id = "is-username-claimed")}
      * is found under {@code "is-username-claimed"}, not under anything taken from the events.
      */
     String id();

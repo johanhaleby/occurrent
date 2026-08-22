@@ -1,0 +1,65 @@
+#
+# Copyright 2026 Johan Haleby
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MigrateOccurrentAnnotationRenames_0_35
+displayName: Migrate Occurrent framework annotations to the Occurrent prefix (0.34.0 -> 0.35.0)
+description: >-
+  Renames all seven framework annotations in org.occurrent.annotation to an Occurrent-prefixed name, so that
+  @Projection, @Saga, @Subscription and @DcbSubscription stop taking the simple name their descriptor needs, and
+  so that the whole set is named one way (ADR 127 decision 3). @Projection becomes @OccurrentProjection, @Saga
+  @OccurrentSaga, @Snapshot @OccurrentSnapshot, @Subscription @OccurrentSubscription, @StreamSubscription
+  @OccurrentStreamSubscription, @DcbSubscription @OccurrentDcbSubscription, and @SynchronousSubscription
+  @OccurrentSynchronousSubscription. @StreamSubscription's nested StartPosition enum, which is a different type
+  from the top-level org.occurrent.annotation.StartPosition and keeps the constant BEGINNING_OF_TIME, moves with
+  it. The old annotations are deprecated for removal and keep working until they go, so an application can run
+  this recipe whenever it wants to. What this recipe does not do is move a void handler method to a descriptor,
+  which the four subscription annotations need, since the new ones take a Subscription or DcbSubscription value
+  and declare no eventTypes and no tags. See doc/migration/upgrading-to-0.35.0.md for that step and for the
+  handlers it has to be done by hand for.
+recipeList:
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.annotation.Projection
+      newFullyQualifiedTypeName: org.occurrent.annotation.OccurrentProjection
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.annotation.Saga
+      newFullyQualifiedTypeName: org.occurrent.annotation.OccurrentSaga
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.annotation.Snapshot
+      newFullyQualifiedTypeName: org.occurrent.annotation.OccurrentSnapshot
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.annotation.Subscription
+      newFullyQualifiedTypeName: org.occurrent.annotation.OccurrentSubscription
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.annotation.StreamSubscription$StartPosition
+      newFullyQualifiedTypeName: org.occurrent.annotation.OccurrentStreamSubscription$StartPosition
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.annotation.StreamSubscription
+      newFullyQualifiedTypeName: org.occurrent.annotation.OccurrentStreamSubscription
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.annotation.DcbSubscription
+      newFullyQualifiedTypeName: org.occurrent.annotation.OccurrentDcbSubscription
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.annotation.SynchronousSubscription
+      newFullyQualifiedTypeName: org.occurrent.annotation.OccurrentSynchronousSubscription
+      ignoreDefinition: true

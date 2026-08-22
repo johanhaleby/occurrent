@@ -25,7 +25,7 @@ import java.lang.annotation.*;
  * replaying the whole stream. For example:
  *
  * <pre lang="java">
- * &#64;Snapshot(id = "accountSnapshot")
+ * &#64;OccurrentSnapshot(id = "accountSnapshot")
  * SnapshotView&lt;Account, AccountEvent&gt; accountSnapshot() {
  *     return SnapshotView.&lt;Account, AccountEvent&gt;builder(Account.EMPTY)
  *         .schemaVersion(1)
@@ -71,18 +71,11 @@ import java.lang.annotation.*;
  * {@code DcbSnapshotView} to maintain a DCB snapshot, one per boundary. DCB snapshots do not support the synchronous
  * {@link #mode()}.
  * </p>
- *
- * @deprecated Renamed to {@link OccurrentSnapshot}. Its attributes and the factory method it marks are unchanged,
- * only the annotation's own name moves, so that all seven Occurrent annotations share one prefix. Run
- * {@code org.occurrent.UpgradeToOccurrent_0_35} to rewrite every use, or see
- * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md">the 0.35.0
- * migration guide</a>.
  */
-@Deprecated(forRemoval = true)
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
-public @interface Snapshot {
+public @interface OccurrentSnapshot {
     /**
      * The unique identifier of the snapshot (required, no default). It is the durable checkpoint key and the namespace
      * for the zero-config store, and must be unique across all subscriptions, projections, and snapshots.
