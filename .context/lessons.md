@@ -1978,3 +1978,27 @@ The related habit that caused it: telling a worker "do not push again unless I a
 getting a settled head to verify against, and it transfers responsibility for the next move to the
 orchestrator. Any such instruction needs a matching entry on the sweep list, because the worker will
 now correctly do nothing forever.
+
+## A test that asserts a guarantee cannot be dismissed as flaky without answering the guarantee (rel34, 2026-08-22)
+
+`RabbitMqCloudEventBridgeConnectionRecoveryTest` failed on a pull request in a module that pull
+request does not touch. It was JDK-asymmetric, main's last completed run was green, and there was
+no known-flake issue. Every available signal said flake, and filing it as one would have taken
+thirty seconds.
+
+The verdict, after a deliberate investigation, was a PRODUCTION SILENT STALL in code already merged
+to main. amqp-client re-issues `basic.consume` before running its recovery listeners, so the first
+redelivery after a connection recovery arrives under the previous channel generation, the fence
+drops it unacked, and at prefetch 1 the bridge stops consuming until closed. Reproduced
+deterministically once someone looked.
+
+The argument that kept it open was one sentence, and it is reusable: this test asserts the exact
+property the change it was written for exists to guarantee, so if it can fail then either the
+guarantee can fail or the test does not pin it down, and both of those need an owner. Neither is
+"flaky".
+
+Three supporting habits mattered. The orchestrator routed it to the fleet that owned the code rather
+than diagnosing it, because a wrong owner would have concluded "flake" faster. It sent the evidence
+that narrowed it (JDK asymmetry, main green) as evidence rather than as a conclusion. And it said
+plainly which reading it could not rule out, so the receiving fleet knew what it was being asked to
+settle rather than to confirm.

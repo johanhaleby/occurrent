@@ -1,8 +1,9 @@
 schema_version: 1
 epic: rel34
-revision: 30
-updated_at: '2026-08-22T15:35:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U7 merged, five units done)
+revision: 31
+updated_at: '2026-08-22T16:10:00+00:00'
+updated_by: 'orchestrator session rel34-epic-registration-8c2066 (#922 verdict: a production stall in
+  shipped-to-main code, tag waits on brk''s fix)'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -810,8 +811,8 @@ units:
       met: false
       evidence: ''
     blocking_on:
-    - brk U17, the RabbitMqCloudEventBridgeConnectionRecoveryTest verdict; brk does not close until it
-      is in
+    - 'brk''s fence-removal PR for #922, a PRODUCTION defect in code already merged to main; PR number
+      pending'
     next_action: dispatch after plan approval
     last_meaningful_progress_at: '2026-08-22T07:05:33+00:00'
     observed:
@@ -848,6 +849,25 @@ units:
           item 34 for Johan to rule, and no change to rel34''s tag unless he rules it in.'
         via: brk orchestrator message
         at: '2026-08-22T15:10:00+00:00'
+      issue_922_verdict:
+        note: 'NOT A FLAKE. A PRODUCTION SILENT STALL, in code already on main. The channel-generation
+          fence brk''s PR 895 added to RabbitMqCloudEventBridge is the defect: amqp-client 5.33.1 re-issues
+          basic.consume BEFORE it runs recovery listeners, so the first redelivery after a connection
+          recovery arrives under the OLD generation, the fence drops it unacked, and with prefetchCount
+          1 the bridge silently stops consuming until it is closed. Reproduced DETERMINISTICALLY, a slow
+          RecoveryListener registered before the bridge''s makes it fail every time, and shown to pass
+          with the fence neutralised. The fence guards a hazard the client already prevents, since RecoveryAwareChannelN
+          keeps delivery tags monotonic across recoveries and no-ops acks on stale tags. No message is
+          lost, it stays unacked and requeues on close, but a consumer that silently stops consuming is
+          as bad. Fix is to REMOVE the fence, production change in broker/rabbitmq/blocking, brk has a
+          plan-first Opus worker on it with a regression test from the deterministic probe. HOW IT WAS
+          NEARLY MISSED, and this is the part worth keeping: it presented as a test failure on rel34''s
+          PR 914, in a module 914 does not touch, JDK-asymmetric, with main''s last completed run green.
+          Every signal invited filing it as a flake. rel34 refused to, on one argument: the test asserts
+          the exact property PR 895 was written to guarantee, so if it can fail then either the guarantee
+          can fail or the test does not pin it down. It was the first.'
+        via: 'brk orchestrator verdict on #922'
+        at: '2026-08-22T16:10:00+00:00'
     assessment: 'Johan''s manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
       The orchestrator hands him the checklist and verifies the observable results. The 1000-file allowance
       is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z:
