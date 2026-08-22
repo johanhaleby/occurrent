@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 14
+revision: 15
 updated_at: 2026-08-22T08:2xZ
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -67,7 +67,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on:
-      - {what: "TWO fences. (a) U3's first deliverable extracts buildDcbCriteria out of framework/spring-boot-autoconfigure/common/.../SubscriptionAnnotations.java:226, inside the epic's own fence, which was unrecorded until 2026-08-22T09:30Z. (b) NEW 2026-08-22T10:5xZ, flagged by rel34: #912 changes how DcbCriteriaBuilder in dsl/dcb-dsl/common derives a type filter, adding EventTypeExpansion where there is none today. That is the same derivation U3 tags(..) must match, in a module U3 and U14 own, and it is a follow-on from #753 which already gates U2. Verified on the issue, not taken from the report.", since: 2026-08-22T09:30:00Z, recheck_after: 2026-08-22T13:00:00Z}
+      - {what: "TWO fences, and see U14 for the do-not-unify constraint that binds U3 equally. (a) U3's first deliverable extracts buildDcbCriteria out of framework/spring-boot-autoconfigure/common/.../SubscriptionAnnotations.java:226, inside the epic's own fence, which was unrecorded until 2026-08-22T09:30Z. (b) NEW 2026-08-22T10:5xZ, flagged by rel34: #912 changes how DcbCriteriaBuilder in dsl/dcb-dsl/common derives a type filter, adding EventTypeExpansion where there is none today. That is the same derivation U3 tags(..) must match, in a module U3 and U14 own, and it is a follow-on from #753 which already gates U2. Verified on the issue, not taken from the report.", since: 2026-08-22T09:30:00Z, recheck_after: 2026-08-22T13:00:00Z}
     next_action: "Plan gate first."
     last_meaningful_progress_at: 2026-08-22T10:55:00Z
     observed: {}
@@ -207,7 +207,7 @@ units:
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on:
-      - {what: "#912 (rel34) changes DcbCriteriaBuilder in dsl/dcb-dsl/common, which U14 owns, adding EventTypeExpansion to a derivation that has none. Flagged by rel34 2026-08-22T10:5xZ and verified on the issue.", since: 2026-08-22T10:55:00Z, recheck_after: 2026-08-22T14:00:00Z}
+      - {what: "#912, now rel34/U16 and IN 0.34.0, so it lands BEFORE this epic rather than after. It changes DcbCriteriaBuilder in dsl/dcb-dsl/common, which U14 owns. DO NOT UNIFY the two derivations that will then sit adjacent in that module: buildDcbCriteria (which U3 extracts there) narrows uniformly, while post-#912 DcbCriteriaBuilder is DIRECTION-DEPENDENT, type and includeTypes expand and refuse while excludeTypes takes a lenient expandWhatCanBeFound walk because a narrowed exclusion silently reads events the caller excluded. Two similar-looking helpers with opposite policies in one module is exactly the mechanically-fits reuse trap. Verified on the issue.", since: 2026-08-22T10:55:00Z, recheck_after: 2026-08-22T14:00:00Z}
     next_action: "Sequenced last. Nothing to do until U13 establishes the pattern."
     last_meaningful_progress_at: 2026-08-22T10:55:00Z
     observed: {}
