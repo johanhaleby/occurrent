@@ -1,6 +1,6 @@
 schema_version: 1
 epic: sdi
-revision: 47
+revision: 48
 updated_at: 2026-08-22T13:43:22Z
 updated_by: claude:sdi-orch-admiring-bhabha-362d44
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -119,7 +119,7 @@ units:
     issue: 725
     goal: "Descriptor paths in both SubscriptionAnnotationRegistrar classes (217 and 234 lines) and the move to afterSingletonsInstantiated."
     phase: BLOCKED
-    health: STALLED
+    health: PROGRESSING
     swept: false
     depends_on: [U1, U2, U3, U5, U12]
     session: null
@@ -128,7 +128,7 @@ units:
     blocking_on:
       - {what: "REGISTRAR FENCE, NARROWED 2026-08-22T12:24:48Z to ONE issue. #753 CLEARED (PR 913, a86909f5d). #871 CLEARED (PR 902, 4f12b2ffb, issue closed 12:23:30Z; note PR 908 was CLOSED UNMERGED so 902 carried it alone). **Only #837 remains**: PR 933 OPEN as of 2026-08-22T14:08:19Z, rel34/u6-transactional-subscription-handlers, scope MEASURED not assumed at five files, two main SubscriptionAnnotationRegistrar (blocking and reactor) plus two Mongo advice tests plus changelog.md. dec-0006 two-file premise VINDICATED. Neither registrar imports the API type U1 renames, they use the org.occurrent.annotation.Subscription ANNOTATION, so U1 is textually disjoint and correctly skips both. Fence clears when 933 merges. Previously recorded as RUNNING per rel34's own state file, unit rel34/U6, session local_53811444-7045-4edd-afdb-ec20a97a4ee1, worktree amazing-shannon-db71fe, branch johan/amazing-shannon-db71fe off main, sonnet-5 at high, awaiting the worker's claim and first push. An earlier sdi reading of not dispatched was wrong: it came from tracker signals, which lag dispatch until a worker claims. Read the sibling epic state file, never the tracker, for a sibling fleet's dispatch state. Surfaces still fenced: framework/spring-boot-autoconfigure/{blocking,reactor,common}/** and framework/spring-boot-starter-mongodb{,-reactive}/**", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T14:30:00Z}
     next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T10:55:39Z
+    last_meaningful_progress_at: 2026-08-22T15:18:29Z
     observed: {}
     assessment: "HARD CONSTRAINT from rel34/U6 (#837), which owns both SubscriptionAnnotationRegistrar files until it merges. Its fix makes the handler target whatever the application context yields FOR THE BEAN NAME, looked up INSIDE the handler lambda at EVENT-DELIVERY time, never the instance handed to the post processor. The lookup POINT matters as much as the lookup: during postProcessBeforeInitialization the bean is unfinished, so hoisting it to registration time is premature or circular. sdi U6 moving registration to afterSingletonsInstantiated changes exactly that timing and is therefore the moment this is most likely to be silently undone. U6 MUST carry a test that still FAILS if the target reverts to the raw bean. SECOND REQUIRED TEST, from the U5 adversarial pass and issue #929: the recipe tests rewrite hand-stubbed annotation classes and never load a Spring context, so a green suite is fully consistent with every projection silently failing to register. Whichever of U6 and U7 lands the wiring adds a test that registers a bean through a NEW annotation and asserts it actually receives events. Precedent already in both files: processSynchronousSubscribeAnnotation does it correctly today and carries a comment saying why. Split out of revision 1 oversized single registrar unit. The phase move is the same change as the descriptor path, not a follow-up. EXPLICITLY DOES NOT rewire ProjectionAnnotationRegistrar or SnapshotAnnotationRegistrar: those reach the runner transitively once U13 makes StreamSubscriptions.subscribe delegate to it, so touching them would be roughly 2300 lines of rewrite for no user-visible gain. Opus/high."
   U7:
@@ -151,16 +151,16 @@ units:
     issue: 725
     goal: "The OpenRewrite Java body visitor with its three refusals, reactor Mono wrapping, plus wiring every recipe into org.occurrent.UpgradeToOccurrent_0_34 and a migration-guide coherence pass."
     phase: BLOCKED
-    health: STALLED
+    health: PROGRESSING
     swept: false
     depends_on: [U5, U6, U7]
     session: null
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on:
-      - {what: "CHANGELOG GATE: no sdi unit writes changelog.md until the occurrent-0.34.0 tag exists, because a release cut RENAMES the 'Changelog next version' heading in place (4c04880e5 did exactly that for 0.33.0) and would publish sdi entries as 0.34.0 notes. U8 lands the collected block once the heading means 0.35.0. Units author their entries in their DELIVERY_RESULT meanwhile.", since: 2026-08-22T10:33:52Z, recheck_after: 2026-08-22T14:00:00Z}
+      - {what: "SUPERSEDED 2026-08-22T15:18:29Z by the RELEASE GATE: sdi merges nothing to main until the occurrent-0.34.0 tag exists, which is strictly wider than the changelog rule below and subsumes it. The original text is kept because its reasoning is still why the changelog half exists. CHANGELOG GATE: no sdi unit writes changelog.md until the occurrent-0.34.0 tag exists, because a release cut RENAMES the 'Changelog next version' heading in place (4c04880e5 did exactly that for 0.33.0) and would publish sdi entries as 0.34.0 notes. U8 lands the collected block once the heading means 0.35.0. Units author their entries in their DELIVERY_RESULT meanwhile.", since: 2026-08-22T10:33:52Z, recheck_after: 2026-08-22T14:00:00Z}
     next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T10:55:39Z
+    last_meaningful_progress_at: 2026-08-22T15:18:29Z
     observed: {}
     assessment: "Refusals: any advice annotation on a @SynchronousSubscription handler, a checked throws, a mixed-stack application. Keeps the handler method and delegates to it, never moves the body. Opus/high."
   U9:
@@ -213,16 +213,16 @@ units:
     issue: 725
     goal: "Reshape Subscriptions and StreamSubscriptions on both stacks into a Kotlin idiom layer that builds a descriptor and hands it to the runner, so the runner becomes the single execution path. Keep every public signature, the class identity and the Spring bean."
     phase: BLOCKED
-    health: STALLED
+    health: PROGRESSING
     swept: false
     depends_on: [U12, U2, U3, U4]
     session: null
     deliverables:
       - {check: pr_merged, ref: null, met: false, evidence: null}
     blocking_on:
-      - {what: "REGISTRAR FENCE: also touches the starter bean methods occurrentStreamSubscriptionDsl and occurrentStreamSubscriptions, on rel34 U3's extended ownership", since: 2026-08-22T08:35:15Z, recheck_after: 2026-08-22T14:30:00Z}
+      - {what: "REGISTRAR FENCE, NARROWED to #837 alone at 2026-08-22T12:24:48Z, and PR 933 is now OPEN and green on Java CI with Maven, awaiting rel34's merge. Original text follows. REGISTRAR FENCE: also touches the starter bean methods occurrentStreamSubscriptionDsl and occurrentStreamSubscriptions, on rel34 U3's extended ownership", since: 2026-08-22T08:35:15Z, recheck_after: 2026-08-22T14:30:00Z}
     next_action: "Plan gate first."
-    last_meaningful_progress_at: 2026-08-22T10:55:39Z
+    last_meaningful_progress_at: 2026-08-22T15:18:29Z
     observed: {}
     assessment: "Signature-preserving by constraint: the inline/reified overloads and the @JvmName and @JvmOverloads surface are a released API since 0.20.4 and the starter exposes the type as a ConditionalOnMissingBean, so this changes bodies rather than shapes. waitUntilStarted and StartAt handling move to the runner, which is where ADR 0127 already puts them. MUST PRESERVE getSubscriptionModel(), which the census did not list and which ProjectionAnnotationRegistrar:525 depends on to resolve the recording phase from the exact model the subscription runs on. This unit is what puts @Projection and @Snapshot on the runner without touching their registrars. Sonnet/high."
   U14:

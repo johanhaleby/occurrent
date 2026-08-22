@@ -2485,3 +2485,15 @@ The same defect was sitting one unit over in a different disguise. U2 was READY 
 The fix is to write the hold where the deriver reads. All three units now carry a `blocking_on` entry naming the release tag as the clearing condition, and the two reverted ones have `met: false` with evidence saying reverted-pending-re-land and a cleared `session`. Phase then falls out of the data instead of being asserted beside it.
 
 The general rule: a constraint that only exists in prose is a constraint on whoever reads the prose, which after a restart or a handover is nobody. Before writing an explanation into `next_action` or the memory file, ask which field a tool would have to read for the explanation to be enforced, and set that field too. Ask it especially when the explanation is a good one, because a well-argued note is the most convincing possible substitute for a mechanism and the easiest to mistake for having built one.
+
+## STALLED on a blocked unit measures the orchestrator's attention, not the unit's blocker
+
+Johan asked why several sdi units had stalled. Five showed STALLED, all with the identical `last_meaningful_progress_at`, and the honest answer turned out to be that only two of them were about the world.
+
+`derive` computes health by subtracting `last_meaningful_progress_at` from now, and that field changes only when the orchestrator writes it. For a RUNNING unit that is a fair proxy, since a worker producing nothing really is stalled. For a BLOCKED unit it is not, because the thing that moves is the blocker, and the blocker lives on someone else's PR. A unit whose fence narrowed, whose blocking PR opened and went green, and which nobody thought to re-stamp, looks identical to one whose blocker has not moved in four hours.
+
+Of the five here, two were correct: their blocker is a sibling PR still open and unmerged, so nothing has happened and STALLED says so. The other three were bookkeeping. One had current blocker text and a stale stamp. One still described a fence that had narrowed to a single issue four hours earlier and knew nothing of the PR now open and green against it. One carried a gate that had been superseded outright by a wider one, so it was waiting on a condition that no longer governed it.
+
+The tell is a set of units sharing one timestamp to the second. That is not a fact about the units, it is the signature of a single write that touched all of them, and every one of them has been untouched since.
+
+So when a blocked unit reports STALLED, resolve which of two claims it is making before repeating it: nothing has moved, or nobody has looked. Check the blocker itself, then either re-stamp the unit or leave it stalled deliberately. And propagate a blocker change to EVERY unit that shares it rather than to the one whose entry happened to be open at the time, because the units that miss the update are exactly the ones that will later look stalled for no reason.
