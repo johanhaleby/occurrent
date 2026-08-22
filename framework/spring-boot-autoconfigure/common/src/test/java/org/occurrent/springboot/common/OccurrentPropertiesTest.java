@@ -359,6 +359,29 @@ class OccurrentPropertiesTest {
         }
 
         @Test
+        void rejects_more_attempts_than_the_store_would_ever_make() {
+            OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =
+                    new OccurrentProperties().getProjection().getAppliedAppend();
+
+            assertThatThrownBy(() -> appliedAppend.setMaxAttempts(
+                    OccurrentProperties.ProjectionProperties.AppliedAppendProperties.MAX_ATTEMPTS_CEILING + 1))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot exceed 1000")
+                    .hasMessageContaining("1001");
+        }
+
+        @Test
+        void allows_exactly_the_number_of_attempts_the_store_will_make() {
+            OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =
+                    new OccurrentProperties().getProjection().getAppliedAppend();
+            int ceiling = OccurrentProperties.ProjectionProperties.AppliedAppendProperties.MAX_ATTEMPTS_CEILING;
+
+            appliedAppend.setMaxAttempts(ceiling);
+
+            assertThat(appliedAppend.getMaxAttempts()).isEqualTo(ceiling);
+        }
+
+        @Test
         void allows_a_single_attempt_meaning_no_retry_at_all() {
             OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =
                     new OccurrentProperties().getProjection().getAppliedAppend();

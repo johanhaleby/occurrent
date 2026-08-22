@@ -281,8 +281,13 @@ stops the retries as well as the reads.
 What a store does with a read slower than the time left is not shared, and this is the one place the two stacks
 behave differently rather than only being implemented differently. The blocking store cannot cancel a read it has
 started, so it lets that read finish and can return after the timeout has passed, answering correctly and late. The
-reactive store stops waiting at the deadline, so it returns on time and answers `false` for an append it would have
-found had it waited. The interface documents that difference rather than requiring one of them, since neither
+reactive store stops waiting at the deadline on every poll that has time left, so it returns within the timeout and
+answers `false` for an append it would have found had it waited.
+
+The read a wait must make is the exception on both stacks, since a timeout of zero or one already elapsed leaves no
+remaining time to bound it with. That read runs with the same absence of a deadline `hasApplied` runs with, so the
+client's own timeout is the only thing that ends it, which is the same conclusion decision 5 reaches everywhere
+else. The wall clock is the client's job on every path here, and this is the path where it is the only one. The interface documents that difference rather than requiring one of them, since neither
 choice is free, and a caller who needs the answer more than the deadline reads `hasApplied` directly.
 
 ### 6. Nothing is recorded while a projection is reading history

@@ -82,8 +82,10 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * Every call outside a wait blocks for as long as the underlying {@code Mono} takes to answer. A MongoDB client
  * left with no timeout of its own does not answer at all while a connection it has accepted stops responding, so
  * configure one on the client if these calls have to return, for example through {@code spring.mongodb.uri}.
- * {@link #waitUntilApplied(String, AppendId, Duration)} is the exception and needs no such setting, since it
- * blocks on the time it has left rather than indefinitely.
+ * {@link #waitUntilApplied(String, AppendId, Duration)} bounds each poll that has time left on exactly that time,
+ * so those polls need no such setting. The one read it must make gets no such limit, because a timeout of zero
+ * or one that has already elapsed leaves nothing to bound it with, and that read depends on the client's timeout
+ * exactly as the calls above it do.
  */
 @NullMarked
 public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
@@ -356,21 +358,16 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     }
 
     /**
-     * Wraps a {@link Retry} so a {@link ConflictingIndexException} ends the call instead of being repeated, and so
-     * no policy runs past {@link #MAX_ATTEMPTS_CEILING} attempts, whatever the wrapped policy would have done with
-     * either. Reactor takes the retry policy as one object and gives a store no
-     * separate say in which failures it repeats, unlike the blocking {@code executeWithRetry}, so the store takes
-     * that say back here rather than asking every caller to remember it. Erroring the companion is what stops
-     * {@code retryWhen}, and every other failure reaches the wrapped policy unchanged.
-     */
-    /**
      * Wraps this store's {@link #retry} so it stops once {@code deadlineNanos} ({@link System#nanoTime()} scale)
      * has passed, rather than spending attempts a wait has no time left for. Checked when an attempt fails and
      * before the policy would sleep, the same position the blocking store's retry predicate checks it.
+     * <p>
+     * Built on the delegate's own {@link Retry#retryContext()} rather than an empty one, so a caller's hooks and
+     * policies still read back what they put there through {@code RetrySignal.retryContextView()}.
      */
     private Retry retryUntil(long deadlineNanos) {
         Retry delegate = retry;
-        return new Retry() {
+        return new Retry(delegate.retryContext()) {
             @Override
             public Publisher<?> generateCompanion(Flux<RetrySignal> retrySignals) {
                 return delegate.generateCompanion(retrySignals.handle((signal, sink) -> {
@@ -384,8 +381,18 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
         };
     }
 
+    /**
+     * Wraps a {@link Retry} so a {@link ConflictingIndexException} ends the call instead of being repeated, and so
+     * no policy runs past {@link #MAX_ATTEMPTS_CEILING} attempts, whatever the wrapped policy would have done with
+     * either. Reactor takes the retry policy as one object and gives a store no separate say in which failures it
+     * repeats, unlike the blocking {@code executeWithRetry}, so the store takes that say back here rather than
+     * asking every caller to remember it. Erroring the companion is what stops {@code retryWhen}, and every other
+     * failure reaches the wrapped policy unchanged.
+     * <p>
+     * Built on the delegate's own {@link Retry#retryContext()}, for the same reason {@link #retryUntil(long)} is.
+     */
     private static Retry neverRetryingAConflictingIndex(Retry delegate) {
-        return new Retry() {
+        return new Retry(delegate.retryContext()) {
             @Override
             public Publisher<?> generateCompanion(Flux<RetrySignal> retrySignals) {
                 return delegate.generateCompanion(retrySignals.handle((signal, sink) -> {

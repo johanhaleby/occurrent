@@ -351,4 +351,10 @@ class MongoAppliedAppendStoreBoundsTest {
         assertThat(applied).isTrue();
         assertThat(Duration.between(start, Instant.now())).isGreaterThanOrEqualTo(Duration.ofMillis(250));
     }
+
+    @Test
+    void the_largest_attempt_limit_an_application_can_configure_is_the_one_this_store_will_actually_make() {
+        assertThat(OccurrentProperties.ProjectionProperties.AppliedAppendProperties.MAX_ATTEMPTS_CEILING)
+                .isEqualTo(MongoAppliedAppendStore.MAX_ATTEMPTS_CEILING);
+    }
 }

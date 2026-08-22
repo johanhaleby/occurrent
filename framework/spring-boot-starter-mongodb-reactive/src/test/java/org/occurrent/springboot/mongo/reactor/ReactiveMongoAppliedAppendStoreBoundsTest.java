@@ -37,12 +37,14 @@ import org.springframework.data.mongodb.core.index.ReactiveIndexOperations;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.UpdateDefinition;
 import reactor.core.publisher.Mono;
+import reactor.util.context.Context;
 import reactor.util.retry.Retry;
 import reactor.util.retry.RetryBackoffSpec;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -435,5 +437,58 @@ class ReactiveMongoAppliedAppendStoreBoundsTest {
         AppliedAppendStore store = storeWith(mongoOperations, boundedRetry());
 
         assertThat(store.waitUntilApplied("orders", AppendId.mint(), Duration.ofMillis(100), Backoff.fixed(20))).isFalse();
+    }
+
+    /**
+     * The store wraps whatever `Retry` it is given, twice, and a wrapper built on reactor's no-argument `Retry`
+     * constructor hands every signal an empty context. A caller's own hooks read that context back through
+     * `RetrySignal.retryContextView()`, so losing it changes what their policy sees without changing anything
+     * they wrote.
+     */
+    @Test
+    void a_callers_retry_context_survives_the_wrappers_this_store_puts_around_their_policy() {
+        AtomicReference<String> seenByTheCallersHook = new AtomicReference<>("absent");
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
+                .thenReturn(Mono.error(new RuntimeException("transient store error")))
+                .thenReturn(Mono.just(mock(UpdateResult.class)));
+        Retry callersRetry = Retry.fixedDelay(3, Duration.ofMillis(5))
+                .withRetryContext(Context.of("marker", "supplied by the caller"))
+                .doBeforeRetry(signal -> seenByTheCallersHook.set(
+                        signal.retryContextView().getOrDefault("marker", "absent")))
+                .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+        AppliedAppendStore store = storeWith(mongoOperations, callersRetry);
+
+        store.recordApplied("orders", AppendId.mint());
+
+        assertThat(seenByTheCallersHook).hasValue("supplied by the caller");
+    }
+
+    /**
+     * The exception the interface, this class and ADR 132 all now name. A wait must read once, and a timeout of
+     * zero leaves no remaining time to bound that read with, so it runs with the same absence of a deadline
+     * `hasApplied` runs with. Written down as a test so the documented exception is a measured fact rather than a
+     * claim, and so bounding it later fails here first.
+     */
+    @Test
+    void the_one_read_a_wait_must_make_is_not_bounded_by_a_timeout_that_has_already_elapsed() {
+        Duration stall = Duration.ofMillis(600);
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.exists(any(Query.class), anyString()))
+                .thenReturn(Mono.just(true).delayElement(stall));
+        AppliedAppendStore store = storeWith(mongoOperations, boundedRetry());
+
+        Instant start = Instant.now();
+        boolean applied = store.waitUntilApplied("orders", AppendId.mint(), Duration.ZERO);
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(applied).isTrue();
+        assertThat(elapsed).isGreaterThanOrEqualTo(stall.minusMillis(50));
+    }
+
+    @Test
+    void the_largest_attempt_limit_an_application_can_configure_is_the_one_this_store_will_actually_make() {
+        assertThat(OccurrentProperties.ProjectionProperties.AppliedAppendProperties.MAX_ATTEMPTS_CEILING)
+                .isEqualTo(ReactiveMongoAppliedAppendStore.MAX_ATTEMPTS_CEILING);
     }
 }

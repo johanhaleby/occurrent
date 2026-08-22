@@ -141,10 +141,16 @@ public interface AppliedAppendStore {
      * <p>
      * What an implementation does with a read slower than the time left is its own choice, and the two Mongo stores
      * choose differently. The blocking one cannot cancel a read it has started, so it lets that read finish and can
-     * return after {@code timeout} has passed. The reactive one stops waiting at the deadline, so it returns on
-     * time and answers {@code false} for an append it would have found had it waited longer. Neither is free, and
-     * a caller who needs the answer more than the deadline reads {@link #hasApplied(String, AppendId)} directly,
-     * which has no deadline to cut it short.
+     * return after {@code timeout} has passed. The reactive one stops waiting at the deadline on every poll that
+     * has time left, so it returns within {@code timeout} and answers {@code false} for an append it would have
+     * found had it waited longer. Neither is free, and a caller who needs the answer more than the deadline reads
+     * {@link #hasApplied(String, AppendId)} directly, which has no deadline to cut it short.
+     * <p>
+     * The read this method must make is the exception, on either store, because a {@code timeout} of zero or one
+     * that has already elapsed leaves no remaining time to bound that read with. It runs with the same absence of a
+     * deadline {@link #hasApplied(String, AppendId)} runs with, so it ends when the store's client gives up, and
+     * against a connection that has stopped responding with no client timeout configured it does not end. Bounding
+     * the wall clock is the client's job on every path here, and this is the path where it is the only one.
      * <p>
      * The deadline is checked between polls, never during one, so this method returns after {@code timeout} plus
      * however long the {@link #hasApplied(String, AppendId)} call already in flight takes to answer. For

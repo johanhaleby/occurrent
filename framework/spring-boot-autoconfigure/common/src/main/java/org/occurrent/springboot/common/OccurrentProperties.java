@@ -808,8 +808,18 @@ public class OccurrentProperties {
              * <p>
              * {@code AppliedAppendStore.waitUntilApplied(..)} does not fail when this limit is reached. A read that
              * has run out of attempts counts as not applied yet, so the wait goes on polling until its own timeout.
+             * <p>
+             * Cannot exceed {@link #MAX_ATTEMPTS_CEILING}, which is where the Mongo stores stop a policy that never
+             * stops on its own. A larger number here would be accepted and then not happen, so it is rejected
+             * instead of being quietly reduced to the ceiling.
              */
             private int maxAttempts = 10;
+
+            /**
+             * The largest {@code maxAttempts} an application can ask for, matching the ceiling both Mongo stores
+             * enforce. Two orders of magnitude above the default, so it bounds a mistake rather than a choice.
+             */
+            public static final int MAX_ATTEMPTS_CEILING = 1000;
 
             /**
              * How {@code AppliedAppendStore.waitUntilApplied(..)} paces its polls.
@@ -851,6 +861,9 @@ public class OccurrentProperties {
             public void setMaxAttempts(int maxAttempts) {
                 if (maxAttempts < 1) {
                     throw new IllegalArgumentException("occurrent.projection.applied-append.max-attempts must be at least 1, a store that is never called cannot record or read anything");
+                }
+                if (maxAttempts > MAX_ATTEMPTS_CEILING) {
+                    throw new IllegalArgumentException("occurrent.projection.applied-append.max-attempts cannot exceed " + MAX_ATTEMPTS_CEILING + ", which is where the store stops a retry that never stops on its own, so " + maxAttempts + " would be accepted and then not happen");
                 }
                 this.maxAttempts = maxAttempts;
             }
