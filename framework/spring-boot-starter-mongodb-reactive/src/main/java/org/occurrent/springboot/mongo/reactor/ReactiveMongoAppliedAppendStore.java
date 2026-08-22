@@ -93,13 +93,13 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     private static final String INDEX_OPTIONS_CONFLICT = "IndexOptionsConflict";
 
     /**
-     * How many times a read or a write is attempted before it gives up, 20. With this store's own 100 ms to 2 s
-     * backoff that spans about 31 seconds, deliberately just past the MongoDB driver's 30 second default server
-     * selection timeout, so an ordinary primary failover is ridden out rather than turned into a failure. A store
-     * that stays unreachable past that stops blocking the projection's delivery thread instead of retrying for as
-     * long as the outage lasts. The same number the blocking store uses.
+     * How many times a read or a write calls MongoDB before it gives up, 10. This is a count of attempts and not a
+     * length of time. A call that fails at once is retried on this store's 100 ms to 2 s backoff, so ten of those
+     * take about 11 seconds, while a call to a server that is not answering spends the client's own server
+     * selection timeout, 30 seconds by default, on each of the ten. Only a timeout on the client limits the time,
+     * the same reason a wait needs one, so configure one there when the wall clock is what matters. The same number the blocking store uses.
      */
-    public static final int DEFAULT_MAX_ATTEMPTS = 20;
+    public static final int DEFAULT_MAX_ATTEMPTS = 10;
 
     private final ReactiveMongoOperations mongoOperations;
     private final String collection;
@@ -110,12 +110,13 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
     private volatile boolean indexesEnsured = false;
 
     /**
-     * Retries a failing read or write with backoff from 100 ms up to 2 seconds, with no attempt limit, so a
-     * transient outage of the store does not turn a direct call to {@link #hasApplied(String, AppendId)} or
-     * {@link #recordApplied(String, AppendId)} into a failure, matching the blocking store's own default and ADR
-     * 132 decision 5's requirement that both stacks apply it. {@link #waitUntilApplied(String, AppendId, Duration)}
-     * is unaffected either way, its own reads answer {@code false} rather than surfacing a failure, so a wait
-     * resolves by its own deadline regardless of what a caller supplies here. Polls a wait at
+     * Retries a failing read or write with backoff from 100 ms up to 2 seconds, {@link #DEFAULT_MAX_ATTEMPTS}
+     * times, so a transient outage of the store does not turn a direct call to {@link #hasApplied(String, AppendId)}
+     * or {@link #recordApplied(String, AppendId)} into a failure, and one that keeps failing stops being called.
+     * ADR 132 decision 5 asks for the retry so that a transient outage does not fail a wait, and decision 7 needs
+     * it to end, which is why it counts attempts rather than going on. {@link #waitUntilApplied(String, AppendId, Duration)}
+     * is unaffected either way, its own reads answer {@code false} rather than failing, so a wait resolves by its
+     * own deadline regardless of what a caller supplies here. Polls a wait at
      * {@link AppliedAppendStore#DEFAULT_POLL_BACKOFF}.
      */
     public ReactiveMongoAppliedAppendStore(ReactiveMongoOperations mongoOperations, String collection, Duration retention) {

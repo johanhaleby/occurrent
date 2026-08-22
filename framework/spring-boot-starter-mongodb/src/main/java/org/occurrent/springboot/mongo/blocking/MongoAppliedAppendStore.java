@@ -85,13 +85,13 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
     private static final String INDEX_OPTIONS_CONFLICT = "IndexOptionsConflict";
 
     /**
-     * How many times a read or a write is attempted before it gives up, 20. With this store's own 100 ms to 2 s
-     * backoff that spans about 31 seconds, deliberately just past the MongoDB driver's 30 second default server
-     * selection timeout, so an ordinary primary failover is ridden out rather than turned into a failure. A store
-     * that stays unreachable past that stops blocking the projection's delivery thread instead of retrying for as
-     * long as the outage lasts.
+     * How many times a read or a write calls MongoDB before it gives up, 10. This is a count of attempts and not a
+     * length of time. A call that fails at once is retried on this store's 100 ms to 2 s backoff, so ten of those
+     * take about 11 seconds, while a call to a server that is not answering spends the client's own server
+     * selection timeout, 30 seconds by default, on each of the ten. Only a timeout on the client limits the time,
+     * the same reason a wait needs one, so configure one there when the wall clock is what matters.
      */
-    public static final int DEFAULT_MAX_ATTEMPTS = 20;
+    public static final int DEFAULT_MAX_ATTEMPTS = 10;
 
     private final MongoOperations mongoOperations;
     private final String collection;

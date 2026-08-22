@@ -332,10 +332,10 @@ class OccurrentPropertiesTest {
     class The_applied_append_attempt_limit {
 
         @Test
-        void defaults_to_twenty_attempts() {
+        void defaults_to_ten_attempts() {
             OccurrentProperties properties = new OccurrentProperties();
 
-            assertThat(properties.getProjection().getAppliedAppend().getMaxAttempts()).isEqualTo(20);
+            assertThat(properties.getProjection().getAppliedAppend().getMaxAttempts()).isEqualTo(10);
         }
 
         @Test

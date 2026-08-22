@@ -792,10 +792,12 @@ public class OccurrentProperties {
             private Duration retention = Duration.ofDays(7);
 
             /**
-             * How many times the Mongo-backed {@code AppliedAppendStore} calls the store for one read or one write
-             * before it gives up and fails the caller. With the store's own 100 ms to 2 s backoff, the default of
-             * 20 spans about 31 seconds, just past the MongoDB driver's own 30 second default server selection
-             * timeout, so an ordinary primary failover is ridden out rather than turned into a failure.
+             * How many times the Mongo-backed {@code AppliedAppendStore} calls MongoDB for one read or one write
+             * before it gives up and fails the caller. This counts attempts and does not limit how long they take.
+             * A call that fails at once is retried on the store's 100 ms to 2 s backoff, so the default of 10 takes
+             * about 11 seconds, while a call to a server that is not answering spends the driver's own server
+             * selection timeout, 30 seconds by default, on each of the 10. Set a timeout on the MongoDB client
+             * when the wall clock is what matters, since nothing here can limit it.
              * <p>
              * A projection that records applied appends calls the store on the thread that delivers its events, so
              * this is also how long an unreachable store holds that delivery up. Reaching the limit fails the call,
@@ -804,10 +806,10 @@ public class OccurrentProperties {
              * of that event applies it again. Raising the limit rides out a longer outage and holds deliveries up
              * for longer, and 1 means one attempt and no retry at all.
              * <p>
-             * {@code AppliedAppendStore.waitUntilApplied(..)} is unaffected. Its reads stop at the caller's own
-             * timeout and answer that the append is not applied yet, whichever limit it reaches first.
+             * {@code AppliedAppendStore.waitUntilApplied(..)} does not fail when this limit is reached. A read that
+             * has run out of attempts counts as not applied yet, so the wait goes on polling until its own timeout.
              */
-            private int maxAttempts = 20;
+            private int maxAttempts = 10;
 
             /**
              * How {@code AppliedAppendStore.waitUntilApplied(..)} paces its polls.
