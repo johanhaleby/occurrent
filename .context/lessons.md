@@ -2088,3 +2088,61 @@ reviewed the PR before, its node id is available from the review author instead,
 
 Verify afterwards either way. A wrong id makes `requestReviews` return success while requesting
 nobody, so read `reviewRequests` back and confirm the bot is in it.
+
+## Verify a merge resolution by running the language's checker, not by reading the result
+
+Two independent records, this epic's own conflict map and the worker's delivery report, both said the
+`js/_partials/main.js` conflict resolves by keeping all the lines. Both were wrong in a way that reads
+as obviously right. Each branch's `addedTags` entry was the LAST entry in its own version, so none
+carried a trailing comma, and keeping all of them produced three consecutive entries with no commas
+between. `node --check` exits 1. The file renders the "Added in vX" badges, so nothing about the
+failure is visible in a diff review, only in the site's JavaScript dying.
+
+The general rule: a conflict resolution in a structured file is a claim about syntax, so check it with
+the parser. For JavaScript that is `node --check`, for YAML a load, for JSON a parse. Reading the
+merged hunk and finding it sensible is exactly the check that passes here and still ships a broken file.
+
+## Re-run the trial merge, because a recorded conflict can dissolve on its own
+
+The PR 69 versus PR 74 conflict was recorded as needing Johan's ruling, on the grounds that both
+branches independently rewrote the same section and both versions were independently correct. By the
+time it mattered the conflict was gone. Both branches had moved that day, they merge cleanly, and they
+turn out to be complementary rather than competing, since one contributes a whole outcome value the
+other never mentions.
+
+A conflict map is a snapshot of two moving branches and it goes stale the way any other observation
+does. Re-run the merge before routing a conflict to the user as a decision. What was left here was not
+a decision at all, it was three paragraphs to delete.
+
+## A clean auto-merge is not a correct merge when both sides rewrote the same section
+
+The same two branches merged with zero conflict markers and still produced a section carrying two
+byte-identical copies of one paragraph, two byte-identical copies of another, and two variants of a
+third. Git saw no conflict because the two rewrites landed in adjacent line ranges rather than
+overlapping ones.
+
+So a clean merge of two documentation branches that touch the same section needs a duplicate-content
+pass afterwards. Sorting the section's non-trivial lines and looking for repeats finds it in one
+command. Be careful reading the result on a long page, since legitimately repeated example code will
+dominate the output and the prose duplicates are what matter.
+
+## An info/attributes written through git rev-parse --git-path lands in the SHARED git directory
+
+Setting `js/_partials/main.js merge=union` for a throwaway trial merge, written to the path
+`git rev-parse --git-path info/attributes` resolves to, does not scope to the worktree. That path
+resolves into the COMMON git directory, so the attribute applied to the primary checkout as well and
+would have silently changed how that file merged for anyone working there afterwards.
+
+Remove it explicitly when the trial ends, and confirm with `git check-attr merge -- <file>` reporting
+`unspecified` rather than assuming the worktree removal took it. Removing the worktree does not remove
+it.
+
+## The exit-status masking mistake, a second time in one session
+
+`node --check file.js 2>&1 | head -3 && echo "parses OK"` printed "parses OK" over the top of a real
+`SyntaxError`, because `&&` binds to `head`, whose exit status is 0 whatever the checker said. The same
+shape had already produced a masked rebase failure earlier in this session.
+
+Any command whose exit code is the actual result gets run on its own line with `RC=$?` captured
+immediately, never piped into a formatter and never chained behind `&&`. Piping a verifier into `head`
+or `tail` destroys the one thing being verified.

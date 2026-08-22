@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 40
-updated_at: '2026-08-22T19:05:00+00:00'
-updated_by: 'orchestrator rel34: R2 merge order verified by a full trial merge, keep-all-lines rule falsified'
+revision: 41
+updated_at: '2026-08-22T19:25:00+00:00'
+updated_by: 'orchestrator rel34: R2 checklist published for Johan''s approval'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -916,8 +916,8 @@ units:
       met: false
       evidence: ''
     blocking_on: []
-    next_action: present the verified checklist to Johan for manual_approval, then rebuild preview/0.34.0
-    last_meaningful_progress_at: '2026-08-22T19:05:00+00:00'
+    next_action: Johan approves the published checklist, then rebuild preview/0.34.0 from the merged result
+    last_meaningful_progress_at: '2026-08-22T19:25:00+00:00'
     observed:
       preview_state:
         note: 'Checked 2026-08-22T10:3xZ. preview/0.34.0 is behind TWO held branches by one commit each:
@@ -990,6 +990,16 @@ units:
           The 2026-08-25 date in the filename and front matter is still the placeholder to replace.'
         via: git hash-object on both blobs + reading the post
         at: '2026-08-22T19:05:00+00:00'
+      checklist_published:
+        note: The verified checklist is published at https://claude.ai/code/artifact/8f365680-763a-4b73-8127-89c2f10adf2d
+          , covering the branch to delete rather than merge, the eight-branch merge order with tips, the
+          corrected main.js comma rule, the three paragraph deletions in 'Observing pushed events', the
+          news post date placeholder and version bump, and the preview rebuild with a per-branch ancestor
+          check. It states its own invalidation trigger, that docs/421-broker-modules belongs to brk and
+          is still moving, so a tip other than 0ba67fd on the day means redoing the trial merge. The manual_approval
+          deliverable is met when Johan approves it.
+        via: orchestrator
+        at: '2026-08-22T19:25:00+00:00'
     assessment: 'Seven PRs, not eight branches: docs/saga-step-conditions-added-tag adds a line docs main
       already carries. preview/0.34.0 was behind docs/421-broker-modules by one commit at registration,
       so preview is verified per branch rather than assumed current.'
