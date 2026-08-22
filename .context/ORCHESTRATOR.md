@@ -939,3 +939,19 @@ Two corrections to the entry above, both found by re-checking sdi's own evidence
 **And that turns the whole thread on one fact sdi cannot establish.** Of the last four tags, 0.32.0 (`601fc6f10`), 0.31.0 (`b97856f24`) and 0.30.0 (`5717b5cde`) point at commits that are NOT ancestors of `origin/main`; only 0.33.0 (`4c04880e5`) is on main. Both 0.32.0 and 0.33.0 are "[ci skip] Prepared changelog for release" commits. That is consistent with releases being cut from a prep commit off a side branch, and equally consistent with main having been rewritten since. sdi has not established which, and said so to rel34 rather than handing it over as precedent.
 
 If cutting from an off-main prep commit is the real process, rel34's option 1 loses its objection entirely and sdi's correction about brk's `df0548bfa` being sandwiched between the two sdi commits stops mattering, because a prep commit can be built from any tree. If it is an artifact of a rewrite, the revert option stands. Johan settles it in one sentence and everything else follows.
+
+### sdi 2026-08-22T14:54:36Z: Johan ruled revert, PR 936 open, sdi holds until the tag
+
+Johan ruled through rel34: revert both, merge them again after the 0.34.0 tag. sdi executed it as a PR rather than a push, which is what rel34 asked and what keeps it reviewable, and noted to Johan that it acted on a relayed ruling so the PR stays unmerged and is trivial to close if he reads it differently.
+
+**PR 936**, `sdi/revert-0_35-work-for-0_34-tag`, 167 files, +723/-2901. Reverts `a714f8d32` (934) and `6f47516c6` (924), nothing else. `df0548bfa`, brk's RabbitMQ recovery fix, verified still an ancestor afterwards.
+
+Three verifications, none of them visible from the diff stat. No reference to the reverted names survives, matched on whole words, which mattered because the first substring pass reported six false positives: `SubscriptionHandler` contains `SubscriptionHandle`, and `OccurrentSubscriptionsExtension` predates the epic. Diffing the branch against `5ba3b9bfa` shows only PR 930's eight files outside `.context/`, which is the check that would have caught a revert reaching past its two commits. And the PR body states that neither PR is defective, so a later reader of those commits does not conclude 934 was wrong.
+
+**U1 and U5 stay DONE and that is deliberate.** Their PRs are merged and reviewed. A revert for release sequencing is not a rejection, so the phase is not reversed and the deliverable stays met. Both instead carry an explicit re-land obligation triggered by the `occurrent-0.34.0` tag, with the changelog entry coming from each unit's DELIVERY_RESULT at that point.
+
+**sdi's standing decision: no further unit merges to main until the tag exists.** rel34 asked whether sdi read the going-forward rule the same way and it does, so nothing goes back to Johan. U2 is READY by the graph and held rather than rebriefed, because briefing it against a main without U1's rename is throwaway work that gets undone twice, once when the rename returns and once for the descriptor built on it.
+
+sdi is therefore no longer an input to R3. Nothing of sdi's will be on main for rel34 to worry about.
+
+#929 corrected with rel34's finding rather than left in a message thread. The annotations are non-functional rather than merely un-migrated, so hand adoption fails identically to running the recipe, and there is no position where they ship inert but usable.
