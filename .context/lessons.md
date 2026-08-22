@@ -2445,3 +2445,21 @@ The failure was invisible to everything the delivery did right. The tests were b
 than proxy-identity assertions, mutation-verified in both directions, and correct about the reactive
 transaction context. They ran on Boot's default subclass proxies, which is a configuration axis
 rather than a coverage gap, and no amount of care within that axis reaches it.
+
+## ADR 0127's counts are systematically stale, and every brief derived from it must measure instead
+
+Three briefs in this epic were sized from numbers written in ADR 0127, and all three were wrong in the same direction. The ADR's "four annotation registrars" is seven, totalling 3309 lines. Its "three new descriptor annotations" is seven pairs. Its decision 2 sizes the handle rename at "52 files importing the blocking type and 26 importing the reactor one", seventy eight in total, and the merged diff touched 146 source files.
+
+None of these were errors when written. The ADR described the codebase on the day it was authored and the codebase kept moving, which is what an accepted ADR is supposed to allow. The error is downstream: a brief that quotes the ADR's count inherits a measurement with an expiry date and presents it as current, and a worker sizes its sweep to the smaller number without ever learning there was a larger one.
+
+The cost is not symmetric, which is what makes it worth a rule rather than a caution. An overcount wastes a little time. An undercount ships: a brief saying three annotation pairs normalizes three and leaves four silently unread, which is the exact defect the unit existed to fix, and nothing in a green compile or a passing test would have said so.
+
+So an ADR is authoritative for the DECISION and never for the COUNT. Take the shape, the reasoning and the constraints from it, then measure the surface against the working tree at the moment the brief is written, and put the measurement and its timestamp in the brief so the worker can tell which numbers were checked. Where the two disagree, the tree wins and the divergence is worth recording, because a decision sized against a codebase half the current size may have had its cost-benefit computed against that smaller number too.
+
+## A grep count of zero is two different answers, and `git show <rev>:<path>` cannot tell you which
+
+`git show origin/main:changelog.md | grep -c SubscriptionHandle` returned 0, which was used to confirm a claim that the file documents none of the epic's changes. The claim was true. The evidence was not evidence: `git show` returns zero bytes for that path in this environment, so the pipeline would have printed 0 whatever the file contained. `git ls-tree` lists the file, `git cat-file -s` reports 385683 bytes, and `git cat-file -p` reads all of it and finds genuinely zero matches. Right answer, and the command that produced it could not have produced any other.
+
+The failure is asymmetric and that is what makes it survivable and therefore dangerous. A nonzero count proves the read worked, so every "verify the push landed by grepping for a unique string" check in this session that returned 1 was sound. A ZERO count is ambiguous between "not present" and "read produced nothing", and those are the cases where zero is the answer being hoped for: no fabricated timestamps left, no bad renames left, no mention of the thing that should not be there. The check most likely to be trusted is exactly the one that cannot distinguish success from failure.
+
+Two rules follow. Confirm any zero result through different plumbing before reporting it, with `git cat-file -p $(git rev-parse <rev>:<path>)` rather than `git show`, or by checking the byte count first. And when a check's whole purpose is to establish absence, prove the pipeline can produce a nonzero count on the same input before believing the zero, which is the same discipline the earlier entry about an empty branch read arrived at from the other direction and which was not generalised then.

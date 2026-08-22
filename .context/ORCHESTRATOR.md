@@ -910,3 +910,49 @@ The brief leads with the release-blocker evidence rather than the task, carries 
 **U1's rerun is still `in_progress` and nothing will be concluded until it finishes.** One supporting observation while it runs: `test (subscription-mongodb-spring, java-21)` passed on this same head. The same fixtures on a different JDK agreeing points further away from a code regression, since a real defect in pause and hold semantics would not select a JDK. It is corroboration, not the verdict, and the rerun remains the thing that decides.
 
 No further polling. The monitor wakes on the transitions that matter.
+
+### sdi 2026-08-22T14:45:49Z: the changelog gate I wrote would have shipped 0.35.0 work inside 0.34.0
+
+rel34 found this and it is correct. Every step verified rather than accepted.
+
+`changelog.md` on main mentions `SubscriptionHandle` zero times and the `@Occurrent*` annotations zero times. It opens with `### Changelog next version`, and AGENTS.md line 72 assigns a version only at release time by renaming that heading. So a 0.34.0 cut from main's tip ships U1 and U5 inside 0.34.0, undocumented, while `upgrading-to-0.35.0.md` sits on main opening with "Each section describes one 0.35.0 change that requires action from a caller on 0.34.0", a sentence the release containing those changes would falsify.
+
+**The cause was sdi's changelog gate and it was mine.** The rule was that no sdi unit writes to `changelog.md` until the 0.35.0 tag exists, because a cut renames the heading in place and rel34 was cutting concurrently. The collision analysis was correct and is still correct. The consequence was never derived: keeping entries out of the file to dodge a merge conflict is precisely what makes the code invisible to the release, and the heading rename then assigns it to the wrong version. The entries exist in each unit's DELIVERY_RESULT so nothing is lost, but the cut reads the file, not the delivery reports.
+
+**The severe half is #929, not the missing notes.** `upgrade-0_35.yml` is on main and wires `MigrateOccurrentAnnotationRenames_0_35`, which rewrites all seven annotations onto names no registrar reads. A 0.34.0 cut from the tip therefore ships a working upgrade recipe that silently unregisters every projection, saga, snapshot and subscription of any user who runs it. The undocumented rename is wrong release notes; this breaks running applications.
+
+**rel34's first option is blocked and the correction is load bearing.** Main reads, oldest first, `4f12b2ffb`, `5ba3b9bfa` (923, ADR text), `6f47516c6` (924, U5), `df0548bfa` (930, brk's RabbitMQ recovery fix), `a714f8d32` (934, U1). brk's fix sits between the two sdi commits, so no cut point includes 930 and excludes 924. Cutting before both drops brk's fix from 0.34.0 unless it is cherry-picked, which is brk's call and not rel34's to make alone.
+
+sdi's position, sent to rel34: no objection to being reverted, and it prefers that to shipping #929 inside 0.34.0. U1's revert is clean since 934 squashed with no auto-close keyword, and 924 is the same shape.
+
+**Deliberately NOT asking Johan in parallel.** rel34 owns release mechanics and is carrying the ask with the #929 escalation and the option-1 correction folded in. Two fleets putting one question to him is how a worker ends up holding two rulings. sdi implements whatever he rules.
+
+U2's dispatch is HELD pending that ruling. It is READY by the graph, U1 being DONE, but dispatching more 0.35.0 code onto main is the exact thing under question, and a unit started now would deepen whatever has to be undone.
+
+### sdi 2026-08-22T14:49:52Z: the release question narrows to one fact only Johan has
+
+Two corrections to the entry above, both found by re-checking sdi's own evidence rather than by anything new arriving.
+
+**The confirmation of rel34's changelog claim was right but rested on a command that could not have said otherwise.** `git show origin/main:changelog.md | grep -c SubscriptionHandle` returned 0, and in this environment that command returns zero bytes for that path, so it prints 0 whatever the file holds. Re-verified through `git cat-file`: the blob is 385683 bytes and contains genuinely zero mentions of `SubscriptionHandle` and zero of `OccurrentProjection`. The claim stands on real evidence now. Lesson recorded, since a zero from that command is ambiguous exactly when zero is the hoped-for answer.
+
+**"The cause is a gate I wrote" was only half right, and the better half changes the options.** Writing the entries under `### Changelog next version` would NOT have prevented this. A cut renames that heading wholesale, so an entry written there is assigned to whatever version is cut next, and U1 would have been documented as a 0.34.0 change instead of undocumented. The gate made the misassignment invisible; it did not create it. The actual cause is structural: main is a single trunk, "unreleased" means "in the next release whoever cuts it", and sdi targeting 0.35.0 while rel34 cuts 0.34.0 from that same trunk cannot work without either a release branch or sdi holding its code off main. This matters because it rules out the cheap fix someone will otherwise propose, that sdi simply writes its changelog entries now.
+
+**And that turns the whole thread on one fact sdi cannot establish.** Of the last four tags, 0.32.0 (`601fc6f10`), 0.31.0 (`b97856f24`) and 0.30.0 (`5717b5cde`) point at commits that are NOT ancestors of `origin/main`; only 0.33.0 (`4c04880e5`) is on main. Both 0.32.0 and 0.33.0 are "[ci skip] Prepared changelog for release" commits. That is consistent with releases being cut from a prep commit off a side branch, and equally consistent with main having been rewritten since. sdi has not established which, and said so to rel34 rather than handing it over as precedent.
+
+If cutting from an off-main prep commit is the real process, rel34's option 1 loses its objection entirely and sdi's correction about brk's `df0548bfa` being sandwiched between the two sdi commits stops mattering, because a prep commit can be built from any tree. If it is an artifact of a rewrite, the revert option stands. Johan settles it in one sentence and everything else follows.
+
+### sdi 2026-08-22T14:54:36Z: Johan ruled revert, PR 936 open, sdi holds until the tag
+
+Johan ruled through rel34: revert both, merge them again after the 0.34.0 tag. sdi executed it as a PR rather than a push, which is what rel34 asked and what keeps it reviewable, and noted to Johan that it acted on a relayed ruling so the PR stays unmerged and is trivial to close if he reads it differently.
+
+**PR 936**, `sdi/revert-0_35-work-for-0_34-tag`, 167 files, +723/-2901. Reverts `a714f8d32` (934) and `6f47516c6` (924), nothing else. `df0548bfa`, brk's RabbitMQ recovery fix, verified still an ancestor afterwards.
+
+Three verifications, none of them visible from the diff stat. No reference to the reverted names survives, matched on whole words, which mattered because the first substring pass reported six false positives: `SubscriptionHandler` contains `SubscriptionHandle`, and `OccurrentSubscriptionsExtension` predates the epic. Diffing the branch against `5ba3b9bfa` shows only PR 930's eight files outside `.context/`, which is the check that would have caught a revert reaching past its two commits. And the PR body states that neither PR is defective, so a later reader of those commits does not conclude 934 was wrong.
+
+**U1 and U5 stay DONE and that is deliberate.** Their PRs are merged and reviewed. A revert for release sequencing is not a rejection, so the phase is not reversed and the deliverable stays met. Both instead carry an explicit re-land obligation triggered by the `occurrent-0.34.0` tag, with the changelog entry coming from each unit's DELIVERY_RESULT at that point.
+
+**sdi's standing decision: no further unit merges to main until the tag exists.** rel34 asked whether sdi read the going-forward rule the same way and it does, so nothing goes back to Johan. U2 is READY by the graph and held rather than rebriefed, because briefing it against a main without U1's rename is throwaway work that gets undone twice, once when the rename returns and once for the descriptor built on it.
+
+sdi is therefore no longer an input to R3. Nothing of sdi's will be on main for rel34 to worry about.
+
+#929 corrected with rel34's finding rather than left in a message thread. The annotations are non-functional rather than merely un-migrated, so hand adoption fails identically to running the recipe, and there is no position where they ship inert but usable.
