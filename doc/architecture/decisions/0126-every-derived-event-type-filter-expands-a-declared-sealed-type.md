@@ -271,3 +271,35 @@ because all of them share the one helper the exemption lives in.
 #750 and #758 close through this ADR together with the implementing unit's pull request.
 Whoever reads ADR 124's Consequences section and follows it to #750 should find this ADR, not
 an issue still asking the question ADR 124 deferred answering.
+
+## Amendment (2026-08-22): two more call sites found by #912, neither reached through `deriveFilter`
+
+The table above and the "six call sites" language that follows it describe the four DSLs #750
+and #758 named plus the saga DSL and the annotation-based subscription, verified against the
+tree at the time this decision was written. `ExecuteFilter.type`/`includeTypes`
+(`application/service/common`) and `DcbCriteriaBuilder.type`/`types` (`dsl/dcb-dsl/common`) were
+not in that count. [#912](https://github.com/johanhaleby/occurrent/issues/912), filed while
+closing #753, found both still mapped a declared class straight to its own CloudEvent type with
+no expansion at all, the same defect this decision's table describes for the other four.
+
+Neither goes through `deriveFilter`. `ExecuteFilter` resolves to a `StreamReadFilter`, not a
+`Filter`, and `DcbCriteriaBuilder` resolves to a `DcbCriterion`, not a `Filter` either, so
+`deriveFilter`'s `Function<Class<?>, String>` to `Filter` pipeline does not fit either shape.
+Both call `EventTypeExpansion.expand` directly instead and build their own result type from the
+expanded set. `deriveFilter` stays the right shared step for every site that does resolve to a
+plain `Filter`. Neither of these two ever sees an empty declared-type set either, since `type`
+and `includeTypes`, and `type` and `types` on the DCB side, all require at least one `Class`
+argument, so the `Filter.all()` branch `deriveFilter` exists to produce has nothing to reach on
+either path.
+The property this decision states, that a filter derived from a caller's declared event types
+must match every stored event the caller's own declared types would accept, holds for both:
+`ExecuteFilter.type`/`includeTypes` and `DcbCriteriaBuilder.type`/`types` refuse a declared type
+whose concrete types cannot all be found, the same refusal every site in the table above applies.
+
+`ExecuteFilter.excludeTypes` is a distinct derivation this decision's property does not describe
+and does not need to. The property above is about an inclusive filter matching too little. An
+exclusive filter's defect runs the other way, matching too much by excluding too little, so
+`excludeTypes` widens to every concrete type `EventTypeExpansion.expandWhatCanBeFound` can find
+rather than refusing. [#912](https://github.com/johanhaleby/occurrent/issues/912)'s own pull
+request records that direction-dependent choice and its reasoning. `DcbCriteriaBuilder` has no
+exclusive derivation to reach.

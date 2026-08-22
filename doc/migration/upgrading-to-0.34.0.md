@@ -122,15 +122,56 @@ for the full decision.
 0.33.0 made a saga and an annotation-based subscription expand a declared sealed event type into the
 concrete types it permits, and refuse a declared type whose concrete types cannot all be found ([section
 10 of that guide](upgrading-to-0.33.0.md#10-a-saga-or-subscription-declaring-a-supertype-event-is-refused)).
-Four more places derived a type filter the same old way and did not get that fix. The projection DSL, the
-subscription DSL's `filterFromEventTypes`, `DomainEventQueries` on both the blocking and reactor stacks, and
-the Spring Boot starter's `@Snapshot` registrar on both stacks all kept the old derivation. 0.34.0 brings all
-four in line with the saga and the annotation-based subscription. See [ADR 126](../architecture/decisions/0126-every-derived-event-type-filter-expands-a-declared-sealed-type.md).
+Six more places derived a type filter the same old way and did not get that fix. The projection DSL, the
+subscription DSL's `filterFromEventTypes`, `DomainEventQueries` on both the blocking and reactor stacks, the
+Spring Boot starter's `@Snapshot` registrar on both stacks, `ExecuteFilter`'s `type(Class)` and
+`includeTypes(Class, ...)`, and `DcbCriteriaBuilder`'s `type(Class)` and `types(Class, ...)` all kept the old
+derivation, or in `ExecuteFilter` and `DcbCriteriaBuilder`'s case had none at all. 0.34.0 brings all six in
+line with the saga and the annotation-based subscription. See [ADR 126](../architecture/decisions/0126-every-derived-event-type-filter-expands-a-declared-sealed-type.md).
 
 0.34.0 also removes the one shape that was exempt everywhere, a concrete class that is neither final nor
 sealed, which is the last row of the table below. That part changes a saga and an annotation-based
-subscription too, so read it even if the four places above are not what you use. See
-[#753](https://github.com/johanhaleby/occurrent/issues/753).
+subscription too, so read it even if the six places above are not what you use. See
+[#753](https://github.com/johanhaleby/occurrent/issues/753) and [#912](https://github.com/johanhaleby/occurrent/issues/912).
+
+`ExecuteFilter.excludeTypes` mostly sits outside this refusal. A declared type it cannot fully expand is
+widened to every concrete subtype a downward walk can find instead, since excluding a supertype has to
+exclude everything under it, and widening the concrete types the walk finds never removes fewer of them than
+a complete expansion would. That widening needs no migration step by itself. It still refuses an array or a
+primitive declared type, the same two shapes `type`/`includeTypes` refuse, since no event is ever an instance
+of either. Declaring one to `excludeTypes` was accepted up to 0.33.0, whatever your `CloudEventTypeGetter`
+happened to return for it, so that one shape is new. Nobody sensibly excludes by array or primitive type, so
+in practice this affects close to nobody, but it is still a behavior change worth naming rather than folding
+into "no migration step."
+
+**Widening is not completeness, and this is the one place in this section worth reading even if you never hit
+a refusal.** Two declared-type shapes still leave a gap after this fix, and one of them can silently exclude
+nothing at all rather than merely less than hoped.
+
+A concrete class that is declared directly and is itself neither final nor sealed contributes itself to the
+widened exclusion: reflection cannot discover a subclass stored under its own name, so
+`excludeTypes(OrderPlaced.class)` on such a class still only excludes events of `OrderPlaced`'s own CloudEvent
+type, exactly as before, but that exclusion is not empty.
+
+An interface or an abstract class whose hierarchy reopens before the downward walk finds anything concrete is
+different, and this is the shape to check your own declarations against. `excludeTypes(SensitiveEvent.class)`
+on a sealed `SensitiveEvent` that permits only a non-sealed abstract class, with nothing concrete found above
+that level, contributes nothing at all. The resulting filter excludes zero real events, silently, exactly as
+it did before this fix, and nothing about the exception-free result tells you that. Seal the hierarchy, or
+declare the concrete types directly, to get a working exclusion for that shape. See the changelog entry under
+`#### Changes` for [#912](https://github.com/johanhaleby/occurrent/issues/912).
+
+Widening on a boundary-seeded `DcbCriteriaBuilder` and DCB append conditions built from a `DcbCriteriaBuilder`
+also change, worth calling out even though `DcbCriteriaBuilder` has no `excludeTypes`. `type`/`types` now name
+every concrete subtype a declared supertype permits, so a `DcbCriterion` built from `type(OrderEvent.class)`
+matches more events than it used to whenever `OrderEvent` is sealed. Two consequences follow from that. A
+`DcbCriteriaBuilder` seeded with a boundary carrying `excludingTypes(...)` (`DcbCriterion.excludingTypes`) now
+throws `IllegalArgumentException("Types and excluded types cannot overlap")` if the newly expanded types include
+one already excluded on the boundary, where before expansion that overlap was unreachable unless you named the
+excluded type directly. And `DcbCriteriaBuilder`'s constructors build `DcbAppendCondition` boundaries as well as
+read criteria (`DcbAppendCondition#failIfEventsMatch`), so an append boundary built from a sealed supertype now
+conflicts with more concurrent writes than before, the same correctness fix as the read side, applied to
+optimistic concurrency checks instead of a query.
 
 **Read this as a report about a projection, subscription, query, or snapshot that was already missing
 events, not as a regression.** Under every type mapper Occurrent ships, a handler or a query keyed on a
@@ -168,6 +209,29 @@ The subscription DSL's `filterFromEventTypes` (and the `subscriptionFilterFromEv
 `agnosticSubscriptionFilterFromEventTypes` built on it) throw the same shape without the override
 suggestion, since that Kotlin function has none either.
 
+`ExecuteFilter.type(Class)` and `includeTypes(Class, ...)` throw the same shape the first time
+`ApplicationService#execute` resolves the filter, pointing you at `ExecuteFilter.from(StreamReadFilter)`:
+
+```
+java.lang.IllegalArgumentException: the concrete event types dispatch would accept for com.example.OrderEvent
+cannot all be enumerated, so a filter derived from it would miss some of them. Filter on the concrete event
+types instead, make OrderEvent and every level below it final or sealed, or build the StreamReadFilter
+yourself with ExecuteFilter.from(..), which is the way out when a CloudEventTypeMapper of your own maps the
+whole hierarchy onto a single CloudEvent type string.
+```
+
+`DcbCriteriaBuilder.type(Class)` and `types(Class, ...)` throw when the call builds the criterion, pointing
+you at building a `DcbCriterion` from the raw CloudEvent type string instead, since the builder has no
+override of its own:
+
+```
+java.lang.IllegalArgumentException: the concrete event types dispatch would accept for com.example.OrderEvent
+cannot all be enumerated, so a criterion derived from it would miss some of them. Declare the concrete event
+types instead, make OrderEvent and every level below it final or sealed, or build the DcbCriterion yourself
+with the raw type string, which is the way out when a CloudEventTypeMapper of your own maps the whole
+hierarchy onto a single CloudEvent type string.
+```
+
 You are affected when a declared or registered type is one of these:
 
 | Shape | Java | Kotlin |
@@ -186,7 +250,7 @@ ordinary sealed hierarchy of records needs nothing.
 ### The last row also changes a saga and an annotation-based subscription
 
 The first five shapes were already refused for a saga and an annotation-based subscription in 0.33.0, and
-0.34.0 only brings the other four places in line. The last row is different. 0.33.0 exempted a concrete class
+0.34.0 only brings the other six places in line. The last row is different. 0.33.0 exempted a concrete class
 that is neither final nor sealed everywhere, on purpose, to keep every caller declaring one working. 0.34.0
 removes that exemption, so a saga and an annotation-based subscription now refuse it too.
 
@@ -255,8 +319,10 @@ Use this when the hierarchy is not yours to seal, or when it is deliberately ope
 list a type, per concrete type instead of the supertype: `Projection.Builder.on(OrderPlaced.class, ...)` and
 `.on(PaymentReserved.class, ...)` in place of a single `.on(OrderEvent.class, ...)`, `SnapshotView.Builder.on(...)`
 the same way, `filterFromEventTypes(converter, arrayOf(OrderPlaced::class, PaymentReserved::class))` in place
-of `arrayOf(OrderEvent::class)`, and `domainEventQueries.query(OrderPlaced.class, PaymentReserved.class)` or
-`query(List.of(OrderPlaced.class, PaymentReserved.class))` in place of `query(OrderEvent.class)`.
+of `arrayOf(OrderEvent::class)`, `domainEventQueries.query(OrderPlaced.class, PaymentReserved.class)` or
+`query(List.of(OrderPlaced.class, PaymentReserved.class))` in place of `query(OrderEvent.class)`,
+`ExecuteFilter.includeTypes(OrderPlaced.class, PaymentReserved.class)` in place of `type(OrderEvent.class)`,
+and `dcbCriteriaBuilder.types(OrderPlaced.class, PaymentReserved.class)` in place of `type(OrderEvent.class)`.
 
 ### Or set an explicit filter
 
@@ -269,7 +335,11 @@ subscription DSL's `filterFromEventTypes` has no override, so build the `Filter`
 `StreamSubscriptionFilter.filter(...)` or `AgnosticSubscriptionFilter.filter(...)` in place of calling
 `filterFromEventTypes`. A saga's override is `replacementFilter(Filter)`, which already skipped expansion
 before this release and still does. An annotation-based subscription has none, so list the concrete types in
-the annotation's `eventTypes` attribute instead.
+the annotation's `eventTypes` attribute instead. `ExecuteFilter`'s override is the already-existing
+`ExecuteFilter.from(StreamReadFilter)`, which skips expansion entirely by building the `StreamReadFilter`
+yourself. `DcbCriteriaBuilder` has no override, so build the `DcbCriterion` from the raw CloudEvent type
+string with `DcbCriteria.type(String)` or `types(String, ...)` instead of going through the builder for that
+criterion.
 
 ### Empty still means empty on `DomainEventQueries`
 
@@ -286,10 +356,12 @@ The same reason [section 10 of the 0.33.0 guide](upgrading-to-0.33.0.md#why-ther
 gives for the saga and subscription case. Telling a refused declaration from a sealed one that now works
 needs the sealed modifier from the class declaration, which OpenRewrite does not expose on the type behind a
 class literal, so a mechanical rewrite or even a review marker is not possible. A projection throws the
-first time a runner or a query derives its filter, a `@Snapshot` throws at registration, and
+first time a runner or a query derives its filter, a `@Snapshot` throws at registration,
 `DomainEventQueries` and the subscription DSL throw at the first query or subscription registration that
-needs one, so a test that exercises your projections, queries, subscriptions, and snapshots finds every
-affected declaration.
+needs one, `ExecuteFilter` throws the first time `ApplicationService#execute` resolves the filter, and
+`DcbCriteriaBuilder` throws when `type(...)`/`types(...)` builds the criterion, so a test that exercises your
+projections, queries, subscriptions, snapshots, execute filters, and DCB criteria finds every affected
+declaration.
 
 The last row of the table, a concrete class that is neither final nor sealed, has a second reason on top of
 that one. Even given the modifier, a recipe would have to pick between two remedies that mean different

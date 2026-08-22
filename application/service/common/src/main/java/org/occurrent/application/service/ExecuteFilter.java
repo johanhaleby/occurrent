@@ -20,11 +20,12 @@ import org.jspecify.annotations.NullMarked;
 import org.occurrent.application.converter.typemapper.CloudEventTypeGetter;
 import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.StreamReadFilter;
+import org.occurrent.filter.internal.EventTypeExpansion;
 
-import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.stream.Stream;
+import java.util.Set;
 
 /**
  * An application-service-level stream read filter that resolves domain event classes to CloudEvent types
@@ -58,37 +59,103 @@ public interface ExecuteFilter<E> {
 
     /**
      * Create a filter that includes events of the supplied domain event type.
+     * <p>
+     * {@code eventType} is expanded the way every other type-filter derivation in the library expands a declared
+     * type, through {@link EventTypeExpansion}: a sealed type expands to the concrete types it permits, all the way
+     * down, and a type whose concrete types cannot all be found is refused rather than turned into a filter that
+     * would miss some of them.
      */
     static <E> ExecuteFilter<E> type(Class<? extends E> eventType) {
         Objects.requireNonNull(eventType, "eventType cannot be null");
-        return cloudEventTypeGetter -> StreamReadFilter.type(cloudEventTypeGetter.getCloudEventType(eventType));
+        return includeTypes(eventType);
     }
 
     /**
      * Create a filter that includes events whose CloudEvent type matches any of the supplied domain event types.
+     * <p>
+     * Each declared type is expanded the way {@link #type(Class)} expands one.
      */
     @SafeVarargs
     static <E> ExecuteFilter<E> includeTypes(Class<? extends E> first, Class<? extends E>... more) {
-        return cloudEventTypeGetter -> StreamReadFilter.type(Condition.in(resolveCloudEventTypes(cloudEventTypeGetter, first, more)));
+        Set<Class<? extends E>> declaredTypes = declaredTypes(first, more);
+        return cloudEventTypeGetter -> {
+            List<String> types = resolveCloudEventTypes(EventTypeExpansion.expand(declaredTypes, ExecuteFilter::cannotFilterOn), cloudEventTypeGetter);
+            return StreamReadFilter.type(types.size() == 1 ? Condition.eq(types.getFirst()) : Condition.in(types));
+        };
     }
 
     /**
      * Create a filter that excludes events whose CloudEvent type matches any of the supplied domain event types.
+     * <p>
+     * A declared type is WIDENED to every concrete type {@link EventTypeExpansion#expandWhatCanBeFound}'s downward
+     * walk can find rather than refused when it cannot all be enumerated, which is the opposite of what
+     * {@link #type(Class)} and {@link #includeTypes} do, and on purpose. Excluding a supertype has to exclude
+     * everything under it, or the exclusion silently lets the excluded family of events through. Widening never
+     * excludes fewer of the concrete types that walk finds than a complete expansion would, so it is never the
+     * wrong direction to fail in. It does not promise the exclusion excludes something. {@code expandWhatCanBeFound}'s
+     * own documentation scopes itself to a caller that is not deriving a filter, since a missed type there would
+     * narrow what an inclusive filter reads. Excluding is the opposite question, where a missed type only narrows
+     * what gets excluded, never what gets read, so deriving an exclusive filter from it here is the safe direction
+     * that scope was written before, not the one it warns against. A concrete class declared
+     * directly that is itself neither final nor sealed contributes itself, the same as before this method went
+     * through {@link EventTypeExpansion}, since no downward walk can find a subclass stored under its own name, but
+     * the exclusion is not empty. <strong>An interface or an abstract class whose hierarchy reopens before the walk
+     * finds anything concrete is different: it contributes nothing at all, so the resulting filter excludes zero
+     * real events while looking like a working exclusion.</strong> {@code excludeTypes(SensitiveEvent.class)} on a
+     * sealed {@code SensitiveEvent} that permits a non-sealed abstract class, with nothing concrete found above
+     * that level, silently keeps every event of that family in the read. Seal the hierarchy, or declare the
+     * concrete types directly, to get a working exclusion for that shape. An array and a primitive are refused, for
+     * two different reasons kept apart the way {@link EventTypeExpansion#expandWhatCanBeFound} keeps them apart: no
+     * event is ever an instance of a primitive class, while an array is refused for consistency with {@link #type} and
+     * {@link #includeTypes}, not because excluding one is impossible.
      */
     @SafeVarargs
     static <E> ExecuteFilter<E> excludeTypes(Class<? extends E> first, Class<? extends E>... more) {
-        return cloudEventTypeGetter -> StreamReadFilter.type(Condition.not(Condition.in(resolveCloudEventTypes(cloudEventTypeGetter, first, more))));
+        Set<Class<? extends E>> declaredTypes = declaredTypes(first, more);
+        return cloudEventTypeGetter -> StreamReadFilter.type(Condition.not(Condition.in(resolveCloudEventTypes(
+                EventTypeExpansion.expandWhatCanBeFound(declaredTypes, ExecuteFilter::cannotExcludeArrayOrPrimitive), cloudEventTypeGetter))));
     }
 
     @SafeVarargs
-    private static <E> List<String> resolveCloudEventTypes(CloudEventTypeGetter<? super E> cloudEventTypeGetter, Class<? extends E> first, Class<? extends E>... more) {
-        Objects.requireNonNull(cloudEventTypeGetter, "cloudEventTypeGetter cannot be null");
+    private static <E> Set<Class<? extends E>> declaredTypes(Class<? extends E> first, Class<? extends E>... more) {
         Objects.requireNonNull(first, "first event type cannot be null");
         Objects.requireNonNull(more, "additional event types cannot be null");
+        Set<Class<? extends E>> declared = new LinkedHashSet<>();
+        declared.add(first);
+        for (Class<? extends E> eventType : more) {
+            declared.add(Objects.requireNonNull(eventType, "eventType cannot be null"));
+        }
+        return declared;
+    }
 
-        return Stream.concat(Stream.of(first), Arrays.stream(more))
-                .peek(eventType -> Objects.requireNonNull(eventType, "eventType cannot be null"))
-                .map(cloudEventTypeGetter::getCloudEventType)
-                .toList();
+    private static <E> List<String> resolveCloudEventTypes(Set<Class<? extends E>> eventTypes, CloudEventTypeGetter<? super E> cloudEventTypeGetter) {
+        Objects.requireNonNull(cloudEventTypeGetter, "cloudEventTypeGetter cannot be null");
+        return eventTypes.stream().map(cloudEventTypeGetter::getCloudEventType).distinct().toList();
+    }
+
+    private static IllegalArgumentException cannotFilterOn(Class<?> eventType) {
+        if (eventType.isArray()) {
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be filtered on by type, since this expansion does not support an array. Filter on the concrete event types instead.");
+        }
+        if (eventType.isPrimitive()) {
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be filtered on by type, since no event is ever an instance of a primitive type. Filter on the concrete event types instead.");
+        }
+        return new IllegalArgumentException("the concrete event types dispatch would accept for " + eventType.getName()
+                + " cannot all be enumerated, so a filter derived from it would miss some of them. Filter on the "
+                + "concrete event types instead, make " + eventType.getSimpleName() + " and every level below it "
+                + "final or sealed, or build the StreamReadFilter yourself with ExecuteFilter.from(..), which is the "
+                + "way out when a CloudEventTypeMapper of your own maps the whole hierarchy onto a single CloudEvent "
+                + "type string.");
+    }
+
+    private static IllegalArgumentException cannotExcludeArrayOrPrimitive(Class<?> eventType) {
+        if (eventType.isArray()) {
+            return new IllegalArgumentException(eventType.getTypeName()
+                    + " cannot be excluded by type, since this expansion does not support an array. Exclude the concrete event types instead.");
+        }
+        return new IllegalArgumentException(eventType.getTypeName()
+                + " cannot be excluded by type, since no event is ever an instance of a primitive type. Exclude the concrete event types instead.");
     }
 }
