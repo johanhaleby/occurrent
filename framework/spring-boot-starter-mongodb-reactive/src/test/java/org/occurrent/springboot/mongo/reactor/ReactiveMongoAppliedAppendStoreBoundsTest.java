@@ -215,7 +215,6 @@ class ReactiveMongoAppliedAppendStoreBoundsTest {
 
     private static Retry boundedRetry() {
         return Retry.fixedDelay(ATTEMPTS - 1L, Duration.ofMillis(5))
-                .filter(e -> !(e instanceof ReactiveMongoAppliedAppendStore.ConflictingIndexException))
                 .onRetryExhaustedThrow((spec, signal) -> signal.failure());
     }
 
@@ -233,5 +232,42 @@ class ReactiveMongoAppliedAppendStoreBoundsTest {
                 .append("codeName", new BsonString("IndexOptionsConflict"))
                 .append("errmsg", new BsonString("Index already exists with different options"));
         return new UncategorizedMongoDbException("index setup failed", new MongoCommandException(response, new ServerAddress()));
+    }
+
+    /**
+     * A caller supplying its own {@code Retry} cannot opt into retrying an index this store can never create.
+     * Reactor takes the policy as one object, so without the store wrapping it, a policy like this one would spend
+     * every attempt on error 85 and bring back the startup hang this change removes.
+     */
+    @Test
+    void a_retry_of_the_callers_own_still_does_not_repeat_a_conflicting_compound_index() {
+        AtomicInteger indexAttempts = new AtomicInteger();
+        ReactiveMongoOperations mongoOperations = mongoOperationsWhoseIndexSetupConflicts(indexAttempts);
+        when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
+                .thenReturn(Mono.just(mock(UpdateResult.class)));
+        Retry retryingEverything = Retry.fixedDelay(50, Duration.ofMillis(1))
+                .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+        AppliedAppendStore store = storeWith(mongoOperations, retryingEverything);
+
+        assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
+                .isInstanceOf(ReactiveMongoAppliedAppendStore.ConflictingIndexException.class);
+
+        assertThat(indexAttempts).hasValue(1);
+    }
+
+    @Test
+    void a_retry_of_the_callers_own_still_repeats_an_ordinary_failure() {
+        AtomicInteger attempts = new AtomicInteger();
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
+                .thenReturn(failingAfterCounting(attempts));
+        Retry threeAttempts = Retry.fixedDelay(2, Duration.ofMillis(1))
+                .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+        AppliedAppendStore store = storeWith(mongoOperations, threeAttempts);
+
+        assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
+                .isInstanceOf(RuntimeException.class);
+
+        assertThat(attempts).hasValue(3);
     }
 }

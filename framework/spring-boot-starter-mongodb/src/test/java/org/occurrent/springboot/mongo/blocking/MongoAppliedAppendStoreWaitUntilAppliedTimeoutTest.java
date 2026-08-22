@@ -44,8 +44,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * {@link MongoAppliedAppendStore#waitUntilApplied(String, AppendId, Duration)} promises to return {@code false} once
- * {@code timeout} elapses. The store's read is wrapped in a {@link RetryStrategy} whose own attempts take about half
- * a minute by default and can be configured to take far longer, so a wait against a store that never stops failing
+ * {@code timeout} elapses. The store's read is wrapped in a {@link RetryStrategy} with an attempt budget of its
+ * own, which says nothing about how long those attempts take, so a wait against a store that never stops failing
  * must stop that retry at its own deadline rather than let it run its attempts out. No Testcontainers needed, a
  * mocked {@link MongoOperations} whose read always throws is enough to force the sustained-outage path.
  */

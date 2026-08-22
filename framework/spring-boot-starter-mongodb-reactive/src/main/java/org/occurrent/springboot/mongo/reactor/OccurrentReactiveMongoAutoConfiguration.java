@@ -183,11 +183,10 @@ public class OccurrentReactiveMongoAutoConfiguration<E> {
         OccurrentProperties.ProjectionProperties.AppliedAppendProperties.WaitBackoffProperties waitBackoff = appliedAppend.getWaitBackoff();
         Backoff pollBackoff = Backoff.exponential(waitBackoff.getInitial(), waitBackoff.getMax(), waitBackoff.getMultiplier());
         // Retry.backoff counts retries rather than total calls, so one less than the configured attempts is what
-        // makes this match the blocking starter. The filter keeps an index this store can never create from being
-        // attempted again on a schedule, the same as ReactiveMongoAppliedAppendStore.defaultRetry().
+        // makes this match the blocking starter. The store wraps this to keep an index it can never create from
+        // being attempted again, so nothing about that is decided here.
         Retry storeRetry = Retry.backoff(appliedAppend.getMaxAttempts() - 1L, Duration.ofMillis(100))
                 .maxBackoff(Duration.ofSeconds(2))
-                .filter(e -> !(e instanceof ReactiveMongoAppliedAppendStore.ConflictingIndexException))
                 .onRetryExhaustedThrow((spec, signal) -> signal.failure());
         return new ReactiveMongoAppliedAppendStore(mongo, appliedAppend.getCollection(), appliedAppend.getRetention(), storeRetry, pollBackoff);
     }

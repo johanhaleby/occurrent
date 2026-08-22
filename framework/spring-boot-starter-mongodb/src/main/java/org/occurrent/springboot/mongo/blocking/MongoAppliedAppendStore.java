@@ -198,7 +198,10 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      * interrupt flag is already restored by {@code RetryExecution} before this method ever sees the exception.
      */
     private boolean readOnceBoundedBy(String projectionId, AppendId appendId, long deadlineNanos) {
-        Supplier<Boolean> read = () -> readOnce(projectionId, appendId);
+        // Checked inside the supplier as well as in the retry predicate, because the predicate runs before the
+        // retry sleeps and the sleep can cross the deadline. Answering false there keeps a read that would start
+        // after the deadline from starting at all.
+        Supplier<Boolean> read = () -> System.nanoTime() < deadlineNanos && readOnce(projectionId, appendId);
         Predicate<Throwable> notShutdownAndBeforeDeadline = e -> isRetryable(e) && System.nanoTime() < deadlineNanos;
         try {
             return requireNonNull(executeWithRetry(read, notShutdownAndBeforeDeadline, retryStrategy).get());
@@ -229,8 +232,8 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      * wait never reaches the deadline check that is supposed to end it. The loop shape (read, check, sleep, grow
      * the backoff) otherwise matches the interface default. Only the read is store-specific.
      * <p>
-     * The deadline bounds the retries, not the individual read. It is checked before a retried read sleeps, so the
-     * last attempt can already be in flight when the deadline passes, and this method returns once that attempt
+     * The deadline stops a read from starting, not one already running. No attempt begins once the deadline has
+     * passed, but the one already in flight when it passes runs on, and this method returns once that attempt
      * answers. A MongoDB client left with no timeout of its own does not answer at all while a connection it has
      * accepted stops responding, so the timeout a caller asked for holds only as far as the client's own
      * {@code timeoutMS} or socket timeout holds. Configure one on the client if the wait's deadline has to be the

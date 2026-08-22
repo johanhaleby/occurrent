@@ -27,6 +27,8 @@ import org.springframework.data.mongodb.core.index.Index;
 import org.springframework.data.mongodb.core.index.IndexOptions;
 import org.springframework.data.mongodb.core.index.ReactiveIndexOperations;
 import org.springframework.data.mongodb.core.query.Update;
+import org.reactivestreams.Publisher;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
@@ -127,9 +129,9 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * @param collection   rejected if blank, for the same reason a negative {@code retention} is. MongoDB rejects
      *                     the name, and a permanent configuration error belongs at startup rather than on every
      *                     read and write this store makes.
-     * @param retry        a {@code Retry} of the caller's own decides for itself which failures it repeats, so one
-     *                     that should give up on an index it can never create filters
-     *                     {@link ConflictingIndexException} out the way {@link #defaultRetry()} does.
+     * @param retry        wrapped so that it never repeats a {@link ConflictingIndexException}, whatever policy it
+     *                     is. Error 85 never becomes anything else, so a caller cannot opt into retrying it and
+     *                     cannot reintroduce the startup hang by supplying a policy of its own.
      * @param retention    rejected if negative, since MongoDB would then reject the TTL index this store creates
      *                      from it, and a {@code Retry} would otherwise retry that permanent
      *                      configuration error rather than fail once at startup.
@@ -148,7 +150,7 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
             throw new IllegalArgumentException("retention cannot be negative, a TTL index cannot expire a document before it was inserted.");
         }
         this.retention = retention;
-        this.retry = requireNonNull(retry, "retry cannot be null");
+        this.retry = neverRetryingAConflictingIndex(requireNonNull(retry, "retry cannot be null"));
         AppliedAppendStore.rejectBusyLoopBackoff(requireNonNull(pollBackoff, "pollBackoff cannot be null"));
         this.pollBackoff = pollBackoff;
     }
@@ -310,17 +312,33 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * {@code Retry.backoff} counts retries rather than total calls, unlike the blocking {@code RetryStrategy}'s
      * {@code maxAttempts}, so {@link #DEFAULT_MAX_ATTEMPTS} minus one is what makes both stacks call the store the
      * same number of times.
-     * <p>
-     * Filters out {@link ConflictingIndexException} because reactor takes the retry policy as one object and gives
-     * a store no separate say in which failures it repeats, unlike the blocking {@code executeWithRetry}. Error 85
-     * never becomes anything but error 85, so repeating it only turns a configuration mistake into a call that
-     * takes the whole retry budget to fail.
      */
     static Retry defaultRetry() {
         return Retry.backoff(DEFAULT_MAX_ATTEMPTS - 1L, Duration.ofMillis(100))
                 .maxBackoff(Duration.ofSeconds(2))
-                .filter(e -> !(e instanceof ConflictingIndexException))
                 .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+    }
+
+    /**
+     * Wraps a {@link Retry} so a {@link ConflictingIndexException} ends the call instead of being repeated, whatever
+     * the wrapped policy would have done with it. Reactor takes the retry policy as one object and gives a store no
+     * separate say in which failures it repeats, unlike the blocking {@code executeWithRetry}, so the store takes
+     * that say back here rather than asking every caller to remember it. Erroring the companion is what stops
+     * {@code retryWhen}, and every other failure reaches the wrapped policy unchanged.
+     */
+    private static Retry neverRetryingAConflictingIndex(Retry delegate) {
+        return new Retry() {
+            @Override
+            public Publisher<?> generateCompanion(Flux<RetrySignal> retrySignals) {
+                return delegate.generateCompanion(retrySignals.handle((signal, sink) -> {
+                    if (signal.failure() instanceof ConflictingIndexException) {
+                        sink.error(signal.failure());
+                    } else {
+                        sink.next(signal);
+                    }
+                }));
+            }
+        };
     }
 
     /**
