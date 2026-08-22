@@ -1,0 +1,164 @@
+schema_version: 1
+epic: sdi
+revision: 1
+updated_at: 2026-08-22T08:00:00Z
+updated_by: claude:sdi-orch-admiring-bhabha-362d44
+baseline: {repo: johanhaleby/occurrent, branch: main}
+authority: "Standing grants in .context/orchestrator-policy.yml (auto_epic_prs merge, allow_one_equivalent_sibling green, allow_reasoned_declines threads, memory checkpoint commit + push to default). No session-scoped deviation."
+milestone: 3
+pending_actions: []
+units:
+  U1:
+    issue: 725
+    goal: "Rename org.occurrent.subscription.api.{blocking,reactor}.Subscription to SubscriptionHandle across 78 importing files, with the declarative ChangeType recipe, and nothing else."
+    phase: PLANNED
+    health: UNKNOWN
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on:
+      - {what: "REGISTRAR FENCE: rel34 U3 (#871), U6 (#837), U9 (#753) must merge first; this rename touches framework/spring-boot-autoconfigure/blocking/.../ProjectionAnnotationRegistrar.java plus 6 test files there", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T09:00:00Z}
+    next_action: "Hold for the fence. Plan gate first."
+    last_meaningful_progress_at: 2026-08-22T08:00:00Z
+    observed: {}
+    assessment: "Large in files, small in thought. Must go first so every later unit is written against the final name. Fence intersection measured 2026-08-22T07:5xZ: 1 main file + 6 test files under framework/spring-boot-autoconfigure/**."
+  U2:
+    issue: 725
+    goal: "Subscription<E> and ReactiveSubscription<E> descriptors with builders, plus the shared selector logic in dsl/subscription-dsl/common. Handler dispatch rule and sealed expansion via EventTypeExpansion."
+    phase: PLANNED
+    health: UNKNOWN
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Plan gate first. Unfenced: touches only dsl/subscription-dsl/**."
+    last_meaningful_progress_at: 2026-08-22T08:00:00Z
+    observed: {}
+    assessment: "Design-bearing core. dsl/subscription-dsl/{common,blocking,reactor} already exist on main."
+  U3:
+    issue: 725
+    goal: "DcbSubscription<E> and ReactiveDcbSubscription<E> against U2's settled shared code, with tags(..) narrowing and criteria(..) replacing."
+    phase: PLANNED
+    health: UNKNOWN
+    swept: false
+    depends_on: [U2]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Plan gate first."
+    last_meaningful_progress_at: 2026-08-22T08:00:00Z
+    observed: {}
+    assessment: "Unfenced. The tags-versus-criteria distinction is the ADR's highest-risk line."
+  U4:
+    issue: 725
+    goal: "Four runners: two following ProjectionRunner/ReactiveProjectionRunner, two following DcbProjectionRunner/ReactiveDcbProjectionRunner, returning SubscriptionHandle."
+    phase: PLANNED
+    health: UNKNOWN
+    swept: false
+    depends_on: [U1, U2, U3]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Plan gate first."
+    last_meaningful_progress_at: 2026-08-22T08:00:00Z
+    observed: {}
+    assessment: "Depends on U1 because the return type is the renamed handle."
+  U5:
+    issue: 721
+    goal: "Seven new Occurrent-prefixed annotation types in framework/annotations, with the seven old ones deprecated forRemoval. Selector attributes (eventTypes, tags) omitted from the new subscription annotations per ADR 127 decision 1."
+    phase: PLANNED
+    health: UNKNOWN
+    swept: false
+    depends_on: []
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Plan gate first. Unfenced: framework/annotations only, no autoconfigure."
+    last_meaningful_progress_at: 2026-08-22T08:00:00Z
+    observed: {}
+    assessment: "Unfenced. Annotation TYPES only; wiring them into the registrars is U6 and is fenced."
+  U6:
+    issue: 721
+    goal: "Descriptor paths in both SubscriptionAnnotationRegistrar classes, the move to afterSingletonsInstantiated, and normalization of both annotation sets in the two bean post processors."
+    phase: PLANNED
+    health: UNKNOWN
+    swept: false
+    depends_on: [U1, U2, U3, U5]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on:
+      - {what: "REGISTRAR FENCE: rel34 U3 (#871), U6 (#837), U9 (#753) must merge first, then rebase onto them", since: 2026-08-22T08:00:00Z, recheck_after: 2026-08-22T09:00:00Z}
+    next_action: "Plan gate first. Hold for the fence."
+    last_meaningful_progress_at: 2026-08-22T08:00:00Z
+    observed: {}
+    assessment: "The largest unit, roughly a third of the epic. Must preserve rel34/U6's #837 advice fix on the deprecated reflective paths, which live until a later release."
+  U7:
+    issue: 725
+    goal: "The OpenRewrite Java visitor rewriting a void handler method into a descriptor factory that delegates to it, with the three refusals: advised @SynchronousSubscription handler, checked throws, and a mixed-stack application."
+    phase: PLANNED
+    health: UNKNOWN
+    swept: false
+    depends_on: [U5, U6]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Plan gate first."
+    last_meaningful_progress_at: 2026-08-22T08:00:00Z
+    observed: {}
+    assessment: "The hardest single piece and not mechanical. Last, after the annotation and descriptor shapes stop moving."
+  U8:
+    issue: 725
+    goal: "Declarative rename recipes wired into org.occurrent.UpgradeToOccurrent_0_34, the section in doc/migration/upgrading-to-0.34.0.md, and the changelog entries under the existing 'Changelog next version' heading."
+    phase: PLANNED
+    health: UNKNOWN
+    swept: false
+    depends_on: [U7]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Plan gate first."
+    last_meaningful_progress_at: 2026-08-22T08:00:00Z
+    observed: {}
+    assessment: "Definition-of-done item. Recipe additions may ride earlier units where the rename they cover ships there."
+  U9:
+    issue: 721
+    goal: "Sweep the test classes, example files and documentation-site reference lines that name any of the seven annotations, plus the held docs branch for occurrent-org.github.io."
+    phase: PLANNED
+    health: UNKNOWN
+    swept: false
+    depends_on: [U6, U7]
+    session: null
+    deliverables:
+      - {check: pr_merged, ref: null, met: false, evidence: null}
+      - {check: branch_pushed, repo: occurrent-org/occurrent-org.github.io, ref: null, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Plan gate first."
+    last_meaningful_progress_at: 2026-08-22T08:00:00Z
+    observed: {}
+    assessment: "Mechanical. Docs branch is HELD for release day, never merged by this epic."
+  U10:
+    issue: 725
+    goal: "In-epic fixpoint: fresh-context adversarial review of the epic's complete increment, addendum fixes, re-review until a round returns zero new confirmed findings above the recorded severity threshold. Then close #725 and #721 by hand."
+    phase: PLANNED
+    health: UNKNOWN
+    swept: false
+    depends_on: [U1, U2, U3, U4, U5, U6, U7, U8, U9]
+    session: null
+    deliverables:
+      - {check: issue_closed, ref: 725, met: false, evidence: null}
+      - {check: issue_closed, ref: 721, met: false, evidence: null}
+    blocking_on: []
+    next_action: "Plan gate first. Stopping rule and round cap are a user ruling at plan approval."
+    last_meaningful_progress_at: 2026-08-22T08:00:00Z
+    observed: {}
+    assessment: "rel34's R3 (cutting the 0.34.0 tag) gates on this unit completing."
