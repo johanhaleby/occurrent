@@ -165,10 +165,12 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
 
     @Test
     void a_subscribable_replacement_that_genuinely_replays_does_not_inherit_the_starters_never_replays_fact() {
-        // Issue 903: the starter still built its own default composition (ComposedCatchupModel is supplied,
-        // identified, and marked defaultBypassesCatchup), but the application supplied its own Subscribable bean for
-        // this projection to run on, one that genuinely replays. isDefaultKnownLiveOnlyFor must compare identity
-        // against the model this projection's own capability resolves to, not just read the flag.
+        // Unit-level check of isDefaultKnownLiveOnlyFor's identity comparison itself, not a reproduction of a
+        // reachable starter configuration: OccurrentReactiveMongoAutoConfiguration's occurrentDurableSubscriptionModel
+        // is gated by one @ConditionalOnMissingBean(value = {FluxSubscriptionModel.class, Subscribable.class}), so
+        // ComposedCatchupModel is only ever supplied when no such replacement exists, and a real mismatch cannot
+        // arise. This test wires the holder and the capability by hand to verify the comparison would still answer
+        // correctly if that condition were ever split apart.
         Subscribable starterModel = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         ComposedCatchupModel composedCatchupModel = new ComposedCatchupModel();
         composedCatchupModel.suppliedBy(starterModel);
@@ -198,10 +200,10 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
 
     @Test
     void a_flux_subscription_model_replacement_that_genuinely_replays_does_not_inherit_the_starters_never_replays_fact() {
-        // Same defect, reached through the DcbProjection path instead: the app supplies its own FluxSubscriptionModel
-        // bean for this DCB projection, mismatching the identity ComposedCatchupModel was given for the starter's own
-        // composition. FluxSubscriptionModel does not extend SubscriptionModelCapability, so it also needs Subscribable
-        // for the DcbSubscriptionModel adapter's named subscribe to reach it.
+        // Same unit-level check through the DcbProjection path, same caveat as the test above: the shared
+        // @ConditionalOnMissingBean means this mismatch cannot arise from a real starter configuration either.
+        // FluxSubscriptionModel does not extend SubscriptionModelCapability, so it also needs Subscribable for the
+        // DcbSubscriptionModel adapter's named subscribe to reach it.
         Subscribable starterModel = mock(Subscribable.class, withSettings().extraInterfaces(ReplayAwareSubscriptions.class));
         ComposedCatchupModel composedCatchupModel = new ComposedCatchupModel();
         composedCatchupModel.suppliedBy(starterModel);
