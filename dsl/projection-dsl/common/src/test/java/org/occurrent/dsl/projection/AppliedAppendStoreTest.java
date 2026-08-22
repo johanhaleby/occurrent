@@ -281,4 +281,113 @@ class AppliedAppendStoreTest {
         assertThat(result[0]).isFalse();
         assertThat(interruptedAfterwards[0]).isTrue();
     }
+
+    @Test
+    void an_in_memory_store_keeps_only_as_many_appends_per_projection_as_it_was_given() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory(3);
+        AppendId oldest = AppendId.mint();
+        AppendId second = AppendId.mint();
+        AppendId third = AppendId.mint();
+        AppendId fourth = AppendId.mint();
+
+        store.recordApplied("orders", oldest);
+        store.recordApplied("orders", second);
+        store.recordApplied("orders", third);
+        store.recordApplied("orders", fourth);
+
+        assertThat(store.hasApplied("orders", oldest)).isFalse();
+        assertThat(store.hasApplied("orders", second)).isTrue();
+        assertThat(store.hasApplied("orders", third)).isTrue();
+        assertThat(store.hasApplied("orders", fourth)).isTrue();
+    }
+
+    @Test
+    void reading_an_append_does_not_save_it_from_being_evicted_ahead_of_a_newer_one() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory(2);
+        AppendId oldest = AppendId.mint();
+        AppendId newer = AppendId.mint();
+        store.recordApplied("orders", oldest);
+        store.recordApplied("orders", newer);
+
+        assertThat(store.hasApplied("orders", oldest)).isTrue();
+        store.recordApplied("orders", AppendId.mint());
+
+        assertThat(store.hasApplied("orders", oldest)).isFalse();
+        assertThat(store.hasApplied("orders", newer)).isTrue();
+    }
+
+    @Test
+    void each_projection_gets_the_bound_to_itself_rather_than_sharing_one() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory(1);
+        AppendId orders = AppendId.mint();
+        AppendId customers = AppendId.mint();
+
+        store.recordApplied("orders", orders);
+        store.recordApplied("customers", customers);
+
+        assertThat(store.hasApplied("orders", orders)).isTrue();
+        assertThat(store.hasApplied("customers", customers)).isTrue();
+    }
+
+    @Test
+    void recording_the_same_append_twice_does_not_use_up_two_of_the_appends_a_projection_keeps() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory(2);
+        AppendId first = AppendId.mint();
+        AppendId second = AppendId.mint();
+
+        store.recordApplied("orders", first);
+        store.recordApplied("orders", first);
+        store.recordApplied("orders", second);
+
+        assertThat(store.hasApplied("orders", first)).isTrue();
+        assertThat(store.hasApplied("orders", second)).isTrue();
+    }
+
+    @Test
+    void the_default_in_memory_store_stops_growing_at_the_number_of_appends_it_documents() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppendId oldest = AppendId.mint();
+        store.recordApplied("orders", oldest);
+        for (int i = 0; i < AppliedAppendStore.DEFAULT_IN_MEMORY_MAX_RECORDED_APPENDS_PER_PROJECTION; i++) {
+            store.recordApplied("orders", AppendId.mint());
+        }
+
+        assertThat(store.hasApplied("orders", oldest)).isFalse();
+    }
+
+    @Test
+    void an_in_memory_store_that_would_keep_no_append_at_all_is_rejected() {
+        Throwable thrown = catchThrowable(() -> AppliedAppendStore.inMemory(0));
+
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("at least 1");
+    }
+
+    @Test
+    void clear_still_removes_every_append_a_bounded_in_memory_store_kept() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory(3);
+        AppendId appendId = AppendId.mint();
+        store.recordApplied("orders", appendId);
+
+        store.clear("orders");
+
+        assertThat(store.hasApplied("orders", appendId)).isFalse();
+    }
+
+    @Test
+    void a_wait_whose_timeout_has_already_elapsed_still_answers_that_an_applied_append_is_applied() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppendId appendId = AppendId.mint();
+        store.recordApplied("orders", appendId);
+
+        assertThat(store.waitUntilApplied("orders", appendId, Duration.ZERO)).isTrue();
+        assertThat(store.waitUntilApplied("orders", appendId, Duration.ofSeconds(-1))).isTrue();
+    }
+
+    @Test
+    void a_wait_whose_timeout_has_already_elapsed_answers_false_for_an_append_that_was_never_recorded() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+
+        assertThat(store.waitUntilApplied("orders", AppendId.mint(), Duration.ZERO)).isFalse();
+    }
 }

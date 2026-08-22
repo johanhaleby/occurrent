@@ -792,6 +792,36 @@ public class OccurrentProperties {
             private Duration retention = Duration.ofDays(7);
 
             /**
+             * How many times the Mongo-backed {@code AppliedAppendStore} calls MongoDB for one read or one write
+             * before it gives up and fails the caller. This counts attempts and does not limit how long they take.
+             * A call that fails at once is retried on the store's 100 ms to 2 s backoff, so the default of 10 takes
+             * about 11 seconds, while a call to a server that is not answering spends the driver's own server
+             * selection timeout, 30 seconds by default, on each of the 10. Set a timeout on the MongoDB client
+             * when the wall clock is what matters, since nothing here can limit it.
+             * <p>
+             * A projection that records applied appends calls the store on the thread that delivers its events, so
+             * this is also how long an unreachable store holds that delivery up. Reaching the limit fails the call,
+             * and that failure comes out of the projection's own event handling, where the subscription treats it
+             * like any other failing handler. The read model is updated before the recording runs, so a redelivery
+             * of that event applies it again. Raising the limit rides out a longer outage and holds deliveries up
+             * for longer, and 1 means one attempt and no retry at all.
+             * <p>
+             * {@code AppliedAppendStore.waitUntilApplied(..)} does not fail when this limit is reached. A read that
+             * has run out of attempts counts as not applied yet, so the wait goes on polling until its own timeout.
+             * <p>
+             * Cannot exceed {@link #MAX_ATTEMPTS_CEILING}, which is where the Mongo stores stop a policy that never
+             * stops on its own. A larger number here would be accepted and then not happen, so it is rejected
+             * instead of being quietly reduced to the ceiling.
+             */
+            private int maxAttempts = 10;
+
+            /**
+             * The largest {@code maxAttempts} an application can ask for, matching the ceiling both Mongo stores
+             * enforce. Two orders of magnitude above the default, so it bounds a mistake rather than a choice.
+             */
+            public static final int MAX_ATTEMPTS_CEILING = 1000;
+
+            /**
              * How {@code AppliedAppendStore.waitUntilApplied(..)} paces its polls.
              */
             private WaitBackoffProperties waitBackoff = new WaitBackoffProperties();
@@ -822,6 +852,20 @@ public class OccurrentProperties {
 
             public void setRetention(Duration retention) {
                 this.retention = retention;
+            }
+
+            public int getMaxAttempts() {
+                return maxAttempts;
+            }
+
+            public void setMaxAttempts(int maxAttempts) {
+                if (maxAttempts < 1) {
+                    throw new IllegalArgumentException("occurrent.projection.applied-append.max-attempts must be at least 1, a store that is never called cannot record or read anything");
+                }
+                if (maxAttempts > MAX_ATTEMPTS_CEILING) {
+                    throw new IllegalArgumentException("occurrent.projection.applied-append.max-attempts cannot exceed " + MAX_ATTEMPTS_CEILING + ", which is where the store stops a retry that never stops on its own, so " + maxAttempts + " would be accepted and then not happen");
+                }
+                this.maxAttempts = maxAttempts;
             }
 
             public WaitBackoffProperties getWaitBackoff() {

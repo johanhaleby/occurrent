@@ -249,12 +249,49 @@ Mongo implementations on both stacks live in the starters and take a `RetryStrat
 `NativeMongoCheckpointStorage` established, so a transient outage of the store does not turn into a failed wait.
 
 Each poll's read is limited to the time the wait has left, and that is part of this decision rather than an
-implementation detail. A default `RetryStrategy` retries without a limit, since `RetryImpl`'s no-argument
-constructor builds itself with `infinite()` attempts, so a poll that inherits it can go on retrying straight
-through the caller's timeout and then throw instead of answering `false`. The withdrawn machinery shipped that
-defect and fixed it in [#730](https://github.com/johanhaleby/occurrent/issues/730) by limiting each poll's read to
-the wait's remaining time. Both stacks apply that limit here, so the timeout the caller asked for is the one they
-get.
+implementation detail. A `RetryStrategy` built from `RetryImpl`'s no-argument constructor retries with
+`infinite()` attempts, so a poll that inherited one could go on retrying straight through the caller's timeout and
+then throw instead of answering `false`. The withdrawn machinery shipped that defect and fixed it in
+[#730](https://github.com/johanhaleby/occurrent/issues/730) by limiting each poll's read to the wait's remaining
+time. Both stacks apply that limit here.
+
+Two separate things end that read and they do different work. The wait's own deadline stops a read from starting,
+and the store's attempt limit, `occurrent.projection.applied-append.max-attempts`, stops a failed one from being
+tried again. Whether either ends a read already running is where the two stacks differ. The blocking one cannot, because a
+Mongo call it has started cannot be interrupted from inside a store that was handed a `MongoOperations` and does
+not own the client. The reactive one can, and cancels that read at the deadline. The timeout a caller asked for therefore
+holds as far as that client's own timeout holds, and an application that needs it exact configures one there. The
+reactive stack blocks its wait on the time it has left, which the blocking driver has no equivalent of.
+
+That attempt limit applies outside a wait too, where `recordApplied`, `hasApplied` and `clear` give up rather than
+calling a store for as long as an outage lasts. Decision 7 depends on it, since the clear it expects to stop a
+recorder can only stop if the retry behind that clear ends.
+
+An application can also construct either store directly and hand it a retry policy of its own, and neither
+`RetryStrategy` nor reactor's `Retry` reports whether a policy stops on its own, so the store cannot reject one that
+does not the way it rejects a blank collection name. Each store therefore stops the call itself once a policy is still
+retrying after a ceiling two orders of magnitude above the default, leaving a policy that stops at or before that
+ceiling to stop on its own. `occurrent.projection.applied-append.max-attempts` is rejected above the ceiling rather
+than accepted and then not performed. The number of times a store reaches MongoDB for one read or write is decided before the
+call starts on every path, which is the property this decision needs, and the configured limit is what decides it
+wherever the starters or the store's own defaults built the policy.
+
+A wait always reads at least once before it honours its timeout, so a timeout of zero or one that has already
+elapsed asks the store rather than answering `false` without looking. The interface default and both Mongo stores
+agree on that much, and an already-elapsed timeout costs one read rather than a retry budget, because the deadline
+stops the retries as well as the reads.
+
+What a store does with a read slower than the time left is not shared, and this is the one place the two stacks
+behave differently rather than only being implemented differently. The blocking store cannot cancel a read it has
+started, so it lets that read finish and can return after the timeout has passed, answering correctly and late. The
+reactive store stops waiting at the deadline on every poll that has time left, so it returns within the timeout and
+answers `false` for an append it would have found had it waited.
+
+The read a wait must make is the exception on both stacks, since a timeout of zero or one already elapsed leaves no
+remaining time to bound it with. That read runs with the same absence of a deadline `hasApplied` runs with, so the
+client's own timeout is the only thing that ends it, which is the same conclusion decision 5 reaches everywhere
+else. The wall clock is the client's job on every path here, and this is the path where it is the only one. The interface documents that difference rather than requiring one of them, since neither
+choice is free, and a caller who needs the answer more than the deadline reads `hasApplied` directly.
 
 ### 6. Nothing is recorded while a projection is reading history
 
@@ -542,7 +579,8 @@ configuration cannot work and nothing at runtime would explain why.
 
 The Spring Boot starters auto-configure a Mongo-backed store with `@ConditionalOnMissingBean`, so an application
 that sets the attribute gets a working store without wiring one. Properties live under `occurrent.projection.*`,
-covering the retention time, the wait's backoff, and the poll's schedule from decision 7.
+covering the retention time, the wait's backoff, the store's attempt limit, and the poll's schedule from
+decision 7.
 
 Where a projection identifier and a subscription identifier can differ, the programmatic API takes both explicitly.
 They are the same string by construction on the annotation path and on `ProjectionRunner.project(subscriptionId,
@@ -569,7 +607,7 @@ separately.
   having applied all of it, and decision 10 states the delay and why it is intended. An identifier that was never
   recorded, or was cleared, or has been evicted, all produce a timeout instead. A store that cannot be read keeps
   the wait polling until its timeout expires, which is true only because decision 5 limits each read to the time
-  the wait has left.
+  the wait has left, and holds as far as the MongoDB client's own timeout holds.
 - That guarantee depends on the clear having finished, so it is not true in the window before it does. A wait
   between a rebuild starting and its clear completing can be told `true` about an append whose read model is being
   discarded. Decision 7 states how long that window is in each case. This design narrows the untrue answer to that
