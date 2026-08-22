@@ -64,7 +64,7 @@ units:
         69.
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T09:55:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T08:53:11+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -92,14 +92,14 @@ units:
           reports DEFERRED, I had read the same diff and missed it, and a correction to an overclaimed
           guarantee is exactly the edit that overclaims in a new direction.'
         via: gh api pulls/900/reviews commit_id compared to headRefOid
-        at: '2026-08-22T09:30:00+00:00'
+        at: '2026-08-22T08:47:06+00:00'
       enumeration_value:
         note: 'The code-side enumeration found a FIFTH and SIXTH surface the brief never named: PR 74
           independently rewrote the same docs section as PR 69, a genuine textual conflict now known before
           release day rather than discovered while merging held branches under time pressure; and PR 72
           carries a duplicate news post that the take-73''s rule already disposes of.'
         via: worker report, dispositions verified
-        at: '2026-08-22T09:55:00+00:00'
+        at: '2026-08-22T08:53:11+00:00'
     assessment: One invariant, four surfaces, two repos. The boolean-to-three fix already shipped once
       and was stale on arrival; the enumeration is derived from RoutingOutcome.java, not from a findings
       list. Takes PR 69's repair out of brk/U8's scope, recorded in ORCHESTRATOR.md. docs/append-identity
@@ -149,7 +149,7 @@ units:
           absent from present rather than truncating. One Colima replica-set flake was correctly diagnosed
           as the known 2GB VM infra issue and retried, not reported as a failure.'
         via: orchestrator adversarial verify subagent
-        at: '2026-08-22T08:55:00+00:00'
+        at: '2026-08-22T08:30:57+00:00'
       routed_edge:
         note: 'The pass flagged one edge OUTSIDE the claim''s scope, which I verified against the diff
           before routing: preservePositionAndDcbTags reapplies the ORIGINAL event''s tags to the dcbTags
@@ -158,7 +158,7 @@ units:
           silently. Filed as #904, milestone 0.35.0, marker carried. Deferred rather than folded into
           U2 because #876 is a silent-corruption fix on the critical path and this edge regresses nothing.'
         via: gh pr diff 901 read directly
-        at: '2026-08-22T08:55:00+00:00'
+        at: '2026-08-22T08:30:57+00:00'
       scope_growth:
         note: 'PR 901 gained NEW production code during its rebase that was NOT in the head the first
           adversarial pass verified: DcbCloudEvents.preserveTags(original, updated), public, in the published
@@ -173,7 +173,7 @@ units:
           and isDcbEvent, or in an internal package per this repo''s own convention (the mutable saga
           registry lives in dsl.saga.internal for exactly this reason). Asked, not ruled.'
         via: gh pr view --json files compared across heads, gh pr diff
-        at: '2026-08-22T09:05:00+00:00'
+        at: '2026-08-22T08:36:56+00:00'
       verify_discipline:
         note: 'Head moved three times in fifteen minutes (9a2337dbf, b733100d8, d9589f867) while verify
           passes ran. DO NOT spawn a pass per push. The rule: verify once the worker declares itself settled,
@@ -181,7 +181,7 @@ units:
           verdict carries; any code delta means re-verify. The first pass HELD against 9a2337dbf and does
           NOT cover preserveTags; a second is running against b733100d8.'
         via: orchestrator
-        at: '2026-08-22T09:05:00+00:00'
+        at: '2026-08-22T08:36:56+00:00'
       adversarial_verify_2:
         note: 'HELD against b733100d8, scoped to the new preserveTags and its three call sites. Real MongoDB
           8.0 via Testcontainers, reading BOTH the raw dcbTags BSON array and the dcbtags extension on
@@ -198,7 +198,7 @@ units:
           rather than reported as defects: the Colima container flake, and a shared ~/.m2 race from a
           concurrent session that surfaced as NoSuchMethodError on the very method under test.'
         via: orchestrator adversarial verify subagent, second pass
-        at: '2026-08-22T09:40:00+00:00'
+        at: '2026-08-22T08:49:26+00:00'
       blocked_on_suppressed_finding:
         note: 'MERGE BLOCKED 2026-08-22T10:0xZ. Copilot''s verdict on d9589f867 was ''Needs a closer look'',
           NOT approval, and its body carried a suppressed comment. Zero unresolved threads and a green
@@ -212,7 +212,7 @@ units:
           originals that HAVE a position. The stated claim never mentioned the absent case, so no falsification
           attempt constructed one.'
         via: gh api pulls/901/reviews body plus reading MongoEventStore.updateEvent
-        at: '2026-08-22T10:10:00+00:00'
+        at: '2026-08-22T09:03:54+00:00'
       reverify_preserve_position:
         note: 'HELD against 39d9a6ef0, the head carrying the preservePosition fix that the earlier verdict
           did not cover. Real Mongo via Testcontainers across all three stores, and it ran the check that
@@ -318,7 +318,7 @@ units:
           re-milestoned to 0.35.0 an hour earlier, and it cost a rerun on an unrelated PR within that
           hour.'
         via: delegated log triage plus gh run list
-        at: '2026-08-22T09:30:00+00:00'
+        at: '2026-08-22T08:47:06+00:00'
       adversarial_verify:
         note: 'FALSIFIED, merge BLOCKED. Verdict: HELD only for the shipped starter wiring as-is, FALSIFIED
           as a general claim. isDefaultKnownLiveOnlyFor is a bare reference check with no unwrapping,
@@ -335,7 +335,7 @@ units:
           UNVERIFIED GAP surfaced: suppliedBy has no once-only guard, a second call silently overwrites
           the first, and no path in this starter was found that calls it twice.'
         via: orchestrator adversarial verify subagent
-        at: '2026-08-22T10:55:00+00:00'
+        at: '2026-08-22T09:16:02+00:00'
       reverify:
         note: 'RE-VERIFY against 7d63c9c8b: FALSIFIED but against the CLAIM, not the code. AopProxyUtils.getSingletonTarget
           only unwraps something implementing Advised, so genuine Spring AOP proxies (ProxyFactory, which
@@ -434,7 +434,7 @@ units:
           RESIDUAL STATED RATHER THAN HIDDEN: this bounds attempts, only the MongoDB client can bound
           time, and a read already in flight when a deadline passes is not interrupted.'
         via: worker DELIVERY_RESULT, gate facts verified independently
-        at: '2026-08-22T11:50:00+00:00'
+        at: '2026-08-22T10:38:17+00:00'
       adr132_granted:
         note: '#915 (ADR 132 decision 5 stale on three counts plus its property list) GRANTED into PR
           914 rather than becoming a separate unit. Not scope widening: the brief''s invariant requirement
@@ -444,7 +444,7 @@ units:
           in any release, so AGENTS.md permits correcting it in place. A markdown-only push does not re-run
           the matrix here, so the 26 green contexts stand.'
         via: orchestrator ruling
-        at: '2026-08-22T11:50:00+00:00'
+        at: '2026-08-22T10:38:17+00:00'
       reverify_2:
         note: 'FALSIFIED a SECOND time, reactive stack only, and again by the fix itself. Defect 1, the
           unbounded retry, is CLOSED on both stacks: the 1000 ceiling is enforced identically, verified
@@ -651,7 +651,7 @@ units:
           for one attempt. Both are the kind a passing test suite would not have surfaced, since neither
           changes the returned value.
         via: worker message
-        at: '2026-08-22T12:20:00+00:00'
+        at: '2026-08-22T10:47:53+00:00'
       issue_917:
         note: '#917, RabbitMqCloudEventSink.close()''s javadoc describes the before-only shutdown check
           and goes stale the moment #916 merges. FOLDED INTO PR 916 rather than taken as a follow-up,
@@ -661,7 +661,7 @@ units:
           carrying a javadoc that contradicts its own code in between. U10 (#867) owns broker/rabbitmq/blocking/**
           and is fenced out of this one file.'
         via: orchestrator ruling
-        at: '2026-08-22T12:20:00+00:00'
+        at: '2026-08-22T10:47:53+00:00'
       reverify:
         note: 'FALSIFIED narrowly on one clause: ''the caller''s retryIf is invoked exactly once per attempt''
           is false, because applyShutdownPredicate combines the two predicates with Predicate.and, which
@@ -702,7 +702,7 @@ units:
       evidence: CLOSED by the merge, verified; in-progress label released by the worker when the PR opened.
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T08:45:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T08:30:57+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -743,7 +743,7 @@ units:
           claim 3 HELD (grep for preconditions: returns exactly the two files, and the store-neutral recipe''s
           yaml key renames carry no precondition and no value check). Nothing left unverified.'
         via: orchestrator adversarial verify subagent under Johan's dec-0006 grant
-        at: '2026-08-22T08:40:00+00:00'
+        at: '2026-08-22T08:23:49+00:00'
       merge_gate:
         note: HELD, and the reason is specific rather than caution. Head 65220005 is Copilot-clean on
           the CURRENT head (reviewed 08:10Z, Approval recommended, 0 new comments, no suppressed block,
@@ -754,13 +754,13 @@ units:
           grant permits merging when a sibling has PASSED; neither misc sibling has completed, so the
           grant does not reach this case.
         via: gh pr view statusCheckRollup, .github/workflows/maven.yml:243-250
-        at: '2026-08-22T08:40:00+00:00'
+        at: '2026-08-22T08:23:49+00:00'
       hygiene:
         note: Worktree removed and local branch johan/relaxed-bardeen-0a12f8 deleted 2026-08-22T09:2xZ
           after confirming the worktree was clean, its head equalled the merged pin, and the remote branch
           was already gone (deleted by the merge). Session archiving batches at epic closeout.
         via: git worktree remove, git branch -D
-        at: '2026-08-22T09:30:00+00:00'
+        at: '2026-08-22T08:47:06+00:00'
     assessment: 'Shipped defect in rewrite/src/main/resources/META-INF/rewrite/subscription-mode-0_32.yml,
       verified by git ls-tree against the tag. Same class as #828 (already closed), so read that fix first.'
   U9:
@@ -803,7 +803,7 @@ units:
           notably candid: it records that the earlier decision to leave the exemption held while the loss
           stayed invisible, and that this is what changed.'
         via: git ls-tree occurrent-0.33.0 plus diff inspection
-        at: '2026-08-22T10:25:00+00:00'
+        at: '2026-08-22T09:11:19+00:00'
       surface_timing:
         note: 'The pass established that refusal TIMING is not uniform across the six registration surfaces:
           a saga throws at build(), the Spring registrars at bean processing, ProjectionRunner and DomainEventFeed
@@ -852,7 +852,7 @@ units:
           shard from the Kafka one. Triage delegated. A both-JDK failure in one shard reads as a regression
           from the change rather than infrastructure.'
         via: gh pr view, gh run list, graphql reviewThreads
-        at: '2026-08-22T13:20:00+00:00'
+        at: '2026-08-22T11:15:31+00:00'
       adversarial_919_falsified:
         note: 'FALSIFIED, and on the one hazard the brief named. RabbitMqBuildFailureClassifier.isTransient
           never returns for a cause chain that loops, because shutdownSignalIn walks getCause() with no
@@ -929,7 +929,7 @@ units:
           sdi''s landing unit creates one or uses one. A worker told to add an entry under a heading that
           is not there is exactly who invents a premature `### 0.35.0`, which AGENTS.md forbids by name.'
         via: sdi cross-epic message, verified with git show 4c04880e5 and git ls-tree occurrent-0.33.0
-        at: '2026-08-22T11:30:00+00:00'
+        at: '2026-08-22T10:35:04+00:00'
       seeding_decision:
         note: 'DECIDED, and relayed to sdi so its U8 brief could unblock. The cut SEEDS a fresh `### Changelog
           next version`, BARE, with no subsection headings under it. Derivation: the failure this removes
@@ -941,7 +941,7 @@ units:
           the next entry goes. Reversible: omit the line and the first writer creates the heading, which
           is the 0.33.0 precedent.'
         via: orchestrator decision under AGENTS.md
-        at: '2026-08-22T11:50:00+00:00'
+        at: '2026-08-22T10:38:17+00:00'
     assessment: 'AGENTS.md:71-73: cutting a release renames the heading, it does not restructure the section.
       Runs after the last gating merge and after C1 reaches fixpoint.'
   R2:
@@ -979,7 +979,7 @@ units:
           under brk. Rebuild once brk closes and the 69-versus-74 conflict is ruled on. docs/saga-step-conditions-added-tag
           still exists and is still the superseded no-op branch to DELETE rather than merge.'
         via: gh api compare per branch tip against preview
-        at: '2026-08-22T10:35:00+00:00'
+        at: '2026-08-22T09:13:10+00:00'
       held_set_now_eight:
         note: 'The held docs set is now EIGHT PRs, not seven: 68, 69, 70, 71, 72, 73, 74 and the new 76
           from rel34/U15. The superseded branch docs/saga-step-conditions-added-tag is still to be DELETED
@@ -1082,7 +1082,7 @@ units:
           No production code, so nothing changes for rel34''s shard reading beyond one fewer flake. rel34''s
           U17 was retired into this.'
         via: brk orchestrator messages, cross-checked against the merge commit
-        at: '2026-08-22T13:20:00+00:00'
+        at: '2026-08-22T11:15:31+00:00'
       gate_widened:
         note: 'R3''s gate widened 2026-08-22T14:4xZ and the tag date moved with it. RabbitMqCloudEventBridgeConnectionRecoveryTest.a_held_deferred_delivery_tag_across_a_forced_connection_recovery
           failed on rel34''s PR 914 in a module 914 does not touch. rel34 routed it to brk rather than
@@ -1235,7 +1235,7 @@ units:
     blocking_on: []
     next_action: 'implementation is SEPARATE work and #818 stays open; dispatch as its own plan-approved
       unit at Opus/high per the worker''s own derived recommendation'
-    last_meaningful_progress_at: '2026-08-22T13:00:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T11:10:09+00:00'
     observed:
       design_gate:
         note: 'ADR 134 delivered as PR 911, Proposed, design only, no code. NOT merged on green: a plan-first
@@ -1254,7 +1254,7 @@ units:
           is a migration-guide section and no recipe. MY OWN GAP FOUND: no default value stated for the
           quarantine time budget.'
         via: read the full ADR from gh pr diff
-        at: '2026-08-22T10:25:00+00:00'
+        at: '2026-08-22T09:11:19+00:00'
       premise_check:
         note: 'TWO REAL DEFECTS in ADR 134''s premises, plus one gap, found before the design gate reached
           Johan. (1) FALSE: ''every blocking subscription model wraps the handler in executeWithRetry''.
@@ -1275,7 +1275,7 @@ units:
           today, so the compile-break half of the ADR''s open question is hypothetical for user code only,
           while the silent findByStatus(ACTIVE) half is real.'
         via: orchestrator premise-verification subagent
-        at: '2026-08-22T10:55:00+00:00'
+        at: '2026-08-22T09:16:02+00:00'
     assessment: 'Johan ruled it IN 0.34.0 (dec-0002), overruling the recommendation to defer. Pre-existing:
       predates ADR 123 and ADR 126, both of which accepted the tradeoff deliberately, and PR 816''s review
       thread raised it against ADR 126. The event path has no equivalent of SagaExecution.pollTimers,
@@ -1329,7 +1329,7 @@ units:
           original purpose, deriving the ReplayAwareSubscriptions capability the recording and catch-up-listening
           wiring depends on, is genuinely untouched.'
         via: worker message plus gh pr view
-        at: '2026-08-22T09:30:00+00:00'
+        at: '2026-08-22T08:47:06+00:00'
       review_round:
         note: 'Copilot found 2 threads, both matching what U12''s own independent local review had already
           flagged. FIXED: raw reference comparison in isDefaultKnownLiveOnlyFor breaks under AOP proxying,
@@ -1341,7 +1341,7 @@ units:
           reviewers, but it changes RECORDING behaviour rather than the warning this unit''s remit covers,
           so routing it was correct rather than folding it in. #909 needs a routing decision.'
         via: worker message
-        at: '2026-08-22T10:10:00+00:00'
+        at: '2026-08-22T09:03:54+00:00'
       gate_908:
         note: 'Green, Java CI completed/success, ONE unresolved thread which is a legitimate reasoned
           decline under the policy: Copilot found the resolveCatchupModel gap, the worker agreed it is
@@ -1350,7 +1350,7 @@ units:
           the head is 2a0b03fef, and that delta IS the AOP proxy fix, so the substantive change is unreviewed.
           Re-review requested.'
         via: gh pr view, gh run list, graphql reviewThreads
-        at: '2026-08-22T13:20:00+00:00'
+        at: '2026-08-22T11:15:31+00:00'
     assessment: 'Adopted by Johan at a structured ask, dec-0007, on U3''s own routing recommendation after
       it found the gap while reviewing its own PR 902. Reactor twin of U3''s fix, similar size. Pre-granted
       the OccurrentReactiveMongoAutoConfiguration bean-method extension up front, because dec-0005 already
@@ -1391,7 +1391,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: dispatch after PR 901 merges, since both build on its fix
-    last_meaningful_progress_at: '2026-08-22T09:15:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T08:40:58+00:00'
     observed: {}
     assessment: 'THE UNIT THAT DECIDES WHAT FIXING #876 MEANS. PR 901 stops the corruption going forward
       and does not touch a document already corrupted, so without this the release ships half a fix for
@@ -1425,7 +1425,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: dispatch after PR 901 merges, since both build on its fix
-    last_meaningful_progress_at: '2026-08-22T09:15:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T08:40:58+00:00'
     observed: {}
     assessment: 'Fourth store, same defect class. Small. Shipping #876 fixed on three of four stores is
       an asymmetry the changelog would have to caveat, and InMemoryEventStore is what people write their
@@ -1536,7 +1536,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T12:20:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T10:47:53+00:00'
     observed: {}
     assessment: 'Brought back into 0.34.0 by dec-0009 after failing three unrelated PRs in under three
       hours across both JDKs in a module none of them touched (PR 902 java-25, PR 908 java-21, a main

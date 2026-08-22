@@ -2274,6 +2274,20 @@ it, and nothing about the file looked wrong.
 Take every timestamp from the clock. `date -u` costs nothing, and a value written from a sense of
 how much time has passed is a guess wearing the shape of an observation.
 
+The future scan is the WEAK test and stopping at it leaves most of the damage in place. It only
+catches fabrications that overshot far enough to cross the present. rel34's first repair swept 43
+future values, declared the file clean, and left 17 more that were invented and still in the past.
+sdi ran the same check on its own file and found thirteen of fourteen values fabricated while ZERO
+were in the future, so a future scan would have passed it completely.
+
+The stronger test asks whether a value was ever measured rather than whether it is impossible. For
+each distinct timestamp, find the first commit whose version of the file contains it and compare.
+A value recorded AFTER that commit cannot be a measurement, since the observation would have to
+postdate the record of it. Sweep every timestamp field, not only the one the tooling reads, because
+fabrication is a property of how a value was produced and not of which field it landed in. Exclude
+deadline fields such as `stale_after` and `recheck_after` deliberately, since those are future by
+design and flagging them trains you to ignore the audit.
+
 Recovery is usually available and worth doing rather than clamping to now. Each checkpoint commit
 carries the real time the observation was recorded, so `git log --format=%aI` on the state file, plus
 `git show <commit>:<file>` to find the first commit containing each fabricated value, reconstructs
