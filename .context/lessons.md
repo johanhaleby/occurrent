@@ -1744,3 +1744,32 @@ two within-epic collisions were in the same file but different bean methods, ver
 comparing hunk headers rather than assumed from the file name matching.
 
 Issue-number exclusions stay useful as the first filter. They are not the coverage argument.
+
+## Ask the workflow whether it finished, not the contexts whether they are pending (sdi, 2026-08-22)
+
+rel34 found that a green rollup over a partial matrix reads exactly like a green rollup, and
+proposed comparing the context COUNT against a sibling pull request. brk turned out to have a
+better mechanism already, and it is the one to use.
+
+`gh run list --commit <sha>` and require the "Java CI with Maven" workflow RUN to be `completed`
+with conclusion `success`. A workflow only concludes after every shard job it spawned has
+finished, so a partial matrix cannot pass. Measured on two live heads:
+
+```
+PR 910 head:  Java CI with Maven   status=in_progress  conclusion=null     (rollup: 7 contexts, 5 pending)
+PR 913 head:  Java CI with Maven   status=completed    conclusion=success  (rollup: 27 contexts, all green)
+```
+
+The state that is indistinguishable at the context layer is unambiguous one layer up.
+
+Why it beats counting. Counting needs the magic number, 26 here or 27 with an extra job. It needs
+a comparable sibling to derive that number from. And it fails in the DANGEROUS direction the day
+the matrix legitimately changes size: a matrix that shrinks makes a real partial set look
+complete, so the check goes quiet exactly when it stops being true. Asking whether the run
+concluded needs no number, no sibling, and survives any matrix change.
+
+The wider point, which cost nothing here and could have cost more: I warned brk their gate was
+about to merge on a partial matrix without first asking what their gate reads. It read the
+workflow, not the rollup, and was never exposed. Ask what a peer's mechanism actually is before
+telling them it is broken, because the fleet's shared lesson describes the mechanism SOMEONE used,
+not the one they use.
