@@ -31,10 +31,14 @@ package org.occurrent.subscription;
  *       it. Offering the same event to the same registration again gets the same answer, so stop instead.</li>
  * </ul>
  * <p>
- * Exactly two of the six always come with an exception propagating to the caller as well, {@link #NOT_DELIVERABLE}
- * and {@link #REFUSED}. The other four never do. That is what lets a caller tell an event nothing could receive from
- * an event something tried to receive and failed on, without reading any state a concurrent lifecycle call could
- * have changed in the meantime.
+ * Two of the six always come with an exception propagating to the caller as well, {@link #NOT_DELIVERABLE} and
+ * {@link #REFUSED}. {@link #DELIVERED} may, since a handler that ran and threw is still a handler that ran, and its
+ * exception propagates after this outcome has been reported. {@link #FILTERED}, {@link #DEFERRED} and
+ * {@link #UNAVAILABLE} never do.
+ * <p>
+ * So an outcome that arrives on its own, with nothing thrown, is one of those three, and a caller can tell an event
+ * nothing was able to receive from an event something tried to receive and failed on without reading any state a
+ * concurrent lifecycle call could have changed in the meantime.
  * <p>
  * All six come out of one evaluation, not a check taken before or after dispatch. A check taken separately would
  * let a {@code stop()}, a {@code pauseSubscription} or a {@code cancelSubscription} land between the check and the

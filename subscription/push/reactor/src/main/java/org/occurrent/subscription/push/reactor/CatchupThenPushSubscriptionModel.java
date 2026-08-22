@@ -305,18 +305,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                         // the entry still here and leaves it alone, or finds it gone and relaunches. Without that
                         // the start could see a replay still running, do nothing, and leave a launcher no one ever
                         // calls again.
-                        boolean startedWhileThisReplayWasStopping;
                         synchronized (this) {
                             forget(subscriptionId, replayDone);
                             catchupOwners.remove(subscriptionId, replayDone);
-                            startedWhileThisReplayWasStopping = !stopped && !shuttingDown && startResumesSubscriptionsAutomatically;
                         }
-                        // Outside the monitor. relaunchInterruptedReplay takes it again and re-checks, so a
-                        // start(true) racing this still cannot launch a second replay, and the replay this starts
-                        // is free to take the monitor for its own completion rather than waiting for this thread.
-                        if (startedWhileThisReplayWasStopping) {
-                            relaunchInterruptedReplay(subscriptionId);
-                        }
+                        // The lifecycle state is read where the replay is installed rather than here, because a
+                        // stop() or a start(false) taking the monitor in between would make an answer read here
+                        // stale by the time it was acted on.
+                        relaunchInterruptedReplay(subscriptionId, true);
                     }
                     replayDone.tryEmitValue(caughtUp);
                 },
@@ -346,7 +342,19 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     // resumeSubscription, or two starts) would otherwise both see nothing replaying and put two replays on one
     // handover, and the replay phase folds every event without consulting the de-dup cache, so the history would be
     // applied twice. Lifecycle calls are rare enough that the lock costs nothing.
-    private synchronized Sinks.@Nullable One<Boolean> relaunchInterruptedReplay(String subscriptionId) {
+    private Sinks.@Nullable One<Boolean> relaunchInterruptedReplay(String subscriptionId) {
+        return relaunchInterruptedReplay(subscriptionId, false);
+    }
+
+    // onlyWhenStartResumesSubscriptionsAutomatically is for a replay relaunching itself after a stop. It asks the
+    // lifecycle state here, where the replay is installed, so a stop() or a start(false) cannot slip in between
+    // the question and the answer being acted on. An explicit resumeSubscription passes false and is unaffected.
+    private synchronized Sinks.@Nullable One<Boolean> relaunchInterruptedReplay(String subscriptionId,
+                                                                                boolean onlyWhenStartResumesSubscriptionsAutomatically) {
+        if (onlyWhenStartResumesSubscriptionsAutomatically
+                && (stopped || shuttingDown || !startResumesSubscriptionsAutomatically)) {
+            return null;
+        }
         Supplier<Sinks.One<Boolean>> launch = interruptibleReplays.get(subscriptionId);
         // catchupOwners, not replayingSubscriptions. The latter is released at the drain, before this model drops
         // the launcher, so a resume landing in that window would read "launcher present, nothing replaying", take

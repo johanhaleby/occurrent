@@ -338,12 +338,12 @@ class ReactiveHandoverTest {
     }
 
     /**
-     * A failure in the live phase arrives after the catch-up has already reported itself done, so nothing is
-     * waiting to be told. The engine records it as terminal, which is what every later payload is refused with,
-     * and that refusal is permanent for the life of this engine.
+     * A live handler that fails is not the engine failing. Its error reaches the caller that offered that payload,
+     * through that payload's own acknowledgement, and the engine goes on accepting the next one. Only a catch-up
+     * that fails makes the engine refuse for good, which the test below covers.
      */
     @Test
-    void a_live_phase_failure_makes_the_engine_refuse_permanently() {
+    void a_live_handler_that_fails_does_not_make_the_engine_refuse_permanently() {
         RuntimeException liveFailure = new IllegalStateException("live boom");
         ReactiveHandover<String> handover = ReactiveHandover.create(
                 payload -> payload.equals("L1") ? Mono.error(liveFailure) : Mono.empty(), payload -> payload,
@@ -490,6 +490,66 @@ class ReactiveHandoverTest {
 
         // The places are given back as the payloads are delivered, so the engine takes offers again.
         StepVerifier.create(handover.acceptReportingDelivery("after")).expectNext(true).verifyComplete();
+    }
+
+    /**
+     * The drain is over when the payloads taken in while the history was being read have all been handled, and
+     * payloads taken in afterwards are live delivery however early they arrive. Counting deliveries alone could
+     * not tell the two apart, so a payload taken in after the boundary ended the drain in place of one taken in
+     * before it, and a source that frees the subscription on that signal did so with a buffered payload still
+     * waiting.
+     */
+    @Test
+    void a_payload_taken_in_after_the_history_was_read_does_not_end_the_drain() throws Exception {
+        CountDownLatch firstBufferedEntered = new CountDownLatch(1);
+        CountDownLatch releaseFirstBuffered = new CountDownLatch(1);
+        List<String> delivered = new CopyOnWriteArrayList<>();
+        ReactiveHandover<String> handover = ReactiveHandover.create(
+                payload -> Mono.fromRunnable(() -> {
+                    if (payload.equals("buffered-1")) {
+                        firstBufferedEntered.countDown();
+                        awaitLatchQuietly(releaseFirstBuffered);
+                    }
+                    delivered.add(payload);
+                }), payload -> payload, CatchupThenLiveOptions.defaults(), "test payload");
+
+        // Two payloads arrive while the history is still being read, so both belong to the drain.
+        handover.accept("buffered-1").subscribe(ignored -> {
+        }, ignored -> {
+        });
+        handover.accept("buffered-2").subscribe(ignored -> {
+        }, ignored -> {
+        });
+
+        List<String> signals = new CopyOnWriteArrayList<>();
+        FakeSource source = source(List.of(), false);
+        source.onHistoryDone = () -> signals.add("historyDone");
+        source.onLiveDrained = () -> signals.add("liveDrained");
+        StepVerifier.create(handover.catchUp(source)).expectNext(true).verifyComplete();
+
+        assertThat(firstBufferedEntered.await(5, TimeUnit.SECONDS))
+                .as("the drain has started and is handling the first of the two buffered payloads")
+                .isTrue();
+        assertThat(signals).containsExactly("historyDone");
+
+        // Taken in after the history was read, so this one is live delivery and must not end the drain.
+        handover.accept("after-the-boundary").subscribe(ignored -> {
+        }, ignored -> {
+        });
+        Thread.sleep(200);
+        assertThat(signals)
+                .as("a payload taken in after the boundary cannot end a drain it was never part of")
+                .containsExactly("historyDone");
+
+        releaseFirstBuffered.countDown();
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!signals.contains("liveDrained") && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(signals).as("the drain ends once both buffered payloads have been handled")
+                .containsExactly("historyDone", "liveDrained");
+        assertThat(delivered).startsWith("buffered-1", "buffered-2");
     }
 
     private static void awaitLatchQuietly(CountDownLatch latch) {
@@ -852,6 +912,8 @@ class ReactiveHandoverTest {
         private Runnable onReplayStarted;
         private Runnable onReplayCompleted;
         private Runnable onReplayAbandoned;
+        private Runnable onHistoryDone;
+        private Runnable onLiveDrained;
         private int replayCallCount = 0;
         private int markCaughtUpCallCount = 0;
         private int stopAfter = Integer.MAX_VALUE;
@@ -876,6 +938,20 @@ class ReactiveHandoverTest {
         private FakeSource(List<String> history, boolean alreadyCaughtUp) {
             this.history = history;
             this.alreadyCaughtUp = alreadyCaughtUp;
+        }
+
+        @Override
+        public void historyDone() {
+            if (onHistoryDone != null) {
+                onHistoryDone.run();
+            }
+        }
+
+        @Override
+        public void liveDrained() {
+            if (onLiveDrained != null) {
+                onLiveDrained.run();
+            }
         }
 
         @Override

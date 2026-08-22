@@ -221,6 +221,20 @@ public final class ReactiveHandover<T> {
     // until the drain hands it to the sink, and then in the sink's own queue until its handler runs, so counting
     // only one of the two would leave the other unbounded. maxBufferedEvents caps this, not either queue.
     private final java.util.concurrent.atomic.AtomicInteger liveBacklog = new java.util.concurrent.atomic.AtomicInteger();
+    // Guards taking a place, stamping a payload with its turn, and queueing it, so the three cannot interleave.
+    private final Object admission = new Object();
+    // How many live payloads have been taken in, ever. A payload's own number is its turn, and the drain boundary
+    // is the last turn taken in while the history was still being read.
+    private final java.util.concurrent.atomic.AtomicLong admitted = new java.util.concurrent.atomic.AtomicLong();
+    // The last turn that belongs to the drain. A payload taken in after this one is live delivery, not part of
+    // what was buffered while the history was read, however early it happens to be delivered.
+    //
+    // This and the admission guard are two guards on one property, on purpose. The guard makes the queue order and
+    // the turn order agree, which is what keeps deliveries in step with the count. The turn check makes the count
+    // right whatever the order turns out to be. Either alone holds the property today, so neither can be
+    // falsified by a test while the other is in place, and the pair is what keeps a later change to one of them
+    // from quietly ending the drain early.
+    private final java.util.concurrent.atomic.AtomicLong drainBoundaryTurn = new java.util.concurrent.atomic.AtomicLong(-1L);
     private volatile boolean stopped = false;
     // Set once, right before the buffered live payloads are drained on a successful catch-up, and never cleared
     // afterwards, mirroring BlockingHandover's live field. acceptIfLive(..) reads this to refuse a payload outright,
@@ -386,27 +400,19 @@ public final class ReactiveHandover<T> {
     // any more. The handling below stays as defence, not as a path anything reaches today, which is why no test
     // drives it.
     private void offerToLiveSink(Item item, MonoSink<Boolean> ackSink) {
-        if (!reserveBacklogPlace()) {
-            ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents)));
-            return;
+        // Taking a place, stamping the payload with its turn and queueing it are one step. Apart, a payload could
+        // take a place and be queued behind one that took its place later, and the drain boundary below counts by
+        // turn, so the two have to agree.
+        synchronized (admission) {
+            if (liveBacklog.get() >= maxBufferedEvents) {
+                ackSink.error(new PreDispatchRefusalException(this, HandoverMessages.bufferOverflow(maxBufferedEvents)));
+                return;
+            }
+            liveBacklog.incrementAndGet();
+            Item stamped = item.withTurn(admitted.incrementAndGet());
+            pendingOffers.add(new PendingOffer(stamped, ackSink, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
         }
-        pendingOffers.add(new PendingOffer(item, ackSink, System.nanoTime() + CONCURRENT_EMISSION_RETRY_WINDOW.toNanos()));
         drainPendingOffers();
-    }
-
-    // Taken before the payload is queued, so a slow handler holding the drain cannot let callers pile up behind it
-    // without limit. Compare and set rather than a read followed by an increment, so two callers arriving together
-    // cannot both take the last place.
-    private boolean reserveBacklogPlace() {
-        while (true) {
-            int taken = liveBacklog.get();
-            if (taken >= maxBufferedEvents) {
-                return false;
-            }
-            if (liveBacklog.compareAndSet(taken, taken + 1)) {
-                return true;
-            }
-        }
     }
 
     private void drainPendingOffers() {
@@ -550,11 +556,14 @@ public final class ReactiveHandover<T> {
                 .then(Mono.fromRunnable(() -> {
                     drainedSource.set(source);
                     source.historyDone();
-                    // Taken after historyDone, so nothing that arrives from here on is counted as part of the
-                    // drain. Read from the backlog rather than from the sink's own queue, because a payload taken
-                    // in while the history was being read can still be waiting for the drain to hand it over, and
-                    // leaving those out would end the drain while some of them were still to be delivered.
-                    remainingInDrain.compareAndSet(-1L, liveBacklog.get());
+                    // Taken after historyDone, under the same guard admission uses, so every payload already
+                    // taken in has a turn at or below the boundary and every later one is above it. Counting
+                    // deliveries alone was not enough: a payload taken in after the boundary, delivered before one
+                    // taken in before it, would count against the drain and end it early.
+                    synchronized (admission) {
+                        drainBoundaryTurn.compareAndSet(-1L, admitted.get());
+                        remainingInDrain.compareAndSet(-1L, liveBacklog.get());
+                    }
                 }))
                 .then(recordMarker)
                 .doOnSuccess(ignored -> {
@@ -641,9 +650,13 @@ public final class ReactiveHandover<T> {
     // Counts one delivered payload against the buffered set, and tells the source once that set is exhausted. Only
     // ever counts down from a taken count, so a delivery before the history read finished, or after the drain is
     // over, changes nothing.
-    private void countTowardsDrain() {
+    private void countTowardsDrain(Item item) {
         long remaining = remainingInDrain.get();
         if (remaining <= 0L) {
+            return;
+        }
+        long boundary = drainBoundaryTurn.get();
+        if (boundary < 0L || item.turn() > boundary) {
             return;
         }
         if (remainingInDrain.decrementAndGet() == 0L) {
@@ -658,7 +671,7 @@ public final class ReactiveHandover<T> {
             if (item.ack() != null) {
                 liveBacklog.decrementAndGet();
             }
-            countTowardsDrain();
+            countTowardsDrain(item);
         });
     }
 
@@ -708,6 +721,13 @@ public final class ReactiveHandover<T> {
     // A replayed payload has a null ack; a live payload carries the MonoSink whose completion (with whether it was
     // genuinely delivered) lets the caller acknowledge. The deliver supplier is bound at creation time, so Item
     // needs no type parameter of its own.
-    private record Item(Supplier<Mono<Void>> deliver, String dedupKey, @Nullable MonoSink<Boolean> ack) {
+    private record Item(Supplier<Mono<Void>> deliver, String dedupKey, @Nullable MonoSink<Boolean> ack, long turn) {
+        private Item(Supplier<Mono<Void>> deliver, String dedupKey, @Nullable MonoSink<Boolean> ack) {
+            this(deliver, dedupKey, ack, Long.MAX_VALUE);
+        }
+
+        private Item withTurn(long turn) {
+            return new Item(deliver, dedupKey, ack, turn);
+        }
     }
 }
