@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 67
-updated_at: '2026-08-22T17:01:27+00:00'
-updated_by: 'orchestrator rel34: fresh reviews landed on five PRs, 933 holds on a documented exception'
+revision: 68
+updated_at: '2026-08-22T17:03:48+00:00'
+updated_by: 'orchestrator rel34: 914 falsified, the sweep found both overclaims and passed them'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -479,8 +479,9 @@ units:
         either rejects values above it or honours them.
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: await the adversarial verdict on 6bbcd4077 and CI, then merge if both clear
-    last_meaningful_progress_at: '2026-08-22T16:43:44+00:00'
+    next_action: worker fixes two self-contradictions, adds a biting test for retryUntil, corrects the
+      :67 javadoc
+    last_meaningful_progress_at: '2026-08-22T17:03:48+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -579,6 +580,34 @@ units:
           doc had drifted above retryUntil. Copilot did not flag it and it compiles either way.'
         via: worker report
         at: '2026-08-22T16:43:44+00:00'
+      sweep_ran_judgement_failed:
+        note: 'FALSIFIED on the sweep and the narrowed property. THE SWEEP HIT BOTH SURVIVING OVERCLAIMS
+          AND PASSED THEM, since both contain ''never quietly shortens'' which the worker grepped for.
+          So the mechanism worked and the judgement on the hits did not, and sweeping harder is not the
+          fix. FALSIFIER 1: the property is stated TWICE in AppliedAppendStore''s own javadoc and the
+          two disagree. Line 143-145 says the reactive one returns WITHIN timeout; line 155-157 says it
+          returns after timeout PLUS the in-flight call. 155 is the leftover pre-narrowing text, so the
+          narrowing was added above it and the old absolute left below, which is the exact failure the
+          round-2 comment described, committed inside the fix for it. Empirically 155 is false: readOnceBoundedBy
+          calls read.block(Duration.ofNanos(remainingNanos)) which cancels the in-flight read, measured
+          at 158ms against a 3000ms read under a 100ms timeout where 155 predicts 3100ms. The worker''s
+          own invariant carries the same error, since ''never ends one already running'' is true of blocking
+          and false of reactive. FALSIFIER 2: fix 3 made the ceiling javadoc false on both stacks and
+          in ADR 0132. Both say no configured value reaches the ceiling; fix 3 caps the property at EXACTLY
+          the ceiling. The re-checkable form needs no build: OccurrentPropertiesTest.allows_exactly_the_number_of_attempts_the_store_will_make
+          asserts setMaxAttempts(MAX_ATTEMPTS_CEILING) is accepted while MongoAppliedAppendStore.java:102
+          says no configured value reaches it. ONE TEST IN THIS PR ASSERTS THE NEGATION OF ONE JAVADOC
+          SENTENCE IN THIS PR. Second half: a policy carrying its own onRetryExhaustedThrow has it silently
+          replaced, since the store''s wrapper errors first. SECONDARY: retryUntil''s context fix has
+          NO test that bites, reverting it leaves 23 of 23 green, and it is the wrapper the suppressed
+          comment named. And MongoAppliedAppendStore:67 states DEFAULT_MAX_ATTEMPTS as an invariant of
+          a caller-supplied argument, where the reactive twin at :77 gets it right. HELD with evidence:
+          both wrappers'' context across three entry points, the ceiling accepting 1/999/1000 and rejecting
+          1001/MAX_VALUE/0/-1/MIN_VALUE naming both numbers, constant drift tied in both starter modules,
+          fixes 2 and 3 reddening on revert, every javadoc block landing on its member 15 of 15 and 13
+          of 13, and the zero and already-expired cases making exactly one read on both stacks.'
+        via: adversarial verify subagent, empirical with mocked Mongo
+        at: '2026-08-22T17:03:48+00:00'
     assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:30:57Z after
       a scoping read, which is why #878 moved here from U5. The read found two collisions the original
       split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
