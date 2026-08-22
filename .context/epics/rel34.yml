@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 69
-updated_at: '2026-08-22T17:06:08+00:00'
-updated_by: 'orchestrator rel34: 901 gate clear but for the adversarial pass, docs workaround claim checked'
+revision: 70
+updated_at: '2026-08-22T17:09:06+00:00'
+updated_by: 'orchestrator rel34: U2 DONE, PR 901 merged closing four issues, U14 widened'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -111,37 +111,32 @@ units:
     goal: 'updateEvent no longer rewrites the stored position as a BSON string and no longer drops dcbTags.
       Invariant: a document round-tripped through convertToDocument preserves position as int64 and preserves
       dcbTags, at all three write-back sites (SpringMongoEventStore:356, MongoEventStore:756, ReactorMongoEventStore:904).'
-    phase: BLOCKED
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
-    session: ListAgents name brave-sammet-c975a0-82, worktree brave-sammet-c975a0, chip task_8def816f,
-      Sonnet/high
+    session: null
     deliverables:
     - check: pr_merged
       ref: 901
-      met: false
-      evidence: ''
+      met: true
+      evidence: 'PR 901 MERGED 2026-08-22 as squash 80d61fcbc, CAS-pinned to the verified head a481bcbae,
+        branch deleted. Closed FOUR issues: #876, #904, #927 and #907, all CLOSED and verified.'
     - check: issue_closed
       ref: 876
-      met: false
-      evidence: ''
+      met: true
+      evidence: '#876 CLOSED by PR 901 (squash 80d61fcbc).'
     - check: issue_closed
       ref: 927
-      met: false
-      evidence: ''
+      met: true
+      evidence: '#927 CLOSED by PR 901 (squash 80d61fcbc).'
     - check: issue_closed
       ref: 907
-      met: false
-      evidence: ''
-    blocking_on:
-    - what: 'PR 901 held by the orchestrator gate. Clears when the worker pushes a test for an original
-        with no tags whose updater forges some, proving the withoutExtension(TAGS) branch, plus #927''s
-        streamId and streamVersion, and the gate re-runs from the top on the new head.'
-      since: '2026-08-22T15:11:57+00:00'
-      recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: merge on the adversarial verdict, every other gate fact is already satisfied
-    last_meaningful_progress_at: '2026-08-22T17:06:08+00:00'
+      met: true
+      evidence: '#907 CLOSED by PR 901 (squash 80d61fcbc).'
+    blocking_on: []
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T17:09:06+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:52:47Z; identity resolved by grepping the session transcript
@@ -331,6 +326,23 @@ units:
           defect and several were invisible to exactly this combination of facts.'
         via: gh api actions runs, pulls reviews, graphql reviewThreads
         at: '2026-08-22T17:06:08+00:00'
+      adversarial_held_on_the_stated_claim:
+        note: 'HELD on the claim as stated, FALSIFIED on the broader property the DELIVERY_RESULT framed
+          it as. Merged because the SHIPPED prose is correctly scoped: the changelog says ''on every one
+          of the three MongoDB event stores'', and #927''s own body scopes itself the same way. The over-broad
+          framing was in a PR comment, not in anything that ships. Verified exhaustively on the three
+          Mongo stores: returned event cross-checked against the document reconstructed via DcbDocumentMapper.toCloudEvent
+          IN THE SAME TEST across six scenarios; convertToDocument writes exactly two values from a parameter
+          rather than the event, streamId and streamVersion, both now covered, and a full BSON key-and-type
+          diff found no sixth instance; chain order not load-bearing since the four preserve* methods
+          touch disjoint extensions; #907''s .log() removed rather than downgraded with zero .log( calls
+          left in the reactor store; five mutations each reddening between 2 and 7 of 8 tests, and the
+          streamIdentity mutation reddening 4 of 8 on all three stores. Minor reporting inaccuracy to
+          remember: the DELIVERY_RESULT claimed nine tests per store and twenty-seven total; surefire
+          reports EIGHT per store and twenty-four. The grep -c ''@Test'' count was inflated by the @Testcontainers
+          annotation.'
+        via: adversarial verify subagent
+        at: '2026-08-22T17:09:06+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
@@ -1852,9 +1864,9 @@ units:
       is needed.'
   U14:
     issue: 905
-    goal: 'InMemoryEventStore.updateEvent reapplies the original event''s position, closing the same store-owned-field
-      loss #876 fixed for the three MongoDB stores, so a fresh replacement event built by an update function
-      does not silently vanish from a DCB read filtered on position.'
+    goal: InMemoryEventStore.updateEvent reapplies EVERY value the store owns, not only position, so a
+      fresh replacement event neither loses them nor lets an updater forge them. The property is asserted
+      in the TCK rather than per store, so a fourth implementation cannot miss it the way this one did.
     phase: PLANNED
     health: PROGRESSING
     swept: false
@@ -1872,8 +1884,25 @@ units:
       evidence: ''
     blocking_on: []
     next_action: dispatch after PR 901 merges, since both build on its fix
-    last_meaningful_progress_at: '2026-08-22T08:40:58+00:00'
-    observed: {}
+    last_meaningful_progress_at: '2026-08-22T17:09:06+00:00'
+    observed:
+      widened_by_the_901_pass:
+        note: 'WIDENED from #905''s position-only scope by the adversarial pass on PR 901, which found
+          TWO MORE instances in InMemoryEventStore beyond the one #905 names. Its only preserve* call
+          is preserveAppendId at line 569, against four in each Mongo store. (1) A fresh replacement event
+          drops streamId and streamVersion, and the stream then becomes UNREADABLE, a NullPointerException
+          in calculateStreamVersion at line 743 from read() at 631. That is worse than the Mongo symptom,
+          which merely returned a lying event. (2) A forged identity is accepted verbatim: the event stays
+          physically in stream:1 while reporting streamversion 999, and read(''stream:1'').version() then
+          returns 999, which is the value stream-level optimistic concurrency is written against. THE
+          STRUCTURAL FINDING IS THE VALUABLE PART. This was invisible because the property was landed
+          as three per-store MongoDB test files rather than in the TCK, where its own twin already lives:
+          EventStoreOperationsConformance:313-325 asserts the append id survives a fresh replacement and
+          its comment says ''the store owns the append id the same way it owns streamId and streamVersion'',
+          with no sibling for the other fields. InMemoryEventStoreOperationsConformanceTest extends that
+          class, so a TCK-level test would have caught this on the first run. U14 puts it in the TCK.'
+        via: adversarial verify subagent on PR 901
+        at: '2026-08-22T17:09:06+00:00'
     assessment: 'Fourth store, same defect class. Small. Shipping #876 fixed on three of four stores is
       an asymmetry the changelog would have to caveat, and InMemoryEventStore is what people write their
       tests against, so the gap is most visible exactly where users are trying to prove their code works.
