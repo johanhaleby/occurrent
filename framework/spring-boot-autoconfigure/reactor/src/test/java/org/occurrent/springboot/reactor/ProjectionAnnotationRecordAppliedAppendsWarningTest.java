@@ -246,7 +246,7 @@ class ProjectionAnnotationRecordAppliedAppendsWarningTest {
                 .thenReturn(subscription);
         ComposedCatchupModel composedCatchupModel = new ComposedCatchupModel();
         composedCatchupModel.suppliedBy(model);
-        composedCatchupModel.identifiedAs(model);
+        composedCatchupModel.identifiedAs((SubscriptionModelCapability) model);
         composedCatchupModel.defaultBypassesCatchup();
 
         new ApplicationContextRunner()

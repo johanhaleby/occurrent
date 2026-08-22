@@ -25,6 +25,7 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.springboot.reactor.ComposedCatchupModel;
 import org.occurrent.subscription.api.reactor.CheckpointStorage;
+import org.occurrent.subscription.api.reactor.SubscriptionModelCapability;
 import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 
@@ -77,15 +78,38 @@ class ReactiveComposedCatchupModelWiringTest {
         }
     }
 
+    @Test
+    void the_holder_is_identified_with_the_exact_durable_model_the_bean_method_returns() {
+        // Issue 903: identifiedAs must be given the durable model the bean method actually returns, not
+        // catchupLayer (suppliedBy's argument, one layer further in). A regression that passed catchupLayer to
+        // identifiedAs instead would still pass every other test in this file and in
+        // ProjectionAnnotationRecordAppliedAppendsWarningTest, since those all build the holder by hand.
+        try (GenericApplicationContext applicationContext = new GenericApplicationContext()) {
+            applicationContext.registerBean("userEventStore", EventStore.class, () -> positionOrderedEventStore(true));
+            applicationContext.refresh();
+
+            ComposedCatchupModel holder = new ComposedCatchupModel();
+            Object durableModel = composeThroughTheBeanMethod(applicationContext, holder);
+
+            assertThat(durableModel).isInstanceOf(SubscriptionModelCapability.class);
+            assertThat(holder.isDefaultKnownLiveOnlyFor((SubscriptionModelCapability) durableModel)).isTrue();
+        }
+    }
+
     // Calls OccurrentReactiveMongoAutoConfiguration.occurrentDurableSubscriptionModel(..) itself, the production
     // bean method, rather than reproducing its composeCatchupLayer(..) call and filling the holder by hand, so a
-    // regression that stops the bean method from calling suppliedBy fails this test instead of passing it.
+    // regression that stops the bean method from calling suppliedBy or identifiedAs fails this test instead of
+    // passing it.
     private static ComposedCatchupModel fillHolderThroughTheBeanMethod(GenericApplicationContext applicationContext) {
         ComposedCatchupModel holder = new ComposedCatchupModel();
-        OccurrentReactiveMongoAutoConfiguration<Object> autoConfiguration = new OccurrentReactiveMongoAutoConfiguration<>();
-        autoConfiguration.occurrentDurableSubscriptionModel(mock(ReactiveMongoOperations.class), mock(CheckpointStorage.class),
-                new OccurrentProperties(), applicationContext.getBeanProvider(DcbEventStore.class), applicationContext, holder);
+        composeThroughTheBeanMethod(applicationContext, holder);
         return holder;
+    }
+
+    private static Object composeThroughTheBeanMethod(GenericApplicationContext applicationContext, ComposedCatchupModel holder) {
+        OccurrentReactiveMongoAutoConfiguration<Object> autoConfiguration = new OccurrentReactiveMongoAutoConfiguration<>();
+        return autoConfiguration.occurrentDurableSubscriptionModel(mock(ReactiveMongoOperations.class), mock(CheckpointStorage.class),
+                new OccurrentProperties(), applicationContext.getBeanProvider(DcbEventStore.class), applicationContext, holder);
     }
 
     private static EventStore positionOrderedEventStore(boolean writesPosition) {

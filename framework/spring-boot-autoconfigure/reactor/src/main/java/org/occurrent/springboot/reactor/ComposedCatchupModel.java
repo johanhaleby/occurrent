@@ -49,7 +49,7 @@ public final class ComposedCatchupModel {
     private volatile boolean supplied = false;
     private volatile @Nullable ReplayAwareSubscriptions replayAware;
     private volatile boolean defaultBypassesCatchup = false;
-    private volatile @Nullable Object composedModel;
+    private volatile @Nullable SubscriptionModelCapability composedModel;
 
     /**
      * Supplies the composed subscription model this instance answers for, {@code instanceof}-checked against
@@ -104,10 +104,12 @@ public final class ComposedCatchupModel {
      * {@code getBean(FluxSubscriptionModel.class)} lookup) resolves to. {@link #isDefaultKnownLiveOnlyFor} compares
      * a projection's own model against this reference, not against {@link #suppliedBy}'s {@code catchupLayer}: this
      * stack's capability lookup is a direct {@code instanceof} with no unwrap (ADR 132 decision 8), so a projection
-     * never actually sees {@code catchupLayer}, only the durable wrapper around it. Called at most once, by the same
-     * bean method that calls {@link #suppliedBy} and {@link #defaultBypassesCatchup()}.
+     * never actually sees {@code catchupLayer}, only the durable wrapper around it. Typed as
+     * {@link SubscriptionModelCapability} rather than {@link Object}, the same type
+     * {@link #isDefaultKnownLiveOnlyFor} compares it against, since the durable model always satisfies it. Called at
+     * most once, by the same bean method that calls {@link #suppliedBy} and {@link #defaultBypassesCatchup()}.
      */
-    public void identifiedAs(Object durableModel) {
+    public void identifiedAs(SubscriptionModelCapability durableModel) {
         this.composedModel = requireNonNull(durableModel, "durableModel cannot be null");
     }
 
