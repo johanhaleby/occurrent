@@ -1,6 +1,6 @@
 schema_version: 1
 epic: brk
-revision: 167
+revision: 168
 updated_at: 2026-08-19T12:05:00Z
 updated_by: local_5be2772d-d436-44c5-b62d-155a712d6410
 baseline: {repo: johanhaleby/occurrent, branch: main}
@@ -303,16 +303,16 @@ units:
   U16:
     issue: 884
     goal: "Fix #893 item 21: KafkaCloudEventBridgeTest.resolver_alone_falls_back_to_catchAllDestination_subscribing_by_pattern_for_the_per_type_resolver times out on one of two events under load (three CI sightings, latest main run 32565000813). Make the test wait on a signal from the bridge or consumer assignment rather than a fixed window, or fix the pattern-subscription readiness it exposes if the wait is not the cause. Test-only unless the investigation proves a production gap."
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
     session: null
     deliverables:
-      - {check: pr_merged, ref: null, met: false}
+      - {check: pr_merged, ref: 920, met: true, evidence: "squash cfee1477b, CAS pin ef65c4d matched, branch deleted on tip match, #884 closed; Maven workflow success on the head, Copilot approval, Sonnet verify MERGE-SAFE (wait is the AdminClient assignment signal on the bridge's own group, 10/10 both ways locally since the race needs CI load, reported honestly)"}
     blocking_on: []
-    next_action: "dispatched 2026-08-22T12:0xZ as a Sonnet worktree subagent off origin/main, dec-0024. #884 is the same test (rel34 U17 retired in favour of this unit 2026-08-22T12:5xZ), the PR closes #884 and clears #893 item 21"
-    last_meaningful_progress_at: 2026-08-22T12:00:00Z
+    next_action: "DONE 2026-08-22T14:1xZ. Adjacent pre-existing cold-start gap (auto.offset.reset latest on a new group) filed as #893 item 34 for Johan's decision"
+    last_meaningful_progress_at: 2026-08-22T14:10:00Z
   U17:
     issue: 893
     goal: "Decide whether RabbitMqCloudEventBridgeConnectionRecoveryTest.a_held_deferred_delivery_tag_across_a_forced_connection_recovery (four sightings, #893 items 17 and 30, latest rel34 PR 914 misc java-21) is a real race in PR 895's recovery path (loss-class, fix in brk), a test racing its own fixture (fix the test), or infrastructure. The test pins the held-tag-survives-recovery guarantee, so a flake note is not an acceptable end state."
