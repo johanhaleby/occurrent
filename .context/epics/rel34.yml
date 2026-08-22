@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 64
-updated_at: '2026-08-22T16:46:00+00:00'
-updated_by: 'orchestrator rel34: U10 down to one sentence, U16 answered and routed two new issues'
+revision: 65
+updated_at: '2026-08-22T16:49:15+00:00'
+updated_by: 'orchestrator rel34: 919 held on four suppressed findings that sat five hours unread'
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -1053,9 +1053,9 @@ units:
         with a test carrying a timeout.
       since: '2026-08-22T15:11:57+00:00'
       recheck_after: '2026-08-22T15:56:57+00:00'
-    next_action: worker narrows one javadoc sentence, then the prose-only delta lets the verdict carry
-      and I merge
-    last_meaningful_progress_at: '2026-08-22T16:46:00+00:00'
+    next_action: worker settles the onBeforeRetry claim empirically across four sites, then requests a
+      fresh Copilot review
+    last_meaningful_progress_at: '2026-08-22T16:49:15+00:00'
     observed:
       gate_919:
         note: 'PR 919 opened, all ten dispatched units now have PRs. TWO FAILURES on test (example-projection)
@@ -1119,6 +1119,28 @@ units:
           since a.initCause(a) throws IllegalArgumentException ''Self-causation not permitted''.'
         via: adversarial verify subagent
         at: '2026-08-22T16:46:00+00:00'
+      four_suppressed_findings_sat_five_hours:
+        note: 'NOT MERGED despite the javadoc narrowing being correct and the diff being comments only,
+          which does let the adversarial verdict carry. Copilot''s latest review on 919 is on fe69724e3,
+          HOURS OLD, says ''Changes recommended'', and carries FOUR suppressed comments, TWO of them flagged
+          ''previously missed, in code that hasn''t changed since the last review''. They have been unaddressed
+          since 11:44:27Z. Suppressed comments open no threads, so the PR''s honest ''0 unresolved threads''
+          was blind to all four. This is the ninth time today that reading a review BODY found what the
+          thread count could not. The finding, one defect in four places (RabbitMqCloudEventBridge:853,
+          domain/RabbitMqDomainEventBridge:809, DefaultRabbitMqCloudEventBridgeFactory:84, domain/DefaultRabbitMqDomainEventBridgeFactory:79):
+          each logs ''Attempt {} of {} failed. Retrying in {}.'' from onBeforeRetry, which Copilot says
+          fires AFTER the backoff with info describing the UPCOMING attempt, so the first failure logs
+          as attempt 2 and the delay is announced after it elapsed. It recommends onRetryableError. I
+          DID NOT RELAY THIS AS SETTLED, because two credible sources contradict. Structurally Copilot
+          looks right: in RetryExecution at this head onBeforeRetry is line 179, onRetryableError 200,
+          the sleep 207, currentAttempt++ 215, so 179 is the top of the NEXT iteration and fires after
+          the previous sleep. Empirically it looks wrong: the FIRST adversarial pass ran the two-failures
+          test and observed ''Attempt 1 of 10'' then ''Attempt 2 of 10'', which is correct numbering.
+          Likely reconciliation is that the halves separate, since BeforeRetryInfoImpl is built from retryInfoWithPrevBackoff
+          and lastErr, so the NUMBER may describe the failed attempt while the TIMING is still wrong.
+          Routed to the worker to settle by running it and to report which half holds.'
+        via: gh api pulls/919/reviews + my read of RetryExecution at pr919d
+        at: '2026-08-22T16:49:15+00:00'
     assessment: 'Decided IN by derivation, not asked: AGENTS.md:120 requires every component to ship production
       ready including surviving a transient outage of the store it talks to, and the broker modules ship
       for the first time in 0.34.0. The earlier decline for PR 861 is one of the deferrals the triage
