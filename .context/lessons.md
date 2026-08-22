@@ -2276,6 +2276,24 @@ PR 900's head at `08:49:51Z`. All three came from `gh` and all three still match
 while 60 timestamps typed in the same file across the same day were fabricated. Every completion
 claim held too, four merge SHAs and five issue states, because those were fetched.
 
+Sweep the prose file, not only the schema file, and scope the repair to what you wrote. rel34 swept
+its epic state four times and never touched `ORCHESTRATOR.md`, where the same three shapes turned up
+41 redacted values, 11 without seconds and one in the future. Prose is where these accumulate,
+because a schema field invites a format and a sentence invites a guess.
+
+That file is shared, which makes the repair a different problem from the audit. Classify every hit by
+the section that owns it before changing anything. rel34's first attempt repaired 17 values, three of
+which were sdi's writing sitting under a rel34 heading, and two of those were quotations sdi had
+deliberately left because it was describing the defect rather than asserting the value. Reverted and
+redone at 9, scoped to rel34's own claims.
+
+Two rules came out of that. Never splice a bare time-of-day into a line whose date came from
+somewhere else, since reconstruction gives you a whole instant and a bare `17:1xZ` on a line dated
+four days earlier cannot take its time from today's commit. And a value that trips the sweep while
+being a quotation, or a measured value written to the minute, is not repaired: widen the sweep to
+stop flagging it, because padding a measured `13:11Z` to `13:11:00Z` invents a second in order to
+look verifiable, which is this whole defect wearing the costume of the fix.
+
 A redacted-minute timestamp is the worst variant, because it borrows the credibility of care.
 Both fleets wrote times as `13:0xZ` or `07:4xZ`, hour known and minute not claimed, which reads as a
 deliberate statement about precision. rel34 had fourteen. Two things compound. No audit either fleet
