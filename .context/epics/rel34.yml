@@ -1,8 +1,8 @@
 schema_version: 1
 epic: rel34
-revision: 14
-updated_at: '2026-08-22T09:40:00+00:00'
-updated_by: orchestrator session rel34-epic-registration-8c2066 (U2 re-verify HELD on b733100d8)
+revision: 15
+updated_at: '2026-08-22T09:55:00+00:00'
+updated_by: orchestrator session rel34-epic-registration-8c2066 (U1 DONE and merged)
 baseline:
   repo: johanhaleby/occurrent
   branch: main
@@ -37,7 +37,7 @@ units:
       Changes entry (fold the development-history framing per AGENTS.md:75), the news post on docs/append-identity,
       and pages/docs/docs.md on docs/802-push-observation-hook including the non-compiling boolean lambda
       sample.'
-    phase: RUNNING
+    phase: DONE
     health: PROGRESSING
     swept: false
     depends_on: []
@@ -46,16 +46,24 @@ units:
     deliverables:
     - check: pr_merged
       ref: 900
-      met: false
-      evidence: ''
+      met: true
+      evidence: 'CAS-MERGED 2026-08-22T09:5xZ pinned to d4df542fdc93d8fa6d37f6afb5348f0c3ef628d5, squash
+        a45a17a08. Gate: Copilot reviewed the EXACT current head at 08:49:51Z (commit_id compared, not
+        presence), Approval recommended, 0 new comments, Balanced, no suppressed block with the read confirmed
+        to return rows; 0 unresolved threads by isResolved==false alone; mergeable; prose-only so no adversarial
+        pass, and no workflow ran because markdown-only pushes are paths-ignored by design rather than
+        because of the [ci skip] marker.'
     - check: branch_pushed
       ref: null
-      met: false
-      evidence: ''
+      met: true
+      evidence: Both held docs branches carry the corrections and are NOT merged, correctly. docs/append-identity's
+        news post now names all six outcomes and splits them right (DELIVERED and FILTERED as a subscription
+        seeing the event, the other four as nothing receiving it). docs/802-push-observation-hook has
+        zero occurrences of the non-compiling (cloudEvent, matched) lambda. PR 74 still sits cleanly on
+        69.
     blocking_on: []
-    next_action: held for a Copilot re-review on d4df542fd, the commit that fixes Copilot's own finding
-      and has never been reviewed
-    last_meaningful_progress_at: '2026-08-22T08:12:00+00:00'
+    next_action: none
+    last_meaningful_progress_at: '2026-08-22T09:55:00+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -84,6 +92,13 @@ units:
           guarantee is exactly the edit that overclaims in a new direction.'
         via: gh api pulls/900/reviews commit_id compared to headRefOid
         at: '2026-08-22T09:30:00+00:00'
+      enumeration_value:
+        note: 'The code-side enumeration found a FIFTH and SIXTH surface the brief never named: PR 74
+          independently rewrote the same docs section as PR 69, a genuine textual conflict now known before
+          release day rather than discovered while merging held branches under time pressure; and PR 72
+          carries a duplicate news post that the take-73''s rule already disposes of.'
+        via: worker report, dispositions verified
+        at: '2026-08-22T09:55:00+00:00'
     assessment: One invariant, four surfaces, two repos. The boolean-to-three fix already shipped once
       and was stale on arrival; the enumeration is derived from RoutingOutcome.java, not from a findings
       list. Takes PR 69's repair out of brk/U8's scope, recorded in ORCHESTRATOR.md. docs/append-identity
