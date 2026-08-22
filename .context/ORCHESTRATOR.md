@@ -885,3 +885,15 @@ The rest of U7's surface was measured and the goal was right about it. Seven reg
 ### U1 CI failure, cause not yet established
 
 `test (subscription-mongodb-spring, java-25)` FAILED on `d2a622f0e`, at the `Run shard tests` step with every setup step green. Attributable to the PR rather than to a known-red shard: that shard was `success` on main's last three completed runs. The cause is NOT established, because `Java CI with Maven` is still `in_progress` and GitHub withholds job logs until the run completes. Recording it as unknown rather than guessing. The worker has been asked to reproduce locally with `-am`, which can beat the log, and pointed at the one shape a green compile cannot catch: a string literal, reflective lookup or resource file naming the old type, which `ChangeType` does not rewrite.
+
+### sdi 2026-08-22T14:34:06Z: U1's CI failure diagnosed, rerun issued on the identical SHA
+
+The run completed so the log became retrievable. One failure: `SubscriptionModelConformance$TheLifeCycle.a_paused_subscription_receives_what_the_fixture_declares_and_delivers_again_once_resumed`. The assertion expected the subsequence `["2", "3"]` and got `["3"]`, so the event published while the subscription was paused never arrived, against a fixture that declares it holds events while paused.
+
+**Read as two fixtures rather than as a flake, per the recorded TCK lesson.** `TheLifeCycle` ran twice in this shard with fourteen tests each, once failing and once passing. That is the shape the lessons file warns is a fixture disagreement rather than a retry, so "it passed on the second run" was never available as a reading here.
+
+**What the diff can and cannot explain.** U1's entire change inside the failing module `subscription/mongodb/spring/` is the two javadoc lines corrected after Copilot's review. Both are inert. Everything else there is the type rename, and the TCK module's own diff is forty insertions against forty deletions across nine files, the balance a pure rename produces. Nothing in it can alter pause and hold semantics.
+
+**What the log points at instead.** Sixteen occurrences of MongoDB error 286, `ChangeStreamHistoryLost`, plus an `IllegalStateException: state should be: open` from the reactor model. A change stream whose resume point ages out of the oplog genuinely loses events, which is exactly the observed symptom of event "2" never arriving.
+
+That makes environmental far more likely than a regression, and "far more likely" is not a verdict. A rerun on the identical SHA is the discriminator that settles it: the code is fixed, so a pass exonerates it and a second failure makes it real. Issued at 2026-08-22T14:34:06Z, currently `in_progress`. No fix will be pushed and nothing will be claimed about the cause until it concludes.
