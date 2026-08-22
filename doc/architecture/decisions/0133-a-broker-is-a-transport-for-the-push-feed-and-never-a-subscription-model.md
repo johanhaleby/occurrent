@@ -1073,3 +1073,53 @@ What goes is the reactor model's record of which attempt was writing a marker, a
 A caller that wants an id to read its history again deletes its checkpoint, which is the recovery ADR 116 already
 documents for a subscription that must start over. That is now the only way to ask for it, in process as well as
 after a restart, rather than a cancel and a fresh subscribe sometimes meaning the same thing.
+
+Two things about that write turned out to need saying, both found while implementing the amendment above.
+
+**The write no longer holds the model monitor.** The blocking model asked its ownership question and wrote the
+marker inside one `synchronized` step on the model itself, which is what made the answer and the write one step.
+It also meant a checkpoint store that took seconds to answer held every other lifecycle call on that model for as
+long as the write ran, and the replay runs on a virtual thread, so blocking inside `synchronized` held the platform
+thread underneath it too. ADR 131 decided that same tradeoff the other way for the catch-up models, and the same
+reasoning applies here. The ownership question and the write now happen under a lock for that subscription id.
+`cancelSubscription` and `subscribe` take the same lock, since those are the two calls that move an id out from
+under a write, so the atomicity is unchanged. `stop`, `start`, `pause` and `resume` do not, so they no longer wait
+for a store, with one exception. A `cancelSubscription` for the same id waits for the write by design, and it is
+holding the model monitor while it does, so a lifecycle call arriving behind such a cancel waits for that store
+call after all. Removing that too means taking the per-id lock before the monitored section rather than inside it,
+in both `cancelSubscription` and `subscribe`, which is recorded on
+[#893](https://github.com/johanhaleby/occurrent/issues/893) rather than done here. The model monitor is always taken before that lock and never after it, which is what keeps the two
+from deadlocking.
+
+A registration is the only thing that creates a lock. `launchReplay` makes it under the same monitor that
+publishes the id and before it publishes it, so a cancel for a registered id always finds one, and the write takes
+only that lock and never the monitor. Creating it at the first write instead does not work, and it is worth writing down
+why, because it looks like it should. A lifecycle call that finds no lock runs its work without one, and a
+`ConcurrentHashMap` get can return null while a `computeIfAbsent` for that key is still in flight, so a cancel can
+read no lock, run its removal unlocked, and return while the write it should have waited for is starting. That one
+is a loss rather than an untidiness, through the recovery this model documents. The cancel returns, the caller
+deletes the checkpoint to force a replay, and the write nobody waited for puts a marker back, so the next
+subscription skips its history. Creating the lock at registration is what makes a missing lock proof that the id
+was never registered, which is the reading the unlocked branch depends on, and it is what ADR 131 does. A
+lifecycle call still takes a lock only if it finds one, so an id this model never registered, an arbitrary one
+passed to `cancelSubscription` for instance, adds nothing to the registry.
+
+**A stop refuses a marker write that has not started, and cannot refuse one that has.** The replay is asked
+whether to keep going before every event and never after the last one, so a stop arriving after that reaches the
+marker step with the replay already finished. `BlockingHandover` asks once more right before it hands over, which
+covers the gap after the last event, and the ownership question the amendment above introduced asks only who owns
+the id. Both marker steps now ask whether the model is stopped as well.
+
+That is as far as a stop can reach, and `stop()` says so on both stacks rather than promising more. A write that
+has already begun is not called off, because calling it off would mean either waiting for a checkpoint store
+inside `stop()`, which is what taking the write off the monitor exists to avoid, or abandoning a store call whose
+outcome nobody can then know. Such a marker stands, and it is entitled to, since the attempt that made it had
+read the whole history and held the id when it began, which is all a marker claims.
+
+Each stack ends up somewhere different, because the two order the write differently against the drain of the
+events buffered during the replay. The blocking handover drains and then writes, so a stop arriving during the drain is
+refused. The reactive one writes and then drains, so by the time a buffered event is being delivered its marker is
+already written and there is nothing left to refuse. Neither is wrong under the contract above, but they are not
+the same answer, and the reactive ordering is recorded on [#893](https://github.com/johanhaleby/occurrent/issues/893)
+rather than changed here, since moving that write past the drain rearranges the pipeline rather than
+changing this one step.

@@ -246,6 +246,112 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
         }
     }
 
+    /**
+     * A lifecycle call runs its work unlocked when it finds no lock for the id, and that is only safe if a
+     * registered id always has one. Creating the lock at the marker write instead would not give that, since the
+     * write happens at the end of the replay and a {@code ConcurrentHashMap} get can return null while a
+     * {@code computeIfAbsent} for the same key is still in flight. A cancel could then run its removal unlocked
+     * while the write it should have waited for was starting, return, and let the caller delete a checkpoint that
+     * the in-flight write then puts back.
+     * <p>
+     * So the lock is created where the id is registered, and this asserts the property that makes the unlocked
+     * branch safe rather than trying to lose that race on purpose.
+     */
+    @Test
+    void a_lifecycle_call_for_a_registered_id_always_finds_its_marker_lock() throws Exception {
+        CountDownLatch handlerParked = new CountDownLatch(1);
+        CountDownLatch releaseHandler = new CountDownLatch(1);
+        List<String> tookTheUnlockedBranch = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(() -> Stream.of(cloudEvent("1"))), feed, marker);
+
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            handlerParked.countDown();
+            awaitLatch(releaseHandler, Duration.ofSeconds(60));
+        });
+        assertThat(handlerParked.await(10, TimeUnit.SECONDS))
+                .as("the replay is parked in its handler, so it has not reached its marker write")
+                .isTrue();
+
+        // Installed after subscribe so it reports only on the cancel below.
+        model.runBetweenMarkerLockLookupAndAction(() -> tookTheUnlockedBranch.add("cancel"));
+
+        // Cancelled before any marker write has run, which is when a lazily created lock would not exist yet.
+        model.cancelSubscription("sub");
+        releaseHandler.countDown();
+
+        assertThat(tookTheUnlockedBranch)
+                .as("the id was registered, so its lock already existed and the cancel took it rather than "
+                        + "running its removal unlocked")
+                .isEmpty();
+    }
+
+    /**
+     * The other side of a stop reaching the marker step. {@code BlockingHandover} asks once more after the last
+     * replayed event, but the buffered live events are drained after that and the marker is written after them, so
+     * a stop landing during the drain arrives past every question the handover asks.
+     * <p>
+     * The stop is placed there through the handler for a buffered event, which is delivered during the drain and
+     * nowhere else. The live event is fed while the history is being read, which is what puts it in the buffer.
+     */
+    @Test
+    void a_stop_arriving_during_the_buffer_drain_leaves_nothing_marked() throws Exception {
+        CountDownLatch drainParked = new CountDownLatch(1);
+        CountDownLatch releaseDrain = new CountDownLatch(1);
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        AtomicReference<CatchupThenPushSubscriptionModel> modelRef = new AtomicReference<>();
+        // The live event is fed while the history stream is being read, so it is buffered rather than delivered.
+        PositionOrderedReader reader = reader(() -> Stream.of(cloudEvent("hist"))
+                .peek(ignored -> feed.accept(cloudEvent("live"))));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
+        modelRef.set(model);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            if (ce.getId().equals("live")) {
+                drainParked.countDown();
+                awaitLatch(releaseDrain, Duration.ofSeconds(60));
+            }
+        });
+
+        assertThat(drainParked.await(10, TimeUnit.SECONDS))
+                .as("the buffered event is being delivered, which happens during the drain and after the handover "
+                        + "has asked its last question about stopping")
+                .isTrue();
+        modelRef.get().stop();
+        releaseDrain.countDown();
+
+        // Waited on rather than slept past, so the assertion reads storage after the replay has actually run its
+        // marker step rather than after a second in which a slow enough replay might not have reached it.
+        subscription.waitUntilStarted(Duration.ofSeconds(10));
+
+        assertThat(marker.exists("sub"))
+                .as("the marker step asks about the stop as well as about ownership, so a stop that arrives with "
+                        + "the history already read still marks nothing")
+                .isFalse();
+    }
+
+    // A thread waiting for the model monitor is BLOCKED, one queued on a ReentrantLock is WAITING. This test
+    // covers both, since which one a caller ends up in is exactly what the change under test moves.
+    private static boolean isQueued(Thread thread) {
+        Thread.State state = thread.getState();
+        return state == Thread.State.BLOCKED || state == Thread.State.WAITING;
+    }
+
+    private static void awaitLatch(CountDownLatch latch, Duration timeout) {
+        try {
+            if (!latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                throw new IllegalStateException("Timed out waiting for the latch");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for the latch", e);
+        }
+    }
+
     private static void awaitLatch(CountDownLatch latch) {
         try {
             if (!latch.await(10, TimeUnit.SECONDS)) {
@@ -264,7 +370,7 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
      * finds, in this process and after a restart alike.
      * <p>
      * Asserted as an ordering rather than as a duration, so it says which of the two finished first rather than how
-     * long either took. The cancel is released only once it is genuinely waiting on the monitor, which is what
+     * long either took. The cancel is released only once it is genuinely queued behind the write, which is what
      * keeps the ordering from being decided by the cancel simply not having started yet.
      */
     @Test
@@ -318,11 +424,13 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
             order.add("cancel returned");
         }, "canceller");
         canceller.start();
-        // Either it is waiting for the monitor the write holds, which is the invariant, or it already ran, which is
-        // the falsification. Waiting for one of the two rather than sleeping is what makes the assertion below mean
-        // something in both cases.
+        // Either it is queued behind the write, which is the invariant, or it already ran, which is the
+        // falsification. Waiting for one of the two rather than sleeping is what makes the assertion below mean
+        // something in both cases. WAITING as well as BLOCKED, since a thread queued on a ReentrantLock parks
+        // rather than contending for a monitor, and checking only for BLOCKED spun here for the full deadline on
+        // every run.
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
-        while (canceller.getState() != Thread.State.BLOCKED && order.isEmpty() && System.nanoTime() < deadline) {
+        while (!isQueued(canceller) && order.isEmpty() && System.nanoTime() < deadline) {
             Thread.onSpinWait();
         }
 
@@ -332,6 +440,125 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
         assertThat(order)
                 .as("the write the owning attempt started ran to completion before the cancel could take the id")
                 .containsExactly("marker write returned", "cancel returned");
+    }
+
+    /**
+     * The reason the marker write moved off the model monitor and onto a lock for its own subscription id. One
+     * monitor used to guard every lifecycle call and the checkpoint write alike, so a store that took seconds to
+     * answer held {@code stop()} for that long even though a stop does not move the id and does not care what the
+     * write decides.
+     * <p>
+     * This model feeds one subscription (ADR 90), so the call that has to get through is another call about the
+     * same id rather than one about a different id. {@code cancelSubscription} and {@code subscribe} still wait,
+     * deliberately, since those are the two that move the id out from under the write.
+     */
+    @Test
+    void a_marker_write_does_not_hold_up_a_lifecycle_call_that_does_not_move_the_id() throws Exception {
+        CountDownLatch saveEntered = new CountDownLatch(1);
+        CountDownLatch releaseSave = new CountDownLatch(1);
+        List<String> order = new CopyOnWriteArrayList<>();
+        InMemoryCheckpointStorage backing = new InMemoryCheckpointStorage();
+        CheckpointStorage marker = new CheckpointStorage() {
+            @Override
+            public @Nullable Checkpoint read(String subscriptionId) {
+                return backing.read(subscriptionId);
+            }
+
+            @Override
+            public Checkpoint save(String subscriptionId, Checkpoint checkpoint, CheckpointWriteCondition condition) {
+                saveEntered.countDown();
+                // Parked far longer than the wait below, so the write is still running when the assertion is
+                // made rather than having released whatever it held as the test looked.
+                awaitLatch(releaseSave, Duration.ofSeconds(60));
+                Checkpoint saved = backing.save(subscriptionId, checkpoint, condition);
+                order.add("marker write returned");
+                return saved;
+            }
+
+            @Override
+            public OptionalLong writeVersion(String subscriptionId) {
+                return backing.writeVersion(subscriptionId);
+            }
+
+            @Override
+            public void delete(String subscriptionId) {
+                backing.delete(subscriptionId);
+            }
+
+            @Override
+            public boolean exists(String subscriptionId) {
+                return backing.exists(subscriptionId);
+            }
+        };
+
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(() -> Stream.of(cloudEvent("1"))), feed, marker);
+        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        });
+
+        assertThat(saveEntered.await(10, TimeUnit.SECONDS))
+                .as("the marker write is running and is not going to return on its own")
+                .isTrue();
+
+        Thread stopper = new Thread(() -> {
+            model.stop();
+            order.add("stop returned");
+        }, "stopper");
+        stopper.start();
+        stopper.join(TimeUnit.SECONDS.toMillis(5));
+
+        // Read while the write is still parked, since that is the moment the assertion is about, and then the
+        // write is let go whatever it said. Asserting first would leave the write parked and the stopper blocked
+        // behind it for a minute on the one run where this regresses, which is the run that most needs to report.
+        List<String> whileTheWriteWasRunning = List.copyOf(order);
+        releaseSave.countDown();
+        stopper.join(TimeUnit.SECONDS.toMillis(10));
+
+        assertThat(whileTheWriteWasRunning)
+                .as("a stop got through while the marker write was still running, rather than queueing behind it "
+                        + "on a monitor the write was holding")
+                .containsExactly("stop returned");
+    }
+
+    /**
+     * What {@code stop()} promises, that a stopped replay marked nothing, asserted for the one ordering that could
+     * break it. The replay is asked whether to keep going before every event and never after the last one, so a
+     * stop arriving in that gap would reach the marker write unnoticed if nothing asked again. Something does:
+     * {@code BlockingHandover} re-asks right before the write, for exactly this.
+     * <p>
+     * The stop is placed in the gap through the handler for the last event, which is the only way to reach it from
+     * outside the model.
+     */
+    @Test
+    void a_stop_arriving_after_the_last_replayed_event_leaves_nothing_marked() throws Exception {
+        CountDownLatch lastEventReached = new CountDownLatch(1);
+        CountDownLatch stopped = new CountDownLatch(1);
+        InMemoryCheckpointStorage marker = new InMemoryCheckpointStorage();
+
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        AtomicReference<CatchupThenPushSubscriptionModel> modelRef = new AtomicReference<>();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader(() -> Stream.of(cloudEvent("1"))), feed, marker);
+        modelRef.set(model);
+
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+            lastEventReached.countDown();
+            awaitLatch(stopped);
+        });
+
+        assertThat(lastEventReached.await(10, TimeUnit.SECONDS))
+                .as("the attempt is inside the handler for the last event of its history")
+                .isTrue();
+        Thread stopper = new Thread(() -> modelRef.get().stop(), "stopper");
+        stopper.start();
+        stopper.join(TimeUnit.SECONDS.toMillis(10));
+        stopped.countDown();
+
+        subscription.waitUntilStarted(Duration.ofSeconds(10));
+
+        assertThat(marker.exists("sub"))
+                .as("a stop means nothing was marked, whether it arrives during the history or in the gap after "
+                        + "the last event of it")
+                .isFalse();
     }
 
     private static PositionOrderedReader reader(Supplier<Stream<CloudEvent>> history) {
