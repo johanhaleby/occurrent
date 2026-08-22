@@ -139,6 +139,60 @@ class SpringMongoEventStoreUpdateEventPositionAndDcbTagsTest {
         );
     }
 
+    @Test
+    void updating_a_dcb_event_with_a_fresh_replacement_event_keeps_the_original_dcb_tags_on_both_the_document_and_the_returned_event() {
+        SpringMongoEventStore eventStore = newEventStore(STREAM, DCB);
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        Document before = rawDocument("a");
+
+        // A fresh event built from scratch, not derived from "original", carries none of the original's extensions
+        // and, here, a different tag ("other:9" instead of "name:1"). Tags are store-owned the same way streamId,
+        // streamVersion and the append id already are, so the update must not move the event across the
+        // consistency boundary its original tags defined.
+        CloudEvent updated = eventStore.updateEvent("a", SOURCE, original -> taggedEvent("a", "Renamed", "other:9")).orElseThrow();
+
+        Document after = rawDocument("a");
+        assertAll(
+                () -> assertThat(after.get(OccurrentCloudEventExtension.POSITION))
+                        .as("position must stay a BSON int64 after an update, not be coerced to a string")
+                        .isInstanceOf(Long.class)
+                        .isEqualTo(before.get(OccurrentCloudEventExtension.POSITION)),
+                () -> assertThat(after.getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .as("the indexed dcbTags array must keep the original tags, not the replacement event's")
+                        .isEqualTo(before.getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class)),
+                () -> assertThat(after.getString(DcbCloudEvents.TAGS))
+                        .as("the dcbtags extension field on the document must match the indexed array, not the replacement event's tags")
+                        .isEqualTo(before.getString(DcbCloudEvents.TAGS)),
+                () -> assertThat(DcbCloudEvents.getTags(updated))
+                        .as("the CloudEvent updateEvent returns must carry the original tags too, not the replacement event's")
+                        .containsExactlyElementsOf(DcbCloudEvents.getTags(taggedEvent("a", "Defined", "name:1"))),
+                () -> assertThat(after.getString("type")).isEqualTo("Renamed")
+        );
+    }
+
+    @Test
+    void a_second_update_keeps_the_bson_int64_position_and_the_indexed_dcb_tags_from_the_first_update() {
+        SpringMongoEventStore eventStore = newEventStore(STREAM, DCB);
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+
+        eventStore.updateEvent("a", SOURCE, original -> CloudEventBuilder.v1(original).withSubject("first").build());
+        Document afterFirst = rawDocument("a");
+
+        eventStore.updateEvent("a", SOURCE, original -> CloudEventBuilder.v1(original).withSubject("second").build());
+        Document afterSecond = rawDocument("a");
+
+        assertAll(
+                () -> assertThat(afterSecond.get(OccurrentCloudEventExtension.POSITION))
+                        .as("position must still be a BSON int64 after a second update")
+                        .isInstanceOf(Long.class)
+                        .isEqualTo(afterFirst.get(OccurrentCloudEventExtension.POSITION)),
+                () -> assertThat(afterSecond.getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .as("the indexed dcbTags array must still survive a second update")
+                        .isEqualTo(afterFirst.getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class)),
+                () -> assertThat(afterSecond.getString("subject")).isEqualTo("second")
+        );
+    }
+
     private SpringMongoEventStore newEventStore(EventStoreCapability first, EventStoreCapability... rest) {
         EventStoreConfig config = new EventStoreConfig.Builder()
                 .eventStoreCollectionName(EVENT_COLLECTION)

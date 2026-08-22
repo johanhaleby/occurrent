@@ -350,6 +350,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
                 throw UpdateEventFunctionValidator.updateFunctionReturnedNull();
             }
             updatedCloudEvent = OccurrentCloudEventExtension.preserveAppendId(currentCloudEvent, updatedCloudEvent);
+            updatedCloudEvent = DcbCloudEvents.preserveTags(currentCloudEvent, updatedCloudEvent);
             if (!Objects.equals(updatedCloudEvent, currentCloudEvent)) {
                 String streamId = OccurrentExtensionGetter.getStreamId(currentCloudEvent);
                 long streamVersion = OccurrentExtensionGetter.getStreamVersion(currentCloudEvent);
