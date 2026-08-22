@@ -2022,3 +2022,22 @@ And the tax is worth naming to the fleet rather than letting each unit rediscove
 hits a known-defective test spends a triage round establishing what the orchestrator already knows.
 Tell them the test, the issue, and the instruction (rerun, do not investigate, it is owned
 elsewhere) as soon as the verdict is in.
+## `git show <remote-branch>:<path>` can return zero bytes and your grep will call it a finding (sdi, 2026-08-22)
+
+Verifying U5's PR I ran `git show origin/<branch>:<file> | grep '@Deprecated'` across seven files and
+got seven clean misses. The ref resolved, so nothing looked wrong, and I was one sentence from
+reporting that a worker had skipped a required deprecation. The files were 0 bytes: the ref
+resolves after a targeted fetch while the path lookup does not, and a grep over empty input is a
+confident silence.
+
+The tell was the SHAPE of the result. Seven for seven, all negative, on a requirement the worker had
+been given explicitly. A worker skipping one is plausible; skipping all seven while doing everything
+else correctly is not, and that improbability is what should trigger the re-check.
+
+Use `git diff origin/main..<branch> -- <paths>` instead, which reads the actual change, and prove
+the pattern can match at all before trusting a zero: I confirmed the same grep found two hits on
+`origin/main`, which is what turned a suspicious zero into a known-broken read.
+
+The general rule was already written down here from a Haiku sweep that missed a Kotlin file, and it
+held again unchanged: **a read returning nothing is "not found by this method", never "not there".**
+The addition is that an improbable pattern of absence is itself the signal to distrust the method.
