@@ -21,6 +21,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 
@@ -29,6 +30,7 @@ import java.util.Set;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Covers {@link ReplayAwareSubscriptions#findIn(SubscriptionModelCapability)}, the lookup a caller uses instead of casting to a concrete
@@ -73,6 +75,21 @@ class ReplayAwareSubscriptionsTest {
         assertThat(found).isEmpty();
     }
 
+    // The default answers false rather than registering, and it validates first, so a model that inherits it refuses
+    // a null the same way every model that overrides it does.
+    @Test
+    void the_default_listener_registration_refuses_a_null_argument() {
+        PlainReplayAwareModel model = new PlainReplayAwareModel();
+
+        assertThatThrownBy(() -> model.listenForCatchup(null, new NoopCatchupListener()))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("subscriptionId");
+        assertThatThrownBy(() -> model.listenForCatchup("orders", null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("listener");
+        assertThat(model.listenForCatchup("orders", new NoopCatchupListener())).isFalse();
+    }
+
     @Test
     void an_id_the_model_never_saw_is_not_catching_up() {
         ReplayAwareModel model = new ReplayAwareModel(Set.of("orders"));
@@ -80,6 +97,24 @@ class ReplayAwareSubscriptionsTest {
         // The same answer as a subscription that has handed over, which is what lets a readiness poll ask one question
         // rather than two.
         assertThat(model.isCatchingUp("never-subscribed")).isFalse();
+    }
+
+    // Nothing but the two methods the capability requires, so listenForCatchup is the interface default.
+    private static final class PlainReplayAwareModel implements ReplayAwareSubscriptions {
+        @Override
+        public boolean isCatchingUp(String subscriptionId) {
+            return false;
+        }
+    }
+
+    private static final class NoopCatchupListener implements CatchupListener {
+        @Override
+        public void catchupStarted(Object episode) {
+        }
+
+        @Override
+        public void historyRead(Object episode) {
+        }
     }
 
     private static class PlainModel implements SubscriptionModel {

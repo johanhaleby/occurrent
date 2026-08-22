@@ -19,6 +19,7 @@ package org.occurrent.subscription.api.blocking;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.CatchupListener;
 
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -73,6 +74,8 @@ public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
      * @return {@code true} when this model sends those, {@code false} when it does not and nothing was registered.
      */
     default boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
         return false;
     }
 

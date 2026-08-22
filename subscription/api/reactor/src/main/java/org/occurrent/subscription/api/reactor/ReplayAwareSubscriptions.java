@@ -19,6 +19,8 @@ package org.occurrent.subscription.api.reactor;
 import org.jspecify.annotations.NullMarked;
 import org.occurrent.subscription.CatchupListener;
 
+import java.util.Objects;
+
 /**
  * A reactive subscription model that replays history before it delivers live events, and can say which of its
  * subscriptions are still in that replay.
@@ -75,6 +77,8 @@ public interface ReplayAwareSubscriptions extends SubscriptionModelCapability {
      * @return {@code true} when this model sends those, {@code false} when it does not and nothing was registered.
      */
     default boolean listenForCatchup(String subscriptionId, CatchupListener listener) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId cannot be null");
+        Objects.requireNonNull(listener, "listener cannot be null");
         return false;
     }
 
