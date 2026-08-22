@@ -1,7 +1,7 @@
 schema_version: 1
 epic: rel34
 revision: 43
-updated_at: '2026-08-22T20:00:00+00:00'
+updated_at: '2026-08-22T12:57:57+00:00'
 updated_by: 'orchestrator rel34: U6 chip title gate failed at spawn, retitled and session recorded'
 baseline:
   repo: johanhaleby/occurrent
@@ -128,7 +128,7 @@ units:
     blocking_on: []
     next_action: worker adds the forged-tags-on-a-non-DCB-original test, verifies it fails with preserveTags
       reverted, then the gate re-runs
-    last_meaningful_progress_at: '2026-08-22T19:45:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:54:55+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -226,7 +226,7 @@ units:
           preserveAppendId then preservePosition then preserveTags cannot undo an earlier step, since
           each rebuilds targeting only its own named extension.'
         via: orchestrator adversarial verify subagent
-        at: '2026-08-22T16:50:00+00:00'
+        at: '2026-08-22T12:20:43+00:00'
       routed_927:
         note: 'INCIDENTAL out-of-scope finding, filed as #927: when an updater returns an event built
           from scratch, updateEvent''s RETURNED event never regains streamid and streamversion. Those
@@ -238,7 +238,7 @@ units:
           into 0.34.0 on the symmetry argument, with the counter-argument (genuinely pre-existing, and
           0.34.0 has grown a lot) stated on the issue. Johan''s call.'
         via: adversarial verify subagent, verified reproducible
-        at: '2026-08-22T16:50:00+00:00'
+        at: '2026-08-22T12:20:43+00:00'
       gate_blocked_no_review_on_head:
         note: 'MERGE BLOCKED again, on a different failure mode from last time. All three workflow runs
           on 39d9a6ef0 are completed/success, unresolved review threads are ZERO, and the adversarial
@@ -251,7 +251,7 @@ units:
           review''s author via an ''... on Bot{id}'' fragment: BOT_kgDOCnlnWA. Request verified present
           in reviewRequests afterwards, since a wrong id succeeds while requesting nobody.'
         via: gh api pulls/901/reviews + graphql reviewRequests
-        at: '2026-08-22T18:25:00+00:00'
+        at: '2026-08-22T12:39:33+00:00'
       copilot_coverage_finding_confirmed:
         note: 'Copilot reviewed 39d9a6ef0 after the re-review request and returned ''Changes recommended''
           at Balanced effort (read from the review body, not assumed), one comment, no suppressed block.
@@ -265,7 +265,7 @@ units:
           are DIFFERENT claims, and only the second one gates a merge. I conflated them. The harness disappears,
           the suite is what remains. Said so on the PR.'
         via: gh api pulls/901/reviews + reading the three test files at pr901
-        at: '2026-08-22T19:45:00+00:00'
+        at: '2026-08-22T12:54:55+00:00'
     assessment: 'Pre-existing, confirmed present in the occurrent-0.33.0 tag by the triage sweep. Issue
       names the mapper gap (OccurrentCloudEventMongoDocumentMapper:42-46) and the missing Long overload
       (DocumentCloudEventWriter:55-75). Silent loss from numeric position queries and position-based catch-up.
@@ -301,7 +301,7 @@ units:
       evidence: '#871 CLOSED by the merge, verified.'
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T17:20:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:24:01+00:00'
     observed:
       dispatch:
         note: started by Johan 2026-08-22T07:4xZ; identity resolved by grepping the session transcript
@@ -353,7 +353,7 @@ units:
           regression shape; and the once-only guard verified against the real call site as unreachable
           twice.'
         via: orchestrator re-verify subagent
-        at: '2026-08-22T14:20:00+00:00'
+        at: '2026-08-22T11:32:03+00:00'
       introduction_proxy:
         note: 'A THIRD defect, found by the Copilot re-review the orchestrator insisted on for PR 908
           and ported here proactively by the worker: a valid AOP INTRODUCTION proxy, one implementing
@@ -362,7 +362,7 @@ units:
           fixed. ultimateTarget now stops unwrapping one layer short when the next target does not itself
           implement the interface, with a DelegatingIntroductionInterceptor-backed test on both stacks.'
         via: worker message, Copilot re-review on 908
-        at: '2026-08-22T14:20:00+00:00'
+        at: '2026-08-22T11:32:03+00:00'
       path_to_merge:
         note: 'The longest route of any unit today, and every step mattered. The brief''s file boundary
           was WRONG, since the fix is structurally cross-module, and the worker returned BLOCKED before
@@ -374,7 +374,7 @@ units:
           when the unwrap only misses non-Advised wrappers. The same analysis that shipped this established
           that the reactor twin does NOT exist, closing #903 and #909 as not reproducible.'
         via: orchestrator
-        at: '2026-08-22T17:20:00+00:00'
+        at: '2026-08-22T12:24:01+00:00'
     assessment: 'Warning-only defect, recording itself stays correct. Fix shape agreed in the issue body.
       Touches the blocking registrar, so U6 follows this unit rather than running beside it. OWNERSHIP
       EXTENDED by dec-0005 (2026-08-22T07:58Z) to framework/spring-boot-starter-mongodb/.../OccurrentMongoAutoConfiguration.java,
@@ -417,7 +417,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: await CI on e2554fdc, then run the gate from the top including a fresh adversarial pass
-    last_meaningful_progress_at: '2026-08-22T19:45:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:54:55+00:00'
     observed:
       delivery:
         note: 'PR 914, head aa21f4fc2, 26/26 green, mergeStateStatus CLEAN, closes #857, #877, #878, #879.
@@ -464,7 +464,7 @@ units:
           store does not. Either the claim narrows or the store changes; a contract on the interface that
           an implementation does not meet is the exact drift moving it up there was meant to prevent.'
         via: orchestrator re-verify subagent, measured
-        at: '2026-08-22T17:05:00+00:00'
+        at: '2026-08-22T12:22:23+00:00'
       rebased_and_mergeable:
         note: 'Worker fixed the twice-falsified reactive defect and rebased. Head e2554fdc, MERGEABLE,
           CI running. The fix makes readOnceBoundedBy retry against a deadline-aware wrapper rather than
@@ -478,7 +478,7 @@ units:
           wait for a slow read is correct: that would mean dropping block(Duration), which is the only
           reason its wait honours the caller''s timeout, and #878 credits it with exactly that.'
         via: worker message + gh pr view
-        at: '2026-08-22T19:45:00+00:00'
+        at: '2026-08-22T12:54:55+00:00'
     assessment: 'FOUR issues in one pass: #857, #877, #878, #879. RESTRUCTURED 2026-08-22T08:50Z after
       a scoping read, which is why #878 moved here from U5. The read found two collisions the original
       split would have walked into: U4 and U5 both needed dsl/projection-dsl/common/.../AppliedAppendStore.java,
@@ -540,7 +540,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: 'await the worker''s claim on #837 and its first push'
-    last_meaningful_progress_at: '2026-08-22T18:10:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:37:06+00:00'
     observed:
       scope_derived_by_orchestrator:
         note: 'Enumerated the invocation sites myself rather than trusting the issue text. The defect
@@ -557,7 +557,7 @@ units:
           use the raw bean, which is the sibling finding #837''s own body calls a separate issue, and
           it belongs to sdi.'
         via: grep over all five registrars and both bean post processors
-        at: '2026-08-22T18:10:00+00:00'
+        at: '2026-08-22T12:37:06+00:00'
       sdi_fence:
         note: sdi's U6 (descriptor paths in both SubscriptionAnnotationRegistrar files, move to afterSingletonsInstantiated)
           and its U7 (annotation-set normalization across the other five registrars and both BPPs) rewrite
@@ -566,7 +566,7 @@ units:
           owns the two SubscriptionAnnotationRegistrar files until it merges; sdi must preserve the by-name
           lookup when it reworks them. Fence stated to sdi's orchestrator.
         via: sdi epic state + gh pr view 924
-        at: '2026-08-22T18:10:00+00:00'
+        at: '2026-08-22T12:37:06+00:00'
       sdi_fence_accepted:
         note: 'sdi''s orchestrator accepted the fence and recorded the invariant against its own U6 in
           the sdi epic state, in the terms given: target is what the context yields FOR THE BEAN NAME,
@@ -577,7 +577,7 @@ units:
           as sdi''s own open design question (recorded against its U2 and U6) after checking my analysis
           rather than taking it, so that finding is owned and will not fall between the fleets.'
         via: cross-session message from [sdi] Orchestrator
-        at: '2026-08-22T18:40:00+00:00'
+        at: '2026-08-22T12:41:01+00:00'
       sdi_count_correction_did_not_reach_rel34:
         note: 'sdi corrected its own registrar call-site split from 17 non-DCB / 4 DCB to 16 / 5, total
           21 unchanged, and asked whether the wrong number had reached any rel34 brief. Checked rather
@@ -585,7 +585,7 @@ units:
           The only call-site count in any rel34 brief is U6''s own ''SIX call sites in TWO files'', which
           I derived myself from the registrars. Nothing to correct here.'
         via: grep over briefs/ and rel34.yml
-        at: '2026-08-22T18:40:00+00:00'
+        at: '2026-08-22T12:41:01+00:00'
       chip_title_gate_failed:
         note: 'PROCESS FAILURE, mine. The chip went out titled ''Fix #837: @Transactional silently bypassed
           on subscription handlers'' with no sigil, no epic, no unit and no model suffix. SKILL.md:383
@@ -605,7 +605,7 @@ units:
           gate, so the summary was trimmed rather than the suffix, since the suffix is the part that must
           survive.'
         via: orchestrator self-check against SKILL.md:383
-        at: '2026-08-22T20:00:00+00:00'
+        at: '2026-08-22T12:57:57+00:00'
     assessment: 'Dispatched 2026-08-22 as a chip after U3 merged. The 2026-08-17 deferral to the ADR 127
       epic and my own 2026-08-22 supersede were BOTH argued on premises that did not survive. The deferral
       assumed a large fix that the epic would rewrite immediately; the supersede assumed the epic had
@@ -641,7 +641,7 @@ units:
       evidence: '#866 CLOSED, and #917 closed by the same PR.'
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T15:35:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T11:54:37+00:00'
     observed:
       self_review:
         note: The worker's own local review found TWO real design issues in its first pass, both fixed
@@ -674,7 +674,7 @@ units:
           THE OTHER THREE CLAUSES HELD across 12 scenarios plus the module''s 51 tests, including a backoff
           shorter than the poll interval being polled once at 10ms rather than padded.'
         via: orchestrator adversarial verify subagent
-        at: '2026-08-22T14:20:00+00:00'
+        at: '2026-08-22T11:32:03+00:00'
     assessment: Shipped defect confirmed present in the occurrent-0.33.0 tag. Bounded.
   U8:
     issue: 834
@@ -792,7 +792,7 @@ units:
       evidence: '#753 CLOSED by the merge, verified.'
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T13:50:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T11:23:29+00:00'
     observed:
       adr_immutability:
         note: 'COMPLIANT, verified against the tag rather than assumed. ADR 0124 IS in the occurrent-0.33.0
@@ -812,7 +812,7 @@ units:
           this explicitly rather than claiming uniform registration-time refusal, which is why it is not
           a finding.'
         via: adversarial verify subagent
-        at: '2026-08-22T13:50:00+00:00'
+        at: '2026-08-22T11:23:29+00:00'
     assessment: 'Decided IN 0.34.0 by the orchestrator on Johan''s conditional delegation at the triage
       sweep, derivation recorded in ORCHESTRATOR.md. Do not re-ask. Reachability is low (records and Kotlin
       data classes are implicitly final) but the failure is silent event loss with no log or exception,
@@ -844,7 +844,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: worker fixes the non-terminating classifier, then the gate re-runs from the top
-    last_meaningful_progress_at: '2026-08-22T17:50:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:31:11+00:00'
     observed:
       gate_919:
         note: 'PR 919 opened, all ten dispatched units now have PRs. TWO FAILURES on test (example-projection)
@@ -869,7 +869,7 @@ units:
           behind. NOT run, both needing a broker: the Testcontainers outage test and the RabbitMQ example
           smoke test. Held on PR 919 as a comment, outcome stated without prescribing the mechanism.'
         via: adversarial verify subagent a713afbdeed49388d
-        at: '2026-08-22T17:50:00+00:00'
+        at: '2026-08-22T12:31:11+00:00'
     assessment: 'Decided IN by derivation, not asked: AGENTS.md:120 requires every component to ship production
       ready including surviving a transient outage of the store it talks to, and the broker modules ship
       for the first time in 0.34.0. The earlier decline for PR 861 is one of the deferrals the triage
@@ -966,7 +966,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: Johan approves the published checklist, then rebuild preview/0.34.0 from the merged result
-    last_meaningful_progress_at: '2026-08-22T19:25:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:50:59+00:00'
     observed:
       preview_state:
         note: 'Checked 2026-08-22T10:3xZ. preview/0.34.0 is behind TWO held branches by one commit each:
@@ -986,7 +986,7 @@ units:
           rather than merged, so the count of docs/* branches is nine while the merge set is eight. preview/0.34.0
           must be rebuilt to include 76 as well as the PR 69 and PR 74 heads it is already behind.'
         via: orchestrator
-        at: '2026-08-22T17:30:00+00:00'
+        at: '2026-08-22T12:24:51+00:00'
       trial_merge_all_eight:
         note: 'Ran a REAL trial merge of all eight held branches in a throwaway worktree rather than reasoning
           about the conflict map. Verified tips: 802-push-observation-hook 7b4d224, 421-broker-modules
@@ -995,7 +995,7 @@ units:
           3b8b561. ALL EIGHT merge with exactly ONE conflicting file, js/_partials/main.js, every time.
           Nothing else conflicts anywhere.'
         via: git worktree + sequential git merge
-        at: '2026-08-22T19:05:00+00:00'
+        at: '2026-08-22T12:47:31+00:00'
       keep_all_lines_is_wrong:
         note: 'CORRECTION to this unit''s own recorded conflict map and to U15''s report. Both say the
           main.js resolution is ''keep all lines'' or ''keep all three''. That is NOT sufficient and produces
@@ -1009,7 +1009,7 @@ units:
           present are push-subscription-blocking-observer, broker-subscriptions-blocking, projection-annotation-applied-appends
           and deriving-the-event-filter, all 0.34.0.'
         via: node --check on the merged tree, before and after
-        at: '2026-08-22T19:05:00+00:00'
+        at: '2026-08-22T12:47:31+00:00'
       conflict_69_vs_74_is_gone:
         note: 'The PR 69 versus PR 74 conflict that gated the preview rebuild NO LONGER EXISTS as a conflict
           and needs NO ruling from Johan. Both branches moved on 2026-08-22 and now merge cleanly, verified
@@ -1025,7 +1025,7 @@ units:
           a decision. Keep PR 74''s variant, which additionally names the contrast with FILTERED, and
           delete PR 69''s plus one copy of each duplicated paragraph.'
         via: trial merge + grep against RoutingOutcome.java
-        at: '2026-08-22T19:05:00+00:00'
+        at: '2026-08-22T12:47:31+00:00'
       news_post_addadd_is_moot:
         note: 'The recorded rule ''the news-post add/add resolved in 73''s favour'' is OBSOLETE. PR 73
           (append-identity) and PR 72 (0.34.0-release-notes) both add _posts/news/2026-08-25-0_34_0.md
@@ -1038,7 +1038,7 @@ units:
           correct rule that you may acknowledge on DELIVERED and FILTERED and never on the other four.
           The 2026-08-25 date in the filename and front matter is still the placeholder to replace.'
         via: git hash-object on both blobs + reading the post
-        at: '2026-08-22T19:05:00+00:00'
+        at: '2026-08-22T12:47:31+00:00'
       checklist_published:
         note: The verified checklist is published at https://claude.ai/code/artifact/8f365680-763a-4b73-8127-89c2f10adf2d
           , covering the branch to delete rather than merge, the eight-branch merge order with tips, the
@@ -1048,7 +1048,7 @@ units:
           is still moving, so a tip other than 0ba67fd on the day means redoing the trial merge. The manual_approval
           deliverable is met when Johan approves it.
         via: orchestrator
-        at: '2026-08-22T19:25:00+00:00'
+        at: '2026-08-22T12:50:59+00:00'
     assessment: 'Seven PRs, not eight branches: docs/saga-step-conditions-added-tag adds a line docs main
       already carries. preview/0.34.0 was behind docs/421-broker-modules by one commit at registration,
       so preview is verified per branch rather than assumed current.'
@@ -1099,7 +1099,7 @@ units:
           both-JDK failure that was a real regression; and main''s last COMPLETED run, cacdc25b9, is green
           with that test present. That rules out deterministically broken, not an intermittent race.'
         via: brk orchestrator messages, gh run list, statusCheckRollup per JDK
-        at: '2026-08-22T14:45:00+00:00'
+        at: '2026-08-22T11:36:28+00:00'
       brk_920_merged:
         note: 'brk PR 920 merged as cfee1477b and #884 is closed by it, so brk''s remaining item before
           closing is U17 alone. Adjacent brk finding for awareness, not action: the Kafka starter leaves
@@ -1107,7 +1107,7 @@ units:
           before its first rebalance never sees it. Pre-existing since the starter shipped, filed as #893
           item 34 for Johan to rule, and no change to rel34''s tag unless he rules it in.'
         via: brk orchestrator message
-        at: '2026-08-22T15:10:00+00:00'
+        at: '2026-08-22T11:45:54+00:00'
       issue_922_verdict:
         note: 'NOT A FLAKE. A PRODUCTION SILENT STALL, in code already on main. The channel-generation
           fence brk''s PR 895 added to RabbitMqCloudEventBridge is the defect: amqp-client 5.33.1 re-issues
@@ -1126,7 +1126,7 @@ units:
           the exact property PR 895 was written to guarantee, so if it can fail then either the guarantee
           can fail or the test does not pin it down. It was the first.'
         via: 'brk orchestrator verdict on #922'
-        at: '2026-08-22T16:10:00+00:00'
+        at: '2026-08-22T12:11:27+00:00'
     assessment: 'Johan''s manual acts via mvn_release.sh (Java 21, mvn deploy -Prelease, GPG, tags occurrent-<version>).
       The orchestrator hands him the checklist and verifies the observable results. The 1000-file allowance
       is the one to read carefully now that three broker modules ship. SDI GATE RELEASED 2026-08-22T08:25:22Z:
@@ -1313,7 +1313,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T15:10:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T11:45:54+00:00'
     observed:
       pr_908:
         head: 2170cca7184b20dc7d90f2c3dd69466890db3f9c
@@ -1461,7 +1461,7 @@ units:
         earned its own row in the refusal table.
     blocking_on: []
     next_action: none, the branch is HELD for release day
-    last_meaningful_progress_at: '2026-08-22T17:30:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:24:51+00:00'
     observed:
       collision_check:
         note: 'The worker checked its hunks against every held branch rather than assuming: base-file
@@ -1471,7 +1471,7 @@ units:
           the last line of the addedTags map in js/_partials/main.js, which PRs 69, 73 and 74 also touch;
           resolution is keep all lines, which preview/0.34.0 already demonstrates.'
         via: worker report
-        at: '2026-08-22T17:30:00+00:00'
+        at: '2026-08-22T12:24:51+00:00'
     assessment: Found by the orchestrator while checking a question U9 raised, not reported by any worker.
       changelog.md's FIRST highlight promises sealed supertypes now expand in projections, DSL subscriptions,
       queries and snapshot views alike. docs main line 6984 says @Projection 'does not expand or refuse
@@ -1501,14 +1501,14 @@ units:
       evidence: ''
     blocking_on: []
     next_action: run the merge gate on PR 928, adversarial pass before merge
-    last_meaningful_progress_at: '2026-08-22T17:50:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T12:31:11+00:00'
     observed:
       pr_opened:
         note: PR 928 on rel34/u16-type-filter-expansion, 8 files, touching ExecuteFilter, DcbCriteriaBuilder.kt,
           both test classes, changelog, the 0.34.0 migration guide and the upgrade-0_34 rewrite recipe.
           Not yet gated.
         via: gh pr view
-        at: '2026-08-22T17:50:00+00:00'
+        at: '2026-08-22T12:31:11+00:00'
     assessment: 'Johan adopted it OVERRIDING both the filing worker''s recommendation and the orchestrator''s,
       dec-0010. The override reason is the stronger one: a caller who fixes their declarations for the
       rest of the library would still find these two handing a decider nothing. THE TRAP, recorded so
@@ -1573,7 +1573,7 @@ units:
       evidence: ''
     blocking_on: []
     next_action: none
-    last_meaningful_progress_at: '2026-08-22T15:10:00+00:00'
+    last_meaningful_progress_at: '2026-08-22T11:45:54+00:00'
     observed: {}
     assessment: 'Adopted by dec-0009. Found and correctly DECLINED by the U12 worker, whose remit covered
       the warning rather than recording, and routed instead of folded in. Confirmed by two independent
@@ -1598,11 +1598,11 @@ cross_epic:
       If a rel34 unit returns BLOCKED needing one, claim it and tell sdi before writing, since sdi said
       it will take a number above 0135 and tell rel34 first if its descriptor-factory question needs a
       record.
-    at: '2026-08-22T18:40:00+00:00'
+    at: '2026-08-22T12:41:01+00:00'
   adr_0127_amended:
     note: 'ADR 0127 is materially different from its morning text: a public catch-all handler on the descriptor
       builder, the runner stated as the single execution path across all 21 registrar lookups within 0.35.0,
       the call-site split corrected to 16 non-DCB and 5 DCB, and its own section 6 item 7 fixed to stop
       pointing at upgrading-to-0.34.0.md. No rel34 brief cites ADR 0127''s CONTENT, only its existence,
       so nothing in this epic went stale. Checked, not assumed.'
-    at: '2026-08-22T18:40:00+00:00'
+    at: '2026-08-22T12:41:01+00:00'

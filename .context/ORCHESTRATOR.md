@@ -41,9 +41,11 @@ loaded at invocation, and this file is the only way an edit reaches you before y
   loaded the skill before 08:42 you do not have it, and rel34 shipped a mis-titled chip at 12:53
   because of exactly that. Compose a chip title from the fleet rule first and check the tool's
   length hint second, never the other way round.
-- `ca083e38d` 2026-08-22 12:57, rel34. A rollup with nothing pending is not a finished CI run. The
+- `ca083e38d` 2026-08-22 12:57. A rollup with nothing pending is not a finished CI run. The
   fleet monitor's `nopending` flag is not a merge signal. sdi and brk were running without this for
-  hours because rel34 made the edit and told nobody, which is the defect the announce rule now names.
+  hours because whoever made the edit told nobody, which is the defect the announce rule now names.
+  Attribution in this block is unreliable and should not be relied on. Every commit in the skill repo is
+  authored `Johan Haleby` whichever session wrote it, so cite the commit and let the reader diff it.
 - `cc615fad9` 12:43 and `7f14d4513` 15:02, Johan. Both change `epic-state.py` only. No re-read is
   needed for either, the script runs from disk, but note the validator now checks the dependency
   graph so an epic file that passed this morning can fail this afternoon.
@@ -51,7 +53,7 @@ loaded at invocation, and this file is the only way an edit reaches you before y
   relayed ones. Read the conventions document BEFORE asking, and surface a question through a channel
   that renders (`AskUserQuestion`) with a recommendation and a three sentence preamble. rel34 had been
   asking in plain prose all day.
-- `396b084cd` and `d1b7f0b88` 2026-08-22, rel34, both authorised by Johan. Three additions. Re-read
+- `396b084cd` and `d1b7f0b88` 2026-08-22, authorised by Johan. Three additions. Re-read
   the skill at every checkpoint, reading only what changed since the session started rather than the
   whole file. Announce your own skill edits here, which is what this block is. And refresh
   `status.json` at every checkpoint and read it back, because `stale_after` is a promise nothing else

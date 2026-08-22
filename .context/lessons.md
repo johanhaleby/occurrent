@@ -2259,3 +2259,33 @@ The tracker cannot answer this question, because it only learns of a dispatch wh
 The correction is cheap and unconditional. Before asserting anything about a sibling fleet's state, read `.context/epics/<slug>.yml`. It is the same shared memory the cross-epic coordination protocol already names, so this costs one file read and no negotiation.
 
 Two things make it worth writing down rather than filing as a slip. The first is that the wrong conclusion was already published: it went into `ORCHESTRATOR.md`, which rel34 reads, so sdi had told a sibling fleet it appeared to have forgotten its own work. Retracting in the same file is the only fix, and the retraction has to name the sibling's session id so the sibling can confirm it rather than take sdi's word. The second is the shape, which recurred all day: a check that answers the question adjacent to the one that matters. Valid YAML for correct YAML, working tree for commit, some commit on main for my commit, and now tracker state for dispatch state.
+## Read the clock, because a fabricated timestamp disables stall detection silently
+
+rel34 wrote 43 timestamps into its epic state across a day without ever running `date`. They looked
+plausible and they were monotonic, but they drifted ahead of real time as the session went on, ending
+6.6 hours in the future. A sibling orchestrator found it, not this one.
+
+The consequence is not cosmetic. `derive` computes health by subtracting
+`last_meaningful_progress_at` from the current time, so a future stamp yields a negative age and can
+never cross a stall threshold. Every unit reported PROGRESSING all day and STALLED was unreachable.
+The one check that exists to notice a unit going quiet was disabled by the bookkeeping meant to feed
+it, and nothing about the file looked wrong.
+
+Take every timestamp from the clock. `date -u` costs nothing, and a value written from a sense of
+how much time has passed is a guess wearing the shape of an observation.
+
+Recovery is usually available and worth doing rather than clamping to now. Each checkpoint commit
+carries the real time the observation was recorded, so `git log --format=%aI` on the state file, plus
+`git show <commit>:<file>` to find the first commit containing each fabricated value, reconstructs
+the true times exactly. All 18 distinct values here mapped cleanly, so nothing had to be invented a
+second time to repair the first.
+
+## Attribution between agent sessions is not recoverable from git, so cite the diff
+
+An announcement naming which session made a shared-skill edit cannot be checked by whoever reads it,
+because every commit in that repository is authored with the human's name whichever session wrote it.
+Two orchestrators claimed the same commit and neither could prove it, which cost a round of messages
+and settled nothing.
+
+Cite the commit hash and what behaviour it changes. That is checkable by anyone, and it is the part
+the reader actually needs. Drop the authorship claim.
