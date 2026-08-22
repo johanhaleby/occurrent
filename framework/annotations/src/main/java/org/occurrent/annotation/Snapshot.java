@@ -71,14 +71,7 @@ import java.lang.annotation.*;
  * {@code DcbSnapshotView} to maintain a DCB snapshot, one per boundary. DCB snapshots do not support the synchronous
  * {@link #mode()}.
  * </p>
- *
- * @deprecated Renamed to {@link OccurrentSnapshot}. Its attributes and the factory method it marks are unchanged,
- * only the annotation's own name moves, so that all seven Occurrent annotations share one prefix. Run
- * {@code org.occurrent.UpgradeToOccurrent_0_35} to rewrite every use, or see
- * <a href="https://github.com/johanhaleby/occurrent/blob/main/doc/migration/upgrading-to-0.35.0.md">the 0.35.0
- * migration guide</a>.
  */
-@Deprecated(forRemoval = true)
 @Target({ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
