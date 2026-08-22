@@ -310,7 +310,7 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(reader, feed, marker);
         modelRef.set(model);
 
-        model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
+        Subscription subscription = model.subscribe("sub", null, StartAt.subscriptionModelDefault(), ce -> {
             if (ce.getId().equals("live")) {
                 drainParked.countDown();
                 awaitLatch(releaseDrain, Duration.ofSeconds(60));
@@ -324,8 +324,10 @@ class CatchupThenPushSubscriptionModelLifecycleAtomicityTest {
         modelRef.get().stop();
         releaseDrain.countDown();
 
-        // Long enough for a marker write that was not refused to have finished.
-        Thread.sleep(1000);
+        // Waited on rather than slept past, so the assertion reads storage after the replay has actually run its
+        // marker step rather than after a second in which a slow enough replay might not have reached it.
+        subscription.waitUntilStarted(Duration.ofSeconds(10));
+
         assertThat(marker.exists("sub"))
                 .as("the marker step asks about the stop as well as about ownership, so a stop that arrives with "
                         + "the history already read still marks nothing")
