@@ -26,7 +26,7 @@ import java.time.temporal.ChronoUnit;
  * and you may wish to wait ({@link #waitUntilStarted(Duration)} for them to start before continuing.
  */
 @NullMarked
-public interface Subscription {
+public interface SubscriptionHandle {
 
     /**
      * @return The id of the subscription
@@ -34,7 +34,7 @@ public interface Subscription {
     String id();
 
     /**
-     * Synchronous, <strong>blocking</strong> call returns once the {@link Subscription} has started.
+     * Synchronous, <strong>blocking</strong> call returns once the {@link SubscriptionHandle} has started.
      * <p>
      * This overload waits forever and throws away the answer, so a subscription that never started looks exactly like
      * one that did. Use {@link #waitUntilStarted(Duration)} when you need to know which happened.
@@ -44,7 +44,7 @@ public interface Subscription {
     }
 
     /**
-     * Synchronous, <strong>blocking</strong> call returns once the {@link Subscription} has started or
+     * Synchronous, <strong>blocking</strong> call returns once the {@link SubscriptionHandle} has started or
      * {@link Duration timeout} exceeds.
      * <p>
      * This handle answers for the one start it was created for, and it reports started once nothing further is

@@ -23,7 +23,7 @@ import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 
 import java.time.Duration;
 import java.util.function.Consumer;
@@ -47,12 +47,12 @@ class FakeCheckpointAwareSubscriptionModel implements CheckpointAwareSubscriptio
     private @Nullable Consumer<CloudEvent> action;
 
     @Override
-    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         this.subscriptionId = requireNonNull(subscriptionId);
         this.filter = filter;
         this.startAt = requireNonNull(startAt);
         this.action = requireNonNull(action);
-        return new Subscription() {
+        return new SubscriptionHandle() {
             @Override
             public String id() {
                 return subscriptionId;
@@ -110,7 +110,7 @@ class FakeCheckpointAwareSubscriptionModel implements CheckpointAwareSubscriptio
     }
 
     @Override
-    public Subscription resumeSubscription(String subscriptionId) {
+    public SubscriptionHandle resumeSubscription(String subscriptionId) {
         throw new UnsupportedOperationException();
     }
 

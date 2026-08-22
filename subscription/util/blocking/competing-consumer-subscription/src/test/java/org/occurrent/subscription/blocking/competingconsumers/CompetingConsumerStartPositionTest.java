@@ -29,7 +29,7 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.ManualStartSubscriptionModel;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 
 import java.time.Duration;
@@ -153,7 +153,7 @@ class CompetingConsumerStartPositionTest {
         @Nullable StartAt startAtReceived = null;
 
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             startAtReceived = startAt;
             runningIds.add(subscriptionId);
             pausedIds.remove(subscriptionId);
@@ -192,7 +192,7 @@ class CompetingConsumerStartPositionTest {
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             pausedIds.remove(subscriptionId);
             return new FakeSubscription(subscriptionId);
         }
@@ -203,7 +203,7 @@ class CompetingConsumerStartPositionTest {
         }
     }
 
-    private record FakeSubscription(String id) implements Subscription {
+    private record FakeSubscription(String id) implements SubscriptionHandle {
         @Override
         public boolean waitUntilStarted(Duration timeout) {
             return true;

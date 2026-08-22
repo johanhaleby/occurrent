@@ -27,7 +27,7 @@ import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -49,7 +49,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
         // runs below, which is exactly the race NamedCatchupSupport.cancelSubscription's "not yet handed over" branch covers.
         ReactorStreamCatchupSubscriptionModel catchup = new ReactorStreamCatchupSubscriptionModel(wrapped, new StuckPositionOrderedReader());
 
-        Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+        SubscriptionHandle subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
                 StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.empty());
         catchup.cancelSubscription("sub");
 
@@ -88,7 +88,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
         });
         assertThat(sendsThem).isTrue();
 
-        Subscription subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
+        SubscriptionHandle subscription = catchup.subscribe("sub", StreamSubscriptionFilter.filter(Filter.all()),
                 StartAt.checkpoint(GlobalCheckpoint.of(0)), cloudEvent -> Mono.fromRunnable(() -> signals.add("delivered")));
         StepVerifier.create(subscription.waitUntilStarted()).verifyComplete();
 
@@ -249,9 +249,9 @@ class ReactorStreamCatchupSubscriptionModelTest {
         }
 
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
             subscribeCalls.add(subscriptionId);
-            return new Subscription() {
+            return new SubscriptionHandle() {
                 @Override
                 public String id() {
                     return subscriptionId;
@@ -293,7 +293,7 @@ class ReactorStreamCatchupSubscriptionModelTest {
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             throw new AssertionError("resumeSubscription must not be called in this test");
         }
 

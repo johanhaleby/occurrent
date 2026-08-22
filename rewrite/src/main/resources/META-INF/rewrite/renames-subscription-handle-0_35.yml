@@ -1,0 +1,35 @@
+#
+# Copyright 2026 Johan Haleby
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: org.occurrent.MigrateSubscriptionHandleRename_0_35
+displayName: Rename Subscription to SubscriptionHandle (0.34.0 -> 0.35.0)
+description: >-
+  Renames org.occurrent.subscription.api.blocking.Subscription to SubscriptionHandle, and its reactor twin
+  org.occurrent.subscription.api.reactor.Subscription likewise. Both interfaces are what a caller holds after
+  starting a subscription, not the subscription itself, which is what the new name says (ADR 127 decision 2). It
+  is a plain type rename with no signature or behaviour change, so declarative ChangeType covers it the same way
+  renames-0_33.yml already covers five subscription-model interfaces. See doc/migration/upgrading-to-0.35.0.md
+  for what this rename covers.
+recipeList:
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.Subscription
+      newFullyQualifiedTypeName: org.occurrent.subscription.api.blocking.SubscriptionHandle
+      ignoreDefinition: true
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: org.occurrent.subscription.api.reactor.Subscription
+      newFullyQualifiedTypeName: org.occurrent.subscription.api.reactor.SubscriptionHandle
+      ignoreDefinition: true

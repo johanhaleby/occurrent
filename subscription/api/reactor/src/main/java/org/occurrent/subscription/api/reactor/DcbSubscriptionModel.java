@@ -76,7 +76,7 @@ public interface DcbSubscriptionModel {
      * @param action         This action will be invoked for each cloud event matching {@code criteria}. The next event
      *                       is not processed until the returned {@link Mono} completes.
      */
-    Subscription subscribe(String subscriptionId, DcbCriteria criteria, DcbStartAt startAt, Function<CloudEvent, Mono<Void>> action);
+    SubscriptionHandle subscribe(String subscriptionId, DcbCriteria criteria, DcbStartAt startAt, Function<CloudEvent, Mono<Void>> action);
 
     /**
      * Subscribe to DCB events matching {@code criteria} at the subscription model default position, tracked by
@@ -84,7 +84,7 @@ public interface DcbSubscriptionModel {
      *
      * @see #subscribe(String, DcbCriteria, DcbStartAt, Function)
      */
-    default Subscription subscribe(String subscriptionId, DcbCriteria criteria, Function<CloudEvent, Mono<Void>> action) {
+    default SubscriptionHandle subscribe(String subscriptionId, DcbCriteria criteria, Function<CloudEvent, Mono<Void>> action) {
         return subscribe(subscriptionId, criteria, DcbStartAt.subscriptionModelDefault(), action);
     }
 

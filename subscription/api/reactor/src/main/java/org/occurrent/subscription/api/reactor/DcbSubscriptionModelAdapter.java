@@ -59,7 +59,7 @@ final class DcbSubscriptionModelAdapter implements DcbSubscriptionModel {
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, DcbCriteria criteria, DcbStartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+    public SubscriptionHandle subscribe(String subscriptionId, DcbCriteria criteria, DcbStartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         requireNonNull(subscriptionId, "Subscription id cannot be null");
         requireNonNull(criteria, "Criteria cannot be null");
         requireNonNull(startAt, DcbStartAt.class.getSimpleName() + " cannot be null");

@@ -22,7 +22,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.retry.RetryStrategy;
 import org.occurrent.subscription.DurationToTimeoutConverter;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -40,7 +40,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * An in-memory subscription
  */
 @NullMarked
-public class InMemorySubscription implements Subscription, Runnable {
+public class InMemorySubscription implements SubscriptionHandle, Runnable {
     private final String id;
     private final BlockingQueue<CloudEvent> queue;
     private final Consumer<CloudEvent> consumer;

@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -64,7 +64,7 @@ class ProjectionAnnotationAsynchronousSubscribableResolutionTest {
 
     @Test
     void an_application_supplied_asynchronous_subscription_model_without_primary_still_starts_and_a_default_projection_binds_to_it() {
-        Subscription subscription = mock(Subscription.class);
+        SubscriptionHandle subscription = mock(SubscriptionHandle.class);
         when(subscription.waitUntilStarted()).thenReturn(Mono.empty());
         SubscriptionModel own = mock(SubscriptionModel.class);
         when(own.subscribe(any(), any(), any(), any())).thenReturn(subscription);

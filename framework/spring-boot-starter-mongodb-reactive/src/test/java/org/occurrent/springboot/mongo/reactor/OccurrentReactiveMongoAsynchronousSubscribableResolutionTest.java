@@ -25,7 +25,7 @@ import org.occurrent.dsl.subscription.reactor.Subscriptions;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.StartAt;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -65,7 +65,7 @@ class OccurrentReactiveMongoAsynchronousSubscribableResolutionTest {
 
     @Test
     void an_application_supplied_asynchronous_subscription_model_without_primary_still_starts_and_the_dsl_binds_to_it() {
-        Subscription subscription = mock(Subscription.class);
+        SubscriptionHandle subscription = mock(SubscriptionHandle.class);
         SubscriptionModel own = mock(SubscriptionModel.class);
         when(own.subscribe(any(), any(), any(), any())).thenReturn(subscription);
 

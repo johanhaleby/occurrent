@@ -28,7 +28,7 @@ import org.occurrent.subscription.CatchupListener;
 import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.reactor.ReplayAwareSubscriptions;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.api.reactor.SubscriptionModel;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -176,7 +176,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
      * refusal of an unsupported filter included.
      */
     @Override
-    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
+    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Function<CloudEvent, Mono<Void>> action) {
         requireNonNull(subscriptionId, "subscriptionId cannot be null");
         requireNonNull(action, "Action cannot be null");
         requireNonNull(startAt, StartAt.class.getSimpleName() + " cannot be null");
@@ -187,7 +187,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
         if (subscriptionOwners.putIfAbsent(subscriptionId, routed) != null) {
             throw new DuplicateSubscriptionIdException(subscriptionId);
         }
-        final Subscription subscription;
+        final SubscriptionHandle subscription;
         try {
             subscription = routed.subscribe(subscriptionId, filter, startAt, action);
         } catch (RuntimeException e) {
@@ -301,7 +301,7 @@ public class ReactorCatchupSubscriptionModel implements CheckpointAwareSubscript
     }
 
     @Override
-    public Subscription resumeSubscription(String subscriptionId) {
+    public SubscriptionHandle resumeSubscription(String subscriptionId) {
         return ownerOf(subscriptionId).resumeSubscription(subscriptionId);
     }
 

@@ -35,7 +35,7 @@ import org.occurrent.filter.Filter;
 import org.occurrent.subscription.*;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
@@ -269,7 +269,7 @@ class StreamCatchupSubscriptionModelTest {
         CheckpointAwareSubscriptionModel reportsNoCheckpoint = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, null);
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(reportsNoCheckpoint, eventStore, new CatchupSubscriptionModelConfig(100));
 
-        Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
+        SubscriptionHandle started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
 
         // A start that failed and will not be retried throws rather than answering false, since false is reserved for a
         // subscription nothing has started yet but still could, and this one never will. Five seconds is a bound on a
@@ -307,7 +307,7 @@ class StreamCatchupSubscriptionModelTest {
         CopyOnWriteArrayList<DomainEvent> received = new CopyOnWriteArrayList<>();
         CheckpointAwareSubscriptionModel reportsNoCheckpoint = new CheckpointAwareInMemorySubscriptionModel(inMemorySubscriptionModel, null);
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(reportsNoCheckpoint, eventStore, new CatchupSubscriptionModelConfig(100));
-        Subscription started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
+        SubscriptionHandle started = subscription.subscribe("subscription", StartAt.checkpoint(GlobalCheckpoint.of(0)), toDomainEvents(received));
         assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(5)));
 
         assertThatThrownBy(() -> subscription.pauseSubscription("subscription"))
@@ -329,7 +329,7 @@ class StreamCatchupSubscriptionModelTest {
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(reportsNoCheckpoint, eventStore, new CatchupSubscriptionModelConfig(100));
         String subscriptionId = "subscription";
 
-        Subscription started = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> subscription.pauseSubscription(subscriptionId));
+        SubscriptionHandle started = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> subscription.pauseSubscription(subscriptionId));
 
         assertThatThrownBy(() -> started.waitUntilStarted(Duration.ofSeconds(5))).isInstanceOf(IllegalStateException.class);
         assertThat(subscription.isPaused(subscriptionId))
@@ -345,7 +345,7 @@ class StreamCatchupSubscriptionModelTest {
         AtomicBoolean runningMarkedBeforeCatchupRuns = new AtomicBoolean(false);
         StreamCatchupSubscriptionModel subscription = new StreamCatchupSubscriptionModel(subscriptionModel, eventStore, new CatchupSubscriptionModelConfig(100)) {
             @Override
-            protected Future<Subscription> startCatchupAsync(String subscriptionId, Callable<Subscription> catchup) {
+            protected Future<SubscriptionHandle> startCatchupAsync(String subscriptionId, Callable<SubscriptionHandle> catchup) {
                 return super.startCatchupAsync(subscriptionId, () -> {
                     runningMarkedBeforeCatchupRuns.set(runningCatchupSubscriptions.containsKey(subscriptionId));
                     return catchup.call();
@@ -372,7 +372,7 @@ class StreamCatchupSubscriptionModelTest {
         CountDownLatch replayReached = new CountDownLatch(1);
         CountDownLatch releaseReplay = new CountDownLatch(1);
 
-        Subscription started = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+        SubscriptionHandle started = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
             replayReached.countDown();
             awaitLatch(releaseReplay);
         });
@@ -416,7 +416,7 @@ class StreamCatchupSubscriptionModelTest {
 
         CountDownLatch firstReplayReached = new CountDownLatch(1);
         CountDownLatch releaseFirstReplay = new CountDownLatch(1);
-        Subscription first = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+        SubscriptionHandle first = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
             firstReplayReached.countDown();
             awaitLatch(releaseFirstReplay);
         });
@@ -428,7 +428,7 @@ class StreamCatchupSubscriptionModelTest {
 
         CountDownLatch secondReplayReached = new CountDownLatch(1);
         CountDownLatch releaseSecondReplay = new CountDownLatch(1);
-        Subscription second = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
+        SubscriptionHandle second = subscription.subscribe(subscriptionId, StartAtTime.beginningOfTime(), cloudEvent -> {
             secondReplayReached.countDown();
             awaitLatch(releaseSecondReplay);
         });
@@ -870,7 +870,7 @@ class StreamCatchupSubscriptionModelTest {
         }
 
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             StartAt resolved = startAt.get(new StartAt.SubscriptionModelContext(InMemorySubscriptionModel.class));
             StartAt startAtToUse = resolved != null && resolved.isDefault() ? StartAt.subscriptionModelDefault() : StartAt.now();
             return delegate.subscribe(subscriptionId, filter, startAtToUse, action);
@@ -907,7 +907,7 @@ class StreamCatchupSubscriptionModelTest {
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             return delegate.resumeSubscription(subscriptionId);
         }
 

@@ -20,6 +20,8 @@ import com.rabbitmq.client.AMQP.BasicProperties;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
+import com.rabbitmq.client.Recoverable;
+import com.rabbitmq.client.RecoveryListener;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.AfterEach;
@@ -47,19 +49,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * A held {@code DEFERRED} delivery tag ({@code heldDeferredDeliveryTags}) must not be trusted across an automatic
- * connection recovery: RabbitMQ delivery tags restart at 1 on the recovered channel, so a stale tag can silently
- * identify a completely different message afterward. {@link RabbitMqCloudEventBridge} now registers a
- * {@code RecoveryListener} on its connection and a {@code ConsumerShutdownSignalCallback} on its own consumer,
- * both bumping a generation counter that invalidates every delivery tag captured before either fires.
+ * A {@link RabbitMqCloudEventBridge} keeps consuming after its connection has recovered automatically. Both tests
+ * hold a {@code DEFERRED} delivery (a live message arriving while a catch-up replay is parked), force the
+ * underlying TCP connection closed from the broker side with {@code rabbitmqctl close_all_connections}, and then
+ * release the replay and assert the message still reaches the projection.
  * <p>
- * Holds a {@code DEFERRED} delivery (a live message that arrives while a catch-up replay is parked), forces the
- * underlying TCP connection closed from the broker side ({@code rabbitmqctl close_all_connections}) so the client's
- * automatic recovery reconnects with a fresh channel and a reset delivery-tag counter, then releases the parked
- * replay and asserts the held message still reaches the projection, without a stale tag ever being acknowledged
- * along the way. Fails outright, rather than skipping quietly, if {@code close_all_connections} itself reports a
- * non-zero exit code: a test that can silently pass without ever forcing the drop it exists to test is worse than
- * no test at all.
+ * The second test also delays every recovery listener on the connection past the point where the recovered
+ * consumer has already been handed the requeued message. The RabbitMQ client re-issues {@code basic.consume} while
+ * it recovers topology, before it notifies any recovery listener, so a bridge that decided a delivery's fate from
+ * what a recovery listener had told it would leave that first redelivery unacknowledged and, at the default
+ * prefetch of one, never receive anything again. See <a
+ * href="https://github.com/johanhaleby/occurrent/issues/922">occurrent#922</a>.
+ * <p>
+ * Both fail outright, rather than skipping quietly, when {@code close_all_connections} reports a non-zero exit
+ * code. A test that can pass without ever forcing the recovery it exists to exercise is worse than no test at all.
  */
 @Testcontainers
 class RabbitMqCloudEventBridgeConnectionRecoveryTest {
@@ -123,7 +126,8 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
             Thread.sleep(500);
 
             // Force the TCP connection closed from the broker side. The client's automatic recovery (enabled
-            // above) reconnects on a fresh channel with delivery tags restarting at 1.
+            // above) reconnects, resubscribes the consumer, and offsets the recovered channel's delivery tags past
+            // every tag the dead channel issued.
             forceCloseAllConnectionsOrFail();
 
             // Wait for the client to report the connection open again (automatic recovery completed).
@@ -135,8 +139,80 @@ class RabbitMqCloudEventBridgeConnectionRecoveryTest {
             releaseReplay.countDown();
 
             // The held message must still reach the projection once catch-up finishes and the bridge's own
-            // held-tag release runs, generation-fenced against the recovery this test just forced.
+            // held-tag release runs.
             await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(folded).contains("id-1"));
+        }
+    }
+
+    @Test
+    void a_redelivery_arriving_before_the_connections_recovery_listeners_run_is_still_consumed() throws Exception {
+        String queue = "test-queue-" + UUID.randomUUID();
+        adminChannel.queueDeclare(queue, false, false, false, null);
+        adminChannel.queueBind(queue, exchange, OrderPlaced.class.getName());
+
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel liveFeed = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        InMemoryEventStore store = new InMemoryEventStore();
+        store.write("s1", List.of(cloudEvent("historical", OrderPlaced.class.getName())));
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
+
+        CountDownLatch replayEntered = new CountDownLatch(1);
+        CountDownLatch releaseReplay = new CountDownLatch(1);
+        List<String> folded = new CopyOnWriteArrayList<>();
+        model.subscribe("proj", null, StartAt.subscriptionModelDefault(), ce -> {
+            folded.add(ce.getId());
+            if (ce.getId().equals("historical")) {
+                replayEntered.countDown();
+                awaitLatch(releaseReplay);
+            }
+        });
+        assertThat(replayEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // Registered on the connection before the bridge is built, and recovery listeners run in registration
+        // order, so this one holds every later listener back for two seconds after the recovered consumer has
+        // already been handed the requeued message. Two seconds rather than none, because a listener that returned
+        // at once could bump a generation counter before the redelivery had read it, which is the ordering that
+        // made the first test flaky rather than failing.
+        CountDownLatch recoveryComplete = new CountDownLatch(1);
+        ((Recoverable) connection).addRecoveryListener(new RecoveryListener() {
+            @Override
+            public void handleRecovery(Recoverable recoverable) {
+                sleep(Duration.ofSeconds(2));
+                recoveryComplete.countDown();
+            }
+
+            @Override
+            public void handleRecoveryStarted(Recoverable recoverable) {
+            }
+        });
+
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection, liveFeed, outcomeChannel, queue)
+                .declareTopology(false)
+                .pollInterval(Duration.ofSeconds(2))
+                .build()) {
+            publish(OrderPlaced.class.getName(), "id-1");
+            sleep(Duration.ofMillis(500));
+
+            forceCloseAllConnectionsOrFail();
+            // Waits for the listener above rather than for a fixed delay, so the replay is released only once the
+            // redelivery has been handed to the recovered consumer with the replay still parked, which is the
+            // ordering this test exists for.
+            assertThat(recoveryComplete.await(30, TimeUnit.SECONDS))
+                    .as("the connection's recovery listeners must have run")
+                    .isTrue();
+
+            releaseReplay.countDown();
+
+            await().atMost(Duration.ofSeconds(20)).untilAsserted(() -> assertThat(folded).contains("id-1"));
+        }
+    }
+
+    private static void sleep(Duration duration) {
+        try {
+            Thread.sleep(duration.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
         }
     }
 

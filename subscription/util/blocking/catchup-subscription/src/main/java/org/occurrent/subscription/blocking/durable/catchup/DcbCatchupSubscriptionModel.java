@@ -31,7 +31,7 @@ import org.occurrent.subscription.StartAt.StartAtCheckpoint;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.blocking.durable.catchup.CheckpointStorageConfig.UseCheckpointInStorage;
 import org.occurrent.subscription.internal.BoundedIdCache;
@@ -88,7 +88,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
     }
 
     @Override
-    public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         Objects.requireNonNull(startAt, "Start at supplier cannot be null");
         final StartAt firstStartAt;
         if (startAt.isDefault()) {
@@ -116,11 +116,11 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
             return subscribeLiveWithoutCatchup(subscriptionId, filter, firstStartAt, action);
         }
 
-        Future<Subscription> subscriptionCompletableFuture = startCatchupAsync(subscriptionId, () -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
+        Future<SubscriptionHandle> subscriptionCompletableFuture = startCatchupAsync(subscriptionId, () -> startDcbCatchupSubscription(subscriptionId, filter, startAt, action, firstStartAt));
         return new CatchupSubscription(subscriptionId, subscriptionCompletableFuture);
     }
 
-    private Subscription startLiveDcbSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAtToUse, Consumer<CloudEvent> action, @Nullable BoundedIdCache cache) {
+    private SubscriptionHandle startLiveDcbSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAtToUse, Consumer<CloudEvent> action, @Nullable BoundedIdCache cache) {
         return subscriptionModel.subscribe(subscriptionId, filter, startAtToUse, dcbLiveConsumer(action, cache));
     }
 
@@ -131,7 +131,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
      * claimed. Distinct from {@link #startLiveDcbSubscription}'s own use inside a finishing attempt's handover,
      * which has already gone through that lock and that decision and must not cancel itself.
      */
-    private Subscription subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+    private SubscriptionHandle subscribeLiveWithoutCatchup(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
         cancelRunningCatchup(subscriptionId);
         return startLiveDcbSubscription(subscriptionId, filter, startAt, action, null);
     }
@@ -148,7 +148,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
         };
     }
 
-    private Subscription startDcbCatchupSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
+    private SubscriptionHandle startDcbCatchupSubscription(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action, StartAt firstStartAt) {
         long windowSize = config.dcbCatchupPositionWindowSize;
 
         StartAt nextStartAt = firstStartAt.get(generateSubscriptionModelContext());
@@ -225,7 +225,7 @@ class DcbCatchupSubscriptionModel extends AbstractCatchupSubscriptionModel {
                         }
                     }));
 
-            final Subscription subscription;
+            final SubscriptionHandle subscription;
             if (subscriptionsWasCancelledOrShutdown) {
                 // Same fix as the blocking stream side. Priming startAtToUse is skipped for an explicit cancellation of
                 // this exact id, since its get() call saves globalCheckpoint as a side effect, which would recreate the

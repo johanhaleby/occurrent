@@ -787,3 +787,125 @@ The redaction is the part worth keeping. It reads as a statement about precision
 Repairing them separated the two recovery sources, which had been treated as one. `PR 908 was CLOSED WITHOUT MERGING at 13:0xZ` is a claim about a GitHub object and `gh` settles it outright at `11:41:19Z`, eighty minutes off. The adjacent claim about when rel34 flagged #912 is a cross-fleet event no external system owns, so only commit reconstruction can bound it. Owning system first, reconstruction as fallback, because reconstruction yields a bound while the owning system yields the value.
 
 sdi at revision 37, prose swept, zero future observation values, the two observation keys still deliberately unrepaired and recorded as such. brk's PR 930 took a new head and remains disjoint from U1 on the measurement already recorded. U1 still running.
+
+### sdi checkpoint 2026-08-22T13:58:00Z: dec-0006's premise expired, and U1 recreated issue #721 inside the epic that fixes it
+
+Two findings from checking U1's in-flight diff rather than waiting for its delivery.
+
+**dec-0006's zero-intersection claim is no longer true, and its conclusion survives anyway.** The decision Johan approved rested on a `comm -12` showing U1's fourteen framework files disjoint from rel34's open PR 914 and from the two files rel34/U6 owns. U1's framework set has since grown to sixteen, and the two new files are exactly `OccurrentMongoAutoConfiguration` and `OccurrentReactiveMongoAutoConfiguration`, which PR 914 also edits. So the files now intersect. The hunks do not: PR 914 works at lines 182 to 206 in each, U1 at 292 and 329, so git auto merges and the decision holds. Recording it because the premise expired through U1's own growth rather than through anything rel34 did, which is a way a measured decision can go stale that nothing in the fence protocol watches for.
+
+**U1 renamed three references to the wrong Subscription.** `org.occurrent.annotation.Subscription` is an annotation and keeps its name; only the API type `org.occurrent.subscription.api.{blocking,reactor}.Subscription` becomes `SubscriptionHandle`. Three added lines now reference a `@SubscriptionHandle` annotation that does not exist, two javadoc lines in the Mongo auto configurations and one comment. A text level rename cannot distinguish the two meanings, which is precisely issue #721, so the epic that exists to fix that ambiguity had begun introducing fresh instances of it. Sent to the worker with the rule that an `@` prefix means the annotation and stays, plus an instruction to sweep its own diff for the same shape rather than fixing only the three named lines.
+
+Caught by reading the worker's working tree during a wait rather than by any gate. The merge gate would have caught it, but only after a full CI run and a review round.
+
+### sdi checkpoint 2026-08-22T14:05:25Z: AGENTS.md rule change checked against sdi's recorded reasoning
+
+rel34's PR 932 changes one line of `AGENTS.md`, extending the release-status test from API changes to unreachability arguments. "Nothing in this repository reaches it" is now explicitly an observation about this repository rather than about the code, and argues for dropping or ignoring a shipped path no better than a call-site count argues for reshaping a shipped API. A path reachable only through a shipped type is reachable whatever the starter wires by default.
+
+Checked against sdi rather than noted and filed. The state file contains no unreachability reasoning at all. The plan uses the neighbouring rule exactly once, at line 305, and in the additive direction: "nothing here calls it" is no reason to skip a public API addition, applied to the catch-all handler U2 builds. That is the half of the rule that already existed and the change reinforces it.
+
+**One consequence for briefs not yet written.** U13 and U14 are scoped by a measured call-site split, sixteen non-DCB sites and five DCB sites. Under the amended rule that enumeration scopes the WORK and does not license the BREAKING CHANGE. Both reshape APIs that have shipped, so each still owes an `UpgradeToOccurrent_0_35` recipe addition and a `doc/migration/upgrading-to-0.35.0.md` entry regardless of how few sites the repository contains. Their briefs must say so explicitly, because a brief that leads with a call-site count invites exactly the inference this line now forbids.
+
+U1 already models the compliant shape: its diff carries `rewrite/src/main/resources/META-INF/rewrite/renames-subscription-handle-0_35.yml`, a wiring change to `upgrade-0_35.yml`, a recipe test, and a migration guide edit, alongside the rename itself.
+
+PR 932 touches only `AGENTS.md` and is disjoint from U1. No sdi action on the PR.
+
+**Resolved at 2026-08-22T14:06:43Z.** The worker took the correction, restored both javadoc lines to `{@code @Subscription}` and the comment to its annotation form, then began sweeping its own diff for the same shape rather than stopping at the three lines named. Verified by content, not by its report: zero occurrences of `@SubscriptionHandle` anywhere in the worktree across Java, Kotlin, Markdown and YAML.
+
+Worth recording what found it, because no gate would have. The defect surfaced from reading an in-flight worktree during a wait, and it is invisible to compilation (a javadoc `{@code}` reference to a nonexistent type is not a compile error), invisible to tests, and invisible to the fence check. CI would have gone green on it. The merge gate would have caught it only if a reviewer read those two lines, and a 149 file mechanical rename is exactly the diff a reviewer skims.
+
+### sdi checkpoint 2026-08-22T14:08:19Z: the fence PR is open, and U7 is the unit it frees
+
+rel34 opened PR 933 for #837, `rel34/u6-transactional-subscription-handlers`, +555/-18. Its scope was measured rather than taken from any brief, and the measurement matters because two different sources had it wrong. The sdi registration prompt said #837 touches "all four registrars" and rel34's own goal text said "every registrar surface in one pass". The PR touches five files: `SubscriptionAnnotationRegistrar` blocking and reactor as the only main sources, two Mongo transactional-advice tests, and `changelog.md`.
+
+**dec-0006's premise was correct and the doubt raised against it was not.** That decision lifted U1's fence on a `comm -12` against "the two files rel34/U6 owns", and earlier today this session flagged that premise as probably stale given the broader scope both other sources described. The PR settles it: two files, exactly as measured. Recording the correction in the same place the doubt was recorded, because a suspicion published and then quietly dropped is worse than one never raised.
+
+**U1 is disjoint from it on two independent measurements.** No file intersection, and U1 does not touch `SubscriptionAnnotationRegistrar` at all. The reason it correctly skips those files is the distinction U1 got wrong three times elsewhere: both registrars reference `Subscription`, but it is `org.occurrent.annotation.Subscription`, the annotation, which keeps its name. Neither imports the API type being renamed.
+
+**What clears on merge is U7 alone, and that is the thing to prepare for.** U7's dependencies, U5 and U12, are both DONE, so #837 is its only remaining blocker and it becomes dispatchable the moment 933 merges. U6 and U13 also lose the #837 blocker but stay held by U1, U2, U3 and U4. U8 waits on U6 and U7. So the correct action while 933 is in CI is to have U7's brief written and gated rather than starting to write it on the merge event.
+
+Two obligations that brief carries, both derived rather than remembered. It must preserve PR 933's advice fix on the deprecated reflective paths, which outlive 0.35.0, and it must carry the migration obligation explicitly: under the `AGENTS.md` line rel34 changed in PR 932, a call-site count in this repository neither licenses a reshape nor supports an unreachability claim, so U7 owes its `UpgradeToOccurrent_0_35` recipe addition and migration entry on release status alone.
+
+### sdi correction 2026-08-22T14:10:04Z: dec-0006's premise never expired, and the apparent growth was the defect
+
+Retract the checkpoint above titled "dec-0006's premise expired". It reported that U1's framework file set had grown from the fourteen dec-0006 measured to sixteen, that the two new files were the Mongo auto configurations, and that these now intersected rel34's open PR 914 where the decision had claimed zero intersection. The observation was accurate and the conclusion was backwards.
+
+The two files entered U1's set only because of the annotation rename defect. They contained no reference to the API type at all, just a javadoc line naming the `@Subscription` ANNOTATION, so the correct diff for them is empty. With the defect fixed, both drop out. Verified by content at 2026-08-22T14:10:04Z: U1's framework set is fourteen files, the intersection with PR 914 is empty, and the total diff fell from 149 files to 147. dec-0006's premise was exact on both halves, the two files rel34/U6 owns and U1's fourteen framework files disjoint from every open rel34 PR.
+
+**The miss worth keeping is the order the two findings arrived in.** The intersection was found first and treated as a fence question, asking whether the overlapping hunks would conflict. They did not, so it was recorded as a premise that had expired harmlessly. The defect was found separately afterwards by reading the hunks for an unrelated reason. But the intersection WAS the defect's fingerprint. Two files appearing in a mechanical rename's diff without containing the renamed type is not scope growth, it is a wrong edit, and the question "why did these files enter the set" would have reached it immediately while "does this intersection still conflict" did not.
+
+So a measured decision whose premise appears to expire deserves the cause investigated before the consequence is re-derived. Legitimate scope growth and a defect in the work look identical at the level of a file list, and only one of them is safe to note and move past.
+
+### sdi checkpoint 2026-08-22T14:14:22Z: U1 delivered as PR 934, gate not met
+
+`sdi/u1-subscription-handle-rename` is open as PR 934, head `4c497824c`, 149 files, +930/-724. Brief compliance was checked by reading the PR rather than by trusting the worker's report, and it holds on every point. The recipe `org.occurrent.MigrateSubscriptionHandleRename_0_35` carries both `ChangeType` entries fully qualified with `ignoreDefinition: true`, and is wired into `org.occurrent.UpgradeToOccurrent_0_35`, which is the aggregate name the definition of done requires. The recipe test is present, `doc/migration/upgrading-to-0.35.0.md` has its section 2, and there is no `changelog.md` or ADR edit, which is what the changelog gate demands until the 0.35.0 tag exists. Zero `@SubscriptionHandle` misfires survive in the pushed head.
+
+**The merge gate is NOT met and the reason is worth stating precisely, because the tempting reading says otherwise.** `Java CI with Maven` is `in_progress`, `MongoDB test containers` is `queued`, the Copilot review is `in_progress`, and `reviewDecision` is empty. Read from the workflow run, per the rule this session added to the skill at `ca083e38d`.
+
+The rollup on the same PR at the same instant reports six contexts with three pending, and it is instructive twice over. Three pending already refutes a merge, but had the queued jobs happened to start and finish first it would have read zero pending and looked green. And six contexts against this repository's twenty-six context matrix means the matrix has not expanded yet, so the rollup is not merely incomplete, it is describing a different and much smaller run than the one that has to pass. A gate reading zero pending against six contexts would be wrong on both counts at once.
+
+One thing needs no action: Copilot review was triggered automatically on this PR, so the GraphQL `requestReviews` path with its bot-id lookup is not needed here. Worth remembering only if a later sdi PR opens without it.
+
+### sdi checkpoint 2026-08-22T14:18:08Z: Copilot found the same defect class in a form the fix could not catch
+
+Copilot reviewed PR 934 at effort level Balanced, read from the review body rather than assumed: four inline comments, four unresolved threads, so the merge gate now fails on threads as well as on CI.
+
+Three of the four are the annotation-rename defect in a different disguise. Where this session caught the `@`-prefixed form, and the worker's sweep therefore covered `@`-prefixed forms, Copilot caught the bare-prose form: three javadoc lines reading "This Subscription doesn't maintain the checkpoint, you need to store it yourself", where the word meant the subscription MODEL as a concept. Renaming those to `SubscriptionHandle` attributes the model's checkpoint responsibility to a handle that has none. In `SpringMongoSubscriptionModel`, `NativeMongoSubscriptionModel` and `ReactorMongoSubscriptionModel`. The fourth is a style nit, "A `SubscriptionHandle` handle" repeating the noun.
+
+**The word carries three meanings in this codebase and the rename targets one.** The API type, which renames. The annotation `org.occurrent.annotation.Subscription`, which does not. And prose meaning the subscription model or the subscription as a concept, which does not. A text level rename cannot separate them, and that inability IS issue #721. The epic has now produced instances of the second and third kinds while fixing the first, which is the strongest possible evidence that #721 is a real defect rather than a naming preference, and worth saying in the PR that closes it.
+
+**The instruction that produced the incomplete fix was mine and it was underspecified.** It said an `@` prefix means the annotation and that bare-word occurrences in prose are suspect, then named three `@` lines as the examples. The worker implemented the examples rather than the rule, which is the predictable outcome when a rule and its illustration disagree in scope. Re-sent with all three meanings enumerated and with the sweep restated as a question to ask of each line rather than a pattern to match.
+
+Also handed over rather than adjudicated here: two added lines read `and "subscription" mode ({@link SubscriptionHandle})`, which describe a mode named subscription rather than the handle type. The worker has the surrounding code and this session does not, so it decides them.
+
+### sdi checkpoint 2026-08-22T14:21:54Z: three of four gate facts met on PR 934, and what the review fact actually means
+
+New head `d2a622f0e`. All four Copilot findings verified fixed by reading the pushed branch, not the worker's report: the three model javadoc lines now read "This subscription model doesn't maintain the checkpoint", and `CancelledSubscription` dropped the repeated noun.
+
+**The two lines this session flagged as candidates were false positives and the worker was right to decline them.** `CatchupSubscriptionModelConfig` imports `org.occurrent.subscription.api.blocking.Subscription`, so `{@link Subscription}` there resolved to the API type and MUST rename or the javadoc link breaks. The sentence contrasts catch-up mode, linked to `EventStoreQueries`, against subscription mode, linked to the live delivery type. It is an associative link rather than a claim that the mode is the handle, and it reads identically before and after. Recording it as a false positive in the same place it was raised, for the same reason the dec-0006 doubt was retracted rather than dropped.
+
+**Gate state, three facts of four met.** Unresolved threads counted with `isResolved == false` alone: zero. Review bodies read: Copilot at effort Balanced, four findings, all addressed. `reviewDecision`: empty. `Java CI with Maven`: `in_progress`, so the merge is refused on CI alone.
+
+**What empty `reviewDecision` means here was measured rather than assumed, and the answer changes how the gate reads.** `main` is not branch protected, and both sdi PRs that have already merged today, 924 and 923, merged with `reviewDecision` empty. So the second gate fact is "not `CHANGES_REQUESTED`", never "is `APPROVED`". Read as requiring an approval it would refuse every PR in this repository forever, including the two that already landed.
+
+One trap avoided that the lessons file already warned about. PR 934 now lists four `johanhaleby | COMMENTED | body 0` reviews. Those are the empty review shells a thread reply creates, not a human re-review and not an approval. Counting reviews, or filtering them by body length, would read them as human sign-off on a PR no human has looked at. They were identified by `.user.login` and by `reviewDecision` staying empty.
+
+### sdi checkpoint 2026-08-22T14:28:01Z: U7 is a release blocker, and its goal text understated the work
+
+Measured while PR 933 sat green, and it changes what U7 is.
+
+**#929 is live on `main` right now.** `UpgradeToOccurrent_0_35` already wires `MigrateOccurrentAnnotationRenames_0_35`, which rewrites all seven annotations onto their `@Occurrent*` names. Zero main sources under `framework/spring-boot-autoconfigure` reference any new name: `@Projection` is read by five main files and `@OccurrentProjection` by none, `@Saga` by two and `@OccurrentSaga` by none, `@Snapshot` by five and `@OccurrentSnapshot` by none, `@Subscription` by three and `@OccurrentSubscription` by none. A user who runs the 0.35.0 upgrade recipe today has every projection, saga, snapshot and subscription silently stop registering. U7 is therefore a release blocker rather than a normalization tidy-up, and the recipe must not ship ahead of the registrars that read what it writes.
+
+**U7's goal text said three new descriptor annotations. There are seven.** U5 added seven and seven deprecated ones remain. Corrected in the state file at revision 41. This is the same failure as the earlier "four registrars" error, a count carried from the ADR into a claim about the code, and it would have cost more here: a brief saying three normalizes three pairs and leaves four annotations silently unread, which is #929 again in a narrower form and inside the unit meant to fix it.
+
+The rest of U7's surface was measured and the goal was right about it. Seven registrars, PR 933 owns the two `SubscriptionAnnotationRegistrar` files, leaving five: `ProjectionAnnotationRegistrar` blocking and reactor, `SagaAnnotationRegistrar` blocking, `SnapshotAnnotationRegistrar` blocking and reactor. Both bean post processors confirmed present.
+
+**PR 933's `Java CI with Maven` is `completed/success`.** The fence clears on rel34 merging it, and U7 is READY at that moment since U5 and U12 are both DONE.
+
+### U1 CI failure, cause not yet established
+
+`test (subscription-mongodb-spring, java-25)` FAILED on `d2a622f0e`, at the `Run shard tests` step with every setup step green. Attributable to the PR rather than to a known-red shard: that shard was `success` on main's last three completed runs. The cause is NOT established, because `Java CI with Maven` is still `in_progress` and GitHub withholds job logs until the run completes. Recording it as unknown rather than guessing. The worker has been asked to reproduce locally with `-am`, which can beat the log, and pointed at the one shape a green compile cannot catch: a string literal, reflective lookup or resource file naming the old type, which `ChangeType` does not rewrite.
+
+### sdi 2026-08-22T14:34:06Z: U1's CI failure diagnosed, rerun issued on the identical SHA
+
+The run completed so the log became retrievable. One failure: `SubscriptionModelConformance$TheLifeCycle.a_paused_subscription_receives_what_the_fixture_declares_and_delivers_again_once_resumed`. The assertion expected the subsequence `["2", "3"]` and got `["3"]`, so the event published while the subscription was paused never arrived, against a fixture that declares it holds events while paused.
+
+**Read as two fixtures rather than as a flake, per the recorded TCK lesson.** `TheLifeCycle` ran twice in this shard with fourteen tests each, once failing and once passing. That is the shape the lessons file warns is a fixture disagreement rather than a retry, so "it passed on the second run" was never available as a reading here.
+
+**What the diff can and cannot explain.** U1's entire change inside the failing module `subscription/mongodb/spring/` is the two javadoc lines corrected after Copilot's review. Both are inert. Everything else there is the type rename, and the TCK module's own diff is forty insertions against forty deletions across nine files, the balance a pure rename produces. Nothing in it can alter pause and hold semantics.
+
+**What the log points at instead.** Sixteen occurrences of MongoDB error 286, `ChangeStreamHistoryLost`, plus an `IllegalStateException: state should be: open` from the reactor model. A change stream whose resume point ages out of the oplog genuinely loses events, which is exactly the observed symptom of event "2" never arriving.
+
+That makes environmental far more likely than a regression, and "far more likely" is not a verdict. A rerun on the identical SHA is the discriminator that settles it: the code is fixed, so a pass exonerates it and a second failure makes it real. Issued at 2026-08-22T14:34:06Z, currently `in_progress`. No fix will be pushed and nothing will be claimed about the cause until it concludes.
+
+### sdi 2026-08-22T14:35:56Z: U7 brief drafted and gated, waiting rather than polling
+
+U7's brief is written and staged at `/private/tmp/claude-501/-Users-johan-devtools-java-projects-occurrent--claude-worktrees-admiring-bhabha-362d44/dd98386f-d179-41e9-99e1-54d0187ce667/scratchpad/u7-brief.md`, 74 lines, so the dispatch on PR 933's merge is a paste rather than an authoring round. Chip title validated against the gate regex before it is needed: `⌁[sdi/U7#721] Normalize the annotation set · Opus/high`, 54 characters, PASS.
+
+The brief leads with the release-blocker evidence rather than the task, carries all seven annotation pairs with the `StreamSubscription$StartPosition` nested rename called out separately, names the five registrars and both bean post processors by path, states the fence rule against PR 933's two files with the requirement to carry its advice fix forward, and specifies the two tests #929 needs with the reason they must be per registrar family rather than one overall. It also carries the changelog gate and, at the end, the three meanings of "Subscription" with U1's six wrong edits as the evidence that reading each occurrence for intent is not optional.
+
+**The fence will not clear immediately.** PR 933 is green and MERGEABLE but carries two unresolved review threads, so rel34 is still working it. That is rel34's gate and sdi has no business pushing on it.
+
+**U1's rerun is still `in_progress` and nothing will be concluded until it finishes.** One supporting observation while it runs: `test (subscription-mongodb-spring, java-21)` passed on this same head. The same fixtures on a different JDK agreeing points further away from a code regression, since a real defect in pause and hold semantics would not select a JDK. It is corroboration, not the verdict, and the rerun remains the thing that decides.
+
+No further polling. The monitor wakes on the transitions that matter.

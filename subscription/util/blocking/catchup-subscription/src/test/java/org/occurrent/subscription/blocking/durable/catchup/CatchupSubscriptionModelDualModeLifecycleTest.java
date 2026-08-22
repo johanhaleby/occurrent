@@ -29,7 +29,7 @@ import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.blocking.Subscription;
+import org.occurrent.subscription.api.blocking.SubscriptionHandle;
 
 import java.lang.reflect.Field;
 import java.util.List;
@@ -172,7 +172,7 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
         }
 
         @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+        public SubscriptionHandle subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             throw new AssertionError("subscribe must not be called by this test");
         }
 
@@ -202,7 +202,7 @@ class CatchupSubscriptionModelDualModeLifecycleTest {
         }
 
         @Override
-        public Subscription resumeSubscription(String subscriptionId) {
+        public SubscriptionHandle resumeSubscription(String subscriptionId) {
             throw new AssertionError("resumeSubscription must not be called by this test");
         }
 

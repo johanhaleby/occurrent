@@ -28,7 +28,7 @@ import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.api.reactor.CheckpointAwareSubscriptionModel;
-import org.occurrent.subscription.api.reactor.Subscription;
+import org.occurrent.subscription.api.reactor.SubscriptionHandle;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorCheckpointStorage;
 import org.occurrent.subscription.mongodb.spring.reactor.ReactorMongoSubscriptionModel;
 import org.occurrent.subscription.reactor.durable.catchup.ReactorCatchupSubscriptionModel;
@@ -132,7 +132,7 @@ class NamedCatchupPathTest {
         publish("e1", "e2", "e3");
         List<String> delivered = new CopyOnWriteArrayList<>();
 
-        Subscription subscription = durableModel.subscribe(streamId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)),
+        SubscriptionHandle subscription = durableModel.subscribe(streamId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)),
                 event -> Mono.fromRunnable(() -> delivered.add(event.getId())));
         subscription.waitUntilStarted().block(TIMEOUT);
 
@@ -148,7 +148,7 @@ class NamedCatchupPathTest {
         CountDownLatch firstReplayedEventReached = new CountDownLatch(1);
         CountDownLatch midReplayEventPublished = new CountDownLatch(1);
 
-        Subscription subscription = durableModel.subscribe(streamId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)),
+        SubscriptionHandle subscription = durableModel.subscribe(streamId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)),
                 event -> Mono.fromRunnable(() -> {
                     if (delivered.isEmpty()) {
                         firstReplayedEventReached.countDown();
@@ -197,7 +197,7 @@ class NamedCatchupPathTest {
         CountDownLatch modelStopped = new CountDownLatch(1);
         AtomicBoolean deliveredWhileStopped = new AtomicBoolean(false);
 
-        Subscription subscription = durableModel.subscribe(streamId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)),
+        SubscriptionHandle subscription = durableModel.subscribe(streamId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)),
                 event -> Mono.fromRunnable(() -> {
                     if (deliveredCounts.isEmpty()) {
                         firstReplayedEventReached.countDown();
@@ -231,7 +231,7 @@ class NamedCatchupPathTest {
     @Test
     void a_duplicate_subscription_id_on_the_catchup_path_is_refused_synchronously() {
         publish("e1");
-        Subscription subscription = durableModel.subscribe(streamId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)),
+        SubscriptionHandle subscription = durableModel.subscribe(streamId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)),
                 event -> Mono.empty());
         subscription.waitUntilStarted().block(TIMEOUT);
 
@@ -249,7 +249,7 @@ class NamedCatchupPathTest {
         CountDownLatch firstReplayedEventReached = new CountDownLatch(1);
         CountDownLatch cancelled = new CountDownLatch(1);
 
-        Subscription subscription = durableModel.subscribe(streamId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)),
+        SubscriptionHandle subscription = durableModel.subscribe(streamId, null, StartAt.checkpoint(GlobalCheckpoint.of(0)),
                 event -> Mono.fromRunnable(() -> {
                     delivered.add(event.getId());
                     if (delivered.size() == 1) {

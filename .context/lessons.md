@@ -2410,3 +2410,38 @@ rel34 found a third shape and it is the one that hides best: minute precision wi
 Two of the values that survived that sweep should stay exactly as they are, and saying why matters more than the repairs. Two redacted times remain in `ORCHESTRATOR.md` inside the paragraph that explains this defect, because quoting a wrong value while describing it is not asserting it. And two measured times are written to the minute without seconds. They are honest, since the clock was read for both, and padding them to `:00` to satisfy a sweep would invent a second in order to look verifiable, which is the failure this whole entry is about wearing the costume of the fix. A sweep exists to find claims nobody checked, so the correct response to a checked claim that trips it is to widen the sweep, never to reshape the value.
 
 Where a value genuinely cannot be recovered, say which kind of unknown it is. A reconstructed bound reads `at or before <time>`, a value nothing owns reads `unverified` in that word with the reason, and a fetched value stands plainly. All three look identical once written as a bare timestamp, and a reader cannot tell them apart unless the text does it for them.
+
+## An expired premise and a defect in the work look identical at the level of a file list
+
+A decision the user had approved rested on a measured `comm -12`: U1's fourteen framework files were disjoint from every open sibling PR. Mid flight, U1's set was observed at sixteen, and the two new files intersected a sibling's open PR where the decision had claimed zero intersection. That was recorded as a premise which had expired harmlessly, since the overlapping hunks were far apart and would auto merge.
+
+The observation was right and the framing was wrong. Those two files had entered the diff only because of a defect: a mechanical rename had renamed a javadoc reference to a same-named annotation, so the files contained no reference to the renamed type at all and their correct diff was empty. Fixing the defect dropped both, restoring the set to fourteen and the intersection to zero. The premise had never expired.
+
+The defect was found afterwards, separately, by reading the hunks for an unrelated reason. It should have been found by the intersection itself, because the intersection was its fingerprint. Two files appearing in a mechanical rename's diff without containing the renamed type is not scope growth, it is a wrong edit. The question that reaches it is "why did these files enter the set". The question actually asked was "does this intersection still conflict", which is answerable, was answered correctly, and led nowhere.
+
+So when a measured premise appears to have expired, investigate the cause before re-deriving the consequence. Legitimate scope growth and a defect in the work are indistinguishable from a file list alone, and only one of them is safe to note and move past. The re-derivation is the tempting move because it is quick and it resolves the immediate question, which is exactly what makes it a way to walk past a bug while writing a correct sentence about it.
+
+## Pointing a worker at an in-file precedent transmits that precedent's defects
+
+rel34's U6 brief told the worker the correct path was already in the file, named
+`processSynchronousSubscribeAnnotation`, and quoted the comment beside it explaining exactly why it
+looks the bean up by name. The worker followed it faithfully at three sites per file. Copilot then
+found that the pattern fails outright under `spring.aop.proxy-target-class=false`, because a JDK
+interface proxy is not an instance of the concrete class that declared the method object the
+registrar holds, so `Method.invoke` rejects the receiver and the handler never runs at all.
+
+The precedent was correct about the question the unit was asking, invoking the proxy rather than the
+raw target, and wrong about an adjacent question nobody was asking. A precedent is evidence that
+someone solved one problem here before, not that the code is correct, and a brief that says follow
+this hands over both properties without distinguishing them.
+
+Two consequences worth carrying. When a brief cites an in-file precedent, say which property it is
+evidence for and that the rest of it is unverified, so the worker knows where it stops being an
+authority. And when a precedent turns out to be defective, the scope grows to include it: the
+original site had shipped the same defect, so the unit went from six sites to eight, and leaving the
+precedent unfixed would have meant knowingly shipping a defect in the path next to the corrected one.
+
+The failure was invisible to everything the delivery did right. The tests were behavioural rather
+than proxy-identity assertions, mutation-verified in both directions, and correct about the reactive
+transaction context. They ran on Boot's default subclass proxies, which is a configuration axis
+rather than a coverage gap, and no amount of care within that axis reaches it.
