@@ -33,14 +33,8 @@ nbdist/
 
 .rdb
 
-# Local durable context: ORCHESTRATOR.md, lessons.md, the orchestrator policy and the
-# per-epic state files are tracked, everything else here is local-only (ordered pattern
-# per the orchestrator skill's epic-state reference)
-!.context/
-.context/*
-!.context/ORCHESTRATOR.md
-!.context/lessons.md
-!.context/epics/
-.context/epics/*
-!.context/epics/*.yml
-!.context/orchestrator-policy.yml
+# Orchestrator memory moved out of this repository on 2026-08-25 and now lives in a
+# private repository of its own. A checkout of a commit from before the move recreates the
+# old tracked copies here, so keep the path ignored to stop them showing as untracked.
+# Those recreated files are inert and are not the live memory.
+.context/
