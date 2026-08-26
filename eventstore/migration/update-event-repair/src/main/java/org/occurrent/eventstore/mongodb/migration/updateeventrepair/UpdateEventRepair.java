@@ -95,7 +95,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * give it a position it never had, which is why every position-backfill startup message points here.
  *
  * <h2>Running it</h2>
- * {@link #report()} counts the damage and writes nothing. {@link #run()} repairs, walking the collection in
+ * {@link #report()} sizes the damage and writes nothing. {@link #run()} repairs, walking the collection in
  * {@code _id} order in batches. A run is idempotent because it only touches events that still look damaged, and it
  * is safe to kill because each event is repaired on its own and a checkpoint document records how far it got.
  *
@@ -150,7 +150,13 @@ public final class UpdateEventRepair {
      * whose tag array is missing cannot use an index, so this reads the whole collection. On a large store run it
      * during a quiet period, the way the runbook's equivalent shell query says to.
      *
-     * @return how many events the repair would touch, and how many of those have a position it cannot restore.
+     * <p>
+     * It sizes a repair rather than predicting its outcome. The two counts it returns are independent of each other,
+     * and neither covers the damage only a run can find. A position another event already holds, one that is not a
+     * number or is not positive, and a tag encoding that cannot be read all look like ordinary damage from the
+     * outside, so they surface as an {@link UnrecoverableEvent} during {@link #run()} and not here.
+     *
+     * @return how many events the repair would touch, and separately how many have DCB tags and no position at all.
      */
     public UpdateEventRepairReport report() {
         long needingRepair = withRetry(() -> eventCollection.countDocuments(damagedEventFilter()));

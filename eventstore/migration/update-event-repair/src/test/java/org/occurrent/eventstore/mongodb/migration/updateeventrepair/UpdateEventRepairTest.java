@@ -37,6 +37,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.dcb.DcbAppendCondition;
+import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
@@ -151,15 +152,18 @@ class UpdateEventRepairTest {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
 
+        // Every appended event below carries a tag the condition does not look for, so the only event that can ever
+        // satisfy the condition is the damaged one. An append tagged name:1 would conflict with itself from then on
+        // and the test would pass with the repair taken out.
         DcbAppendCondition failIfNameTaken = DcbAppendCondition.failIfEventsMatch(DcbCriteria.tags(Tag.parse("name:1")));
-        // The damaged event is missing from the conflict query, so the append that should have been refused succeeds.
-        eventStore.append(List.of(taggedEvent("b", "Defined", "name:1")), failIfNameTaken);
+
+        eventStore.append(List.of(taggedEvent("b", "Defined", "other:1")), failIfNameTaken);
 
         newRepair().run();
 
-        assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("c", "Defined", "name:1")), failIfNameTaken))
+        assertThatThrownBy(() -> eventStore.append(List.of(taggedEvent("c", "Defined", "other:2")), failIfNameTaken))
                 .as("the repaired event must be visible to the conflict query behind a conditional append")
-                .isInstanceOf(Exception.class);
+                .isInstanceOf(DcbAppendConditionNotFulfilledException.class);
     }
 
     @Test

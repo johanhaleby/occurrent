@@ -59,8 +59,13 @@ rules out a damaged position rather than every kind of damage. Run the second qu
 
 ### 2. [tool] Take a report
 
-The report counts the damage and, separately, the part of it that cannot be repaired. It writes nothing, so it is
-safe against a live store.
+The report writes nothing, so it is safe against a live store. It returns two counts, how many events the repair
+would touch and, separately, how many have DCB tags and no position at all.
+
+It sizes a repair rather than predicting its outcome. A position another event already holds, one that is not a
+number or is not positive, and a tag encoding that cannot be read all look like ordinary damage from the outside, so
+step 4 finds them and this step does not. A low `eventsWithLostPosition` here is not a promise that step 5 will have
+nothing in it.
 
 ```java
 MongoDatabase database = mongoClient.getDatabase("my-database");

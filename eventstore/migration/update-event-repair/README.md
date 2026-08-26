@@ -45,7 +45,10 @@ The startup check runs only the query above, because it is the one that costs no
 whose tag array is missing but whose position is fine, since that needs a collection scan. So a silent startup rules
 out a damaged position, not every kind of damage. The tool checks both.
 
-**Ask the tool.** `report()` counts the damage and the part of it that cannot be repaired, and writes nothing.
+**Ask the tool.** `report()` writes nothing and returns two counts, how many events the repair would touch and how
+many have DCB tags and no position at all. It sizes a repair rather than predicting its outcome. A position another
+event already holds, one that is not a number or is not positive, and a tag encoding that cannot be read all look
+like ordinary damage from the outside, so a run finds them and the report does not.
 
 ```java
 MongoDatabase database = mongoClient.getDatabase("my-database");
