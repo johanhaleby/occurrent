@@ -85,6 +85,9 @@ So the damage check goes first, and its warning is out before anything can refus
 `PositionBackfillValidator` message also points at the repair runbook for a caller that used `updateEvent`, because
 the ordering alone does not help an event that has no string position to find.
 
+Within each of those messages the caveat comes before the backfill instruction rather than after it. A reader who
+acts on the first remedy a log line names must not be acting on the one that cannot be taken back.
+
 Ordering does not help a store that never reaches the ordered checks. A store where stream position is only on by default resolves
 that setting before it initializes, and turns position off when the oldest event in the collection has no `position`.
 One event whose position `updateEvent` dropped is enough to trigger it, and with position off the store runs neither

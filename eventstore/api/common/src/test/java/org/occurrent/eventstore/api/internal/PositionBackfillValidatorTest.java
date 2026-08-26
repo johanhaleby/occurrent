@@ -31,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PositionBackfillValidatorTest {
 
     private static final String COLLECTION = "events";
+    private static final String RUNBOOK = "doc/runbooks/position-backfill.md";
 
     @ParameterizedTest
     @MethodSource("everyMessage")
@@ -49,6 +50,12 @@ class PositionBackfillValidatorTest {
                 .contains("updateEvent")
                 .contains("doc/runbooks/update-event-repair.md")
                 .contains("cannot be undone");
+
+        // Order, not just presence. These go into a log, and a reader who acts on the first remedy the line names
+        // must not be acting on the one that cannot be taken back.
+        assertThat(message.indexOf("doc/runbooks/update-event-repair.md"))
+                .as("the repair has to be named before the backfill it warns about, otherwise this test is only checking that the words are somewhere in the line")
+                .isLessThan(message.indexOf(RUNBOOK));
     }
 
     @Test
