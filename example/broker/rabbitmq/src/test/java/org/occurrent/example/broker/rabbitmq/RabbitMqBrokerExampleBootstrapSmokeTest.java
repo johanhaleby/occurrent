@@ -16,8 +16,10 @@
 
 package org.occurrent.example.broker.rabbitmq;
 
+import com.rabbitmq.client.AMQP;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ShutdownSignalException;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
@@ -29,6 +31,7 @@ import org.occurrent.eventstore.mongodb.nativedriver.MongoEventStore;
 import org.occurrent.mongodb.timerepresentation.TimeRepresentation;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 
+import java.io.IOException;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
@@ -114,10 +117,10 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
      * leaked sink would show up as an open channel on the connection, not as anything this probe can observe.
      * Failing the bridge's own channel open,
      * the second {@code openChannel()} call on the connection and every one after it (the first is the sink's),
-     * forces exactly that partial-construction failure without touching the bridge's own topology. Every call
-     * after the first has to fail, not just the second, since {@code RabbitMqCloudEventBridge.Builder#build()}
-     * retries a failed channel open by default (#867), so a proxy that only failed the second call would let a
-     * later retry attempt succeed instead of ever reaching the failure this test exists to force. If the forwarder
+     * forces exactly that partial-construction failure without touching the bridge's own topology. That failure is
+     * a permanent one, a hard AMQP close rather than a plain {@link IOException}, so {@code build()}'s default
+     * retry (#867) fails fast on it instead of exhausting ten attempts and the roughly 11 seconds of backoff that
+     * would cost this test nothing. If the forwarder
      * subscription leaked, it would still be watching the store and would forward a fresh order to the exchange,
      * so a queue bound directly to it, independent of the bridge that never got to declare its own, proves it did
      * not.
@@ -148,14 +151,17 @@ class RabbitMqBrokerExampleBootstrapSmokeTest extends AbstractBrokerExampleTest 
     /** A {@link Connection} that delegates everything to {@code real}, except its second no-argument
      * {@code openChannel()} call and every one after it, which it fails instead, simulating the bridge's own
      * channel open failing while leaving the sink's earlier one, and everything built from it, already running.
-     * Fails permanently rather than once, so the bridge's own default retry (#867) still exhausts into the same
-     * failure this test forces, instead of succeeding on a later attempt. */
+     * Throws a hard-close {@link ShutdownSignalException} rather than a plain {@link IOException}, so the bridge's
+     * own default retry (#867) fails fast on the second call instead of exhausting all ten attempts, roughly 11
+     * seconds of backoff this test does not need, before ever reaching the failure it forces. */
     private static Connection failOnSecondOpenChannel(Connection real) {
         AtomicInteger openChannelCalls = new AtomicInteger();
         InvocationHandler handler = (proxy, method, args) -> {
             if ("openChannel".equals(method.getName()) && method.getParameterCount() == 0
                     && openChannelCalls.incrementAndGet() >= 2) {
-                return Optional.empty();
+                AMQP.Channel.Close hardClose = new AMQP.Channel.Close.Builder().replyCode(AMQP.NOT_FOUND).build();
+                throw new IOException("Simulated permanent failure opening the bridge's channel",
+                        new ShutdownSignalException(false, false, hardClose, "channel"));
             }
             try {
                 return method.invoke(real, args);
