@@ -785,9 +785,19 @@ This applies to `ReactorStreamCatchupSubscriptionModel` and `ReactorDcbCatchupSu
 shipped in 0.30.0, and to `ReactorCatchupSubscriptionModel`, which routes to them. The blocking catch-up models are
 unchanged, because their history reads never filled that cache in the first place.
 
-Only an event a history window read whose write committed after the catch-up took its live resume checkpoint gets the
-second delivery. A store with nothing being written during the replay sees no second delivery at all, so an
-application that rebuilds a read model offline is unaffected.
+On a single-primary MongoDB, the case [ADR 135](../architecture/decisions/0135-the-reactive-handover-dedup-is-fed-only-by-the-reconciliation-read.md)
+verifies, the second delivery goes to an event a history window read whose write committed after the catch-up took
+its live resume checkpoint. A store with nothing being written during the replay sees none at all, so an application
+that rebuilds a read model offline is unaffected.
+
+That bound rests on the resume checkpoint landing strictly past every event committed by then, and there are
+deployments where it does not. Under a secondary read preference or a sharded `mongos`, MongoDB's `operationTime`
+can lag entries already in the oplog, and the catch-up constructors take any `CheckpointAwareSubscriptionModel`, so
+one of your own can answer whatever it likes. Where the checkpoint lags, the live stream delivers pre-replay history
+too, and the cache no longer suppresses it, so the repeats reach as far back as the lag rather than covering
+concurrent writes alone. That suppression was already unreliable there, since a replay longer than
+`handoverCacheSize` evicted its own history ids before the live stream asked about them, but it is gone now rather
+than partial. The handler you need is the same one either way.
 
 Catch-up delivery on these models has always been at-least-once, and the same composition already re-delivers a whole
 replay when a stopped catch-up is started again, so a handler written to tolerate a repeat needs no change. What

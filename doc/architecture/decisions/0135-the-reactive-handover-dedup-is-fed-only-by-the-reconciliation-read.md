@@ -111,10 +111,12 @@ to any other live delivery.
 
 - An append whose position was reserved before the replay read the head, and which committed after it, is delivered
   again by the live subscription and recorded there. `waitUntilApplied` answers for it instead of timing out.
-- That same event updates the read model twice. The set is exactly the events a history window read whose commit
-  came after the resume checkpoint, so the cost equals the benefit and reaches nothing else. In a store with no
-  concurrent writes it is empty. Delivery here is at-least-once already, and this composition re-delivers a whole
-  replay when a stopped catch-up is started again.
+- That same event updates the read model twice. On the single-primary case this ADR claims, the set is exactly the
+  events a history window read whose commit came after the resume checkpoint, so the cost equals the benefit and
+  reaches nothing else, and in a store with no concurrent writes it is empty. Where the checkpoint can lag what is
+  already committed, which is the first limit named below, the live stream delivers pre-replay history too and the
+  cache no longer suppresses it, so the set is as wide as the lag. Delivery here is at-least-once already, and this
+  composition re-delivers a whole replay when a stopped catch-up is started again.
 - Both reactive catch-up models shipped in 0.30.0, so this changes observable delivery for callers who never touch
   `recordAppliedAppends`. It stays inside the at-least-once contract, and no recipe could search a caller's source
   for a requirement that an event arrives once, so it is documented in
