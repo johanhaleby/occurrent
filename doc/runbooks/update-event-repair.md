@@ -5,8 +5,12 @@
 You run an existing MongoDB event store, you are upgrading to 0.34.0 from 0.33.0 or earlier, and your application
 called `EventStoreOperations.updateEvent` at some point while running one of those versions.
 
-If you never called `updateEvent`, nothing in your store is damaged and you can stop reading. The check in step 1
-takes a second and settles it either way.
+If you never called `updateEvent`, nothing in your store is damaged and you can stop reading.
+
+If you are not sure, step 1's first query is indexed and answers in a second whether any event kept a damaged
+position. A `0` there rules out that one kind of damage and nothing else, so run the rest of step 1 before you
+conclude anything. Its second query is a collection scan, and even two zero results leave the cases in "The damage
+this cannot find".
 
 ## Why this is needed
 

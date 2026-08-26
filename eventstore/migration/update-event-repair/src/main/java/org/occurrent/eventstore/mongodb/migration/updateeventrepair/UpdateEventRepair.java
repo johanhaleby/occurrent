@@ -24,6 +24,7 @@ import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
+import com.mongodb.client.model.Projections;
 import com.mongodb.client.model.Sorts;
 import com.mongodb.client.model.Updates;
 import org.bson.BsonType;
@@ -188,6 +189,10 @@ public final class UpdateEventRepair {
             List<Document> batch = withRetry(() -> eventCollection.find(and(damagedEventFilter(), afterFilter(resumeAfter)))
                     .sort(Sorts.ascending(ID))
                     .limit(options.batchSize())
+                    // Only the four fields a repair decision is made from. A stored event carries its data payload,
+                    // which a repair never looks at and which reaches MongoDB's 16 MB document limit, so a batch of
+                    // whole documents would hold far more in memory than the batch size suggests.
+                    .projection(Projections.include(ID, POSITION, DcbCloudEvents.TAGS, DcbDocumentMapper.DCB_TAGS_INDEX_FIELD))
                     .into(new ArrayList<>()));
             if (batch.isEmpty()) {
                 break;
