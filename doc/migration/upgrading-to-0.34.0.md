@@ -741,6 +741,14 @@ new behaviour. A record pattern over `SagaRunnerConfig` has to name the fifth co
 SagaRunnerConfig config = SagaRunnerConfig.defaults().withQuarantineAfter(null);
 ```
 
+On the annotation path you never build a `SagaRunnerConfig`, so the budget is a property instead. It defaults to five
+minutes, and zero is how it says never, because a `Duration` property that is not set binds to its default rather than
+to null.
+
+```properties
+occurrent.saga.quarantine-after=0
+```
+
 ### Why there is no recipe for this one
 
 None of the five can be rewritten mechanically. What your new `case QUARANTINED` branch should do depends on what the

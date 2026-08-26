@@ -116,6 +116,31 @@ class SagaQuarantineSupportTest {
         }
 
         @Test
+        void an_input_the_instance_already_handled_records_no_failure() {
+            // The save committed and the response was lost, so the executor reloads an instance whose watermarks are
+            // already past the input it is about to record a failure for. Recording one writes a record nothing clears,
+            // because the redelivery that would clear it is skipped as a redelivery.
+            SagaEnvelope<OrderState> committed = active(4, Map.of("o1", 7L), 7L);
+
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", committed, at(7), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertThat(record).isNull();
+        }
+
+        @Test
+        void a_failure_of_an_input_past_the_watermarks_is_still_recorded() {
+            // The companion to the case above, so refusing a handled input cannot quietly refuse every input.
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", active(4, Map.of("o1", 6L), 6L), at(8), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertAll(
+                    () -> assertThat(record).isNotNull(),
+                    () -> assertThat(record.envelope().failure().input()).isEqualTo("o1@8")
+            );
+        }
+
+        @Test
         void a_later_failure_of_the_same_input_inside_the_budget_writes_nothing_at_all() {
             SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(4))));
 

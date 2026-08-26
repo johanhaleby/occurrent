@@ -237,6 +237,12 @@ public final class SagaExecutionSupport {
             // Neither reaches the saga at all, so neither can be what threw. Defensive rather than reachable.
             return null;
         }
+        if (current != null && isRedelivery(current, meta)) {
+            // The save committed and its response was lost on the way back, so the reloaded instance already counts
+            // this input as handled. A record written here is never cleared, because the redelivery that would clear it
+            // is skipped as one, so keep the committed outcome instead.
+            return null;
+        }
         String input = redeliveryKeyOf(meta);
         SagaFailure existing = current == null ? null : current.failure();
         if (existing == null || !existing.input().equals(input)) {

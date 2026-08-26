@@ -147,6 +147,7 @@ class SagaAnnotationRegistrar {
         StartAt startAt = push ? null : startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
         SagaRunnerConfig config = SagaRunnerConfig.defaults()
                 .withTimerPollInterval(sagaTimerPollInterval())
+                .withQuarantineAfter(sagaQuarantineAfter())
                 .withRedeliveryDetection(redeliveryDetectionOf(annotation));
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         SagaRunner<E, C> configured = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
@@ -180,6 +181,7 @@ class SagaAnnotationRegistrar {
             // this saga unable to look at the instances it already has, which is the decision manual mode exists for.
             publishSagaInstances(id, SagaInstances.of(stateStore));
             applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
+                refuseIfSagaSubscriptionBeanNameIsTaken(id);
                 SagaSubscription deferred = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
                 sagaSubscriptions.add(deferred);
                 registerSagaSubscriptionSingleton(id, deferred);
@@ -188,6 +190,7 @@ class SagaAnnotationRegistrar {
             return;
         }
 
+        refuseIfSagaSubscriptionBeanNameIsTaken(id);
         SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
         sagaSubscriptions.add(sagaSubscription);
         registerSagaSubscriptionSingleton(id, sagaSubscription);
@@ -407,10 +410,23 @@ class SagaAnnotationRegistrar {
             return;
         }
         ConfigurableListableBeanFactory beanFactory = configurableContext.getBeanFactory();
-        if (beanFactory.containsBean(beanName)) {
+        refuseIfSagaSubscriptionBeanNameIsTaken(id);
+        beanFactory.registerSingleton(beanName, sagaSubscription);
+    }
+
+    /**
+     * Refuse a saga whose {@code sagaSubscription-<id>} name is already taken, before its subscription is started.
+     * Checking only at registration time would leave the saga running and delivering events while the caller was told
+     * it failed to start, and in manual mode the startup action is gone by then so there is nothing left to retry.
+     */
+    private void refuseIfSagaSubscriptionBeanNameIsTaken(String id) {
+        if (!(applicationContext instanceof ConfigurableApplicationContext configurableContext)) {
+            return;
+        }
+        String beanName = sagaSubscriptionBeanName(id);
+        if (configurableContext.getBeanFactory().containsBean(beanName)) {
             throw new IllegalStateException("Cannot publish the SagaSubscription of saga '%s' as '%s' because a bean with that name already exists. Occurrent publishes each @Saga's SagaSubscription under 'sagaSubscription-<id>', so rename your bean or the saga.".formatted(id, beanName));
         }
-        beanFactory.registerSingleton(beanName, sagaSubscription);
     }
 
     /** The bean name the {@link SagaInstances} for {@code sagaId} is published under. */
@@ -567,6 +583,16 @@ class SagaAnnotationRegistrar {
 
     private Duration sagaTimerPollInterval() {
         return occurrentProperties().getSaga().getTimerPollInterval();
+    }
+
+    private @Nullable Duration sagaQuarantineAfter() {
+        return quarantineBudgetOf(occurrentProperties().getSaga().getQuarantineAfter());
+    }
+
+    // Zero is how a Duration property says "never", since an unset property binds to the default rather than to null,
+    // and null is what SagaRunnerConfig takes for a saga that keeps retrying forever.
+    static @Nullable Duration quarantineBudgetOf(@Nullable Duration configured) {
+        return configured == null || configured.isZero() || configured.isNegative() ? null : configured;
     }
 
     // The saga state type is the second type argument of the factory return type Saga<E, S, C>.

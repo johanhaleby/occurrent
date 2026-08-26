@@ -716,6 +716,18 @@ public class OccurrentProperties {
         private Duration timerPollInterval = Duration.ofSeconds(15);
 
         /**
+         * How long one event may keep failing for one saga instance before that instance is quarantined and the
+         * subscription moves past the event, so the saga's other instances stop waiting behind it. Defaults to five
+         * minutes, matching {@code SagaRunnerConfig.defaults()}.
+         * <p>
+         * Set it to zero to keep the pre-0.34.0 behaviour, where the event is retried forever and every other instance
+         * of that saga waits behind it. Quarantine is switched off on its own, with a warning at startup, on a
+         * subscription model that cannot be resumed at a chosen position, since the event could never be obtained
+         * again there.
+         */
+        private Duration quarantineAfter = Duration.ofMinutes(5);
+
+        /**
          * Competing-consumer (leader-election) configuration for the saga timer poller.
          */
         private CompetingConsumerProperties competingConsumer = new CompetingConsumerProperties();
@@ -726,6 +738,14 @@ public class OccurrentProperties {
 
         public void setTimerPollInterval(Duration timerPollInterval) {
             this.timerPollInterval = timerPollInterval;
+        }
+
+        public Duration getQuarantineAfter() {
+            return quarantineAfter;
+        }
+
+        public void setQuarantineAfter(Duration quarantineAfter) {
+            this.quarantineAfter = quarantineAfter;
         }
 
         public CompetingConsumerProperties getCompetingConsumer() {
