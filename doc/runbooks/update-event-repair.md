@@ -130,7 +130,9 @@ the collection when the run finishes rather than tallied as the run goes, so it 
 an earlier run rebuilt. Rebuilding that array is what stops an event looking damaged, so without this number a
 finished run could report a clean collection while a position was still gone.
 
-`result.unrecoverableEventCount()` is the number of events holding damage the tool will not guess at.
+`result.unrecoverableEventCount()` is the number of events this run could not fully repair, carried across a resume
+by the checkpoint. It is not the whole of what needs you, and a `0` is not proof that nothing does, so read it
+together with the count above rather than on its own.
 `result.unrecoverableEvents()` names the findings by `_id`, and every one is also logged, so a truncated list is not
 a lost report. The reasons below are independent, so one event can produce two findings and still count once. The
 count is events, because that is the number of events you have to look at.

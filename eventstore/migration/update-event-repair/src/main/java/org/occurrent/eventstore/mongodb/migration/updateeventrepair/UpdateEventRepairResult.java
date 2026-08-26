@@ -26,17 +26,24 @@ import java.util.List;
  * <p>
  * An event can be counted in {@code eventsRepaired} and still appear in {@code unrecoverableEvents}. An event whose
  * position was dropped entirely, for instance, gets its {@code dcbTags} array rebuilt, which is counted as a repair,
- * while its position stays gone and is reported. A run where {@code unrecoverableEventCount} is {@code 0} restored
- * everything it could detect, which is not the same as everything the old write-back damaged. An update that dropped
- * the {@code dcbtags} extension outright leaves a document nothing can pick out from an ordinary stream event, so it
- * is neither counted nor repaired. See {@link UpdateEventRepair} for that case.
+ * while its position stays gone and is reported.
+ * <p>
+ * A clean run is {@code unrecoverableEventCount} and {@code eventsWithLostPosition} both {@code 0}. Neither number
+ * stands in for the other, since an event can be missing from one and present in the other, and neither covers
+ * everything the old write-back damaged. An update that dropped the {@code dcbtags} extension outright leaves a
+ * document nothing can pick out from an ordinary stream event, so it is neither counted nor repaired. See
+ * {@link UpdateEventRepair} for that case.
  *
  * @param eventsRepaired          How many stored events this call modified. A re-run after a completed run reports
  *                                {@code 0}, since the repair only touches events that still look damaged.
- * @param unrecoverableEventCount How many events hold damage this tool cannot undo. Counts every one, whether or not
- *                                it fitted in {@code unrecoverableEvents}. This counts events rather than findings,
- *                                so an event with two things wrong with it counts once, which is what the number is
- *                                for, how many events a person has to look at.
+ * @param unrecoverableEventCount How many events this call could not fully repair, plus whatever an interrupted
+ *                                earlier run carried in the checkpoint. Counts every one, whether or not it fitted in
+ *                                {@code unrecoverableEvents}, and counts events rather than findings, so an event
+ *                                with two things wrong with it counts once. It is not the whole of what needs a
+ *                                person, and a {@code 0} here is not proof that nothing does. Rebuilding a
+ *                                lost-position event's tag array stops it matching the repair filter, so a later call
+ *                                never sees it and reports {@code 0} here while {@code eventsWithLostPosition} is
+ *                                still above zero. Read both.
  * @param eventsWithLostPosition  How many events in the collection have DCB tags and no {@code position} at all once
  *                                this run finished. Asked of the collection rather than accumulated over the run, so
  *                                it covers events an earlier run repaired the tag array of and events this one was
