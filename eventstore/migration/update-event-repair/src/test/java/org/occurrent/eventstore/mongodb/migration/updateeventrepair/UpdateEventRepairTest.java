@@ -18,6 +18,8 @@
 package org.occurrent.eventstore.mongodb.migration.updateeventrepair;
 
 import com.mongodb.ConnectionString;
+import com.mongodb.MongoSocketReadException;
+import com.mongodb.ServerAddress;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
@@ -25,6 +27,7 @@ import com.mongodb.client.MongoDatabase;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.bson.Document;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -54,11 +57,15 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.UnaryOperator;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -336,6 +343,95 @@ class UpdateEventRepairTest {
     }
 
     @Test
+    void an_event_whose_position_string_is_zero_is_reported_rather_than_written_back_as_a_number() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        // Only an update function that set position itself produces this. Zero is what getPosition returns for an
+        // event that has none, so no store ever assigned it.
+        events().updateOne(new Document("id", "a"),
+                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, "0")));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE),
+                () -> assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
+                        .as("every position query reads position greater than zero, so storing zero as a number would report a repair and leave the event just as invisible")
+                        .isEqualTo("0"),
+                () -> assertThat(eventIdsInPositionOrder())
+                        .as("the event stays outside position-ordered reads, which is what makes writing the value back a lie rather than a partial fix")
+                        .isEmpty(),
+                () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .as("the tag array does not depend on the position, so a forged position must not cost the event its tags too")
+                        .containsExactly("name:1")
+        );
+    }
+
+    @Test
+    void an_event_whose_position_string_is_negative_is_reported_rather_than_written_back_as_a_number() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "a"),
+                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, "-1")));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE),
+                () -> assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
+                        .as("a negative position is not a value any store assigned, so it must be left as it was found")
+                        .isEqualTo("-1")
+        );
+    }
+
+    @Test
+    void an_event_damaged_in_two_ways_at_once_counts_as_one_unrecoverable_event() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        // Two independent reasons on one document. The tag encoding cannot be read and neither can the position, so
+        // the run produces two findings about one event.
+        events().updateOne(new Document("id", "a"),
+                new Document("$set", new Document(DcbCloudEvents.TAGS, 42)
+                        .append(OccurrentCloudEventExtension.POSITION, "not-a-number")));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .as("both reasons must be reported, since an operator needs to see everything wrong with the event")
+                        .extracting(UnrecoverableEvent::reason)
+                        .containsExactlyInAnyOrder(UnrecoverableEvent.Reason.UNREADABLE, UnrecoverableEvent.Reason.POSITION_NOT_A_NUMBER),
+                () -> assertThat(result.unrecoverableEventCount())
+                        .as("the count is of events, because that is what the CLI's exit message and the runbook present as how many events a person has to look at")
+                        .isEqualTo(1)
+        );
+    }
+
+    @Test
+    void a_repair_whose_acknowledgement_is_lost_still_counts_the_event_it_repaired() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+
+        UpdateEventRepairResult result =
+                new UpdateEventRepair(databaseLosingTheFirstUpdateAcknowledgement(), EVENT_COLLECTION, UpdateEventRepairOptions.defaults()).run();
+
+        assertAll(
+                () -> assertThat(result.eventsRepaired())
+                        .as("the retry modifies nothing only because the write it is retrying already landed, so counting it as unrepaired understates the run")
+                        .isEqualTo(1),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:1"))))
+                        .as("the event really is repaired, which is what makes the count of zero wrong rather than conservative")
+                        .containsExactly("a")
+        );
+    }
+
+    @Test
     void one_unreadable_event_does_not_stop_the_rest_of_the_collection_being_repaired() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
@@ -485,6 +581,42 @@ class UpdateEventRepairTest {
 
     private UpdateEventRepair newRepair() {
         return new UpdateEventRepair(database, EVENT_COLLECTION, UpdateEventRepairOptions.defaults());
+    }
+
+    /**
+     * A database whose event collection applies its first {@code updateOne} and then throws, which is what a lost
+     * acknowledgement looks like from the client. The retry that follows re-sends the same {@code $set} against a
+     * document that already has it, so the server matches it and modifies nothing. That is the only way the two
+     * counts disagree, and it cannot be produced by writing a document into the collection by hand.
+     */
+    @SuppressWarnings("unchecked")
+    private MongoDatabase databaseLosingTheFirstUpdateAcknowledgement() {
+        MongoCollection<Document> realEvents = events();
+        AtomicBoolean acknowledgementStillToLose = new AtomicBoolean(true);
+        MongoCollection<Document> flakyEvents = (MongoCollection<Document>) Proxy.newProxyInstance(
+                MongoCollection.class.getClassLoader(),
+                new Class<?>[]{MongoCollection.class},
+                (proxy, method, args) -> {
+                    Object result = invoke(method, realEvents, args);
+                    if (method.getName().equals("updateOne") && acknowledgementStillToLose.compareAndSet(true, false)) {
+                        throw new MongoSocketReadException("Simulated loss of the acknowledgement of a write the server applied", new ServerAddress());
+                    }
+                    return result;
+                });
+        return (MongoDatabase) Proxy.newProxyInstance(
+                MongoDatabase.class.getClassLoader(),
+                new Class<?>[]{MongoDatabase.class},
+                (proxy, method, args) -> method.getName().equals("getCollection") && EVENT_COLLECTION.equals(args[0])
+                        ? flakyEvents
+                        : invoke(method, database, args));
+    }
+
+    private static Object invoke(Method method, Object target, Object @Nullable [] args) throws Throwable {
+        try {
+            return method.invoke(target, args);
+        } catch (InvocationTargetException e) {
+            throw e.getCause();
+        }
     }
 
     private void waitUntilRepaired(int atLeast) throws InterruptedException {

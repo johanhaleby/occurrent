@@ -920,6 +920,10 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     // withoutStreamPosition()) and DCB are honored as-is. When position is only on by default, turn it off if the
     // collection already holds events without a position, so upgrading an existing store does not build the position
     // index over the whole collection at startup. The user gets a warning naming how to turn it on and backfill.
+    //
+    // Turning position off here means writesPosition() is false, so neither the damage warning nor the un-backfilled
+    // checks run and this warning is the only one the operator sees. An event whose position updateEvent dropped is
+    // enough to reach it, so the shared message carries the repair caveat rather than naming the backfill alone.
     private static boolean resolveStreamPositionEnabled(EventStoreConfig config, String eventStoreCollectionName, MongoTemplate mongoTemplate) {
         if (!config.streamPositionEnabled) {
             return false;
@@ -928,10 +932,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             return true;
         }
         if (hasPreExistingUnpositionedEvents(eventStoreCollectionName, mongoTemplate)) {
-            log.warn("Stream position is on by default, but the event collection '{}' already contains events without a 'position'. " +
-                    "Position will NOT be used for this store, to avoid building the position index over a large existing collection at startup. " +
-                    "To use position, enable it explicitly with EventStoreConfig.Builder.withStreamPosition() (or set occurrent.event-store.stream.position=true) " +
-                    "and backfill existing events first with the position-backfill module (see doc/runbooks/position-backfill.md).", eventStoreCollectionName);
+            log.warn(PositionBackfillValidator.positionDisabledByUnpositionedEventsMessage(eventStoreCollectionName));
             return false;
         }
         return true;

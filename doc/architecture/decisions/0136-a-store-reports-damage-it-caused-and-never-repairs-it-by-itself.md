@@ -81,9 +81,16 @@ has no `position` field, so it reaches that check looking like history that pred
 that check names is the position backfill. Running the backfill on such an event gives it a position it never had,
 which is exactly what this tool refuses to do and which nothing can undo.
 
-So the damage check goes first, and its warning is out before anything can refuse to start. Both
-`PositionBackfillValidator` messages also point at the repair runbook for a caller that used `updateEvent`, because
+So the damage check goes first, and its warning is out before anything can refuse to start. Every
+`PositionBackfillValidator` message also points at the repair runbook for a caller that used `updateEvent`, because
 the ordering alone does not help an event that has no string position to find.
+
+Ordering does not help a store that never reaches the ordered checks. A store where stream position is only on by default resolves
+that setting before it initializes, and turns position off when the oldest event in the collection has no `position`.
+One event whose position `updateEvent` dropped is enough to trigger it, and with position off the store runs neither
+the damage check nor the un-backfilled checks, so its warning about the resolution is the only line the operator
+sees. That message is the third one `PositionBackfillValidator` owns, and it carries the same caveat. Sharing the
+wording is also why the three stores no longer each hold their own copy of it.
 
 ### 4. The warning cannot be escalated to a startup failure
 
@@ -109,7 +116,7 @@ CloudEvent extension, which is a genuine string and so came through the coercion
 `PositionDocumentMapper` and `DcbCloudEvents.decodeTags`, so a repaired event is what a running store would write,
 including an empty tag set rebuilding to an empty array rather than an array holding one empty string.
 
-It is not a general recovery, and it does not present itself as one. Three kinds of damage survive it, reported per
+It is not a general recovery, and it does not present itself as one. Four kinds of damage survive it, reported per
 event by `_id` rather than guessed at:
 
 - A position that was dropped entirely. An update function returning an event built from scratch had no position
@@ -118,6 +125,23 @@ event by `_id` rather than guessed at:
 - A position another event already holds as a number, which the unique index refuses. Two events claim one position
   and nothing in either document says which is entitled to it.
 - A `position` string that is not a number, which no known path produces and so points somewhere else.
+- A `position` string holding zero or a negative number. Positions start above zero, `getPosition` returns zero for
+  an event that has none, and every position query reads `position > 0`, so no store assigns such a value. Writing it
+  back as an int64 would count as a repair and leave the event exactly as invisible, which is the worst of the two
+  outcomes: a silent failure reported as a success.
+
+The count of these is a count of events rather than of findings. The reasons are independent, so a document whose
+`dcbtags` is not a string and whose position cannot be read produces two, and counting both would inflate the number
+the CLI's exit message and the runbook present as how many events a person has to look at.
+
+Something else survives the repair without being reported at all, so it is not an unrecoverable case.
+The old write-back preserved whatever position the update function returned, so a function that set `position` itself
+left a forged number behind as a string like any other. The two cases above catch a forged value another event holds
+and a forged value at or below zero. A forged positive value that happens to be free, in a gap in the sequence for
+instance, is indistinguishable from the event's own, and the tool restores it and counts a repair. That is the right
+behaviour, since the alternative is refusing to repair every damaged position on the chance that some are forged, but
+it has to be stated: for a caller whose update functions set `position`, a clean run does not mean the positions are
+right. The runbook and the upgrade guide both say so.
 
 One kind cannot even be seen. `preserveTags` did not exist before PR 901, so an update function that returned a
 replacement event without the `dcbtags` extension left a document that no longer looks like a DCB event at all, and

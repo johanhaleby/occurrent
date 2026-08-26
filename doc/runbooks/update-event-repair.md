@@ -112,8 +112,9 @@ anything.
 ### 5. [you] Deal with what could not be repaired
 
 `result.unrecoverableEventCount()` is the number of events holding damage the tool will not guess at.
-`result.unrecoverableEvents()` names them by `_id`, and every one is also logged, so a truncated list is not a lost
-report.
+`result.unrecoverableEvents()` names the findings by `_id`, and every one is also logged, so a truncated list is not
+a lost report. The reasons below are independent, so one event can produce two findings and still count once. The
+count is events, because that is the number of events you have to look at.
 
 **`POSITION_LOST`.** The event's position was never stored, so there is nothing to restore it from. The tool does
 not assign a new one, because a position invented in `_id` order would look right and be wrong, and any consumer
@@ -129,6 +130,11 @@ hand or accept that it stays outside position-ordered reads.
 **`POSITION_NOT_A_NUMBER`.** No known Occurrent path produces this, so it points at damage from somewhere else.
 Worth investigating before you do anything to it. The event's tag array is repaired even so, since it does not
 depend on the position.
+
+**`POSITION_NOT_POSITIVE`.** The stored position is zero or negative, which no store assigns. Positions start above
+zero and every position query reads `position > 0`, so writing the value back would count as a repair and leave the
+event just as invisible. Only an update function that set `position` itself produces this, which makes the original
+value gone rather than misread. Treat it the way you treat `POSITION_LOST`. The tag array is repaired even so.
 
 **`UNREADABLE`.** The tool could not read the event well enough to repair it, which means its `dcbtags` was edited
 outside Occurrent. The run continues past it, so one such event does not hold up the rest.
@@ -159,12 +165,26 @@ than dropped, the tool rebuilds the tag array from the replacement tags, because
 If the event was a plain stream event and the replacement dropped its `position`, the document has neither a
 `position` nor `dcbtags`, so it looks exactly like history written before position existed. This case reaches a store
 that never used DCB. Your store warns about it as an un-backfilled event, and running the position backfill on it
-assigns a position it never had, which nothing undoes. Both backfill messages point at this runbook for that reason.
+assigns a position it never had, which nothing undoes. Every backfill message points at this runbook for that reason.
 If you called `updateEvent` on 0.33.0 or earlier and you also have events without a position, decide from your own
 records which is which before you backfill.
 
 If you know you ran an update function that built replacement events from scratch over DCB events, compare against
 an external record of what those events should be. The store cannot tell you.
+
+## The repairs this cannot verify
+
+A position the tool restores is the value the document holds, not one it can check. The old write-back kept whatever
+position the update function returned, so a function that set `position` itself left that number behind as a string
+like any other. Two of those still get caught: a value another event already holds is refused by the unique index and
+reported as `POSITION_ALREADY_TAKEN`, and zero or a negative value is reported as `POSITION_NOT_POSITIVE`. A positive
+value that happens to be free, in a gap in the sequence for instance, is indistinguishable from the event's own. The
+tool converts it to a number, counts a repair and reports nothing, because nothing in the store records what the
+position was.
+
+This matters only if your update functions set `position`. If they did, step 6 passing is not the same as the
+positions being right, and the events those functions touched need checking against an external record. If they left
+`position` alone, which is the ordinary case, every restored position came from the event itself.
 
 ## Rollback considerations
 

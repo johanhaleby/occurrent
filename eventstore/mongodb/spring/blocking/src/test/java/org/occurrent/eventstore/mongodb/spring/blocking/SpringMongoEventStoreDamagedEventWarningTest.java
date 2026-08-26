@@ -50,6 +50,7 @@ import org.testcontainers.mongodb.MongoDBContainer;
 import java.net.URI;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.UnaryOperator;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
@@ -130,6 +131,19 @@ class SpringMongoEventStoreDamagedEventWarningTest {
                 .noneSatisfy(message -> assertThat(message).contains("updateEvent damaged"));
     }
 
+    @Test
+    void a_store_that_turns_position_off_over_an_unpositioned_event_still_points_at_the_repair() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        dropThePosition();
+
+        logAppender.list.clear();
+        newEventStoreWithPositionOnByDefault();
+
+        assertThat(warnings())
+                .as("turning position off skips both the damage check and the un-backfilled checks, so this is the only line the operator gets, and naming the backfill alone recommends the one remedy that cannot be undone")
+                .anySatisfy(message -> assertThat(message).contains("position-backfill", "update-event-repair.md"));
+    }
+
     private void makePositionAString() {
         MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
         Document stored = requireNonNull(events.find().first());
@@ -145,13 +159,30 @@ class SpringMongoEventStoreDamagedEventWarningTest {
                 .toList();
     }
 
+    // Only the position of the oldest event matters, since that is the whole of the probe the resolver runs. One
+    // event whose position updateEvent dropped is enough to put an otherwise healthy store on that path.
+    private void dropThePosition() {
+        MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
+        Document stored = requireNonNull(events.find().first());
+        events.updateOne(new Document("_id", stored.get("_id")),
+                new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
+    }
+
     private SpringMongoEventStore newEventStore() {
-        EventStoreConfig config = new EventStoreConfig.Builder()
-                .eventStoreCollectionName(EVENT_COLLECTION)
-                .transactionConfig(transactionManager)
-                .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
-                .eventStoreCapabilities(STREAM)
-                .withStreamPosition()
+        return newEventStore(EventStoreConfig.Builder::withStreamPosition);
+    }
+
+    // No withStreamPosition() call, so position is on only by default and the resolver is free to turn it off.
+    private SpringMongoEventStore newEventStoreWithPositionOnByDefault() {
+        return newEventStore(builder -> builder);
+    }
+
+    private SpringMongoEventStore newEventStore(UnaryOperator<EventStoreConfig.Builder> streamPosition) {
+        EventStoreConfig config = streamPosition.apply(new EventStoreConfig.Builder()
+                        .eventStoreCollectionName(EVENT_COLLECTION)
+                        .transactionConfig(transactionManager)
+                        .timeRepresentation(TimeRepresentation.RFC_3339_STRING)
+                        .eventStoreCapabilities(STREAM))
                 .build();
         return new SpringMongoEventStore(mongoTemplate, config);
     }

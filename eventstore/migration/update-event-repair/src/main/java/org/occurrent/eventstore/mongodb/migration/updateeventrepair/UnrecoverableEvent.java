@@ -25,6 +25,10 @@ import org.jspecify.annotations.NullMarked;
  * The repair rebuilds a stored event from what the document still holds. Where the old {@code updateEvent} write-back
  * destroyed the only copy of a value, there is nothing left to rebuild it from, and the tool reports the event here
  * rather than inventing one.
+ * <p>
+ * One of these is one finding, not one event. The reasons are independent, so a document whose {@code dcbtags} is not
+ * a string and whose position cannot be read produces two. {@code UpdateEventRepairResult.unrecoverableEventCount()}
+ * counts the events behind them.
  *
  * @param eventId The {@code _id} of the stored event.
  * @param reason  Why the event could not be fully repaired.
@@ -58,6 +62,15 @@ public record UnrecoverableEvent(Object eventId, Reason reason, String detail) {
          * somewhere else.
          */
         POSITION_NOT_A_NUMBER,
+        /**
+         * The event's {@code position} is a string holding zero or a negative number, which is not a position any
+         * store assigned. Positions start above zero, {@code OccurrentCloudEventExtension.getPosition} returns
+         * {@code 0} for an event that has none, and every position query reads {@code position > 0}. Writing such a
+         * value back as a number would count as a repair and leave the event exactly as invisible as it was, so the
+         * tool reports it instead. The old write-back preserved whatever position the update function returned, so a
+         * function that forged one produced this.
+         */
+        POSITION_NOT_POSITIVE,
         /**
          * The event could not be read well enough to repair it. Its {@code dcbtags} is not a string, or does not
          * decode to a tag set. Nothing Occurrent writes produces either shape, so it points at a document that was

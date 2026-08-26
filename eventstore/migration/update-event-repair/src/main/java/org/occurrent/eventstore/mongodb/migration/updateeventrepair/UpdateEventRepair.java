@@ -79,13 +79,20 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * It is not a general recovery. Where the old write-back destroyed the only copy of a value, that value is gone.
  * Each {@link UnrecoverableEvent.Reason} says which case it is.
  * <p>
+ * A position it does restore is the value the document holds, not one it can check. The old write-back kept whatever
+ * position the update function returned, so a function that forged one left that number behind as a string like any
+ * other. Two of those the tool still catches: a value another event already holds is refused by the unique index, and
+ * zero or a negative value is a position no store assigns. A positive value that happens to be free, in a gap in the
+ * sequence for instance, is indistinguishable from the event's own. The tool converts it to an int64 and counts a
+ * repair, because nothing in the store records what the position was.
+ * <p>
  * Two kinds of damage cannot be seen at all, both from an update function that returned a replacement event built
  * from scratch. One drops the {@code dcbtags} extension, leaving a document that no longer looks like a DCB event
  * and that nothing distinguishes from an ordinary stream event. The other drops the {@code position} of a plain
  * stream event, which never had {@code dcbtags} to begin with, leaving a document that nothing distinguishes from
  * history written before position existed. Neither matches this tool's filter, so neither is counted or repaired,
  * and the second one reaches a store that writes position as an ordinary un-backfilled event. Backfilling it would
- * give it a position it never had, which is why both position-backfill startup messages point here.
+ * give it a position it never had, which is why every position-backfill startup message points here.
  *
  * <h2>Running it</h2>
  * {@link #report()} counts the damage and writes nothing. {@link #run()} repairs, walking the collection in
@@ -187,8 +194,14 @@ public final class UpdateEventRepair {
                     repaired++;
                     repairedInBatch++;
                 }
-                for (UnrecoverableEvent unrecoverableEvent : found) {
+                if (!found.isEmpty()) {
+                    // One document can produce more than one finding. A dcbtags value that is not a string and a
+                    // position that cannot be read are independent damage, and an event carrying both reports both.
+                    // The count is of events, because that is what the CLI's exit message and the runbook promise:
+                    // how many events a person has to look at, not how many things are wrong with them.
                     unrecoverableCount++;
+                }
+                for (UnrecoverableEvent unrecoverableEvent : found) {
                     log.warn("Cannot fully repair event {} in collection '{}': {} ({}).",
                             unrecoverableEvent.eventId(), eventStoreCollectionName, unrecoverableEvent.reason(), unrecoverableEvent.detail());
                     if (unrecoverable.size() < options.maxReportedUnrecoverable()) {
@@ -236,7 +249,8 @@ public final class UpdateEventRepair {
      * unreadable position leaves the tag array repairable, and an unreadable tag encoding leaves the position
      * repairable. Only a rejected write keeps both exactly as they were found.
      *
-     * @return whether the event was modified.
+     * @return whether this call's update reached the event. A write the server applied and then failed to acknowledge
+     * counts, since the retry that follows it repairs nothing only because the first attempt already did.
      */
     private boolean repairEvent(Document event, List<UnrecoverableEvent> unrecoverable) {
         Object eventId = event.get(ID);
@@ -257,7 +271,17 @@ public final class UpdateEventRepair {
         if (storedPosition instanceof String positionAsString) {
             Long position;
             try {
-                position = Long.parseLong(positionAsString);
+                long parsedPosition = Long.parseLong(positionAsString);
+                if (parsedPosition > 0) {
+                    position = parsedPosition;
+                } else {
+                    // A store's positions start above zero, and getPosition returns zero for an event that has none,
+                    // so zero and anything below it are values no store ever assigned. Writing one back as an int64
+                    // would count as a repair and leave the event exactly as invisible, because every position query
+                    // reads position greater than zero. Only a forged position gets here, so report it.
+                    unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE, positionAsString));
+                    position = null;
+                }
             } catch (NumberFormatException e) {
                 // The tag array does not depend on the position, so rebuild it anyway, the way a dropped position
                 // does below. Only the position itself is beyond saving here.
@@ -292,9 +316,16 @@ public final class UpdateEventRepair {
 
         // The duplicate key is caught inside the retried block, so a deterministic rejection returns rather than
         // throwing, and the retry only ever sees a transient failure. Re-running the same $set is harmless.
+        //
+        // Matched rather than modified, because a retry after an ambiguous failure has to count as the repair it is.
+        // Every field in this update is one the event does not have yet: position is set only when it is a string, so
+        // writing it changes its type, and the tag array only when the field is absent. A first attempt that reaches
+        // the server therefore always modifies the document, and modified zero can only mean the lost acknowledgement
+        // of a write that did land. Counting that as unrepaired would understate the run against the event's own log
+        // line, which is written whatever the count says.
         return withRetry(() -> {
             try {
-                return eventCollection.updateOne(eq(ID, eventId), Updates.combine(updates)).getModifiedCount() > 0;
+                return eventCollection.updateOne(eq(ID, eventId), Updates.combine(updates)).getMatchedCount() > 0;
             } catch (MongoWriteException e) {
                 if (ErrorCategory.fromErrorCode(e.getError().getCode()) != ErrorCategory.DUPLICATE_KEY) {
                     throw e;

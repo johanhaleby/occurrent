@@ -26,9 +26,11 @@ import org.jspecify.annotations.NullMarked;
  *                                  and write-lock cost per iteration at the cost of more round-trips.
  * @param throttleMillis            Milliseconds to sleep between batches, so a repair does not compete with
  *                                  production traffic. {@code 0} disables throttling.
- * @param maxReportedUnrecoverable  How many {@link UnrecoverableEvent} entries {@link UpdateEventRepairResult} keeps.
- *                                  The result always counts every one of them, and every one is logged at WARN as it
- *                                  is found, so a badly damaged collection cannot exhaust memory through this list.
+ * @param maxReportedUnrecoverable  How many {@link UnrecoverableEvent} findings {@link UpdateEventRepairResult}
+ *                                  keeps. This bounds findings rather than events, since one event can produce more
+ *                                  than one. The result's count of events is always complete and every finding is
+ *                                  logged at WARN as it is found, so a badly damaged collection cannot exhaust memory
+ *                                  through this list.
  */
 @NullMarked
 public record UpdateEventRepairOptions(int batchSize, long throttleMillis, int maxReportedUnrecoverable) {
@@ -51,7 +53,7 @@ public record UpdateEventRepairOptions(int batchSize, long throttleMillis, int m
 
     /**
      * Sensible defaults for a moderately sized deployment, meaning batches of {@value #DEFAULT_BATCH_SIZE} events, no
-     * throttling, and up to {@value #DEFAULT_MAX_REPORTED_UNRECOVERABLE} unrecoverable events kept in the result.
+     * throttling, and up to {@value #DEFAULT_MAX_REPORTED_UNRECOVERABLE} unrecoverable findings kept in the result.
      */
     public static UpdateEventRepairOptions defaults() {
         return new UpdateEventRepairOptions(DEFAULT_BATCH_SIZE, DEFAULT_THROTTLE_MILLIS, DEFAULT_MAX_REPORTED_UNRECOVERABLE);

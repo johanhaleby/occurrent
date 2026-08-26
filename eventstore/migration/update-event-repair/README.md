@@ -84,7 +84,8 @@ both `report()` and `run()` read the whole collection. On a large store, run the
 
 The repair rebuilds an event from what its document still holds. Where the old write-back destroyed the only copy of
 a value, that value is gone, and the tool reports the event rather than inventing one. `UpdateEventRepairResult`
-lists them by `_id`, and every one is also logged.
+lists the findings by `_id`, and every one is also logged. One event can produce two of them, since the reasons below
+are independent, so `unrecoverableEventCount()` counts events rather than findings.
 
 - **A position that was dropped entirely.** An update function that returned an event built from scratch kept
 none of the original's extensions, so no position was stored. The tool will not assign a fresh one. A position
@@ -94,6 +95,17 @@ none of the original's extensions, so no position was stored. The tool will not 
   Nothing in either document says which one is entitled to it. Reported as `POSITION_ALREADY_TAKEN`, and the event
   is left exactly as it was found.
 - **A `position` string that is not a number.** No known path produces this. Reported as `POSITION_NOT_A_NUMBER`.
+- **A `position` string holding zero or a negative number.** No store assigns one. Positions start above zero and
+  every position query reads `position > 0`, so writing such a value back would count as a repair and leave the event
+  just as invisible. Only an update function that forged the position produces this. Reported as
+  `POSITION_NOT_POSITIVE`. The tag array is still rebuilt.
+
+A position the tool does restore is the value the document holds, not one it can check. The old write-back kept
+whatever position the update function returned, so a forged one was stored as a string like any other. The two cases
+above catch a forged value that another event already holds and one that is zero or negative. A positive value that
+happens to be free, in a gap in the sequence for instance, is indistinguishable from the event's own. The tool
+converts it to a number and counts a repair. If you ran an update function that set `position` itself, the tool
+cannot tell you whether the value it restored is the one the event had, and nothing in the store can.
 
 Two kinds of damage are invisible to the tool, both from an update function that returned a replacement event built
 from scratch.
@@ -103,7 +115,7 @@ from scratch.
 - It dropped the `position` of a plain stream event, which never had `dcbtags` to begin with, so the document is
   indistinguishable from history written before position existed. A store that writes position warns about it as an
   un-backfilled event, and running the position backfill on it would give it a position it never had. That is why
-  both backfill messages point at the repair runbook.
+  every backfill message points at the repair runbook.
 
 Neither is counted or repaired. If the `dcbtags` extension was replaced rather than dropped, the tool rebuilds the
 tag array from the replacement tags, since that is all the document has.
@@ -153,7 +165,7 @@ script on your laptop.
 | --- | --- | --- |
 | `batchSize` | 500 | How many events to read and repair per batch. Larger batches finish faster but hold more in memory each iteration. |
 | `throttleMillis` | 0 | How long to sleep between batches. Raise this to leave more room for production traffic. `0` means no pause. |
-| `maxReportedUnrecoverable` | 1000 | How many unrepairable events the result keeps. The count is always complete and every one is logged, so the cap only bounds the returned list. |
+| `maxReportedUnrecoverable` | 1000 | How many unrepairable findings the result keeps. One event can produce two, so this bounds findings rather than events. The count of events is always complete and every finding is logged, so the cap only bounds the returned list. |
 
 ## More detail
 

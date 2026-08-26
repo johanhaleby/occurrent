@@ -34,12 +34,17 @@ import java.util.List;
  * @param eventsRepaired          How many stored events this call modified. A re-run after a completed run reports
  *                                {@code 0}, since the repair only touches events that still look damaged.
  * @param unrecoverableEventCount How many events hold damage this tool cannot undo. Counts every one, whether or not
- *                                it fitted in {@code unrecoverableEvents}.
- * @param unrecoverableEvents     Up to {@link UpdateEventRepairOptions#maxReportedUnrecoverable()} of the events
- *                                THIS call found. A run that resumed an interrupted one lists only what it saw
- *                                itself, while {@code unrecoverableEventCount} covers the earlier part too, since
- *                                that count is carried in the checkpoint. Every event is logged at WARN when it is
- *                                found, so neither a truncated list nor a resume means a lost report.
+ *                                it fitted in {@code unrecoverableEvents}. This counts events rather than findings,
+ *                                so an event with two things wrong with it counts once, which is what the number is
+ *                                for: how many events a person has to look at.
+ * @param unrecoverableEvents     Up to {@link UpdateEventRepairOptions#maxReportedUnrecoverable()} findings from
+ *                                THIS call. One event can appear more than once, since a {@code dcbtags} value that
+ *                                is not a string and a position that cannot be read are independent damage, so this
+ *                                list can be longer than {@code unrecoverableEventCount} even without a resume. A run
+ *                                that resumed an interrupted one lists only what it saw itself, while
+ *                                {@code unrecoverableEventCount} covers the earlier part too, since that count is
+ *                                carried in the checkpoint. Every finding is logged at WARN when it is found, so
+ *                                neither a truncated list nor a resume means a lost report.
  */
 @NullMarked
 public record UpdateEventRepairResult(long eventsRepaired, long unrecoverableEventCount,

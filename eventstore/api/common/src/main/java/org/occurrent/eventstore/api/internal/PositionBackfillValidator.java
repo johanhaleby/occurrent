@@ -31,9 +31,9 @@ public final class PositionBackfillValidator {
 
     private static final String RUNBOOK = "doc/runbooks/position-backfill.md";
 
-    // An event whose position the pre-0.34.0 updateEvent dropped also has no position field, so it reaches both
-    // messages below looking like history that predates position. Backfilling it assigns a position it never had,
-    // which cannot be undone, so both messages have to point at the other runbook before anyone runs the backfill.
+    // An event whose position the pre-0.34.0 updateEvent dropped also has no position field, so it reaches every
+    // message below looking like history that predates position. Backfilling it assigns a position it never had,
+    // which cannot be undone, so every message that names the backfill has to point at the other runbook first.
     private static final String UPDATE_EVENT_CAVEAT =
             " If this application ever called updateEvent while running Occurrent 0.33.0 or earlier, read"
                     + " doc/runbooks/update-event-repair.md before running the backfill. That defect could drop an"
@@ -71,6 +71,28 @@ public final class PositionBackfillValidator {
                 + " that do not have one, which can drop history from a projection without any error. Run the position"
                 + " backfill migration described in " + RUNBOOK + ", or set requireBackfilledPosition(true) to fail"
                 + " startup instead of warning."
+                + UPDATE_EVENT_CAVEAT;
+    }
+
+    /**
+     * The message to log at WARN when stream position is only on by default and the event collection already holds
+     * events without a position, so the store turns position off rather than build the position index over an
+     * existing collection while it starts.
+     *
+     * <p>Of the three messages here this is the one an affected store reaches first, and often the only one it
+     * reaches at all. Turning position off means the store never runs the damage warning or either of the checks
+     * above, so this line is the whole of what an operator sees, and it carries the caveat for that reason.
+     *
+     * @param eventStoreCollectionName the name of the event collection that contains unpositioned events
+     * @return the message to log
+     */
+    public static String positionDisabledByUnpositionedEventsMessage(String eventStoreCollectionName) {
+        return "Stream position is on by default, but the event collection '" + eventStoreCollectionName + "' already"
+                + " contains events without a 'position'. Position will NOT be used for this store, to avoid building"
+                + " the position index over a large existing collection at startup. To use position, enable it"
+                + " explicitly with EventStoreConfig.Builder.withStreamPosition() (or set"
+                + " occurrent.event-store.stream.position=true) and backfill existing events first with the"
+                + " position-backfill module (see " + RUNBOOK + ")."
                 + UPDATE_EVENT_CAVEAT;
     }
 

@@ -852,6 +852,12 @@ already warns about events without a position, but that warning names the positi
 remedy here and will not fix it. If you see it and you have also called `updateEvent`, run the second query in the
 [repair runbook](../runbooks/update-event-repair.md) before assuming your history predates position.
 
+There is a third message worth knowing about. If stream position is on only by default, and the oldest event in the
+collection has no `position`, the store turns position off for itself and warns instead of checking anything further.
+That one event is enough, so a single event whose position `updateEvent` dropped puts an otherwise healthy store on
+that path, where it is the only warning you get. Every one of these messages names the repair runbook for that
+reason.
+
 ### What to do about it
 
 Run the `occurrent-eventstore-mongodb-update-event-repair` module. The
@@ -871,9 +877,18 @@ checkpoint if it is killed part way.
 ### What it will not fix, and you should know before you run it
 
 The repair rebuilds an event from what its document still holds. Where the old write-back destroyed the only copy
-of a value, the tool reports the event by `_id` rather than inventing one. Three cases end up
-there, a position that was never stored, a position another event already holds, and a `position` string that is not a number. The
-runbook says what to do about each.
+of a value, the tool reports the event by `_id` rather than inventing one. Four cases end up there: a position that
+was never stored, a position another event already holds, a `position` string that is not a number, and a `position`
+string holding zero or a negative number, which is not a value any store assigns. The runbook says what to do about
+each.
+
+A position the tool does restore is the value the document holds, not one it can check. The old write-back kept
+whatever position the update function returned, so a function that set `position` itself left that number behind as a
+string like any other. A forged value another event already holds is refused by the unique index, and a forged zero
+or negative one is reported, but a positive value that happens to be free is indistinguishable from the event's own.
+The tool restores it and counts a repair. If your update functions set `position`, a clean repair is not the same as
+the positions being right, and you need an external record. If they left `position` alone, every restored position
+came from the event itself.
 
 One case is invisible even to the tool. If an update function returned a replacement event built from scratch,
 without the `dcbtags` extension, the document no longer looks like a DCB event and nothing distinguishes it from an
