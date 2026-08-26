@@ -85,10 +85,11 @@ import static java.util.Objects.requireNonNull;
  *       {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. Once one event has kept failing for one
  *       instance that long, the instance becomes {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED}, the executor
  *       stops rethrowing, and the subscription moves past the event so the saga's other instances keep going. The
- *       quarantined instance stops there, and {@link SagaSubscription#release(String)} brings it back once the cause is
- *       fixed. Set {@code quarantineAfter} to {@code null} to keep the pre-0.34.0 behaviour of blocking indefinitely
- *       instead, which is also what a subscription model that cannot be resumed at a chosen position gets, since a
- *       quarantined instance there could never be replayed.</li>
+ *       quarantined instance stops there, and 0.34.0 has no operation that brings it back, so
+ *       {@code SagaStateStore.delete(sagaId)} is how you abandon it. Set {@code quarantineAfter} to {@code null} to
+ *       keep the pre-0.34.0 behaviour of blocking indefinitely instead, which is also what a subscription model that
+ *       cannot be resumed at a chosen position gets, since the event a quarantined instance stopped on could never be
+ *       obtained again there.</li>
  *   <li><strong>Timer path.</strong> A failing timeout is caught per instance, logged, and left due, so the next poll
  *       retries it while the other instances keep going. A timeout failure does not block the poller and does not
  *       propagate anywhere else, so only the poller ever retries it, never a subscription redelivery.</li>

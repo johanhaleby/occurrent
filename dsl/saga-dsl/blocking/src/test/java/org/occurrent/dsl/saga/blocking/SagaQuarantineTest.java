@@ -130,6 +130,7 @@ class SagaQuarantineTest {
     private SagaStateStore<OrderState> stateStore;
     private final List<OrderCommand> dispatched = new CopyOnWriteArrayList<>();
     private final List<SagaSubscription> subscriptionsToClose = new ArrayList<>();
+    private final List<ReplayableSubscriptionModel> modelsToStop = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void createInstances() {
@@ -142,6 +143,9 @@ class SagaQuarantineTest {
     @AfterEach
     void shutdown() {
         subscriptionsToClose.forEach(SagaSubscription::close);
+        // Closing a SagaSubscription stops its timer poller and nothing else, so each fake model's delivery thread has
+        // to be stopped here or it keeps waking every 20 ms for the rest of the test JVM.
+        modelsToStop.forEach(ReplayableSubscriptionModel::stopDelivering);
         subscriptionModel.shutdown();
     }
 
@@ -362,7 +366,15 @@ class SagaQuarantineTest {
         private volatile boolean running;
         // The 0-based index of the next event to deliver, which is the 1-based position of the previous one.
         private volatile int nextIndex;
+        private volatile @Nullable Thread deliverer;
 
+        void stopDelivering() {
+            running = false;
+            Thread thread = deliverer;
+            if (thread != null) {
+                thread.interrupt();
+            }
+        }
 
         void push(CloudEvent event) {
             log.add(event);
@@ -373,9 +385,12 @@ class SagaQuarantineTest {
             this.subscriptionId = subscriptionId;
             this.action = action;
             this.running = true;
-            Thread deliverer = new Thread(this::deliver, "replayable-" + subscriptionId);
-            deliverer.setDaemon(true);
-            deliverer.start();
+            Thread thread = new Thread(this::deliver, "replayable-" + subscriptionId);
+            thread.setDaemon(true);
+            thread.start();
+            this.deliverer = thread;
+            // Registered where the thread is actually created, so teardown stops it without every test remembering to.
+            modelsToStop.add(this);
             return new ReplayableSubscription(subscriptionId);
         }
 
