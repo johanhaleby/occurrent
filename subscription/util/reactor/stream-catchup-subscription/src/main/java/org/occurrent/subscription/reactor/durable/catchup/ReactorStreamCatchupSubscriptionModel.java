@@ -65,7 +65,9 @@ import static java.util.Objects.requireNonNull;
  * The live resume token is captured before the bulk replay, not after, so an event that commits during the replay is
  * still delivered by the live subscription. The replay pages the sequence in {@code position} windows, then a
  * reconciliation pass keeps paging until the head stops advancing so events written during the replay are delivered
- * in order. A bounded id cache dedupes events that both the replay and the live subscription see.
+ * in order. A bounded id cache dedupes events that both the reconciliation pass and the live subscription see. The
+ * history windows fill nothing, so an event a history window read is delivered again if the live subscription also
+ * sees it.
  * <p>
  * If the replay runs longer than the change stream history (the MongoDB oplog window), the captured token ages out
  * and the live resume fails loudly rather than silently dropping an event. Size the oplog for very large rebuilds.

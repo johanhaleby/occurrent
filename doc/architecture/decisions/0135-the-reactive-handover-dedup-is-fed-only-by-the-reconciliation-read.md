@@ -115,8 +115,8 @@ to any other live delivery.
   came after the resume checkpoint, so the cost equals the benefit and reaches nothing else. In a store with no
   concurrent writes it is empty. Delivery here is at-least-once already, and this composition re-delivers a whole
   replay when a stopped catch-up is started again.
-- The reactive catch-up models shipped in 0.31.0 and 0.32.0, so this changes observable delivery for callers who
-  never touch `recordAppliedAppends`. It stays inside the at-least-once contract, so it needs no migration recipe.
+- Both reactive catch-up models shipped in 0.30.0, so this changes observable delivery for callers who never touch
+  `recordAppliedAppends`. It stays inside the at-least-once contract, so it needs no migration recipe.
 - `handoverCacheSize` now sizes the reconciliation overlap alone, which is what the blocking `cacheSize` already
   means and what the property's own javadoc already claimed. Under the previous behaviour a rebuild larger than the
   cache filled it with history ids and evicted them again, so the caching ADR 38 asked for did not happen at all for
@@ -133,14 +133,23 @@ checkpoint.
 - It was reproduced against a single-node replica set. Under a secondary read preference or a sharded `mongos`,
   `operationTime` can lag committed oplog entries, which is the one case that would break the inference. This ADR
   claims the single-primary case and no more.
-- Nothing tests the exclusivity of the checkpoint form this rests on. The repository does test exclusivity for a
-  resume token, in `SpringMongoSubscriptionModelTest`, where
-  `resuming_at_a_given_position_reopens_the_change_stream_there` reopens at the token carried by an already delivered
-  event and asserts that event arrives exactly once. That is MongoDB's `resumeAfter`, a different mechanism from the
-  `startAtOperationTime` with its increment raised by one that the reasoning above depends on. For that one the
-  subscription TCK asserts only that a written event is present, and `assertDeliversStartingFrom` says in its own
-  comment that a start position may be one the model replays from, so an earlier event arriving is tolerated rather
-  than refused.
+- No test targets the exclusivity of the checkpoint form this rests on directly, but it is no longer untested. Now
+  that the history windows fill no cache, a live change stream that re-delivered pre-checkpoint history would break
+  every test in `ReactorStreamCatchupSubscriptionModelMongoTest` that asserts its received list exactly, which is
+  most of them. That includes
+  `replays_stream_history_from_the_beginning_then_delivers_live_events_without_duplicates` and
+  `a_stream_event_committed_while_the_replay_is_running_is_delivered_exactly_once`, which assert no duplicates on
+  top of the exact list. None of them isolates the exclusivity, so a failure in any one of them has several possible
+  causes.
+- The repository does assert exclusivity directly for a resume token, in `SpringMongoSubscriptionModelTest`, where
+  `resuming_at_a_given_position_reopens_the_change_stream_there` reopens at the token that came with an already
+  delivered event and asserts that event arrives exactly once. That is MongoDB's `resumeAfter`, a different mechanism
+  from the `startAtOperationTime` with its increment raised by one that the reasoning above depends on. For the
+  operation-time form the subscription TCK asserts only that a written event is present, and
+  `assertDeliversStartingFrom` says in its own comment that a start position may be one the model replays from, so an
+  earlier event arriving is tolerated rather than refused. The `startAt = NOW` annotation tests are not a third
+  source either, because `MongoCommons.applyStartPosition` applies no start position at all for `StartAt.now()` and
+  lets the driver open the change stream at the server's own now.
 - The regression coverage is a pipeline unit test and a Mongo test that combines a small handover cache with a write
   committing during the replay, the case nothing covered before. Both reproduce the race by having the reader
   report a head above the last committed position, which ADR 84 permits since `currentPosition()` is a
