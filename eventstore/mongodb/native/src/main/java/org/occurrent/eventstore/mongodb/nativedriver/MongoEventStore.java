@@ -925,7 +925,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // append. A string position sits in its own type range in the position index, so this reads no keys at all on a
     // store that was never damaged.
     private static void warnOnEventsDamagedByUpdateEvent(MongoCollection<Document> eventCollection) {
-        Document firstDamagedEvent = eventCollection.find(Filters.type(OccurrentCloudEventExtension.POSITION, BsonType.STRING)).limit(1).first();
+        // Whether one exists, not what is in it. Without the projection this pulls a whole stored event, payload and
+        // all, into the startup path of an affected store. The Spring twins ask through exists() and never do.
+        Document firstDamagedEvent = eventCollection.find(Filters.type(OccurrentCloudEventExtension.POSITION, BsonType.STRING))
+                .limit(1).projection(Projections.include(ID)).first();
         if (firstDamagedEvent == null) {
             return;
         }

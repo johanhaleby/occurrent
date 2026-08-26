@@ -25,7 +25,7 @@ import org.jspecify.annotations.NullMarked;
  *
  * @param eventsNeedingRepair  How many stored events the repair would touch. {@code 0} means no damage this tool
  *                             can detect, which is not the same as no damage. An update that dropped both
- *                             {@code position} or the {@code dcbtags} extension leaves a document that matches
+ *                             {@code position} and the {@code dcbtags} extension leaves a document that matches
  *                             neither query, whether the event was a DCB append or a plain stream event, and
  *                             {@link UpdateEventRepair} describes both cases.
  * @param eventsWithLostPosition How many stored events have DCB tags but no {@code position} at all. The repair
