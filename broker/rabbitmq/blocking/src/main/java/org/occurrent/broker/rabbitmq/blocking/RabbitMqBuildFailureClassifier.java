@@ -51,15 +51,29 @@ import java.util.Set;
  * outright and retries everything else, including a hard close this classification does not specifically
  * recognise, since an unrecognised one is far more likely to be transient than a silent new permanent failure mode.
  * <p>
- * {@link #isTransient(Throwable)} returns for any cause chain that eventually revisits a throwable it has already
- * seen, including one built to loop back on itself through {@link Throwable#initCause(Throwable)}. This is called
- * from inside a retry loop, so a classification that never returns hangs {@code build()} with it, worse than
- * either answer it could have given instead. {@code Throwable.getCause()} is not {@code final}, so an override
- * that hands back a distinct object on every call defeats this the same way it defeats
- * {@link Throwable#printStackTrace()} itself, which walks a cause chain the identical way for the identical
- * reason. Every {@code getCause()} this module or its dependencies actually construct returns a stable object.
+ * A {@link ShutdownSignalException#isInitiatedByApplication()} shutdown is not transient regardless of its reply
+ * code, or even absent one. It means this module's own {@code Connection} or {@code Channel} was closed
+ * deliberately, and RabbitMQ's automatic connection recovery, the mechanism that would otherwise make a retried
+ * attempt on the same {@code Connection} eventually succeed, never reopens something the client itself chose to
+ * close. Retrying it anyway spends the whole backoff window watching an attempt that cannot ever succeed on its
+ * own, so this refuses it outright the same way it refuses the five explicitly recognised hard closes above.
+ * <p>
+ * {@link #isTransient(Throwable)} returns for every cause chain a caller can construct, including one that loops
+ * back on itself through {@link Throwable#initCause(Throwable)} and one whose {@code getCause()} never repeats an
+ * object, since a caller-supplied override is not bound to the second case either. This is called from inside a
+ * retry loop, so a classification that never returns hangs {@code build()} with it, worse than either answer it
+ * could have given instead. The walk tracks visited identity, the guard {@link Throwable#printStackTrace()} itself
+ * uses against a repeating cause, and additionally bounds itself to {@value #MAX_CAUSE_CHAIN_DEPTH} hops, since
+ * identity alone cannot catch a chain that never repeats a node at all; a {@code getCause()} override under a
+ * caller's control is not required to.
  */
 public final class RabbitMqBuildFailureClassifier {
+
+    // Real cause chains this module or its dependencies ever build are a handful of nodes deep, so this is headroom
+    // rather than a limit anything legitimate could hit. It exists solely to bound a getCause() override that
+    // hands back a fresh, never-repeated object on every call, which the identity-based visited set below cannot
+    // detect, since termination there depends on eventually seeing an object twice.
+    private static final int MAX_CAUSE_CHAIN_DEPTH = 10_000;
 
     private RabbitMqBuildFailureClassifier() {
     }
@@ -70,20 +84,27 @@ public final class RabbitMqBuildFailureClassifier {
             return false;
         }
         ShutdownSignalException shutdown = shutdownSignalIn(throwable);
-        return shutdown == null || isTransientReplyCode(shutdown.getReason());
+        return shutdown == null || (!shutdown.isInitiatedByApplication() && isTransientReplyCode(shutdown.getReason()));
     }
 
     // A cause chain built through Throwable.initCause(...) can loop back on itself (a genuine cycle, not just a
     // repeated equal-looking exception), and Throwable itself allows that, so the walk has to notice it has
     // already visited a throwable before following its cause again, the same guard java.lang.Throwable's own
     // printStackTrace() uses for the same reason. identity, not equals(), since two distinct exceptions with the
-    // same message are not the same node.
+    // same message are not the same node. That catches a repeating node, but Throwable.getCause() is not final, so
+    // a caller-supplied override can hand back a distinct object on every call, an unbounded chain that never
+    // repeats rather than a cycle; the hop count below is what stops the walk on that chain instead.
     private static ShutdownSignalException shutdownSignalIn(Throwable throwable) {
         Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
-        for (Throwable current = throwable; current != null && visited.add(current); current = current.getCause()) {
+        Throwable current = throwable;
+        for (int hops = 0; current != null && hops < MAX_CAUSE_CHAIN_DEPTH; hops++) {
+            if (!visited.add(current)) {
+                return null;
+            }
             if (current instanceof ShutdownSignalException shutdownSignalException) {
                 return shutdownSignalException;
             }
+            current = current.getCause();
         }
         return null;
     }

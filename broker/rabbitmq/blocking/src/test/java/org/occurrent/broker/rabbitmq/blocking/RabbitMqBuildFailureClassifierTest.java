@@ -45,7 +45,7 @@ class RabbitMqBuildFailureClassifierTest {
 
     @Test
     void a_shutdown_signal_exception_with_no_amqp_reply_is_transient() {
-        ShutdownSignalException shutdown = new ShutdownSignalException(false, true, null, "connection");
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, false, null, "connection");
 
         assertThat(RabbitMqBuildFailureClassifier.isTransient(shutdown)).isTrue();
     }
@@ -54,16 +54,37 @@ class RabbitMqBuildFailureClassifierTest {
     void a_connection_forced_close_is_transient() {
         AMQP.Connection.Close close = mock(AMQP.Connection.Close.class);
         when(close.getReplyCode()).thenReturn(AMQP.CONNECTION_FORCED);
-        ShutdownSignalException shutdown = new ShutdownSignalException(false, true, close, "connection");
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, false, close, "connection");
 
         assertThat(RabbitMqBuildFailureClassifier.isTransient(shutdown)).isTrue();
+    }
+
+    // isInitiatedByApplication() true means this module's own code closed the Connection or Channel on purpose,
+    // the same signal a broker-forced close reports through AMQP.CONNECTION_FORCED but for the opposite reason.
+    // RabbitMQ's automatic recovery does not reopen something the client deliberately closed, so retrying this is
+    // not merely useless, it is the one shutdown this classification must never wait out no matter what its reply
+    // code says.
+    @Test
+    void an_application_initiated_shutdown_is_not_transient_even_with_no_amqp_reply() {
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, true, null, "connection");
+
+        assertThat(RabbitMqBuildFailureClassifier.isTransient(shutdown)).isFalse();
+    }
+
+    @Test
+    void an_application_initiated_connection_close_is_not_transient_even_with_an_otherwise_transient_reply_code() {
+        AMQP.Connection.Close close = mock(AMQP.Connection.Close.class);
+        when(close.getReplyCode()).thenReturn(AMQP.CONNECTION_FORCED);
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, true, close, "connection");
+
+        assertThat(RabbitMqBuildFailureClassifier.isTransient(shutdown)).isFalse();
     }
 
     @Test
     void a_not_found_channel_close_wrapped_in_a_bridge_exception_is_not_transient() {
         AMQP.Channel.Close close = mock(AMQP.Channel.Close.class);
         when(close.getReplyCode()).thenReturn(AMQP.NOT_FOUND);
-        ShutdownSignalException shutdown = new ShutdownSignalException(false, true, close, "channel");
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, false, close, "channel");
         RabbitMqBridgeException exception = new RabbitMqBridgeException("failed to declare topology", shutdown);
 
         assertThat(RabbitMqBuildFailureClassifier.isTransient(exception)).isFalse();
@@ -73,7 +94,7 @@ class RabbitMqBuildFailureClassifierTest {
     void a_precondition_failed_channel_close_is_not_transient() {
         AMQP.Channel.Close close = mock(AMQP.Channel.Close.class);
         when(close.getReplyCode()).thenReturn(AMQP.PRECONDITION_FAILED);
-        ShutdownSignalException shutdown = new ShutdownSignalException(false, true, close, "channel");
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, false, close, "channel");
 
         assertThat(RabbitMqBuildFailureClassifier.isTransient(shutdown)).isFalse();
     }
@@ -82,7 +103,7 @@ class RabbitMqBuildFailureClassifierTest {
     void an_access_refused_connection_close_is_not_transient() {
         AMQP.Connection.Close close = mock(AMQP.Connection.Close.class);
         when(close.getReplyCode()).thenReturn(AMQP.ACCESS_REFUSED);
-        ShutdownSignalException shutdown = new ShutdownSignalException(false, true, close, "connection");
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, false, close, "connection");
 
         assertThat(RabbitMqBuildFailureClassifier.isTransient(shutdown)).isFalse();
     }
@@ -91,7 +112,7 @@ class RabbitMqBuildFailureClassifierTest {
     void an_invalid_path_connection_close_is_not_transient() {
         AMQP.Connection.Close close = mock(AMQP.Connection.Close.class);
         when(close.getReplyCode()).thenReturn(AMQP.INVALID_PATH);
-        ShutdownSignalException shutdown = new ShutdownSignalException(false, true, close, "connection");
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, false, close, "connection");
 
         assertThat(RabbitMqBuildFailureClassifier.isTransient(shutdown)).isFalse();
     }
@@ -100,7 +121,7 @@ class RabbitMqBuildFailureClassifierTest {
     void a_not_allowed_channel_close_is_not_transient() {
         AMQP.Channel.Close close = mock(AMQP.Channel.Close.class);
         when(close.getReplyCode()).thenReturn(AMQP.NOT_ALLOWED);
-        ShutdownSignalException shutdown = new ShutdownSignalException(false, true, close, "channel");
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, false, close, "channel");
 
         assertThat(RabbitMqBuildFailureClassifier.isTransient(shutdown)).isFalse();
     }
@@ -117,7 +138,7 @@ class RabbitMqBuildFailureClassifierTest {
     void a_publish_exception_wrapping_a_permanent_amqp_close_is_not_transient() {
         AMQP.Channel.Close close = mock(AMQP.Channel.Close.class);
         when(close.getReplyCode()).thenReturn(AMQP.NOT_FOUND);
-        ShutdownSignalException shutdown = new ShutdownSignalException(false, true, close, "channel");
+        ShutdownSignalException shutdown = new ShutdownSignalException(false, false, close, "channel");
         RabbitMqPublishException exception = new RabbitMqPublishException(
                 "Failed to create a confirm-mode RabbitMQ channel", shutdown);
 
@@ -143,6 +164,29 @@ class RabbitMqBuildFailureClassifierTest {
         RabbitMqBridgeException cyclic = new RabbitMqBridgeException("cyclic", a);
 
         boolean result = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> RabbitMqBuildFailureClassifier.isTransient(cyclic));
+
+        assertThat(result).isTrue();
+    }
+
+    // Throwable.getCause() is not final, so a caller can override it to hand back a fresh, never-repeated object on
+    // every call, an unbounded chain rather than a cycle: the identity-based visited set never sees the same object
+    // twice, so only the classifier's separate hop-count bound stops this walk. assertTimeoutPreemptively for the
+    // same reason as the cyclic case above: an unbounded walk runs forever on the calling thread otherwise.
+    @Test
+    void a_cause_chain_whose_getCause_never_repeats_terminates_instead_of_looping_forever() {
+        class RelentlessCause extends RuntimeException {
+            RelentlessCause() {
+                super("relentless");
+            }
+
+            @Override
+            public synchronized Throwable getCause() {
+                return new RelentlessCause();
+            }
+        }
+        RabbitMqBridgeException neverRepeating = new RabbitMqBridgeException("wrapping an ever-growing cause chain", new RelentlessCause());
+
+        boolean result = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> RabbitMqBuildFailureClassifier.isTransient(neverRepeating));
 
         assertThat(result).isTrue();
     }
