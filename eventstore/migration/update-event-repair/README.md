@@ -73,6 +73,10 @@ position mapper and tag decoder, so a repaired event is what a running store wou
   back and its tag array still missing. Only a rejected write keeps both exactly as they were found.
 - **Throttled.** You can make it sleep between batches so it does not compete with production traffic.
 
+Get every instance writing to the collection onto 0.34.0 before you start. The repair walks `_id` order once and
+never goes back, so an instance still on 0.33.0 or earlier that calls `updateEvent` on an event the walk has already
+passed damages it again, and the run finishes reporting a collection it has left broken.
+
 Run one instance at a time. Two concurrent runs share one checkpoint document, and the first to finish deletes it
 while the other is still going, so a later resume would start from the wrong place. If you run this as a Kubernetes
 Job, make sure a retry cannot overlap the run it is retrying.
@@ -95,10 +99,18 @@ none of the original's extensions, so no position was stored. The tool will not 
   Nothing in either document says which one is entitled to it. Reported as `POSITION_ALREADY_TAKEN`, and the event
   is left exactly as it was found.
 - **A `position` string that is not a number.** No known path produces this. Reported as `POSITION_NOT_A_NUMBER`.
+- **A `dcbtags` that is not a readable string.** Another type, an explicit null, or a value that does not decode to a
+  tag set. Nothing Occurrent writes produces any of them, so it points at a document edited outside the library.
+  Reported as `UNREADABLE`. The position is still restored, since it does not depend on the tags.
 - **A `position` string holding zero or a negative number.** No store assigns one. Positions start above zero and
   every position query reads `position > 0`, so writing such a value back would count as a repair and leave the event
   just as invisible. Only an update function that forged the position produces this. Reported as
   `POSITION_NOT_POSITIVE`. The tag array is still rebuilt.
+
+`eventsWithLostPosition()` on the result is separate from all of these. It is asked of the collection when the run
+finishes rather than tallied as the run goes, so it still counts an event whose tag array an earlier run rebuilt.
+Rebuilding that array is what stops an event looking damaged, so without this number a finished run could report a
+clean collection while a position was still gone.
 
 A position the tool does restore is the value the document holds, not one it can check. The old write-back kept
 whatever position the update function returned, so a forged one was stored as a string like any other. The two cases
@@ -145,12 +157,12 @@ Build the runnable jar:
 mvn -pl eventstore/migration/update-event-repair -am package -DskipTests
 ```
 
-That produces `eventstore-mongodb-update-event-repair-<version>-cli.jar` in the module's `target/` directory, a
+That produces `occurrent-eventstore-mongodb-update-event-repair-<version>-cli.jar` in the module's `target/` directory, a
 single jar with all dependencies bundled. Run it with `<mongoUri> <database> <collection> [report|repair]`. The
 command defaults to `report`, which changes nothing.
 
 ```bash
-java -jar eventstore/migration/update-event-repair/target/eventstore-mongodb-update-event-repair-<version>-cli.jar \
+java -jar eventstore/migration/update-event-repair/target/occurrent-eventstore-mongodb-update-event-repair-<version>-cli.jar \
   "mongodb://localhost:27017" my-database events report
 ```
 

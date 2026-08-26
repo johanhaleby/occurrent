@@ -81,7 +81,7 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <p>
  * A position it does restore is the value the document holds, not one it can check. The old write-back kept whatever
  * position the update function returned, so a function that forged one left that number behind as a string like any
- * other. Two of those the tool still catches: a value another event already holds is refused by the unique index, and
+ * other. Two of those the tool still catches. A value another event already holds is refused by the unique index, and
  * zero or a negative value is a position no store assigns. A positive value that happens to be free, in a gap in the
  * sequence for instance, is indistinguishable from the event's own. The tool converts it to an int64 and counts a
  * repair, because nothing in the store records what the position was.
@@ -154,7 +154,7 @@ public final class UpdateEventRepair {
      */
     public UpdateEventRepairReport report() {
         long needingRepair = withRetry(() -> eventCollection.countDocuments(damagedEventFilter()));
-        long lostPosition = withRetry(() -> eventCollection.countDocuments(and(exists(DcbCloudEvents.TAGS), exists(POSITION, false))));
+        long lostPosition = withRetry(() -> eventCollection.countDocuments(lostPositionFilter()));
         log.info("Repair report for collection '{}': {} events need repair. Separately, {} events have a position that cannot be restored.",
                 eventStoreCollectionName, needingRepair, lostPosition);
         return new UpdateEventRepairReport(needingRepair, lostPosition);
@@ -222,10 +222,24 @@ public final class UpdateEventRepair {
             }
         }
 
+        // Asked of the collection rather than accumulated over the walk, because the walk cannot see all of it. A
+        // POSITION_LOST event gets its tag array rebuilt, which stops it matching the damaged-event filter, so a run
+        // killed between that write and the batch checkpoint leaves an event no resumed run rediscovers. Counting
+        // what is still there means a finished run cannot report a clean collection while a position is still gone.
+        long lostPosition = withRetry(() -> eventCollection.countDocuments(lostPositionFilter()));
+
         deleteCheckpoint();
-        log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone.",
-                eventStoreCollectionName, repaired, unrecoverableCount);
-        return new UpdateEventRepairResult(repaired, unrecoverableCount, unrecoverable);
+        log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone, {} are left without a position.",
+                eventStoreCollectionName, repaired, unrecoverableCount, lostPosition);
+        return new UpdateEventRepairResult(repaired, unrecoverableCount, lostPosition, unrecoverable);
+    }
+
+    /**
+     * An event that was written by a DCB append, so it had a position, and no longer has one. The repair cannot put
+     * it back, so this is what survives a completed run rather than what a run is looking for.
+     */
+    private static Bson lostPositionFilter() {
+        return and(exists(DcbCloudEvents.TAGS), exists(POSITION, false));
     }
 
     /**
@@ -257,13 +271,18 @@ public final class UpdateEventRepair {
         Object storedPosition = event.get(POSITION);
         Object rawTags = event.get(DcbCloudEvents.TAGS);
         String encodedTags;
-        if (rawTags == null || rawTags instanceof String) {
-            encodedTags = (String) rawTags;
+        if (rawTags instanceof String tags) {
+            encodedTags = tags;
+        } else if (rawTags == null && !event.containsKey(DcbCloudEvents.TAGS)) {
+            // No dcbtags field at all, which is an ordinary stream event rather than damage. A document holding an
+            // explicit null falls through to the branch below, since the damaged-event filter matches it and a run
+            // that neither updated it nor said anything about it would finish clean while report() still counted it.
+            encodedTags = null;
         } else {
             // The position does not depend on the tags, so carry on and repair it. Only the tag array is beyond
             // saving here, the same way an unreadable position below still leaves the tag array repairable.
             unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.UNREADABLE,
-                    "dcbtags is a " + rawTags.getClass().getSimpleName() + " rather than a string"));
+                    rawTags == null ? "dcbtags is null rather than a string" : "dcbtags is a " + rawTags.getClass().getSimpleName() + " rather than a string"));
             encodedTags = null;
         }
         List<Bson> updates = new ArrayList<>(2);
@@ -318,7 +337,7 @@ public final class UpdateEventRepair {
         // throwing, and the retry only ever sees a transient failure. Re-running the same $set is harmless.
         //
         // Matched rather than modified, because a retry after an ambiguous failure has to count as the repair it is.
-        // Every field in this update is one the event does not have yet: position is set only when it is a string, so
+        // Every field in this update is one the event does not have yet. Position is set only when it is a string, so
         // writing it changes its type, and the tag array only when the field is absent. A first attempt that reaches
         // the server therefore always modifies the document, and modified zero can only mean the lost acknowledgement
         // of a write that did land. Counting that as unrepaired would understate the run against the event's own log
@@ -421,10 +440,11 @@ public final class UpdateEventRepair {
             }
             UpdateEventRepairResult result = repair.run();
             log.info("Repair result: {}", result);
-            if (result.unrecoverableEventCount() > 0) {
+            if (result.unrecoverableEventCount() > 0 || result.eventsWithLostPosition() > 0) {
                 // Exit non-zero so a job scheduler does not record a run that left events unrepaired as a success.
                 // The events are named in the log above and each one needs a person to decide what to do about it.
-                System.err.println(result.unrecoverableEventCount() + " event(s) hold damage that cannot be undone automatically."
+                System.err.println(result.unrecoverableEventCount() + " event(s) hold damage that cannot be undone automatically and "
+                        + result.eventsWithLostPosition() + " are left without a position."
                         + " See the WARN lines above and doc/runbooks/update-event-repair.md.");
                 System.exit(2);
             }

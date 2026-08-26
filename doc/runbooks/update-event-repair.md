@@ -71,7 +71,7 @@ UpdateEventRepairReport report = repair.report();
 Or from the command line, where `report` is the default:
 
 ```bash
-java -jar eventstore-mongodb-update-event-repair-<version>-cli.jar \
+java -jar occurrent-eventstore-mongodb-update-event-repair-<version>-cli.jar \
   "mongodb://localhost:27017" my-database events report
 ```
 
@@ -95,12 +95,17 @@ UpdateEventRepairResult result = new UpdateEventRepair(database, "events", optio
 Or:
 
 ```bash
-java -jar eventstore-mongodb-update-event-repair-<version>-cli.jar \
+java -jar occurrent-eventstore-mongodb-update-event-repair-<version>-cli.jar \
   "mongodb://localhost:27017" my-database events repair
 ```
 
-It can run against a live store. Raise `throttleMillis` to leave more room for production traffic. Run one instance
-at a time, since two concurrent runs share one checkpoint document and would resume from the wrong place.
+It can run against a live store, but every instance writing to that collection has to be on 0.34.0 first. The repair
+walks `_id` order once and never goes back, so an instance still on 0.33.0 or earlier that calls `updateEvent` on an
+event the walk has already passed damages it again, and the run finishes reporting a collection it has left broken.
+Finish the deploy, or stop the writers, before you start.
+
+Raise `throttleMillis` to leave more room for production traffic. Run one instance at a time, since two concurrent
+runs share one checkpoint document and would resume from the wrong place.
 
 Both the report and the repair read the whole collection, because finding an event whose tag array is missing cannot
 use an index. Neither is expensive in writes, but on a large store give them a quiet period.
@@ -110,6 +115,11 @@ repaired stay repaired, and it only touches events that still look damaged, so a
 anything.
 
 ### 5. [you] Deal with what could not be repaired
+
+`result.eventsWithLostPosition()` is the number of events left with DCB tags and no position at all. It is asked of
+the collection when the run finishes rather than tallied as the run goes, so it still counts an event whose tag array
+an earlier run rebuilt. Rebuilding that array is what stops an event looking damaged, so without this number a
+finished run could report a clean collection while a position was still gone.
 
 `result.unrecoverableEventCount()` is the number of events holding damage the tool will not guess at.
 `result.unrecoverableEvents()` names the findings by `_id`, and every one is also logged, so a truncated list is not
@@ -176,7 +186,7 @@ an external record of what those events should be. The store cannot tell you.
 
 A position the tool restores is the value the document holds, not one it can check. The old write-back kept whatever
 position the update function returned, so a function that set `position` itself left that number behind as a string
-like any other. Two of those still get caught: a value another event already holds is refused by the unique index and
+like any other. Two of those still get caught. A value another event already holds is refused by the unique index and
 reported as `POSITION_ALREADY_TAKEN`, and zero or a negative value is reported as `POSITION_NOT_POSITIVE`. A positive
 value that happens to be free, in a gap in the sequence for instance, is indistinguishable from the event's own. The
 tool converts it to a number, counts a repair and reports nothing, because nothing in the store records what the

@@ -72,10 +72,12 @@ public record UnrecoverableEvent(Object eventId, Reason reason, String detail) {
          */
         POSITION_NOT_POSITIVE,
         /**
-         * The event could not be read well enough to repair it. Its {@code dcbtags} is not a string, or does not
-         * decode to a tag set. Nothing Occurrent writes produces either shape, so it points at a document that was
-         * edited outside the library. The run continues past it rather than stopping, so one such event cannot hold
-         * up the repair of a whole collection.
+         * The event could not be read well enough to repair it. Its {@code dcbtags} is not a string, is an explicit
+         * null, or does not decode to a tag set. Nothing Occurrent writes produces any of those, so it points at a
+         * document that was edited outside the library. A null is not the same as an absent field, which is an
+         * ordinary stream event rather than damage, and it is reported because the damaged-event filter matches it.
+         * The run continues past it rather than stopping, so one such event cannot hold up the repair of a whole
+         * collection.
          */
         UNREADABLE
     }

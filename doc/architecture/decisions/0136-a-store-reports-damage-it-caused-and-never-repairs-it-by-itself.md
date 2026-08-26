@@ -128,9 +128,15 @@ event by `_id` rather than guessed at:
 - A `position` string holding zero or a negative number. Positions start above zero, `getPosition` returns zero for
   an event that has none, and every position query reads `position > 0`, so no store assigns such a value. Writing it
   back as an int64 would count as a repair and leave the event exactly as invisible, which is the worst of the two
-  outcomes: a silent failure reported as a success.
+  outcomes, a silent failure reported as a success.
 
-The count of these is a count of events rather than of findings. The reasons are independent, so a document whose
+A completed run reports the events left without a position by asking the collection, not by adding up what the walk
+saw. Rebuilding a lost-position event's tag array is what stops it matching the damaged-event filter, so a run killed
+between that write and its batch checkpoint leaves an event no resumed run rediscovers, and the result would say the
+collection was clean while the position was still gone. `UpdateEventRepairResult` therefore carries the same
+`eventsWithLostPosition` count `UpdateEventRepairReport` does, and the command-line run exits non-zero on it.
+
+The count of unrecoverable events is a count of events rather than of findings. The reasons are independent, so a document whose
 `dcbtags` is not a string and whose position cannot be read produces two, and counting both would inflate the number
 the CLI's exit message and the runbook present as how many events a person has to look at.
 

@@ -36,7 +36,15 @@ import java.util.List;
  * @param unrecoverableEventCount How many events hold damage this tool cannot undo. Counts every one, whether or not
  *                                it fitted in {@code unrecoverableEvents}. This counts events rather than findings,
  *                                so an event with two things wrong with it counts once, which is what the number is
- *                                for: how many events a person has to look at.
+ *                                for, how many events a person has to look at.
+ * @param eventsWithLostPosition  How many events in the collection have DCB tags and no {@code position} at all once
+ *                                this run finished. Asked of the collection rather than accumulated over the run, so
+ *                                it covers events an earlier run repaired the tag array of and events this one was
+ *                                killed before checkpointing. Repairing that array stops an event matching the
+ *                                damaged-event filter, so no later run would rediscover it, and without this number a
+ *                                finished run could report a clean collection while a position was still gone. Matches
+ *                                {@link UpdateEventRepairReport#eventsWithLostPosition()}, and it is not a subset of
+ *                                {@code unrecoverableEventCount}.
  * @param unrecoverableEvents     Up to {@link UpdateEventRepairOptions#maxReportedUnrecoverable()} findings from
  *                                THIS call. One event can appear more than once, since a {@code dcbtags} value that
  *                                is not a string and a position that cannot be read are independent damage, so this
@@ -47,7 +55,7 @@ import java.util.List;
  *                                neither a truncated list nor a resume means a lost report.
  */
 @NullMarked
-public record UpdateEventRepairResult(long eventsRepaired, long unrecoverableEventCount,
+public record UpdateEventRepairResult(long eventsRepaired, long unrecoverableEventCount, long eventsWithLostPosition,
                                       List<UnrecoverableEvent> unrecoverableEvents) {
 
     public UpdateEventRepairResult {

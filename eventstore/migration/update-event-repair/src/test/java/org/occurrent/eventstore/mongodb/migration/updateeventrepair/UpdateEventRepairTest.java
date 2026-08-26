@@ -432,6 +432,54 @@ class UpdateEventRepairTest {
     }
 
     @Test
+    void a_lost_position_is_still_reported_by_a_run_that_never_saw_the_event_lose_it() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "a"),
+                new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
+
+        // The first run rebuilds the tag array, which stops the event matching the damaged-event filter. Standing in
+        // for a run killed between that write and its checkpoint, whose findings were never persisted.
+        newRepair().run();
+
+        UpdateEventRepairResult second = newRepair().run();
+
+        assertAll(
+                () -> assertThat(second.unrecoverableEvents())
+                        .as("the second run cannot rediscover the event, which is why the count below cannot come from the walk")
+                        .isEmpty(),
+                () -> assertThat(second.eventsWithLostPosition())
+                        .as("a finished run must not report a clean collection while an event is still missing its position")
+                        .isEqualTo(1),
+                () -> assertThat(eventIdsInPositionOrder())
+                        .as("the event really is still outside position-ordered reads, so reporting zero would be false rather than merely incomplete")
+                        .isEmpty()
+        );
+    }
+
+    @Test
+    void an_event_whose_dcbtags_is_an_explicit_null_is_reported_rather_than_silently_skipped() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        // $exists matches a field holding null, so this document is counted as needing repair. Treating it like an
+        // absent field would leave the run finishing clean while report() still counted it.
+        events().updateOne(new Document("id", "a"),
+                new Document("$set", new Document(DcbCloudEvents.TAGS, null)));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.UNREADABLE),
+                () -> assertThat(newRepair().report().eventsNeedingRepair())
+                        .as("whatever the run says about this event, the report must agree, and it still counts it")
+                        .isEqualTo(1)
+        );
+    }
+
+    @Test
     void one_unreadable_event_does_not_stop_the_rest_of_the_collection_being_repaired() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
