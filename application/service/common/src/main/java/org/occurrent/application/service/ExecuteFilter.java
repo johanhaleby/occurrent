@@ -157,7 +157,10 @@ public interface ExecuteFilter<E> {
     private static IllegalArgumentException cannotFilterOn(Class<?> eventType) {
         if (eventType.isArray()) {
             return new IllegalArgumentException(eventType.getTypeName()
-                    + " cannot be filtered on by type, since this expansion does not support an array. Filter on the concrete event types instead.");
+                    + " cannot be filtered on by type, since this expansion does not support an array. An array class is "
+                    + "already concrete, so there is no narrower type to name, and it is refused for consistency with the "
+                    + "other declared shapes rather than because nothing can be an instance of one. Build the "
+                    + "StreamReadFilter yourself with ExecuteFilter.from(..) if you do mean to filter on an array type.");
         }
         if (eventType.isPrimitive()) {
             return new IllegalArgumentException(eventType.getTypeName()
@@ -174,7 +177,10 @@ public interface ExecuteFilter<E> {
     private static IllegalArgumentException cannotExcludeArrayOrPrimitive(Class<?> eventType) {
         if (eventType.isArray()) {
             return new IllegalArgumentException(eventType.getTypeName()
-                    + " cannot be excluded by type, since this expansion does not support an array. Exclude the concrete event types instead.");
+                    + " cannot be excluded by type, since this expansion does not support an array. An array class is "
+                    + "already concrete, so there is no narrower type to name, and it is refused for consistency with "
+                    + "type and includeTypes rather than because excluding one is impossible. Build the StreamReadFilter "
+                    + "yourself with ExecuteFilter.from(..) if you do mean to exclude an array type.");
         }
         return new IllegalArgumentException(eventType.getTypeName()
                 + " cannot be excluded by type, since no event is ever an instance of a primitive type. Exclude the concrete event types instead.");

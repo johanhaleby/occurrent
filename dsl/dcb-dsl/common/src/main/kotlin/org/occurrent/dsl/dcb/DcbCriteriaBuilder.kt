@@ -168,7 +168,11 @@ class DcbCriteriaBuilder<E : Any> private constructor(
 private fun cannotBuildCriterionOn(eventType: Class<*>): IllegalArgumentException {
     if (eventType.isArray) {
         return IllegalArgumentException(
-            "${eventType.typeName} cannot be a declared event type, since this expansion does not support an array. Declare the concrete event types instead."
+            "${eventType.typeName} cannot be a declared event type, since this expansion does not support an array. " +
+                "An array class is already concrete, so there is no narrower type to name, and it is refused for " +
+                "consistency with the other declared shapes rather than because nothing can be an instance of one. " +
+                "Build the DcbCriterion yourself with DcbCriteria.type(String)/types(String, ...) if you do mean to " +
+                "match an array type."
         )
     }
     if (eventType.isPrimitive) {

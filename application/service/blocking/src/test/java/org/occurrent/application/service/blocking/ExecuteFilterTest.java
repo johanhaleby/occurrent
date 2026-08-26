@@ -132,15 +132,19 @@ class ExecuteFilterTest {
         }
 
         @Test
-        void exclude_types_still_refuses_an_array_declared_type() {
+        void exclude_types_still_refuses_an_array_declared_type_and_names_the_only_way_out() {
             // Given: widening never reaches an array, refused for consistency with type/includeTypes rather than
-            // because excluding one would be impossible.
+            // because excluding one would be impossible. That makes "exclude the concrete event types instead" the
+            // wrong advice here, since an array class is already the concrete type, so the message has to name the
+            // raw filter escape rather than a narrower declaration that does not exist.
             ExecuteFilter<Object[]> executeFilter = ExecuteFilter.excludeTypes(Object[].class);
 
             // When / Then
             assertThatThrownBy(() -> executeFilter.resolve(nameGetter()))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining(Object[].class.getTypeName());
+                    .hasMessageContaining(Object[].class.getTypeName())
+                    .hasMessageContaining("ExecuteFilter.from(..)")
+                    .hasMessageNotContaining("Exclude the concrete event types instead");
         }
 
         @Test
@@ -155,12 +159,16 @@ class ExecuteFilterTest {
         }
 
         @Test
-        void type_class_refuses_an_array_declared_type() {
+        void type_class_refuses_an_array_declared_type_and_names_the_only_way_out() {
+            // Given: the same reason as the excludeTypes case. An array class is already the concrete type, so
+            // pointing at the concrete event types would be advice nobody can act on.
             ExecuteFilter<Object[]> executeFilter = ExecuteFilter.type(Object[].class);
 
             assertThatThrownBy(() -> executeFilter.resolve(nameGetter()))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining(Object[].class.getTypeName());
+                    .hasMessageContaining(Object[].class.getTypeName())
+                    .hasMessageContaining("ExecuteFilter.from(..)")
+                    .hasMessageNotContaining("Filter on the concrete event types instead");
         }
 
         @Test

@@ -151,6 +151,20 @@ class DcbCriteriaBuilderTypeExpansionTest {
     }
 
     @Test
+    fun type_refuses_an_array_declared_type_and_names_the_only_way_out() {
+        // Given: an array class is already the concrete event type, so "declare the concrete event types instead"
+        // is advice nobody can act on here. DcbCriteriaBuilder has no filter override, so the raw type string is
+        // the escape the message has to name.
+        val builder = DcbCriteriaBuilder(simpleNameConverter<Any>())
+
+        assertThatThrownBy { builder.type(Array<Any>::class.java) }
+            .isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining(Array<Any>::class.java.typeName)
+            .hasMessageContaining("DcbCriteria.type(String)/types(String, ...)")
+            .hasMessageNotContaining("Declare the concrete event types instead")
+    }
+
+    @Test
     fun type_accepts_a_sealed_interface_whose_only_member_is_a_kotlin_enum_without_bodies() {
         // Given: a caller declaring a bodiless enum directly is the easy half. The refusal they actually meet comes
         // from the sealed event interface above it, which type_refuses_the_sealed_interface_a_kotlin_enum_with_constant_bodies_reopens

@@ -140,9 +140,13 @@ exclude everything under it, and widening can only exclude more. That walk is th
 starts at the declared type, follows a `permits` clause through `Class.getPermittedSubclasses`, and stops at
 the first level that is not sealed, so a type it cannot reach means an event you wanted out stays in, rather
 than the reverse. That widening needs no migration step by itself. It still refuses an array or a
-primitive declared type, the same two shapes `type`/`includeTypes` refuse, since no event is ever an instance
-of either. Declaring one to `excludeTypes` was accepted up to 0.33.0, whatever your `CloudEventTypeGetter`
-happened to return for it, so that one shape is new. Nobody sensibly excludes by array or primitive type, so
+primitive declared type, the same two shapes `type`/`includeTypes` refuse, though for two different reasons.
+No event is ever an instance of a primitive class, so declaring one is a mistake and the concrete event types
+are what you meant. An array is refused for consistency with `type`/`includeTypes` rather than because
+excluding one is impossible, and an array class is already concrete, so there is no narrower type to declare.
+Build the `StreamReadFilter` yourself with `ExecuteFilter.from(StreamReadFilter)` if you do mean to exclude an
+array type. Declaring either to `excludeTypes` was accepted up to 0.33.0, whatever your `CloudEventTypeGetter`
+happened to return for it, so that shape is new. Nobody sensibly excludes by array or primitive type, so
 in practice this affects close to nobody, but it is still a behavior change worth naming rather than folding
 into "no migration step."
 
