@@ -25,8 +25,8 @@ a second compile-time break, and comparing either whole for equality fails silen
 used to start without a recorded position is now refused at `subscribe(..)`. Read
 [section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
 Finally, a saga instance whose event keeps failing is now suspended instead of retried forever, which changes five
-things about the saga API at once. `SagaEnvelope` and `SagaRunnerConfig` each gain a record component, `SagaInstance`
-gains a method, and `SagaStatus` gains a constant that `findByStatus(ACTIVE, ..)` no longer returns. Read
+things about the saga API at once. `SagaEnvelope` gains two record components and `SagaRunnerConfig` gains one,
+`SagaInstance` gains a method, and `SagaStatus` gains a constant that `findByStatus(ACTIVE, ..)` no longer returns. Read
 [section 8](#8-a-saga-instance-that-keeps-failing-is-quarantined-and-four-saga-types-change-with-it).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
@@ -685,8 +685,10 @@ and an event that cannot be asked for again, this keeps the event.
 
 An event with no global position is never quarantined either. The failure record holds that position so you can find
 the event the instance stopped on, and refusing to quarantine keeps the 0.33.0 behaviour, which loses nothing.
-Occurrent's own stored events always have a position, and a feed that drops the CloudEvent extensions on the way in
-does not.
+
+Two setups reach that case. A stream-only event store built with `EventStoreConfig.Builder.withoutStreamPosition()`
+writes events with no global position, so a saga running against such a store keeps blocking however the budget is set.
+So does a feed that drops the CloudEvent extensions on the way in.
 
 ### The five breaks
 
