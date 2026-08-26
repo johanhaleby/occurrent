@@ -178,11 +178,11 @@ A start event whose `evolve` or `onStart` throws has no envelope to record anyth
 write has to insert one. That insert breaks the executor unless start detection changes with it.
 `SagaExecutionSupport.startEventOrNull` returns null whenever `current != null`, and that null is what gates
 `saga.onStart`. So once a quarantine-only document exists, the instance is permanently treated as already started, and
-after a release and a replay its start event is skipped and `onStart` never runs, with no error anywhere.
+a later redelivery of its start event is skipped and `onStart` never runs, with no error anywhere.
 
 The decision is that the executor keys start detection on an explicit marker of whether the instance has ever been
 started, rather than on whether a document exists for it. A quarantine-only envelope is then honestly what it is, a
-record that this instance failed before it began, and the replay after a release starts it properly.
+record that this instance failed before it began, and a later redelivery of its start event starts it properly.
 
 The alternative was to exclude start-event failures from quarantine and leave them on today's path. That was rejected
 because it is a hole in exactly the rule this decision exists to keep. A saga whose first event throws for one
@@ -229,7 +229,7 @@ member with no exemption. The quarantine fields are stored as top-level document
 enumeration projections. An instance whose state cannot be decoded is exactly the instance an operator is looking
 for, so a quarantined instance must be enumerable without reading its state.
 
-### 7. Release clears the record and restarts the subscription at the recorded position
+### 7. Release clears the record and restarts the subscription at the recorded position, and 0.34.0 does not ship it
 
 Release is two things and both are needed. Clear the record alone and the instance handles new events against state
 with a gap in it. Restarting the subscription alone re-runs the quarantine.
@@ -310,6 +310,25 @@ every non-default start and always replays from the beginning, so release has to
 and what it does per model when that capability is absent, rather than assuming a `Subscribable` can be restarted
 anywhere.
 
+**0.34.0 does not ship release, and the reason is the capability named just above.** Implementation went looking for
+a subscription model that guarantees the replay this section requires, meaning one that hands the instance back the
+exact event it stopped on, and no model in this repository provides it. `RepositionableSubscriptions` is the closest
+thing and it is not that guarantee. `CatchupSubscriptionModel` implements the interface whatever it wraps and throws
+`UnsupportedOperationException` when the wrapped model cannot reposition, it answers `isRunning(id)` true while a
+catch-up child is running but hands `pauseSubscription(id)` to the live model where the subscription is not
+registered until handover, and a `GlobalCheckpoint` resume on the default MongoDB starter reaches
+`MongoCommons.applyStartPosition`, which treats a checkpoint it does not recognise as the model default.
+
+So the quarantine half ships and the release half does not. Quarantine on its own is what removes the block this
+decision exists to remove, and it needs no replay to do it. Release needs a replay capability that has to be
+designed and built in the subscription models rather than in the saga DSL, which is work of its own rather than a
+detail of this decision. `SagaStateStore.delete(sagaId)` is the only way out of quarantine in 0.34.0.
+
+The durable record identifies the failing input by its redelivery key rather than by a global position, which is what
+keeps that later work cheap. A position is a number one subscription model assigns, and the same event has a
+different one on a different replay path, or none at all. The redelivery key belongs to the event, so release can be
+added on top of instances written by 0.34.0 without migrating them.
+
 `SagaStateStore.delete(sagaId)`, the escape hatch ADR 128 already names, stays available throughout. It abandons the
 instance deliberately instead of quietly.
 
@@ -353,16 +372,17 @@ restart. For every other instance those events were already handled, so at-least
 advancing costs them nothing.
 
 For the quarantined instance, at-least-once through the subscription channel is given up at that position and
-replaced by the recorded position plus a release. This is the real trade in this decision and it should be read as
-such. What the instance gets in exchange is that the property becomes explicit, durable and visible in
+replaced by the recorded position, which a release will later replay from. This is the real trade in this decision and
+it should be read as such. What the instance gets in exchange is that the property becomes explicit, durable and visible in
 `findByStatus`, rather than implicit in a channel that is no longer moving.
 
 A long store outage quarantines instances. Past the budget the design cannot tell an outage from an input that will
-never succeed, so it treats it as the latter, and an outage longer than the budget quarantines a set of instances. They are all recoverable by release, so this is operational work rather than lost data, but it is a
-real cost and the budget's default has to be chosen with it in mind.
+never succeed, so it treats it as the latter, and an outage longer than the budget quarantines a set of instances.
+Until release ships they cannot be brought back through the saga API, so the budget's default has to be chosen with
+that in mind.
 
-Releasing an instance pauses the saga's subscription while the replay catches up, so it is an operation with a
-visible cost rather than a background one. See Decision point 7.
+Releasing an instance would pause the saga's subscription while the replay catches up, so it is an operation with a
+visible cost rather than a background one. 0.34.0 does not ship it. See Decision point 7.
 
 Dispatch amplification is reduced rather than introduced. Today an input that will never succeed re-dispatches its
 whole command list on every one of the subscription's unlimited retries. Under the budget that stops when the

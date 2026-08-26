@@ -35,25 +35,22 @@ import static java.util.Objects.requireNonNull;
  * for why.
  * <p>
  * What is here and what is not follows the same rule as the rest of {@link SagaInstance}. An operator asking why an
- * instance stopped needs the exception's type and message and the position to release from. The event payload and the
- * stack trace are not lifecycle, so they stay in the log the executor already wrote them to.
+ * instance stopped needs the exception's type and message, and the position to find the event by. The event payload and
+ * the stack trace are not lifecycle, so they stay in the log the executor already wrote them to.
  *
  * @param input          the failing input's redelivery key, which is its stream id with its version, or its global
  *                       position. The same string the executor compares against to tell one failing input from the next
- * @param position       the global subscription position of the failing event, which is where a release replays from
+ * @param position       the global subscription position of the failing event, which is where in the event stream the
+ *                       instance stopped
  * @param firstFailedAt  when this input first failed, which is when the quarantine budget started running
  * @param failureType    the class name of the exception the saga or its dispatcher threw
  * @param failureMessage that exception's message, or {@code null} when it had none
- * @param releasedAt     when an operator released the instance, or {@code null} while it has not been released. A
- *                       released instance stays quarantined until the replay reaches {@code position}, which is what
- *                       keeps a live event from being applied to state that still has the gap in it
  */
 public record SagaFailure(String input,
                           long position,
                           Instant firstFailedAt,
                           String failureType,
-                          @Nullable String failureMessage,
-                          @Nullable Instant releasedAt) {
+                          @Nullable String failureMessage) {
 
     public SagaFailure {
         requireNonNull(input, "input cannot be null");
@@ -62,16 +59,5 @@ public record SagaFailure(String input,
         if (position < 0) {
             throw new IllegalArgumentException("position cannot be negative, was " + position);
         }
-    }
-
-    /** Whether an operator has released this instance and it is waiting for the replay to reach {@link #position()}. */
-    public boolean isReleased() {
-        return releasedAt != null;
-    }
-
-    /** A copy of this record marked released at {@code releasedAt}. */
-    public SagaFailure released(Instant releasedAt) {
-        requireNonNull(releasedAt, "releasedAt cannot be null");
-        return new SagaFailure(input, position, firstFailedAt, failureType, failureMessage, releasedAt);
     }
 }

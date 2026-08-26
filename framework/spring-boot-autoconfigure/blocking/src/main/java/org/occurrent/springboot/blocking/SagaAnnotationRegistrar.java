@@ -394,9 +394,8 @@ class SagaAnnotationRegistrar {
     /**
      * Publish the running {@link SagaSubscription} under {@code sagaSubscription-<id>}, next to the read-only
      * {@code sagaInstances-<id>} above and registered the same way, as a singleton after refresh rather than as a bean
-     * definition. It is here because releasing a quarantined instance is the one saga operation that is not on
-     * {@link SagaInstances}, and without this bean an application on the annotation path could see a quarantined
-     * instance without being able to bring it back.
+     * definition. It hands an application on the annotation path the running subscription itself, which the read-only
+     * {@link SagaInstances} does not expose.
      * <p>
      * A saga in manual mode gets this bean when the application starts that saga, not at refresh, since there is no
      * subscription to publish before then.
@@ -404,7 +403,7 @@ class SagaAnnotationRegistrar {
     private void registerSagaSubscriptionSingleton(String id, SagaSubscription sagaSubscription) {
         String beanName = sagaSubscriptionBeanName(id);
         if (!(applicationContext instanceof ConfigurableApplicationContext configurableContext)) {
-            log.warn("Cannot publish '{}' because the application context is not a ConfigurableApplicationContext; the saga runs fine, but SagaSubscription.release(sagaId) is only reachable from a context that can hold the bean.", beanName);
+            log.warn("Cannot publish '{}' because the application context is not a ConfigurableApplicationContext. The saga runs fine, but SagaSubscription.instances(), which is how a quarantined instance is found, is only reachable from a context that can hold the bean.", beanName);
             return;
         }
         ConfigurableListableBeanFactory beanFactory = configurableContext.getBeanFactory();

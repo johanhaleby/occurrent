@@ -93,7 +93,7 @@ class SagaQuarantineSupportTest {
     }
 
     private static SagaFailure failedOn(long position, Instant firstFailedAt) {
-        return new SagaFailure("o1@" + position, position, firstFailedAt, IllegalStateException.class.getName(), "boom", null);
+        return new SagaFailure("o1@" + position, position, firstFailedAt, IllegalStateException.class.getName(), "boom");
     }
 
     @Nested
@@ -109,7 +109,7 @@ class SagaQuarantineSupportTest {
                     () -> assertThat(record.quarantined()).isFalse(),
                     () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(record.envelope().failure()).isEqualTo(
-                            new SagaFailure("o1@7", 7, NOW, IllegalStateException.class.getName(), "boom", null)),
+                            new SagaFailure("o1@7", 7, NOW, IllegalStateException.class.getName(), "boom")),
                     () -> assertThat(record.expectedVersion()).isEqualTo(3),
                     () -> assertThat(record.envelope().version()).isEqualTo(4)
             );
@@ -235,6 +235,39 @@ class SagaQuarantineSupportTest {
         }
 
         @Test
+        void skips_the_event_it_stopped_on() {
+            // The watermarks sit at 6 and the failure at 9, so an event at 9 is not a redelivery and nothing but the
+            // quarantine check can be what skips it.
+            SagaEnvelope<OrderState> quarantined = withFailure(SagaStatus.QUARANTINED, failedOn(9, NOW));
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    saga(), "o1", quarantined, SagaInput.event(new PaymentReserved("o1")), at(9), NOW);
+
+            assertThat(outcome.processed()).isFalse();
+        }
+
+        @Test
+        void skips_an_event_that_sits_before_the_one_it_stopped_on() {
+            SagaEnvelope<OrderState> quarantined = withFailure(SagaStatus.QUARANTINED, failedOn(9, NOW));
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    saga(), "o1", quarantined, SagaInput.event(new PaymentReserved("o1")), at(7), NOW);
+
+            assertThat(outcome.processed()).isFalse();
+        }
+
+        @Test
+        void keeps_its_timers_armed_and_identifies_the_failing_input_by_its_redelivery_key() {
+            SagaEnvelope<OrderState> quarantined = withFailure(SagaStatus.QUARANTINED, failedOn(9, NOW));
+
+            assertAll(
+                    () -> assertThat(quarantined.timers()).hasSize(1),
+                    () -> assertThat(quarantined.failure().input()).isEqualTo("o1@9"),
+                    () -> assertThat(quarantined.failure().position()).isEqualTo(9)
+            );
+        }
+
+        @Test
         void skips_a_due_timer() {
             SagaEnvelope<OrderState> quarantined = withFailure(SagaStatus.QUARANTINED, failedOn(7, NOW));
 
@@ -256,92 +289,7 @@ class SagaQuarantineSupportTest {
     }
 
     @Nested
-    class AReleasedInstance {
-
-        // The watermarks sit well below the recorded position on purpose. Put them right underneath it and an event
-        // between the two is skipped as a redelivery whatever the release gate does, so the test would pass with the
-        // gate removed.
-        private SagaEnvelope<OrderState> released() {
-            SagaEnvelope<OrderState> quarantined = new SagaEnvelope<>("o1", new AwaitingPayment("o1"), SagaStatus.QUARANTINED, 4,
-                    List.of(new TimerEntry(TIMER, NOW.toEpochMilli())), Map.of("o1", 4L), 4L, NOW.minusSeconds(60), NOW, null,
-                    null, true, failedOn(9, NOW.minusSeconds(600)));
-            return SagaExecutionSupport.onRelease(quarantined, NOW).envelope();
-        }
-
-        @Test
-        void stays_quarantined_until_the_replay_reaches_the_position_it_stopped_at() {
-            // Position 6 is past this instance's watermarks, so nothing but the release gate can be what skips it.
-            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
-                    saga(), "o1", released(), SagaInput.event(new PaymentReserved("o1")), at(6), NOW);
-
-            assertThat(outcome.processed()).isFalse();
-        }
-
-        @Test
-        void skips_an_event_past_the_position_it_stopped_at_rather_than_resuming_across_the_gap() {
-            // A release marks the instance before the subscription is paused, so a live event can arrive in that window
-            // sitting past the recorded position without being the replay. Opening on it would leave a gap in the state.
-            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
-                    saga(), "o1", released(), SagaInput.event(new PaymentReserved("o1")), at(11), NOW);
-
-            assertThat(outcome.processed()).isFalse();
-        }
-
-        @Test
-        void folds_the_event_it_stopped_on_and_clears_the_record() {
-            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
-                    saga(), "o1", released(), SagaInput.event(new PaymentReserved("o1")), at(9), NOW);
-
-            assertAll(
-                    () -> assertThat(outcome.processed()).isTrue(),
-                    () -> assertThat(outcome.envelope().failure()).isNull(),
-                    () -> assertThat(outcome.envelope().state()).isEqualTo(new Paid("o1")),
-                    () -> assertThat(outcome.envelope().status()).isEqualTo(SagaStatus.COMPLETED)
-            );
-        }
-
-        @Test
-        void is_marked_released_without_leaving_quarantine_or_losing_where_it_stopped() {
-            SagaEnvelope<OrderState> envelope = released();
-
-            assertAll(
-                    () -> assertThat(envelope.status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(envelope.failure().isReleased()).isTrue(),
-                    () -> assertThat(envelope.failure().releasedAt()).isEqualTo(NOW),
-                    () -> assertThat(envelope.failure().position()).isEqualTo(9)
-            );
-        }
-
-        @Test
-        void goes_back_to_unreleased_when_the_replay_could_not_be_started() {
-            FailureRecord<OrderState> reverted = SagaExecutionSupport.onReleaseUndone(released(), NOW);
-
-            assertAll(
-                    () -> assertThat(reverted.envelope().status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(reverted.envelope().failure().isReleased()).isFalse(),
-                    () -> assertThat(reverted.envelope().failure().position()).isEqualTo(9)
-            );
-        }
-
-        @Test
-        void can_be_released_again_so_a_replay_that_never_started_has_a_way_back() {
-            FailureRecord<OrderState> second = SagaExecutionSupport.onRelease(released(), NOW.plusSeconds(60));
-
-            assertAll(
-                    () -> assertThat(second).isNotNull(),
-                    () -> assertThat(second.envelope().failure().releasedAt()).isEqualTo(NOW.plusSeconds(60)),
-                    () -> assertThat(second.envelope().failure().position()).isEqualTo(9)
-            );
-        }
-    }
-
-    @Nested
     class AnActiveInstance {
-
-        @Test
-        void has_nothing_to_release() {
-            assertThat(SagaExecutionSupport.onRelease(active(3, Map.of(), null), NOW)).isNull();
-        }
 
         @Test
         void clears_a_failure_record_as_soon_as_any_input_gets_through() {

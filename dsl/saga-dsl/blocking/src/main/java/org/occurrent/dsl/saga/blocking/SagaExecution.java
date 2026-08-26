@@ -127,7 +127,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * the shared channel keeps going. A false answer means the exception propagates exactly as it always has.
      * <p>
      * Only the event path calls this. A failing timeout is already isolated per instance by the poller and blocks
-     * nothing, and a timeout has no position to release from, so there would be nothing to quarantine it at.
+     * nothing, and a timeout has no position of its own, so there would be nothing to quarantine it at.
      */
     private boolean quarantine(String sagaId, EventMeta meta, RuntimeException failure, Duration quarantineAfter) {
         try {
@@ -148,7 +148,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         subscriptionId, sagaId, meta.position(), quarantineAfter, failure);
                 return false;
             }
-            log.error("Saga '{}' instance '{}' kept failing on the event at position {} for {} and is now QUARANTINED. It skips every further event and fires no timers, so the saga's other instances are no longer blocked behind it. Find it with findByStatus(QUARANTINED, ..) and release it once the cause is fixed.",
+            log.error("Saga '{}' instance '{}' kept failing on the event at position {} for {} and is now QUARANTINED. It skips every further event and fires no timers, so the saga's other instances are no longer blocked behind it. Find it with findByStatus(QUARANTINED, ..).",
                     subscriptionId, sagaId, meta.position(), quarantineAfter, failure);
             return true;
         } catch (RuntimeException storeFailure) {

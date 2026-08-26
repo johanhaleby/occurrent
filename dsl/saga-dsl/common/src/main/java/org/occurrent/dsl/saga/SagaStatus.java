@@ -37,10 +37,9 @@ public enum SagaStatus {
      * The instance is suspended at the position of an input it could not handle. It skips every event addressed to it
      * and fires no timers, so the subscription it shares with every other instance of the same saga is free to move on.
      * <p>
-     * This is not terminal. {@link SagaInstance#failure()} says where the instance stopped and why, and releasing it
-     * through {@code SagaSubscription.release(String)} replays the subscription from that position. The instance leaves
-     * quarantine when that event is delivered again, becoming {@link #ACTIVE}, or {@link #COMPLETED} when that event
-     * finishes the saga.
+     * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
+     * which input the instance stopped on, where in the event stream it sits, and what the saga threw.
+     * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided it is not worth recovering.
      * <p>
      * Note that {@code findByStatus(ACTIVE, ...)} does not return a quarantined instance. Enumerate this status too when
      * you are looking for instances that have stopped moving.

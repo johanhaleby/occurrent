@@ -48,7 +48,7 @@ class InMemorySagaStateStoreTest {
     }
 
     private static SagaEnvelope<String> quarantinedEnvelope(String sagaId, String state, long version, List<TimerEntry> timers) {
-        SagaFailure failure = new SagaFailure("s@7", 7, NOW, IllegalStateException.class.getName(), "boom", null);
+        SagaFailure failure = new SagaFailure("s@7", 7, NOW, IllegalStateException.class.getName(), "boom");
         return new SagaEnvelope<>(sagaId, state, SagaStatus.QUARANTINED, version, timers, Map.of(), null, NOW, NOW, null, null, true, failure);
     }
 

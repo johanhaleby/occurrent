@@ -95,7 +95,6 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String FAILURE_FIRST_FAILED_AT = "failureFirstFailedAt";
     private static final String FAILURE_TYPE = "failureType";
     private static final String FAILURE_MESSAGE = "failureMessage";
-    private static final String FAILURE_RELEASED_AT = "failureReleasedAt";
 
     // Field names inside a persisted FlowState document.
     private static final String FLOW_CURRENT_STEP = "currentStep";
@@ -270,7 +269,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         query.fields().include(ID).include(STATUS).include(VERSION).include(TIMERS).include(NEXT_TIMER_FIRES_AT)
                 .include(CURRENT_STEP).include(CREATED_AT).include(UPDATED_AT).include(COMPLETED_AT).include(STARTED)
                 .include(FAILURE_INPUT).include(FAILURE_POSITION).include(FAILURE_FIRST_FAILED_AT).include(FAILURE_TYPE)
-                .include(FAILURE_MESSAGE).include(FAILURE_RELEASED_AT);
+                .include(FAILURE_MESSAGE);
     }
 
     @Override
@@ -323,7 +322,6 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             if (failure.failureMessage() != null) {
                 document.append(FAILURE_MESSAGE, failure.failureMessage());
             }
-            appendInstant(document, FAILURE_RELEASED_AT, failure.releasedAt());
         }
         return document;
     }
@@ -456,8 +454,7 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
                 ((Number) Objects.requireNonNull(document.get(FAILURE_POSITION), "failurePosition")).longValue(),
                 Objects.requireNonNull(readInstant(document, FAILURE_FIRST_FAILED_AT), "failureFirstFailedAt"),
                 Objects.requireNonNull(document.getString(FAILURE_TYPE), "failureType"),
-                document.getString(FAILURE_MESSAGE),
-                readInstant(document, FAILURE_RELEASED_AT));
+                document.getString(FAILURE_MESSAGE));
     }
 
     @SuppressWarnings("unchecked")

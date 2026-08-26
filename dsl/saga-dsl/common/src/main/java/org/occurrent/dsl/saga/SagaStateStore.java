@@ -53,7 +53,7 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * several due timers.
      * <p>
      * Active, not merely unfinished. A {@link SagaStatus#QUARANTINED} instance must not be returned. Its timers stay
-     * armed so a release restores them, and firing one meanwhile would advance its state across the input it stopped on.
+     * armed rather than dropped, and firing one would advance its state across the input it stopped on.
      */
     List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit);
 

@@ -69,7 +69,7 @@ class SpringMongoSagaStateStoreQuarantineTest {
     }
 
     private static SagaFailure failure() {
-        return new SagaFailure("order-1@7", 7, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom", null);
+        return new SagaFailure("order-1@7", 7, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom");
     }
 
     private static SagaEnvelope<String> quarantined(String sagaId) {
@@ -91,21 +91,6 @@ class SpringMongoSagaStateStoreQuarantineTest {
                 () -> assertThat(read.failure()).isEqualTo(failure()),
                 () -> assertThat(read.streamWatermarks()).isEqualTo(Map.of("order-1", 6L)),
                 () -> assertThat(read.positionWatermark()).isEqualTo(6L)
-        );
-    }
-
-    @Test
-    void a_released_instance_keeps_the_instant_it_was_released_at() {
-        SagaStateStore<String> store = new SpringMongoSagaStateStore<>(mongoOperations(), COLLECTION, String.class);
-        SagaFailure released = failure().released(NOW);
-        store.compareAndSave("order-2", new SagaEnvelope<>("order-2", "awaiting-payment", SagaStatus.QUARANTINED, 1,
-                List.of(), Map.of(), null, NOW, NOW, null, null, true, released), 0);
-
-        SagaFailure read = store.find("order-2").orElseThrow().failure();
-
-        assertAll(
-                () -> assertThat(read.isReleased()).isTrue(),
-                () -> assertThat(read.releasedAt()).isEqualTo(NOW)
         );
     }
 

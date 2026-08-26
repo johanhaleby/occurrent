@@ -33,6 +33,8 @@ import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
+import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -242,8 +244,7 @@ public final class SagaRunner<E, C> {
         ScheduledExecutorService poller = Executors.newSingleThreadScheduledExecutor(daemonThreadFactory("occurrent-saga-timer-" + subscriptionId));
         long intervalMillis = config.timerPollInterval().toMillis();
         poller.scheduleWithFixedDelay(pollTask, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
-        return new SagaSubscription(subscription, poller, SagaInstances.of(stateStore), subscriptionModel,
-                new QuarantinedInstances<>(stateStore), strategy, leaseKey, holderId);
+        return new SagaSubscription(subscription, poller, SagaInstances.of(stateStore), strategy, leaseKey, holderId);
     }
 
     /**
@@ -252,18 +253,29 @@ public final class SagaRunner<E, C> {
      * switched off, and the saga keeps the behaviour it had before 0.34.0.
      * <p>
      * Refusing it rather than warning about it is the point. Quarantining means returning normally, which acknowledges
-     * the event to whatever fed it. On a push feed behind a broker bridge that is what stages the offset and moves
-     * past the record, so the one copy this saga could ever be given is gone at the moment of quarantine rather than
-     * at the release. Between an instance that blocks and an event that cannot be asked for again, this keeps the
-     * event, and it says so at startup rather than leaving it to be discovered during the incident.
+     * the event to whatever fed it. On a push feed behind a broker bridge that is what stages the offset and moves past
+     * the record, so the one copy this saga could ever be given is gone at the moment of quarantine. Between an instance
+     * that blocks and an event that cannot be asked for again, this keeps the event, and it says so at startup rather
+     * than leaving it to be discovered during the incident.
      */
     private SagaRunnerConfig quarantineOnlyIfTheEventCanBeAskedForAgain(String subscriptionId, SagaRunnerConfig config) {
-        if (config.quarantineAfter() == null || RepositionableSubscriptions.findIn(subscriptionModel).isPresent()) {
+        if (config.quarantineAfter() == null || canBeResumedAtAChosenPosition(subscriptionModel)) {
             return config;
         }
-        log.warn("Saga subscription '{}' runs on a subscription model that cannot be resumed at a chosen position ({}), so a quarantined instance could never be replayed and quarantine is switched off for this saga. An event that keeps failing for one instance therefore blocks every other instance of this saga, which is the behaviour before 0.34.0. Run the saga on a repositionable model, one of the MongoDB subscription models or a catch-up model, to get instance isolation.",
+        log.warn("Saga subscription '{}' runs on a subscription model that cannot be resumed at a chosen position ({}), so the event a quarantined instance stopped on could never be obtained again and quarantine is switched off for this saga. An event that keeps failing for one instance therefore blocks every other instance of this saga, which is the behaviour before 0.34.0. Run the saga on one of the MongoDB subscription models, or on a catch-up model over one of them, to get instance isolation.",
                 subscriptionId, subscriptionModel.getClass().getName());
         return config.withQuarantineAfter(null);
+    }
+
+    // Asked of the model that owns the position, not of whatever wraps it. CatchupSubscriptionModel implements
+    // RepositionableSubscriptions whatever it wraps and throws when the wrapped model cannot reposition, so a lookup
+    // from the top alone answers yes for a deployment where every reposition fails.
+    private static boolean canBeResumedAtAChosenPosition(Subscribable subscriptionModel) {
+        SubscriptionModelCapability owningThePosition = subscriptionModel instanceof SubscriptionModelWrapper wrapper
+                ? wrapper.getWrappedSubscriptionModelRecursively()
+                : subscriptionModel;
+        return RepositionableSubscriptions.findIn(subscriptionModel).isPresent()
+                && RepositionableSubscriptions.findIn(owningThePosition).isPresent();
     }
 
     /**

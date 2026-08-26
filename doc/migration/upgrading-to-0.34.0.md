@@ -662,26 +662,29 @@ instance for longer than `SagaRunnerConfig.quarantineAfter`, five minutes by def
 the rest to everybody else.
 
 A quarantined instance receives no further events and fires no timers, and its redelivery watermarks stop moving, so
-nothing it skipped is recorded as handled. That is what makes it recoverable. Call
-`SagaSubscription.release(sagaId)` once the cause is fixed and the saga's subscription is replayed from the position
-the instance stopped at, which pauses delivery to every instance of that saga until the replay finishes. The other
-instances recognise the replayed events as redeliveries through their own watermarks, so no command is dispatched a
-second time.
+nothing it skipped is recorded as handled. What it stopped on stays on the record instead of being lost.
+
+0.34.0 stops there. Nothing in it brings an instance back out of quarantine, so read `SagaInstance.failure()` to see
+which input it stopped on and what the saga threw, and call `SagaStateStore.delete(sagaId)` to abandon the instance
+once you have decided not to recover it.
 
 There are two limits to know before you rely on it.
 
 **Quarantine is available only on a subscription model that can be resumed at a chosen position,** which is
-`NativeMongoSubscriptionModel`, `SpringMongoSubscriptionModel` and `CatchupSubscriptionModel`, including any of them
-behind `DurableSubscriptionModel` or `CompetingConsumerSubscriptionModel`. On any other model the runner switches the
-budget off at startup and logs why, so the saga keeps the 0.33.0 behaviour of blocking. That is deliberate rather than
-an omission. Quarantining means returning normally, which acknowledges the event to whatever fed it, and on a push
-feed behind a broker bridge that is what stages the offset and moves past the record. The one copy this saga could
-ever be given would be gone at the moment of quarantine rather than at the release. Between an instance that blocks
-and an event that cannot be asked for again, this keeps the event.
+`NativeMongoSubscriptionModel` and `SpringMongoSubscriptionModel`, including either of them behind
+`DurableSubscriptionModel`, `CompetingConsumerSubscriptionModel` or `CatchupSubscriptionModel`. The wrapper alone is
+not enough. Put a `CatchupSubscriptionModel` around a model that cannot be repositioned and the runner still switches
+the budget off, because a catch-up model hands an explicit resume down to the model it wraps and throws when that
+model cannot take one. On any other model the runner switches the budget off at startup and logs why, so the saga
+keeps the 0.33.0 behaviour of blocking. That is deliberate rather than an omission. Quarantining means returning
+normally, which acknowledges the event to whatever fed it, and on a push feed behind a broker bridge that is what
+stages the offset and moves past the record. The one copy this saga could ever be given would be gone at the moment of
+quarantine. Between an instance that blocks and an event that cannot be asked for again, this keeps the event.
 
-An event with no global position is never quarantined either, for the same reason. There would be no position to
-replay from. Occurrent's own stored events always have one, and a feed that drops the CloudEvent extensions on the way
-in does not.
+An event with neither a stream id and its version nor a global position is never quarantined either. The
+failure record tells one failing input from the next by the event's redelivery key, and an event with neither cannot
+be told apart from the one after it. Occurrent's own stored events always have both, and a feed that drops the
+CloudEvent extensions on the way in does not.
 
 ### The five breaks
 

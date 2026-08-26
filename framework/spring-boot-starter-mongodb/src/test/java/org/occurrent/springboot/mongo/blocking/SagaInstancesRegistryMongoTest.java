@@ -111,8 +111,8 @@ class SagaInstancesRegistryMongoTest {
         assertAll(
                 () -> assertThat(sagaA.id()).isEqualTo("saga-a"),
                 () -> assertThat(sagaB.id()).isEqualTo("saga-b"),
-                // This bean is how an application on the annotation path reaches release(sagaId), which is the one
-                // saga operation the read-only SagaInstances cannot offer.
+                // The published bean answers with the same SagaInstances the registry holds, so an application on the
+                // annotation path reaches one saga's instances either way.
                 () -> assertThat(sagaA.instances()).isSameAs(sagaInstancesRegistry.get("saga-a")),
                 () -> assertThat(sagaB.instances()).isSameAs(sagaInstancesRegistry.get("saga-b"))
         );

@@ -31,8 +31,9 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
+import org.occurrent.subscription.api.blocking.SubscriptionModel;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.Subscription;
-import org.occurrent.subscription.api.blocking.SubscriptionModelLifeCycle;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
 
 import io.cloudevents.core.builder.CloudEventBuilder;
@@ -47,7 +48,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
@@ -99,8 +99,7 @@ class SagaQuarantineTest {
     record Shipped(String orderId) implements OrderState {
     }
 
-    // Flipped by a test that has "fixed the cause" and wants to release. Reading it inside react keeps the saga a
-    // single definition rather than two that could drift apart.
+    // Reading this inside react keeps the saga a single definition rather than two that could drift apart.
     private volatile boolean reactionFails = true;
 
     // Long enough that a timer never fires during a test that is not about timers. The one that is shortens it.
@@ -217,6 +216,41 @@ class SagaQuarantineTest {
                     () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY))
             );
         }
+
+        @Test
+        void blocks_them_exactly_as_before_on_a_wrapper_that_advertises_repositioning_it_cannot_honour() throws Exception {
+            // A wrapper forwards the reposition to the model it wraps, so implementing RepositionableSubscriptions says
+            // nothing about whether the reposition works. CatchupSubscriptionModel is the real case, implementing it
+            // unconditionally and throwing UnsupportedOperationException when its delegate cannot reposition.
+            SagaSubscription subscription = run(new ForwardingWrapper(subscriptionModel), CONFIG);
+            write(POISON, new OrderPlaced("1", POISON));
+            write(HEALTHY, new OrderPlaced("2", HEALTHY));
+            write(POISON, new PaymentReserved("3", POISON));
+            write(HEALTHY, new PaymentReserved("4", HEALTHY));
+
+            TimeUnit.SECONDS.sleep(2);
+
+            assertAll(
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure()).isNull(),
+                    () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY))
+            );
+        }
+
+        @Test
+        void are_isolated_from_it_on_a_wrapper_whose_delegate_can_really_be_repositioned() {
+            ReplayableSubscriptionModel repositionable = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(new ForwardingWrapper(repositionable), CONFIG);
+            repositionable.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            repositionable.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            repositionable.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            repositionable.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
+            ));
+        }
     }
 
     @Nested
@@ -235,7 +269,6 @@ class SagaQuarantineTest {
                         () -> assertThat(failure).isNotNull(),
                         () -> assertThat(failure.failureType()).isEqualTo(IllegalStateException.class.getName()),
                         () -> assertThat(failure.failureMessage()).isEqualTo("this instance can never handle its payment"),
-                        () -> assertThat(failure.isReleased()).isFalse(),
                         // The second event pushed onto this feed, so global position 2.
                         () -> assertThat(failure.position()).isEqualTo(2)
                 );
@@ -274,122 +307,29 @@ class SagaQuarantineTest {
         }
     }
 
-    @Nested
-    class Releasing {
+    /**
+     * Advertises {@link RepositionableSubscriptions} while forwarding the reposition to the model it wraps, which is
+     * what {@code CatchupSubscriptionModel} does. Whether a reposition works is therefore a question about the
+     * delegate rather than about this class.
+     */
+    private record ForwardingWrapper(SubscriptionModel delegate)
+            implements Subscribable, SubscriptionModelWrapper, RepositionableSubscriptions {
 
-        @Test
-        void replays_the_subscription_from_the_recorded_position_and_the_instance_runs_again() {
-            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(model, CONFIG);
-            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
-            model.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
-
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                    assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED));
-
-            // The saga stops throwing, which is what an operator fixes before releasing.
-            reactionFails = false;
-            subscription.release(POISON);
-
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure()).isNull(),
-                    () -> assertThat(dispatched).containsExactly(new ShipOrder(POISON))
-            ));
+        @Override
+        public SubscriptionModel getWrappedSubscriptionModel() {
+            return delegate;
         }
 
-        @Test
-        void leaves_the_healthy_instances_where_they_were_because_the_replay_is_a_redelivery_to_them() {
-            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(model, CONFIG);
-            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("1", HEALTHY)));
-            model.push(cloudEvent(HEALTHY, 2, new PaymentReserved("2", HEALTHY)));
-            model.push(cloudEvent(POISON, 1, new OrderPlaced("3", POISON)));
-            model.push(cloudEvent(POISON, 2, new PaymentReserved("4", POISON)));
-
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                    assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED));
-            assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY));
-
-            reactionFails = false;
-            subscription.release(POISON);
-
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                    assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED));
-            // The replay re-delivers the healthy instance's events, and its own watermarks make them redeliveries, so
-            // ShipOrder is dispatched once rather than twice.
-            assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY), new ShipOrder(POISON));
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
         }
 
-        @Test
-        void puts_both_halves_back_when_the_replay_cannot_be_started() {
-            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(model, CONFIG);
-            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-            model.push(cloudEvent(POISON, 2, new PaymentReserved("2", POISON)));
-
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                    assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED));
-
-            model.refuseReposition();
-            assertThatThrownBy(() -> subscription.release(POISON)).hasMessageContaining("cannot be repositioned right now");
-
-            assertAll(
-                    // Not left released and waiting for a replay that never started.
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure().isReleased()).isFalse(),
-                    // And not left paused, which would have stopped this saga's other instances too.
-                    () -> assertThat(model.isRunning(subscription.id())).isTrue()
-            );
-        }
-
-        @Test
-        void opens_the_instance_on_the_event_it_stopped_on_and_not_on_a_later_one() {
-            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(model, CONFIG);
-            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-            model.push(cloudEvent(POISON, 2, new PaymentReserved("2", POISON)));
-
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                    assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED));
-
-            // Marked released but with no replay behind it, so the only events it can see are ones past the position it
-            // stopped on. A release marks the instance before the subscription is paused, so this is the window a live
-            // event really arrives in.
-            reactionFails = false;
-            model.acceptRepositionWithoutRewinding();
-            subscription.release(POISON);
-            model.push(cloudEvent(POISON, 3, new PaymentReserved("3", POISON)));
-
-            await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
-                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
-                    () -> assertThat(dispatched).doesNotContain(new ShipOrder(POISON))
-            ));
-        }
-
-        @Test
-        void is_refused_for_an_instance_that_is_not_quarantined() {
-            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(model, CONFIG);
-            reactionFails = false;
-            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("1", HEALTHY)));
-
-            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                    assertThat(subscription.instances().find(HEALTHY)).isPresent());
-
-            assertThatThrownBy(() -> subscription.release(HEALTHY))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("is not quarantined");
-        }
-
-        @Test
-        void is_refused_for_an_instance_that_does_not_exist() {
-            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(model, CONFIG);
-
-            assertThatThrownBy(() -> subscription.release("never-seen"))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("does not exist");
+        @Override
+        public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
+            return RepositionableSubscriptions.findIn(delegate)
+                    .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
+                    .resumeSubscription(subscriptionId, startAt);
         }
     }
 
@@ -409,12 +349,12 @@ class SagaQuarantineTest {
     private final java.util.concurrent.atomic.AtomicLong position = new java.util.concurrent.atomic.AtomicLong();
 
     /**
-     * A subscription model that keeps every event it is handed and can be resumed at a chosen position, which is the
-     * capability a release needs and which {@link InMemorySubscriptionModel} does not have. Deliberately minimal: one
-     * subscription, one delivery thread, and a retry loop that keeps re-offering an event whose handler threw, which is
-     * what makes a time budget reachable at all.
+     * A subscription model that keeps every event it is handed and can be resumed at a chosen position, which is what
+     * the runner requires before it turns quarantine on and which {@link InMemorySubscriptionModel} does not have.
+     * Deliberately minimal, meaning one subscription, one delivery thread, and a retry loop that keeps re-offering an
+     * event whose handler threw, which is what makes a time budget reachable at all.
      */
-    private final class ReplayableSubscriptionModel implements Subscribable, SubscriptionModelLifeCycle, RepositionableSubscriptions {
+    private final class ReplayableSubscriptionModel implements SubscriptionModel, RepositionableSubscriptions {
 
         private final List<CloudEvent> log = new CopyOnWriteArrayList<>();
         private volatile @Nullable Consumer<CloudEvent> action;
@@ -423,24 +363,9 @@ class SagaQuarantineTest {
         // The 0-based index of the next event to deliver, which is the 1-based position of the previous one.
         private volatile int nextIndex;
 
-        private volatile boolean refuseReposition;
-        private volatile boolean rewindOnReposition = true;
 
         void push(CloudEvent event) {
             log.add(event);
-        }
-
-        void refuseReposition() {
-            refuseReposition = true;
-        }
-
-        /**
-         * Accept a reposition and carry on delivering from where the feed already was. That is the window a release
-         * really has, between marking the instance and the subscription actually being paused, in which a live event
-         * arrives at a position past the one the instance stopped on.
-         */
-        void acceptRepositionWithoutRewinding() {
-            rewindOnReposition = false;
         }
 
         @Override
@@ -482,12 +407,7 @@ class SagaQuarantineTest {
 
         @Override
         public Subscription resumeSubscription(String subscriptionId, StartAt startAt) {
-            if (refuseReposition) {
-                throw new IllegalStateException("this subscription cannot be repositioned right now");
-            }
-            if (rewindOnReposition) {
-                nextIndex = (int) GlobalCheckpoint.positionOf(((StartAt.StartAtCheckpoint) startAt).checkpoint);
-            }
+            nextIndex = (int) GlobalCheckpoint.positionOf(((StartAt.StartAtCheckpoint) startAt).checkpoint);
             running = true;
             return new ReplayableSubscription(subscriptionId);
         }

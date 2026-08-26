@@ -95,8 +95,8 @@ public final class SagaExecutionSupport {
                                                                            Instant now) {
         // Whether onStart has ever run, which is not the same question as whether a document exists. An instance whose
         // very first event failed has an envelope holding nothing but that failure. Keying on the document would leave
-        // such an instance permanently "already started", so its start event would be skipped after a release and
-        // onStart would never run, with nothing anywhere saying so.
+        // such an instance permanently "already started", so a later redelivery of its start event would skip onStart
+        // with nothing anywhere saying so.
         boolean hasStarted = current != null && current.started();
         @Nullable E startEvent = startEventOrNull(saga, hasStarted, input);
         if (!hasStarted && startEvent == null) {
@@ -106,11 +106,10 @@ public final class SagaExecutionSupport {
         if (current != null && current.isCompleted()) {
             return Outcome.skip();
         }
-        if (current != null && current.isQuarantined() && !isTheInputAReleasedInstanceStoppedOn(current, meta)) {
+        if (current != null && current.isQuarantined()) {
             // A quarantined instance is inert. It skips every input addressed to it and its watermarks stay where they are.
-            // Advancing one here would make the replay after a release treat the input as already handled and skip it a
-            // second time, which is the loss the quarantine exists to avoid. A released instance stays inert too until
-            // the replay reaches the position it stopped at, so a live event cannot be applied across the gap first.
+            // Advancing one would record an input as handled that the instance never applied, and nothing afterwards can
+            // tell that the state has a gap in it.
             return Outcome.skip();
         }
         if (current != null && isRedelivery(current, meta)) {
@@ -183,8 +182,8 @@ public final class SagaExecutionSupport {
                 // Derived from nextState by the envelope's constructor; nothing sensible to pass here.
                 null,
                 true,
-                // An input that got through clears the failure record, including the one a release was waiting on. The
-                // budget is about an input that keeps failing, so any input the instance handles ends it.
+                // An input that got through clears the failure record. The budget is about an input that keeps
+                // failing, so any input the instance handles ends it.
                 null);
         return Outcome.processed(next, commands, expectedVersion);
     }
@@ -230,8 +229,9 @@ public final class SagaExecutionSupport {
                                                                                           Duration quarantineAfter) {
         Long position = meta.position();
         if (position == null) {
-            // Nothing to release from later, so quarantining would acknowledge the input with no way to ask for it
-            // again, which is the loss this design exists to avoid. Keep rethrowing instead.
+            // The record identifies the failing input by its redelivery key and falls back to the position when the
+            // event carries no stream id and version, so an input with neither cannot be told apart from the next one.
+            // Keep rethrowing instead.
             return null;
         }
         if (current != null && (current.isCompleted() || current.isQuarantined())) {
@@ -241,7 +241,7 @@ public final class SagaExecutionSupport {
         String input = redeliveryKeyOf(meta);
         SagaFailure existing = current == null ? null : current.failure();
         if (existing == null || !existing.input().equals(input)) {
-            SagaFailure record = new SagaFailure(input, position, now, failure.getClass().getName(), failure.getMessage(), null);
+            SagaFailure record = new SagaFailure(input, position, now, failure.getClass().getName(), failure.getMessage());
             return failureRecord(saga, sagaId, current, record, SagaStatus.ACTIVE, now, false);
         }
         if (Duration.between(existing.firstFailedAt(), now).compareTo(quarantineAfter) < 0) {
@@ -249,35 +249,8 @@ public final class SagaExecutionSupport {
         }
         // Keep the instant the failing started, refresh what it is failing with, because an input that fails one way and then
         // another is still the same input failing, and the later exception is the more useful one to read.
-        SagaFailure record = new SagaFailure(input, position, existing.firstFailedAt(), failure.getClass().getName(), failure.getMessage(), null);
+        SagaFailure record = new SagaFailure(input, position, existing.firstFailedAt(), failure.getClass().getName(), failure.getMessage());
         return failureRecord(saga, sagaId, current, record, SagaStatus.QUARANTINED, now, true);
-    }
-
-    /**
-     * The envelope that marks {@code current} released, so it accepts an input again once a replay reaches the position
-     * it stopped at, or {@code null} when the instance is not quarantined and there is nothing to release.
-     */
-    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onRelease(SagaEnvelope<S> current, Instant now) {
-        SagaFailure failure = current.failure();
-        if (!current.isQuarantined() || failure == null) {
-            return null;
-        }
-        SagaEnvelope<S> released = withFailure(current, failure.released(now), SagaStatus.QUARANTINED, now);
-        return new FailureRecord<>(released, current.version(), true);
-    }
-
-    /**
-     * The envelope that takes the release mark back off {@code current}, for a release whose replay could not be
-     * started after all, or {@code null} when there is nothing to take back.
-     */
-    public static <S extends @Nullable Object> @Nullable FailureRecord<S> onReleaseUndone(SagaEnvelope<S> current, Instant now) {
-        SagaFailure failure = current.failure();
-        if (!current.isQuarantined() || failure == null || !failure.isReleased()) {
-            return null;
-        }
-        SagaFailure unreleased = new SagaFailure(failure.input(), failure.position(), failure.firstFailedAt(),
-                failure.failureType(), failure.failureMessage(), null);
-        return new FailureRecord<>(withFailure(current, unreleased, SagaStatus.QUARANTINED, now), current.version(), true);
     }
 
     /** The redelivery key that identifies one input, read the same way round as {@link #isRedelivery}. */
@@ -295,7 +268,8 @@ public final class SagaExecutionSupport {
         if (current == null) {
             // An instance whose very first event failed has nothing to attach the record to, so the record inserts one.
             // It holds the initial state and started = false, which is honestly what it is, an instance that failed
-            // before it began. Start detection reads that flag, so a release replays the start event and onStart runs.
+            // before it began. Start detection reads that flag rather than the document, so a later redelivery of the
+            // start event still runs onStart.
             SagaEnvelope<S> inserted = new SagaEnvelope<>(sagaId, saga.initialState(), status, 1, List.of(), Map.of(),
                     null, now, now, null, null, false, record);
             return new FailureRecord<>(inserted, 0, quarantined);
@@ -312,19 +286,6 @@ public final class SagaExecutionSupport {
                 current.currentStep(), current.started(), record);
     }
 
-    // Whether the input is the exact one a released instance stopped on. Equality rather than "at or past it", because
-    // a release marks the instance before the subscription is paused, and a live event arriving in that window sits
-    // past the recorded position without being the replay. Opening on it would apply it to state that never saw the
-    // event underneath, and that gap is undetectable afterwards. An instance whose recorded event a replay can no
-    // longer produce therefore stays quarantined, which is the safe end of that trade.
-    private static <S extends @Nullable Object> boolean isTheInputAReleasedInstanceStoppedOn(SagaEnvelope<S> current, EventMeta meta) {
-        SagaFailure failure = current.failure();
-        if (failure == null || !failure.isReleased()) {
-            return false;
-        }
-        Long position = meta.position();
-        return position != null && position.longValue() == failure.position();
-    }
 
     private static <E, S extends @Nullable Object, C> @Nullable E startEventOrNull(Saga<E, S, C> saga, boolean hasStarted, SagaInput<E> input) {
         if (hasStarted || !(input instanceof SagaInput.Event<E> ev)) {

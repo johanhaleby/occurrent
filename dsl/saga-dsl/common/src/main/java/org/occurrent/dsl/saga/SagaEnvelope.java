@@ -45,7 +45,7 @@ import static java.util.Objects.requireNonNull;
  * @param started           whether {@code onStart} has ever run for this instance. Almost always {@code true}: it is
  *                          {@code false} only for an instance whose very first event failed, which is recorded against
  *                          an envelope that exists purely to hold that record. Start detection reads this rather than
- *                          whether a document exists, so such an instance still starts properly once it is released.
+ *                          whether a document exists, so a later redelivery of its start event still runs onStart.
  * @param failure           the input this instance is failing on, or {@code null} when it is not failing on anything.
  *                          Present from the first failure onwards, so it outlives a single attempt; {@code status}
  *                          says whether the failing has lasted past the runner's quarantine budget
