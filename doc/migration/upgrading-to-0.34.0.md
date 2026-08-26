@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Eight things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
+Nine things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, which most callers need to do nothing about. Read
@@ -24,10 +24,13 @@ a second compile-time break, and comparing either whole for equality fails silen
 `DurableSubscriptionModel` wraps a MongoDB subscription model on a shared Atlas cluster, a fresh subscription that
 used to start without a recorded position is now refused at `subscribe(..)`. Read
 [section 7](#7-durablesubscriptionmodel-refuses-a-first-subscription-when-no-start-position-can-be-recorded).
-Finally, a saga instance whose event keeps failing is now suspended instead of retried forever, which changes five
+Then a saga instance whose event keeps failing is now suspended instead of retried forever, which changes five
 things about the saga API at once. `SagaEnvelope` gains two record components and `SagaRunnerConfig` gains one,
 `SagaInstance` gains a method, and `SagaStatus` gains a constant that `findByStatus(ACTIVE, ..)` no longer returns. Read
 [section 8](#8-a-saga-instance-that-keeps-failing-is-quarantined-and-four-saga-types-change-with-it).
+Finally, a reactor catch-up subscription now delivers an event a second time when a write that was in flight during the
+replay was read by a history window, which needs a handler that is safe to run twice on the same event. Read
+[section 9](#9-a-reactor-catch-up-subscription-can-deliver-a-concurrent-write-twice).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -765,3 +768,38 @@ None of the five can be rewritten mechanically. What your new `case QUARANTINED`
 question about that caller's intent rather than about the API. The two record-component additions could in principle
 be rewritten, but a recipe that fixed those two and left the two that matter would read as a migration that had been
 handled. This section is the migration.
+
+## 9. A reactor catch-up subscription can deliver a concurrent write twice
+
+A reactor catch-up subscription now delivers an event a second time when a write that was still in flight during the
+replay was read by a history window. Before this release that second delivery was suppressed.
+
+A position is reserved before its write commits, so a write in flight when the replay read the head holds a position
+at or below that head, and a history window reads it even though it is not history. The replay used to put every id
+it read into the cache the live delivery filters on, the history reads included, so the change stream's own delivery
+of that event was dropped. The history windows now fill no cache, which is what all three blocking paths already did,
+so the live subscription delivers that event again. The reasoning is in
+[ADR 135](../architecture/decisions/0135-the-reactive-handover-dedup-is-fed-only-by-the-reconciliation-read.md).
+
+This applies to `ReactorStreamCatchupSubscriptionModel` and `ReactorDcbCatchupSubscriptionModel`, both of which
+shipped in 0.30.0, and to `ReactorCatchupSubscriptionModel`, which routes to them. The blocking catch-up models are
+unchanged, because their history reads never filled that cache in the first place.
+
+Only an event a history window read whose write committed after the catch-up took its live resume checkpoint gets the
+second delivery. A store with nothing being written during the replay sees no second delivery at all, so an
+application that rebuilds a read model offline is unaffected.
+
+Catch-up delivery on these models has always been at-least-once, and the same composition already re-delivers a whole
+replay when a stopped catch-up is started again, so a handler written to tolerate a repeat needs no change. What
+changes is that a repeat now actually happens on this path, for the writes described above, where before it did not.
+If your reactor projection or subscription handler is not safe to run twice on the same event, one that increments a
+counter or writes an unconditional insert for example, make it safe before upgrading. Keying the work by the
+CloudEvent id is the usual way.
+
+`handoverCacheSize` changes meaning along with it. It used to be filled by the whole replay and now sizes the
+reconciliation overlap alone, which is what the blocking `cacheSize` already means. A value you raised to cover a
+large rebuild's history is now bigger than it needs to be. Nothing fails if you leave it, the cache just holds fewer
+ids than it has room for.
+
+There is no recipe for this change. Nothing in your source code declares a requirement that an event arrives once, so
+there is nothing a rewrite could search for.

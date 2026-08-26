@@ -116,7 +116,10 @@ to any other live delivery.
   concurrent writes it is empty. Delivery here is at-least-once already, and this composition re-delivers a whole
   replay when a stopped catch-up is started again.
 - Both reactive catch-up models shipped in 0.30.0, so this changes observable delivery for callers who never touch
-  `recordAppliedAppends`. It stays inside the at-least-once contract, so it needs no migration recipe.
+  `recordAppliedAppends`. It stays inside the at-least-once contract, and no recipe could search a caller's source
+  for a requirement that an event arrives once, so it is documented in
+  [Upgrading to 0.34.0](../../migration/upgrading-to-0.34.0.md#8-a-reactor-catch-up-subscription-can-deliver-a-concurrent-write-twice)
+  instead of rewritten.
 - `handoverCacheSize` now sizes the reconciliation overlap alone, which is what the blocking `cacheSize` already
   means and what the property's own javadoc already claimed. Under the previous behaviour a rebuild larger than the
   cache filled it with history ids and evicted them again, so the caching ADR 38 asked for did not happen at all for
