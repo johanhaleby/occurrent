@@ -267,9 +267,12 @@ That attempt limit applies outside a wait too, where `recordApplied`, `hasApplie
 calling a store for as long as an outage lasts. Decision 7 depends on it, since the clear it expects to stop a
 recorder can only stop if the retry behind that clear ends.
 
-An application can also construct either store directly and hand it a retry policy of its own, and neither
-`RetryStrategy` nor reactor's `Retry` reports whether a policy stops on its own, so the store cannot reject one that
-does not the way it rejects a blank collection name. Each store therefore stops the call itself once a policy is still
+An application can also construct either store directly and hand it a retry policy of its own. `RetryStrategy`
+reports nothing about whether a policy stops, since its own attempt limit is package private to
+`org.occurrent.retry.internal`, and reactor's `Retry` reports nothing either unless it happens to be one of the two
+specs Reactor ships, which do expose a public `maxAttempts` field. Reading that field would reject a policy built
+with `Retry.backoff(..)` at construction and still leave one built with `Retry.from(..)` to be stopped at runtime,
+so the store keeps one rule rather than two. Each store therefore stops the call itself once a policy is still
 retrying after a ceiling two orders of magnitude above the default, leaving a policy that stops at or before that
 ceiling to stop on its own. `occurrent.projection.applied-append.max-attempts` is rejected above the ceiling rather
 than accepted and then not performed. The number of times a store reaches MongoDB for one read or write is decided before the

@@ -108,9 +108,12 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
 
     /**
      * The number of attempts after which this store stops a policy that has not stopped itself, 1000, whatever
-     * {@link Retry} it was given. A {@link Retry} is an abstract class with no accessor reporting whether it stops on its own,
-     * so a store handed one that never gives up cannot reject it at construction and would otherwise call MongoDB
-     * for as long as an outage lasted. The store makes at most one attempt beyond this number, because a policy
+     * {@link Retry} it was given. {@link Retry} is an abstract class, and one built with {@link Retry#from} or from
+     * a subclass of a caller's own reports nothing about whether it stops, so a store handed one that never gives
+     * up cannot reject it at construction and would otherwise call MongoDB for as long as an outage lasted.
+     * Reactor's own {@code RetryBackoffSpec} and {@code RetrySpec} do expose a public {@code maxAttempts} field, so
+     * reading it would reject those two at construction and leave every other policy on this ceiling regardless.
+     * One rule for both is worth more here than an earlier failure for the two of them. The store makes at most one attempt beyond this number, because a policy
      * that stops at or before it is left to stop on its own, including how it maps an exhausted retry. Two orders
      * of magnitude above {@link #DEFAULT_MAX_ATTEMPTS}, and {@code occurrent.projection.applied-append.max-attempts}
      * is rejected above it rather than accepted and then not performed, so nothing a Spring application configures
