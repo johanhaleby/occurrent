@@ -301,7 +301,7 @@ The reason the refusal is worth the break for everyone else is that the alternat
 explain it, and no later release makes that loss visible without the same break. Waiting only adds another
 release of loss in front of it.
 
-### A Kotlin enum with constant bodies cannot use two of the three remedies
+### A Kotlin enum with constant bodies cannot be sealed or made final
 
 Kotlin compiles an `enum class` whose constants have bodies as a class that is neither final nor sealed, and
 each constant body as a separate class no `permits` clause points the walk at. The declaration is refused, and
