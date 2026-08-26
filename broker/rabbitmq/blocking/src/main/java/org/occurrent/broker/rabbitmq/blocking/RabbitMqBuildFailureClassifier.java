@@ -36,10 +36,13 @@ import java.util.Set;
  * {@code build()} opens two channels under {@link org.occurrent.broker.api.blocking.DeliveryFailurePolicy#PARK},
  * the consume channel through {@link RabbitMqBridgeException} and the parking publisher's confirm channel through
  * {@link RabbitMqPublishException} ({@link RabbitMqConfirmPublisher}'s own {@code openConfirmChannel}), and a
- * broker briefly unreachable can fail either one. Both wrap one of the same two underlying causes, an
+ * broker briefly unreachable can fail either one. Both usually wrap one of the same two underlying causes, an
  * {@link java.io.IOException} with no further detail (a socket failure, say, "the broker is not reachable right
  * now") or a {@link ShutdownSignalException} (unchecked, thrown when the connection is itself already closed or
- * mid recovery), and both of those are transient.
+ * mid recovery), and both of those are transient. Both can also carry no cause at all. {@code openChannel()}
+ * returning empty (every channel number on the {@code Connection} already in use) throws directly rather than
+ * wrapping anything, and this classification treats that the same way, transient, since a channel slot freeing up
+ * is exactly the kind of thing a retry can wait out.
  * <p>
  * A {@link ShutdownSignalException} carrying an AMQP hard-close reply is not, regardless of which of the two
  * wrapper types carries it. {@code NOT_FOUND} (404, a queue bound to an exchange that does not exist),

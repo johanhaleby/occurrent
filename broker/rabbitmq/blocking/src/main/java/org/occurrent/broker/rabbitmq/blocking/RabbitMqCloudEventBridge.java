@@ -90,7 +90,7 @@ import static java.util.Objects.requireNonNull;
  * {@link Builder#retryStrategy(RetryStrategy)}, exponential backoff from 100 ms up to 2 seconds by default, ten
  * attempts in total, every one of them against that same supplied {@code Connection}. {@code build()} never
  * creates or reconnects the {@code Connection} itself, so this survives only a broker briefly unreachable while
- * that {@code Connection}'s own automatic recovery is what is reopening it; a {@code Connection} with automatic
+ * that {@code Connection}'s own automatic recovery is what is reopening it. A {@code Connection} with automatic
  * recovery disabled, or a broker still unreachable when the {@code Connection} was created in the first place,
  * stays dead for every attempt. See that method's own javadoc for exactly what is retried and what is refused
  * immediately.
@@ -674,9 +674,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
 
         /**
          * How a broker briefly unreachable while {@link #build()} runs is retried before it throws. This retries
-         * only opening a channel and declaring topology on the {@code Connection} this builder was given; it
-         * neither creates nor reconnects that {@code Connection}, so surviving anything past the very first
-         * attempt needs that {@code Connection}'s own automatic recovery already enabled. Exponential backoff from
+         * only opening a channel, declaring topology, and setting QoS on the {@code Connection} this builder was
+         * given. It neither creates nor reconnects that {@code Connection}, so surviving anything past the very
+         * first attempt needs that {@code Connection}'s own automatic recovery already enabled. Exponential backoff from
          * 100 ms up to 2 seconds by default, ten attempts in total, matching the shape
          * {@code AGENTS.md} sets for every component that talks to an external store, capped at that count because a
          * {@link #build()} that never gives up turns a broker that is permanently misconfigured, a rejected
