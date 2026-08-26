@@ -79,15 +79,17 @@ class DcbCriteriaBuilder<E : Any> private constructor(
      * through `Class.getPermittedSubclasses`, and stops at the first level that is not sealed. It reads no classpath
      * and consults no index of subtypes, so a subclass declared outside a `permits` clause is beyond it.
      *
-     * **A Kotlin `enum class` whose constants have bodies is refused, and only one of the two remedies the refusal
-     * message names applies to it.** Kotlin compiles such an enum as a class that is neither final nor sealed, and
-     * each constant body as a separate class no `permits` clause points the walk at, so making it `final` or
-     * `sealed` is not something you can write. Declare the constants instead, `types(MyEnum.A.javaClass,
-     * MyEnum.B.javaClass)`, or move the per-constant behavior into a constructor parameter or a `when` so the enum
-     * needs no constant bodies at all, which makes it final again and lets `type(MyEnum::class.java)` work. The second
-     * remedy also unblocks a sealed event interface above the enum, which an enum with constant bodies reopens and
-     * which is where the refusal usually reaches you. A Java enum
-     * with constant bodies is unaffected, since javac seals that construct implicitly (JLS 8.9).
+     * **A Kotlin `enum class` whose constants have bodies is refused, and the "make it final or sealed" way out the
+     * refusal message offers cannot be written for that construct.** Kotlin compiles such an enum as a concrete
+     * class that is neither final nor sealed, and each constant body as a separate class no `permits` clause points
+     * the walk at. The message's other two ways out both work here. Declare the constants,
+     * `types(MyEnum.A.javaClass, MyEnum.B.javaClass)`, since each body compiles to its own final class, or build
+     * the [DcbCriterion] yourself from the raw CloudEvent type string. Removing the constant bodies is a third
+     * option the message does not mention, by moving the per-constant behavior into a constructor parameter or a
+     * `when`, which makes the enum final again and lets `type(MyEnum::class.java)` work. Removing them also
+     * unblocks a sealed event interface above the enum, which an enum with constant bodies reopens and which is
+     * where the refusal usually reaches you. A Java enum with constant bodies is unaffected, since javac seals
+     * that construct implicitly (JLS 8.9).
      */
     fun type(type: Class<out E>): DcbCriterion {
         val mapped = expandedCloudEventTypes(setOf(type))
