@@ -295,8 +295,31 @@ class MongoAppliedAppendStoreBoundsTest {
                 .upsert(any(Query.class), any(UpdateDefinition.class), anyString());
     }
 
+    /**
+     * The other policy the store cannot tell apart from one that never gives up. A finite limit above the ceiling
+     * is what the javadoc says gets stopped here, so it needs its own test rather than being read off the
+     * never-gives-up case above.
+     */
     @Test
-    void the_ceiling_never_shortens_a_policy_the_caller_actually_chose() {
+    void a_policy_that_asks_for_more_attempts_than_the_ceiling_is_stopped_at_the_ceiling() {
+        MongoOperations mongoOperations = mock(MongoOperations.class);
+        when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
+        when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
+                .thenThrow(new RuntimeException("store outage"));
+        RetryStrategy moreAttemptsThanTheCeiling = RetryStrategy.retry()
+                .backoff(Backoff.fixed(1))
+                .maxAttempts(MongoAppliedAppendStore.MAX_ATTEMPTS_CEILING + 500);
+        AppliedAppendStore store = storeWith(mongoOperations, moreAttemptsThanTheCeiling);
+
+        assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
+                .isInstanceOf(RuntimeException.class);
+
+        verify(mongoOperations, times(MongoAppliedAppendStore.MAX_ATTEMPTS_CEILING + 1))
+                .upsert(any(Query.class), any(UpdateDefinition.class), anyString());
+    }
+
+    @Test
+    void the_ceiling_leaves_a_policy_that_stops_before_it_to_stop_on_its_own() {
         MongoOperations mongoOperations = mock(MongoOperations.class);
         when(mongoOperations.indexOps(anyString())).thenReturn(mock(IndexOperations.class));
         when(mongoOperations.exists(any(Query.class), anyString()))

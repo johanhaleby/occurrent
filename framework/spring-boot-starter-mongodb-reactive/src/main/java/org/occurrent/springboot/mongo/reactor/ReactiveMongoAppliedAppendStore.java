@@ -69,7 +69,7 @@ import static org.springframework.data.mongodb.core.query.Query.query;
  * delivered event nor a plain {@link #hasApplied(String, AppendId)} call, until it runs out of attempts. {@link #waitUntilApplied(String, AppendId, Duration)}
  * is the one exception. Its own reads retry on the same {@link Retry}, but only until the wait's own deadline, and a
  * read that is still failing once the deadline arrives, or once {@link #retry} itself gives up, answers {@code false}
- * rather than throwing, so a sustained store outage always surfaces as a timeout, never as an exception. The
+ * rather than throwing, so a sustained store outage ends a wait as a timeout rather than as a failure. The
  * {@link Backoff} decides how long a wait sleeps between polls that succeeded and simply found the append not yet
  * applied. {@link Retry} rather than the blocking {@code RetryStrategy} because this is the reactive stack, matching
  * how the reactive starter retries elsewhere.
@@ -113,7 +113,10 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * for as long as an outage lasted. The store makes at most one attempt beyond this number, because a policy
      * that stops at or before it is left to stop on its own, including how it maps an exhausted retry. Two orders
      * of magnitude above {@link #DEFAULT_MAX_ATTEMPTS}, and {@code occurrent.projection.applied-append.max-attempts}
-     * is rejected above it, so a configured policy is never shortened here. The same number the blocking store uses.
+     * is rejected above it rather than accepted and then not performed, so nothing a Spring application configures
+     * reaches this number. An application that builds a {@link Retry} itself and hands it to the constructor can,
+     * and a policy still retrying at this number is stopped here whatever it would have gone on to do, since there
+     * is no way to ask it. The same number the blocking store uses.
      */
     public static final int MAX_ATTEMPTS_CEILING = 1000;
 
@@ -260,7 +263,9 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * A read for {@link #waitUntilApplied(String, AppendId, Duration, Backoff)} whose retries stop once
      * {@code deadlineNanos} ({@link System#nanoTime()} scale) passes, rather than continuing on {@link #retry}'s own
      * schedule. Blocking on the retried read with the remaining duration as the block timeout is what stops the
-     * retries themselves at the deadline, not just the wait loop around them. A sustained outage exhausts
+     * retries themselves at the deadline, not just the wait loop around them. The read a wait must make has no
+     * remaining duration to block on, so it is the one read here the deadline does not reach and the client's own
+     * timeout is what ends it. A sustained outage exhausts
      * {@link #retry}'s own attempts too, well before a long deadline. Either way the read answers {@code false}
      * rather than throwing. A wait polls for
      * "not applied yet", and its own deadline check, not the read's failure, is what ends it. This also covers a
@@ -310,6 +315,18 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * reaching the deadline check that is supposed to end it. The loop shape (read, check, sleep, grow the backoff)
      * otherwise matches the interface default and the blocking store's own override. Only the read is
      * store-specific.
+     * <p>
+     * A read that has time left is cancelled once that time runs out, so this method returns within {@code timeout}
+     * and answers {@code false} for an append it would have found had it waited. The blocking store cannot cancel a
+     * read it has started and returns late instead, which is the one place the two stores answer differently rather
+     * than only being written differently.
+     * <p>
+     * The first read runs whatever the deadline says, so a {@code timeout} of zero or one that has already elapsed
+     * still answers whether the append is applied rather than reporting that it is not. That read has no remaining
+     * time to be cut short against, so nothing here ends it and the MongoDB client's own {@code timeoutMS} or
+     * socket timeout is what does, the same as a plain {@link #hasApplied(String, AppendId)} call. Configure one on
+     * the client, for example through {@code spring.mongodb.uri}, if that read has to end while a connection it has
+     * accepted stops responding.
      */
     @Override
     public boolean waitUntilApplied(String projectionId, AppendId appendId, Duration timeout, Backoff backoff) {

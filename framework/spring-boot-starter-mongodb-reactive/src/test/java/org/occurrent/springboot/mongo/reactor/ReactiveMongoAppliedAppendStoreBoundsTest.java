@@ -366,8 +366,30 @@ class ReactiveMongoAppliedAppendStoreBoundsTest {
         assertThat(attempts).hasValue(ReactiveMongoAppliedAppendStore.MAX_ATTEMPTS_CEILING + 1);
     }
 
+    /**
+     * The other policy the store cannot tell apart from one that never gives up. A finite limit above the ceiling
+     * is what the javadoc says gets stopped here, so it needs its own test rather than being read off the
+     * never-gives-up case above.
+     */
     @Test
-    void the_ceiling_never_shortens_a_policy_the_caller_actually_chose() {
+    void a_policy_that_asks_for_more_attempts_than_the_ceiling_is_stopped_at_the_ceiling() {
+        AtomicInteger attempts = new AtomicInteger();
+        ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
+        when(mongoOperations.upsert(any(Query.class), any(UpdateDefinition.class), anyString()))
+                .thenReturn(failingAfterCounting(attempts));
+        Retry moreAttemptsThanTheCeiling = Retry
+                .fixedDelay(ReactiveMongoAppliedAppendStore.MAX_ATTEMPTS_CEILING + 500L, Duration.ZERO)
+                .onRetryExhaustedThrow((spec, signal) -> signal.failure());
+        AppliedAppendStore store = storeWith(mongoOperations, moreAttemptsThanTheCeiling);
+
+        assertThatThrownBy(() -> store.recordApplied("orders", AppendId.mint()))
+                .isInstanceOf(RuntimeException.class);
+
+        assertThat(attempts).hasValue(ReactiveMongoAppliedAppendStore.MAX_ATTEMPTS_CEILING + 1);
+    }
+
+    @Test
+    void the_ceiling_leaves_a_policy_that_stops_before_it_to_stop_on_its_own() {
         AtomicInteger attempts = new AtomicInteger();
         ReactiveMongoOperations mongoOperations = mongoOperationsWithWorkingIndexes();
         when(mongoOperations.exists(any(Query.class), anyString()))

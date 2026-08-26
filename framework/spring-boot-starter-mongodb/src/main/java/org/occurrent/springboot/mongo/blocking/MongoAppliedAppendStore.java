@@ -103,7 +103,10 @@ public class MongoAppliedAppendStore implements AppliedAppendStore {
      * for as long as an outage lasted. The store makes at most one attempt beyond this number, because a policy
      * that stops at or before it is left to stop on its own, including how it maps an exhausted retry. Two orders
      * of magnitude above {@link #DEFAULT_MAX_ATTEMPTS}, and {@code occurrent.projection.applied-append.max-attempts}
-     * is rejected above it, so a configured policy is never shortened here.
+     * is rejected above it rather than accepted and then not performed, so nothing a Spring application configures
+     * reaches this number. An application that builds a {@link RetryStrategy} itself and hands it to the constructor
+     * can, and a policy still retrying at this number is stopped here whatever it would have gone on to do, since
+     * there is no way to ask it.
      */
     public static final int MAX_ATTEMPTS_CEILING = 1000;
 
