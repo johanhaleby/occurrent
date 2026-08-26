@@ -84,7 +84,9 @@ class DcbCriteriaBuilder<E : Any> private constructor(
      * each constant body as a separate class no `permits` clause points the walk at, so making it `final` or
      * `sealed` is not something you can write. Declare the constants instead, `types(MyEnum.A.javaClass,
      * MyEnum.B.javaClass)`, or move the per-constant behavior into a constructor parameter or a `when` so the enum
-     * needs no constant bodies at all, which makes it final again and lets `type(MyEnum::class.java)` work. A Java enum
+     * needs no constant bodies at all, which makes it final again and lets `type(MyEnum::class.java)` work. The second
+     * remedy also unblocks a sealed event interface above the enum, which an enum with constant bodies reopens and
+     * which is where the refusal usually reaches you. A Java enum
      * with constant bodies is unaffected, since javac seals that construct implicitly (JLS 8.9).
      */
     fun type(type: Class<out E>): DcbCriterion {

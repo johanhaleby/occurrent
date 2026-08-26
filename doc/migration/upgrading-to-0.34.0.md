@@ -130,7 +130,7 @@ derivation, or in `ExecuteFilter` and `DcbCriteriaBuilder`'s case had none at al
 line with the saga and the annotation-based subscription. See [ADR 126](../architecture/decisions/0126-every-derived-event-type-filter-expands-a-declared-sealed-type.md).
 
 0.34.0 also removes the one shape that was exempt everywhere, a concrete class that is neither final nor
-sealed, which is the last row of the table below. That part changes a saga and an annotation-based
+sealed, which is the concrete-class row of the table below. That part changes a saga and an annotation-based
 subscription too, so read it even if the six places above are not what you use. See
 [#753](https://github.com/johanhaleby/occurrent/issues/753) and [#912](https://github.com/johanhaleby/occurrent/issues/912).
 
@@ -251,17 +251,16 @@ You are affected when a declared or registered type is one of these:
 | A sealed hierarchy reopened below the declared type | `non-sealed class Base implements OrderEvent` | `open class Base : OrderEvent` or `abstract class Base : OrderEvent` |
 | An array type | `OrderEvent[]` | `Array<OrderEvent>` |
 | A primitive class literal | `int.class` | `Int::class` |
-| A concrete class that is neither final nor sealed | `class OrderPlaced` | `open class OrderPlaced` |
-| An enum whose constants have bodies | not affected, javac seals it (JLS 8.9) | `enum class PaymentEvent { Reserved { ... } }` |
+| A concrete class that is neither final nor sealed | `class OrderPlaced` | `open class OrderPlaced`, or an `enum class` whose constants have bodies |
 
 A projection, a subscription, a query, or a snapshot that declares concrete types, or a sealed type whose
 every level is sealed or final, is unaffected. Java records and Kotlin data classes are final already, so an
 ordinary sealed hierarchy of records needs nothing.
 
-### The last row also changes a saga and an annotation-based subscription
+### The concrete-class row also changes a saga and an annotation-based subscription
 
 The first five shapes were already refused for a saga and an annotation-based subscription in 0.33.0, and
-0.34.0 only brings the other six places in line. The last row is different. 0.33.0 exempted a concrete class
+0.34.0 only brings the other six places in line. The concrete-class row is different. 0.33.0 exempted a concrete class
 that is neither final nor sealed everywhere, on purpose, to keep every caller declaring one working. 0.34.0
 removes that exemption, so a saga and an annotation-based subscription now refuse it too.
 
@@ -303,9 +302,11 @@ release of loss in front of it.
 
 ### A Kotlin enum with constant bodies cannot be sealed or made final
 
-Kotlin compiles an `enum class` whose constants have bodies as a class that is neither final nor sealed, and
-each constant body as a separate class no `permits` clause points the walk at. The declaration is refused, and
-the refusal message offers to make the class final or sealed, neither of which you can write on an enum.
+This is the concrete-class row of the table in Kotlin form, and it gets its own section because two of that
+row's remedies are not available here. Kotlin compiles an `enum class` whose constants have bodies as a
+concrete class that is neither final nor sealed, and each constant body as a separate class no `permits` clause
+points the walk at. The declaration is refused, and the refusal message offers to make the class final or
+sealed, neither of which you can write on an enum.
 
 ```kotlin
 // Refused from 0.34.0. Neither final nor sealed once a constant has a body
@@ -334,6 +335,10 @@ enum class PaymentEvent(private val label: String) : DomainEvent {
     override fun toString() = label
 }
 ```
+
+Removing the bodies also unblocks a sealed event interface above the enum. An enum with constant bodies reopens
+such an interface, so declaring the interface is refused too, and that is usually where the refusal reaches you
+rather than on the enum itself.
 
 The two shapes are stored under different CloudEvent types, so pick between them before you have events in the
 store rather than after. `PaymentEvent.Reserved.javaClass` is `PaymentEvent$Reserved` while the bodiless
@@ -416,7 +421,7 @@ needs one, `ExecuteFilter` throws the first time `ApplicationService#execute` re
 projections, queries, subscriptions, snapshots, execute filters, and DCB criteria finds every affected
 declaration.
 
-The last row of the table, a concrete class that is neither final nor sealed, has a second reason on top of
+The concrete-class row of the table, a class that is neither final nor sealed, has a second reason on top of
 that one. Even given the modifier, a recipe would have to pick between two remedies that mean different
 things about your domain. Adding `final` says nothing may ever extend the class, and a recipe cannot know
 whether a subclass exists in another module, in another repository, or in an application that only depends

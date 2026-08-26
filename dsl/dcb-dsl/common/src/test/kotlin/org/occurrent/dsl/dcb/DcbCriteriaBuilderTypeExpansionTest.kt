@@ -53,9 +53,11 @@ enum class EnumWithBodies : EnumRoot {
     }
 }
 
+sealed interface BodilessEnumRoot
+
 // The same two constants with their behavior moved off the constant bodies, which is one of the two remedies the
 // type KDoc offers a Kotlin caller whose enum is refused.
-enum class EnumWithoutBodies(private val label: String) {
+enum class EnumWithoutBodies(private val label: String) : BodilessEnumRoot {
     A("a"),
     B("b");
 
@@ -146,6 +148,20 @@ class DcbCriteriaBuilderTypeExpansionTest {
         val criterion = builder.type(EnumWithoutBodies::class.java)
 
         assertThat(criterion).isEqualTo(DcbCriteria.types(listOf("EnumWithoutBodies")))
+    }
+
+    @Test
+    fun type_accepts_a_sealed_interface_whose_only_member_is_a_kotlin_enum_without_bodies() {
+        // Given: a caller declaring a bodiless enum directly is the easy half. The refusal they actually meet comes
+        // from the sealed event interface above it, which type_refuses_the_sealed_interface_a_kotlin_enum_with_constant_bodies_reopens
+        // shows an enum with constant bodies reopens.
+        // Dropping the bodies has to fix that shape too, or the advice only helps someone who already knew to
+        // declare the enum rather than the interface.
+        val builder = DcbCriteriaBuilder(simpleNameConverter<BodilessEnumRoot>())
+
+        val criterion = builder.type(BodilessEnumRoot::class.java)
+
+        assertThat(criterion).isEqualTo(DcbCriteria.types(listOf("BodilessEnumRoot", "EnumWithoutBodies")))
     }
 
     @Test
