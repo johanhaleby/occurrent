@@ -85,11 +85,15 @@ import static java.util.Objects.requireNonNull;
  * event type is invisible to it, and {@code acceptRedeliverable(...)} still applies the subscription's own filter
  * regardless of what was bound.
  * <p>
- * <strong>{@link Builder#build()} retries a broker briefly unreachable, per #867.</strong> Opening the channel,
- * declaring the queue and its bindings, and setting QoS all happen inside {@link Builder#retryStrategy(RetryStrategy)},
- * exponential backoff from 100 ms up to 2 seconds by default, ten attempts in total, so a broker that has not
- * finished starting, or is mid-restart, when this bridge is built does not fail the whole application startup over
- * it. See that method's own javadoc for exactly what is retried and what is refused immediately.
+ * <strong>{@link Builder#build()} retries a broker briefly unreachable, per #867, on the {@code Connection} it was
+ * given.</strong> Opening the channel, declaring the queue and its bindings, and setting QoS all happen inside
+ * {@link Builder#retryStrategy(RetryStrategy)}, exponential backoff from 100 ms up to 2 seconds by default, ten
+ * attempts in total, every one of them against that same supplied {@code Connection}. {@code build()} never
+ * creates or reconnects the {@code Connection} itself, so this survives only a broker briefly unreachable while
+ * that {@code Connection}'s own automatic recovery is what is reopening it; a {@code Connection} with automatic
+ * recovery disabled, or a broker still unreachable when the {@code Connection} was created in the first place,
+ * stays dead for every attempt. See that method's own javadoc for exactly what is retried and what is refused
+ * immediately.
  * <p>
  * <strong>Coarse lifecycle.</strong> A background poll, {@link Builder#pollInterval(Duration)} apart (one second by
  * default), reads {@link PushSubscriptionModel#subscriptionIds()} and {@link PushSubscriptionModel#isRunning(String)}
@@ -669,8 +673,11 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
         }
 
         /**
-         * How a broker briefly unreachable while {@link #build()} runs is retried before it throws. Exponential
-         * backoff from 100 ms up to 2 seconds by default, ten attempts in total, matching the shape
+         * How a broker briefly unreachable while {@link #build()} runs is retried before it throws. This retries
+         * only opening a channel and declaring topology on the {@code Connection} this builder was given; it
+         * neither creates nor reconnects that {@code Connection}, so surviving anything past the very first
+         * attempt needs that {@code Connection}'s own automatic recovery already enabled. Exponential backoff from
+         * 100 ms up to 2 seconds by default, ten attempts in total, matching the shape
          * {@code AGENTS.md} sets for every component that talks to an external store, capped at that count because a
          * {@link #build()} that never gives up turns a broker that is permanently misconfigured, a rejected
          * credential or a nonexistent vhost, into an application that hangs at startup with no diagnosis, which is
