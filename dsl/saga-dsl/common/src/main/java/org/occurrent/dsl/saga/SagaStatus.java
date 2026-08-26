@@ -39,7 +39,7 @@ public enum SagaStatus {
      * <p>
      * This is not terminal, but nothing in 0.34.0 brings an instance out of it. {@link SagaInstance#failure()} says
      * which input the instance stopped on, where in the event stream it sits, and what the saga threw.
-     * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided it is not worth recovering.
+     * {@code SagaStateStore.delete(sagaId)} abandons the instance once you have decided not to recover it.
      * <p>
      * Note that {@code findByStatus(ACTIVE, ...)} does not return a quarantined instance. Enumerate this status too when
      * you are looking for instances that have stopped moving.

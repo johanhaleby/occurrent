@@ -229,9 +229,8 @@ public final class SagaExecutionSupport {
                                                                                           Duration quarantineAfter) {
         Long position = meta.position();
         if (position == null) {
-            // The record identifies the failing input by its redelivery key and falls back to the position when the
-            // event carries no stream id and version, so an input with neither cannot be told apart from the next one.
-            // Keep rethrowing instead.
+            // The record holds the position so an operator can find the event, and there is none to hold. Refusing
+            // here keeps the 0.33.0 behaviour of rethrowing, which loses nothing.
             return null;
         }
         if (current != null && (current.isCompleted() || current.isQuarantined())) {

@@ -683,10 +683,10 @@ whatever fed it, and on a push feed behind a broker bridge that is what stages t
 The one copy this saga could ever be given would be gone at the moment of quarantine. Between an instance that blocks
 and an event that cannot be asked for again, this keeps the event.
 
-An event with neither a stream id and its version nor a global position is never quarantined either. The
-failure record tells one failing input from the next by the event's redelivery key, and an event that has neither
-cannot be told apart from the one after it. Occurrent's own stored events always have both, and a feed that drops the
-CloudEvent extensions on the way in does not.
+An event with no global position is never quarantined either. The failure record holds that position so you can find
+the event the instance stopped on, and refusing to quarantine keeps the 0.33.0 behaviour, which loses nothing.
+Occurrent's own stored events always have a position, and a feed that drops the CloudEvent extensions on the way in
+does not.
 
 ### The five breaks
 
