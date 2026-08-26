@@ -61,9 +61,10 @@ public interface ExecuteFilter<E> {
      * Create a filter that includes events of the supplied domain event type.
      * <p>
      * {@code eventType} is expanded the way every other type-filter derivation in the library expands a declared
-     * type, through {@link EventTypeExpansion}: a sealed type expands to the concrete types it permits, all the way
+     * type, through {@link EventTypeExpansion}. A sealed type expands to the concrete types it permits, all the way
      * down, and a type whose concrete types cannot all be found is refused rather than turned into a filter that
-     * would miss some of them.
+     * would miss some of them. The finding is done by the sealed-permits walk described on {@link #excludeTypes},
+     * so both directions mean the same walk when they say a type can or cannot be found.
      */
     static <E> ExecuteFilter<E> type(Class<? extends E> eventType) {
         Objects.requireNonNull(eventType, "eventType cannot be null");
@@ -87,27 +88,47 @@ public interface ExecuteFilter<E> {
     /**
      * Create a filter that excludes events whose CloudEvent type matches any of the supplied domain event types.
      * <p>
-     * A declared type is WIDENED to every concrete type {@link EventTypeExpansion#expandWhatCanBeFound}'s downward
-     * walk can find rather than refused when it cannot all be enumerated, which is the opposite of what
-     * {@link #type(Class)} and {@link #includeTypes} do, and on purpose. Excluding a supertype has to exclude
-     * everything under it, or the exclusion silently lets the excluded family of events through. Widening never
-     * excludes fewer of the concrete types that walk finds than a complete expansion would, so it is never the
-     * wrong direction to fail in. It does not promise the exclusion excludes something. {@code expandWhatCanBeFound}'s
-     * own documentation scopes itself to a caller that is not deriving a filter, since a missed type there would
-     * narrow what an inclusive filter reads. Excluding is the opposite question, where a missed type only narrows
-     * what gets excluded, never what gets read, so deriving an exclusive filter from it here is the safe direction
-     * that scope was written before, not the one it warns against. A concrete class declared
-     * directly that is itself neither final nor sealed contributes itself, the same as before this method went
-     * through {@link EventTypeExpansion}, since no downward walk can find a subclass stored under its own name, but
-     * the exclusion is not empty. <strong>An interface or an abstract class whose hierarchy reopens before the walk
-     * finds anything concrete is different: it contributes nothing at all, so the resulting filter excludes zero
-     * real events while looking like a working exclusion.</strong> {@code excludeTypes(SensitiveEvent.class)} on a
-     * sealed {@code SensitiveEvent} that permits a non-sealed abstract class, with nothing concrete found above
-     * that level, silently keeps every event of that family in the read. Seal the hierarchy, or declare the
-     * concrete types directly, to get a working exclusion for that shape. An array and a primitive are refused, for
-     * two different reasons kept apart the way {@link EventTypeExpansion#expandWhatCanBeFound} keeps them apart: no
-     * event is ever an instance of a primitive class, while an array is refused for consistency with {@link #type} and
-     * {@link #includeTypes}, not because excluding one is impossible.
+     * A declared type is WIDENED to every concrete type {@link EventTypeExpansion#expandWhatCanBeFound} can find
+     * rather than refused when it cannot find them all, which is the opposite of what {@link #type(Class)} and
+     * {@link #includeTypes} do, and on purpose. Excluding a supertype has to exclude everything under it, or the
+     * exclusion silently lets the excluded family of events through.
+     * <p>
+     * <strong>The walk doing the finding is the sealed-permits walk.</strong> It starts at the declared type,
+     * follows a {@code permits} clause through {@link Class#getPermittedSubclasses}, and stops at the first level
+     * that is not sealed. It reads no classpath and consults no index of subtypes, so a subclass declared outside
+     * a {@code permits} clause is beyond it. For a declared type {@code T} and a {@link CloudEventTypeGetter}
+     * {@code g}, the filter excludes the CloudEvent types {@code g} returns for {@code T} itself and for every
+     * concrete type that walk reaches below {@code T}. Growing that set only takes events out of the read, so a
+     * type the walk cannot reach means an event the caller wanted out stays in, rather than the reverse. Being
+     * incomplete is harmless in that one direction, which is a smaller claim than the exclusion doing what its
+     * name promises.
+     * <p>
+     * {@code expandWhatCanBeFound}'s own documentation scopes itself to a caller that is not deriving a filter,
+     * since a missed type there would narrow what an inclusive filter reads. Excluding is the opposite question,
+     * where a missed type only narrows what gets excluded, so deriving an exclusive filter from it here is the
+     * direction that scope was written before this caller existed, not the one it warns against.
+     * <p>
+     * A concrete class declared directly that is itself neither final nor sealed contributes itself, the same as
+     * before this method went through {@link EventTypeExpansion}, since no downward walk can find a subclass
+     * stored under its own name, but the exclusion is not empty.
+     * <p>
+     * <strong>An interface or an abstract class whose hierarchy reopens before the walk finds anything concrete is
+     * different. It contributes its own declared name and nothing else, and how much that excludes is decided by
+     * {@code g} rather than by the walk.</strong> Under a getter that maps each type to its own class name, which
+     * is what {@code ReflectionCloudEventTypeMapper} does in both its qualified and its simple form, no stored
+     * event is written under the declared type's own name, so the filter excludes zero real events while looking like a
+     * working exclusion.
+     * {@code excludeTypes(SensitiveEvent.class)} on a sealed {@code SensitiveEvent} that permits a non-sealed
+     * abstract class, with nothing concrete found above that level, silently keeps every event of that family in
+     * the read. Under a getter of your own that maps a whole hierarchy onto one CloudEvent type string, the same
+     * declaration excludes the whole family instead, because that one string is what the concrete events are
+     * stored under. Seal the hierarchy, or declare the concrete types directly, for an exclusion that does not
+     * depend on which of those two your getter is.
+     * <p>
+     * An array and a primitive are refused, for two different reasons kept apart the way
+     * {@link EventTypeExpansion#expandWhatCanBeFound} keeps them apart. No event is ever an instance of a
+     * primitive class, while an array is refused for consistency with {@link #type} and {@link #includeTypes},
+     * not because excluding one is impossible.
      */
     @SafeVarargs
     static <E> ExecuteFilter<E> excludeTypes(Class<? extends E> first, Class<? extends E>... more) {

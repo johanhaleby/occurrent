@@ -65,17 +65,27 @@ class DcbCriteriaBuilder<E : Any> private constructor(
     // module. By that epic's own plan the incoming helper narrows uniformly rather than applying the refuse policy
     // type/types use here. This is not a claim about today's buildDcbCriteria (in SubscriptionAnnotations), which
     // takes pre-resolved CloudEvent type strings rather than classes and expands nothing itself, it is about the
-    // version landing here. Two type-derivation helpers that look alike is not a reason to share an implementation:
-    // doing so picks one policy for both, and whichever one loses either starts refusing a caller that was fine, or
-    // starts silently missing concrete subtypes it used to find.
+    // version landing here. Two type-derivation helpers that look alike is not a reason to share an implementation.
+    // Sharing one picks a single policy for both, and whichever one loses either starts refusing a caller that was
+    // fine, or starts silently missing concrete subtypes it used to find.
 
     /**
      * A criterion matching events whose CloudEvent type is any of the CloudEvent types [type] expands into.
      *
      * [type] is expanded the way every other type-filter derivation in the library expands a declared type, through
-     * [EventTypeExpansion]: a sealed type expands to the concrete types it permits, all the way down, and a type
+     * [EventTypeExpansion]. A sealed type expands to the concrete types it permits, all the way down, and a type
      * whose concrete types cannot all be found is refused rather than turned into a criterion that would miss some
-     * of them.
+     * of them. The finding is the sealed-permits walk, which starts at the declared type, follows a `permits` clause
+     * through `Class.getPermittedSubclasses`, and stops at the first level that is not sealed. It reads no classpath
+     * and consults no index of subtypes, so a subclass declared outside a `permits` clause is beyond it.
+     *
+     * **A Kotlin `enum class` whose constants have bodies is refused, and only one of the two remedies the refusal
+     * message names applies to it.** Kotlin compiles such an enum as a class that is neither final nor sealed, and
+     * each constant body as a separate class no `permits` clause points the walk at, so making it `final` or
+     * `sealed` is not something you can write. Declare the constants instead, `types(MyEnum.A.javaClass,
+     * MyEnum.B.javaClass)`, or move the per-constant behavior into a constructor parameter or a `when` so the enum
+     * needs no constant bodies at all, which makes it final again and lets `type(MyEnum::class.java)` work. A Java enum
+     * with constant bodies is unaffected, since javac seals that construct implicitly (JLS 8.9).
      */
     fun type(type: Class<out E>): DcbCriterion {
         val mapped = expandedCloudEventTypes(setOf(type))

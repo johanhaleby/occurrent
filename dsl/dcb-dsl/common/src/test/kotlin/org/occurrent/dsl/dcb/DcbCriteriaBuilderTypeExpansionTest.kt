@@ -53,6 +53,15 @@ enum class EnumWithBodies : EnumRoot {
     }
 }
 
+// The same two constants with their behavior moved off the constant bodies, which is one of the two remedies the
+// type KDoc offers a Kotlin caller whose enum is refused.
+enum class EnumWithoutBodies(private val label: String) {
+    A("a"),
+    B("b");
+
+    override fun toString() = label
+}
+
 @DisplayName("DcbCriteriaBuilder type expansion")
 @DisplayNameGeneration(ReplaceUnderscores::class)
 class DcbCriteriaBuilderTypeExpansionTest {
@@ -125,6 +134,18 @@ class DcbCriteriaBuilderTypeExpansionTest {
         assertThatThrownBy { builder.type(EnumRoot::class.java) }
             .isInstanceOf(IllegalArgumentException::class.java)
             .hasMessageContaining(EnumRoot::class.java.name)
+    }
+
+    @Test
+    fun type_accepts_a_kotlin_enum_whose_constants_have_no_bodies() {
+        // Given: the second remedy the KDoc offers, moving the per-constant behavior into a constructor parameter.
+        // Kotlin compiles an enum with no constant bodies as a final class, so the walk stops at it and accepts it,
+        // where the same enum with bodies is refused. Without this test the KDoc advises a change nothing verifies.
+        val builder = DcbCriteriaBuilder(simpleNameConverter<EnumWithoutBodies>())
+
+        val criterion = builder.type(EnumWithoutBodies::class.java)
+
+        assertThat(criterion).isEqualTo(DcbCriteria.types(listOf("EnumWithoutBodies")))
     }
 
     @Test

@@ -188,6 +188,41 @@ class ExecuteFilterTest {
         }
 
         @Test
+        void type_class_accepts_a_java_enum_whose_constants_have_bodies() {
+            // Given: the Kotlin side of this fix refuses the same construct, because Kotlin compiles the enum as a
+            // class that is neither final nor sealed. The migration guide and the DcbCriteriaBuilder KDoc both tell
+            // a Kotlin caller that Java is unaffected, so that claim needs an assertion rather than a reference to
+            // JLS 8.9. javac seals the enum implicitly and lists each constant body as a permitted subclass, so the
+            // walk finds both and the declaration is accepted.
+            ExecuteFilter<JavaEnumWithBodies> executeFilter = ExecuteFilter.type(JavaEnumWithBodies.class);
+
+            // When
+            StreamReadFilter filter = executeFilter.resolve(nameGetter());
+
+            // Then
+            assertThat(filter).isEqualTo(StreamReadFilter.type(Condition.in(
+                    JavaEnumWithBodies.class.getName(),
+                    JavaEnumWithBodies.FIRST.getClass().getName(),
+                    JavaEnumWithBodies.SECOND.getClass().getName())));
+        }
+
+        @Test
+        void exclude_types_on_a_reopened_hierarchy_excludes_the_whole_family_under_a_collapsing_getter() {
+            // Given: the same declaration as the test above, which excludes zero real events under a getter that
+            // maps each type to its own class name. What the exclusion removes is decided by the getter, not by the
+            // walk, so a getter of the caller's own that maps the whole hierarchy onto one CloudEvent type string
+            // makes this exclusion complete instead. Both outcomes come from one declaration, which is why the
+            // documentation cannot claim either one on its own.
+            ExecuteFilter<ReopenedEvent> executeFilter = ExecuteFilter.excludeTypes(ReopenedEvent.class);
+
+            // When
+            StreamReadFilter filter = executeFilter.resolve(collapsingGetter());
+
+            // Then
+            assertThat(filter).isEqualTo(StreamReadFilter.type(Condition.not(Condition.in("collapsed"))));
+        }
+
+        @Test
         void include_types_deduplicates_cloud_event_types_a_collapsing_mapper_maps_several_declared_types_onto() {
             // Given: a CloudEventTypeMapper of the caller's own can map a whole hierarchy onto one CloudEvent type
             // string. The expanded classes still differ, but the condition should not repeat the same string.
@@ -203,6 +238,21 @@ class ExecuteFilterTest {
 
     // Concrete, but neither final nor sealed, so nothing extending it can be found by reflection.
     static class OpenEvent {
+    }
+
+    enum JavaEnumWithBodies {
+        FIRST {
+            @Override
+            public String toString() {
+                return "first";
+            }
+        },
+        SECOND {
+            @Override
+            public String toString() {
+                return "second";
+            }
+        }
     }
 
     sealed interface ReopenedEvent permits ReopenedBase {
@@ -229,7 +279,7 @@ class ExecuteFilterTest {
     }
 
     /** Maps every type to the same CloudEvent type string, the way a caller's own collapsing mapper would. */
-    private static CloudEventTypeGetter<DomainEvent> collapsingGetter() {
+    private static <E> CloudEventTypeGetter<E> collapsingGetter() {
         return eventType -> "collapsed";
     }
 }

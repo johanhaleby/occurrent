@@ -303,3 +303,13 @@ exclusive filter's defect runs the other way, matching too much by excluding too
 rather than refusing. [#912](https://github.com/johanhaleby/occurrent/issues/912)'s own pull
 request records that direction-dependent choice and its reasoning. `DcbCriteriaBuilder` has no
 exclusive derivation to reach.
+
+Both directions mean one walk when they say a concrete type can or cannot be found. It starts at the declared
+type, follows a `permits` clause through `Class.getPermittedSubclasses`, and stops at the first level that is
+not sealed, reading no classpath and consulting no index of subtypes. The inclusive direction refuses a
+declaration when that walk stops early. The exclusive direction keeps what the walk did reach, which excludes
+at least as much as naming the declared type alone used to. What the widened set then removes from a read is
+decided by the `CloudEventTypeGetter` rather than by the walk. Where the walk found nothing concrete, so that
+the set holds only the declared type's own name, that split is total. The same declaration excludes the whole
+family under a mapper that maps a hierarchy onto a single CloudEvent type string, and nothing at all under one
+that maps each type to its own class name.

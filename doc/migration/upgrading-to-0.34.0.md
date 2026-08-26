@@ -136,8 +136,10 @@ subscription too, so read it even if the six places above are not what you use. 
 
 `ExecuteFilter.excludeTypes` mostly sits outside this refusal. A declared type it cannot fully expand is
 widened to every concrete subtype a downward walk can find instead, since excluding a supertype has to
-exclude everything under it, and widening the concrete types the walk finds never removes fewer of them than
-a complete expansion would. That widening needs no migration step by itself. It still refuses an array or a
+exclude everything under it, and widening can only exclude more. That walk is the sealed-permits walk, which
+starts at the declared type, follows a `permits` clause through `Class.getPermittedSubclasses`, and stops at
+the first level that is not sealed, so a type it cannot reach means an event you wanted out stays in, rather
+than the reverse. That widening needs no migration step by itself. It still refuses an array or a
 primitive declared type, the same two shapes `type`/`includeTypes` refuse, since no event is ever an instance
 of either. Declaring one to `excludeTypes` was accepted up to 0.33.0, whatever your `CloudEventTypeGetter`
 happened to return for it, so that one shape is new. Nobody sensibly excludes by array or primitive type, so
@@ -156,10 +158,18 @@ type, exactly as before, but that exclusion is not empty.
 An interface or an abstract class whose hierarchy reopens before the downward walk finds anything concrete is
 different, and this is the shape to check your own declarations against. `excludeTypes(SensitiveEvent.class)`
 on a sealed `SensitiveEvent` that permits only a non-sealed abstract class, with nothing concrete found above
-that level, contributes nothing at all. The resulting filter excludes zero real events, silently, exactly as
-it did before this fix, and nothing about the exception-free result tells you that. Seal the hierarchy, or
-declare the concrete types directly, to get a working exclusion for that shape. See the changelog entry under
-`#### Changes` for [#912](https://github.com/johanhaleby/occurrent/issues/912).
+that level, contributes `SensitiveEvent`'s own declared name and nothing else. How much that excludes is then
+decided by your `CloudEventTypeMapper` rather than by the walk, and the two answers are as far apart as they
+get.
+
+Under a mapper that stores each type under its own class name, which is what `ReflectionCloudEventTypeMapper`
+does in both its qualified and its simple form, no stored event is written under `SensitiveEvent`'s own name, so the
+filter excludes zero real events, silently, exactly as it did before this fix, and nothing about the
+exception-free result tells you that. Under a mapper of your own that maps the whole hierarchy onto one
+CloudEvent type string, the same declaration excludes the whole family, because that one string is what the
+concrete events are stored under. Seal the hierarchy, or declare the concrete types directly, for an exclusion
+that does not depend on which of those two you configured. See the changelog entry under `#### Changes` for
+[#912](https://github.com/johanhaleby/occurrent/issues/912).
 
 Widening on a boundary-seeded `DcbCriteriaBuilder` and DCB append conditions built from a `DcbCriteriaBuilder`
 also change, worth calling out even though `DcbCriteriaBuilder` has no `excludeTypes`. `type`/`types` now name
@@ -242,6 +252,7 @@ You are affected when a declared or registered type is one of these:
 | An array type | `OrderEvent[]` | `Array<OrderEvent>` |
 | A primitive class literal | `int.class` | `Int::class` |
 | A concrete class that is neither final nor sealed | `class OrderPlaced` | `open class OrderPlaced` |
+| An enum whose constants have bodies | not affected, javac seals it (JLS 8.9) | `enum class PaymentEvent { Reserved { ... } }` |
 
 A projection, a subscription, a query, or a snapshot that declares concrete types, or a sealed type whose
 every level is sealed or final, is unaffected. Java records and Kotlin data classes are final already, so an
@@ -289,6 +300,48 @@ The reason the refusal is worth the break for everyone else is that the alternat
 0.33.0 using a mapper Occurrent ships who publishes a subclass loses those events with nothing in a log to
 explain it, and no later release makes that loss visible without the same break. Waiting only adds another
 release of loss in front of it.
+
+### A Kotlin enum with constant bodies cannot use two of the three remedies
+
+Kotlin compiles an `enum class` whose constants have bodies as a class that is neither final nor sealed, and
+each constant body as a separate class no `permits` clause points the walk at. The declaration is refused, and
+the refusal message offers to make the class final or sealed, neither of which you can write on an enum.
+
+```kotlin
+// Refused from 0.34.0. Neither final nor sealed once a constant has a body
+enum class PaymentEvent : DomainEvent {
+    Reserved { override fun toString() = "reserved" },
+    Settled { override fun toString() = "settled" }
+}
+```
+
+Two things do work. Declare the constants, since each body compiles to its own final class:
+
+```kotlin
+ExecuteFilter.includeTypes(PaymentEvent.Reserved.javaClass, PaymentEvent.Settled.javaClass)
+dcbCriteriaBuilder.types(PaymentEvent.Reserved.javaClass, PaymentEvent.Settled.javaClass)
+```
+
+Or move the per-constant behavior into a constructor parameter or a `when`, so the enum needs no constant
+bodies and Kotlin compiles it final again, which lets you declare the enum itself:
+
+```kotlin
+// Accepted, and PaymentEvent::class.java can be declared directly
+enum class PaymentEvent(private val label: String) : DomainEvent {
+    Reserved("reserved"),
+    Settled("settled");
+
+    override fun toString() = label
+}
+```
+
+The two shapes are stored under different CloudEvent types, so pick between them before you have events in the
+store rather than after. `PaymentEvent.Reserved.javaClass` is `PaymentEvent$Reserved` while the bodiless
+version's constants are all `PaymentEvent`, and `ReflectionCloudEventTypeMapper` maps whichever class it is
+handed.
+
+A Java enum with constant bodies is unaffected, since javac seals that construct implicitly (JLS 8.9) and the
+walk finds every constant through the `permits` clause javac writes.
 
 ### Seal the hierarchy
 
