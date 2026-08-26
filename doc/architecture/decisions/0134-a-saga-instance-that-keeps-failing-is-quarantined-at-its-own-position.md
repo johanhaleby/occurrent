@@ -322,15 +322,15 @@ registered until handover, and a `GlobalCheckpoint` resume on the default MongoD
 So the quarantine half ships and the release half does not. Quarantine on its own is what removes the block this
 decision exists to remove, and it needs no replay to do it. Release needs a replay capability that has to be
 designed and built in the subscription models rather than in the saga DSL, which is work of its own rather than a
-detail of this decision. `SagaStateStore.delete(sagaId)` is the only way out of quarantine in 0.34.0.
+detail of this decision.
 
 The durable record identifies the failing input by its redelivery key rather than by a global position, which is what
 keeps that later work cheap. A position is a number one subscription model assigns, and the same event has a
 different one on a different replay path, or none at all. The redelivery key belongs to the event, so release can be
 added on top of instances written by 0.34.0 without migrating them.
 
-`SagaStateStore.delete(sagaId)`, the escape hatch ADR 128 already names, stays available throughout. It abandons the
-instance deliberately instead of quietly.
+`SagaStateStore.delete(sagaId)`, the escape hatch ADR 128 already names, stays available throughout, and until release
+ships it is the only way out of quarantine. It abandons the instance deliberately instead of quietly.
 
 ### 8. The migration treatment for the shipped API this breaks
 

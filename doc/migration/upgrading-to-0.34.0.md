@@ -676,14 +676,16 @@ There are two limits to know before you rely on it.
 not enough. Put a `CatchupSubscriptionModel` around a model that cannot be repositioned and the runner still switches
 the budget off, because a catch-up model hands an explicit resume down to the model it wraps and throws when that
 model cannot take one. On any other model the runner switches the budget off at startup and logs why, so the saga
-keeps the 0.33.0 behaviour of blocking. That is deliberate rather than an omission. Quarantining means returning
-normally, which acknowledges the event to whatever fed it, and on a push feed behind a broker bridge that is what
-stages the offset and moves past the record. The one copy this saga could ever be given would be gone at the moment of
-quarantine. Between an instance that blocks and an event that cannot be asked for again, this keeps the event.
+keeps the 0.33.0 behaviour of blocking.
+
+That is deliberate rather than an omission. Quarantining means returning normally, which acknowledges the event to
+whatever fed it, and on a push feed behind a broker bridge that is what stages the offset and moves past the record.
+The one copy this saga could ever be given would be gone at the moment of quarantine. Between an instance that blocks
+and an event that cannot be asked for again, this keeps the event.
 
 An event with neither a stream id and its version nor a global position is never quarantined either. The
-failure record tells one failing input from the next by the event's redelivery key, and an event with neither cannot
-be told apart from the one after it. Occurrent's own stored events always have both, and a feed that drops the
+failure record tells one failing input from the next by the event's redelivery key, and an event that has neither
+cannot be told apart from the one after it. Occurrent's own stored events always have both, and a feed that drops the
 CloudEvent extensions on the way in does not.
 
 ### The five breaks
