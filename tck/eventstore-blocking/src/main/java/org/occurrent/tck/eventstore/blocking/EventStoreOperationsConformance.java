@@ -362,13 +362,21 @@ public abstract class EventStoreOperationsConformance extends EventStoreConforma
             // The updater forges a different streamId and streamVersion onto a fresh event. Both are store-owned, so
             // the update must neither move the event into the forged stream nor let a read of the real stream answer
             // the forged version, since that version is exactly what stream-level optimistic concurrency is written
-            // against.
-            operations().updateEvent("b", SOURCE, original -> CloudEventBuilder.v1(event("b", "NameRewritten"))
-                    .withExtension(OccurrentCloudEventExtension.STREAM_ID, "forged-stream")
-                    .withExtension(OccurrentCloudEventExtension.STREAM_VERSION, 999L)
-                    .build());
+            // against. A store could pass a version-count check like this one while still leaking the forged values
+            // onto the returned CloudEvent or the stored document's own extension fields, so both are checked
+            // directly below rather than only through eventStore().read(...).
+            CloudEvent updated = operations().updateEvent("b", SOURCE, original -> CloudEventBuilder.v1(event("b", "NameRewritten"))
+                            .withExtension(OccurrentCloudEventExtension.STREAM_ID, "forged-stream")
+                            .withExtension(OccurrentCloudEventExtension.STREAM_VERSION, 999L)
+                            .build())
+                    .orElseThrow();
 
+            CloudEvent stored = queries().query(Filter.id("b")).findFirst().orElseThrow();
             assertAll(
+                    () -> assertThat(extension(updated, OccurrentCloudEventExtension.STREAM_ID)).isEqualTo(STREAM_ID),
+                    () -> assertThat(OccurrentExtensionGetter.getStreamVersion(updated)).isEqualTo(2L),
+                    () -> assertThat(extension(stored, OccurrentCloudEventExtension.STREAM_ID)).isEqualTo(STREAM_ID),
+                    () -> assertThat(OccurrentExtensionGetter.getStreamVersion(stored)).isEqualTo(2L),
                     () -> assertThat(eventStore().read(STREAM_ID).version()).isEqualTo(2),
                     () -> assertThat(idsOf(eventStore().read(STREAM_ID))).containsExactly("a", "b"),
                     () -> assertThat(eventStore().exists("forged-stream")).isFalse()
