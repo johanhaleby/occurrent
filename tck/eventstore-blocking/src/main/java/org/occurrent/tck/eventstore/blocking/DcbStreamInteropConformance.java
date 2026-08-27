@@ -22,11 +22,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.WriteCondition;
 import org.occurrent.eventstore.api.dcb.DcbAppendConditionNotFulfilledException;
 import org.occurrent.eventstore.api.dcb.DcbAppendResult;
+import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.filter.Filter;
 
@@ -35,6 +37,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.eventstore.api.dcb.DcbAppendCondition.failIfEventsMatch;
 import static org.occurrent.tck.ConformanceEvents.event;
 import static org.occurrent.tck.ConformanceEvents.idsOf;
@@ -169,5 +172,32 @@ public abstract class DcbStreamInteropConformance extends EventStoreConformance 
         assertThat(typesOf(dcbEventStore().read(criteria).events()))
                 .as("Only the newly appended event may remain in the boundary")
                 .containsExactly(CHANGED);
+    }
+
+    @Test
+    void updating_a_dcb_event_with_a_fresh_replacement_event_keeps_its_own_tags_and_position() {
+        dcbEventStore().append(List.of(taggedEventWithId("A", DEFINED, NAME_1)));
+        CloudEvent original = queries().query(Filter.id("A")).findFirst().orElseThrow();
+        var originalTags = DcbCloudEvents.getTags(original);
+        long originalPosition = OccurrentCloudEventExtension.getPosition(original);
+
+        // A fresh event built from scratch carries different tags and no position of its own. Both are
+        // store-owned, so the update must not move the event across the consistency boundary its tags defined,
+        // and must not drop it from a DCB read that filters on position, which is every DCB read.
+        CloudEvent updated = operations().updateEvent("A", original.getSource(),
+                original2 -> taggedEventWithId("A", CHANGED, "other:9")).orElseThrow();
+
+        CloudEvent stored = queries().query(Filter.id("A")).findFirst().orElseThrow();
+        assertAll(
+                () -> assertThat(DcbCloudEvents.getTags(updated)).isEqualTo(originalTags),
+                () -> assertThat(DcbCloudEvents.getTags(stored)).isEqualTo(originalTags),
+                () -> assertThat(OccurrentCloudEventExtension.getPosition(updated)).isEqualTo(originalPosition),
+                () -> assertThat(OccurrentCloudEventExtension.getPosition(stored)).isEqualTo(originalPosition),
+                () -> assertThat(typesOf(dcbEventStore().read(DcbCriteria.tags(tag(NAME_1))).events()))
+                        .as("A dropped position would filter the updated event out of every DCB read, since "
+                                + "position(event) > afterPosition compares against zero, not just fail to match "
+                                + "the tag")
+                        .containsExactly(CHANGED)
+        );
     }
 }

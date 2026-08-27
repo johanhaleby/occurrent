@@ -25,9 +25,11 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.cloudevents.OccurrentExtensionGetter;
 import org.occurrent.eventstore.api.EventStoreCapability;
 import org.occurrent.eventstore.api.WriteResult;
 import org.occurrent.eventstore.api.blocking.EventStream;
+import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.filter.Filter;
 
 import java.net.URI;
@@ -39,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.occurrent.tck.ConformanceEvents.*;
+import static org.occurrent.tck.eventstore.blocking.DcbConformanceEvents.taggedEventWithId;
 
 /**
  * The {@link org.occurrent.eventstore.api.blocking.EventStoreOperations} contract covers deleting a whole stream,
@@ -228,6 +231,11 @@ public abstract class EventStoreOperationsConformance extends EventStoreConforma
         }
     }
 
+    /**
+     * The position assertions below assume {@code eventStore()} writes a global position. Every store shipping
+     * with Occurrent does by default. A store built with position turned off is covered separately by
+     * {@link StreamPositionDisabledConformance}.
+     */
     @Nested
     @DisplayName("updating an event")
     class UpdatingAnEvent {
@@ -323,6 +331,107 @@ public abstract class EventStoreOperationsConformance extends EventStoreConforma
 
             CloudEvent updated = queries().query(Filter.id("b")).findFirst().orElseThrow();
             assertThat(extension(updated, OccurrentCloudEventExtension.APPEND_ID)).isEqualTo(appendId);
+        }
+
+        @Test
+        void keeps_the_events_own_stream_identity_even_when_the_update_function_returns_a_fresh_event() {
+            eventStore().write(STREAM_ID, List.of(event("a", DEFINED), event("b", CHANGED)));
+
+            // A fresh event built from scratch carries no streamId or streamVersion of its own. Both are store-owned
+            // the same way the append id already is, so the update must not lose them or move the event to a stream
+            // it does not belong to. Dropping them is worse than stale metadata, since calculateStreamVersion reads
+            // the last event's own streamversion extension and throws when it is missing, making the whole stream
+            // unreadable rather than merely wrong.
+            CloudEvent updated = operations().updateEvent("b", SOURCE, original -> event("b", "NameRewritten")).orElseThrow();
+
+            CloudEvent stored = queries().query(Filter.id("b")).findFirst().orElseThrow();
+            assertAll(
+                    () -> assertThat(extension(updated, OccurrentCloudEventExtension.STREAM_ID)).isEqualTo(STREAM_ID),
+                    () -> assertThat(OccurrentExtensionGetter.getStreamVersion(updated)).isEqualTo(2L),
+                    () -> assertThat(extension(stored, OccurrentCloudEventExtension.STREAM_ID)).isEqualTo(STREAM_ID),
+                    () -> assertThat(OccurrentExtensionGetter.getStreamVersion(stored)).isEqualTo(2L),
+                    () -> assertThat(idsOf(eventStore().read(STREAM_ID))).containsExactly("a", "b"),
+                    () -> assertThat(eventStore().read(STREAM_ID).version()).isEqualTo(2)
+            );
+        }
+
+        @Test
+        void rejects_a_forged_stream_identity_and_keeps_the_original() {
+            eventStore().write(STREAM_ID, List.of(event("a", DEFINED), event("b", CHANGED)));
+
+            // The updater forges a different streamId and streamVersion onto a fresh event. Both are store-owned, so
+            // the update must neither move the event into the forged stream nor let a read of the real stream answer
+            // the forged version, since that version is exactly what stream-level optimistic concurrency is written
+            // against. A store could pass a version-count check like this one while still leaking the forged values
+            // onto the returned CloudEvent or the stored document's own extension fields, so both are checked
+            // directly below rather than only through eventStore().read(...).
+            CloudEvent updated = operations().updateEvent("b", SOURCE, original -> CloudEventBuilder.v1(event("b", "NameRewritten"))
+                            .withExtension(OccurrentCloudEventExtension.STREAM_ID, "forged-stream")
+                            .withExtension(OccurrentCloudEventExtension.STREAM_VERSION, 999L)
+                            .build())
+                    .orElseThrow();
+
+            CloudEvent stored = queries().query(Filter.id("b")).findFirst().orElseThrow();
+            assertAll(
+                    () -> assertThat(extension(updated, OccurrentCloudEventExtension.STREAM_ID)).isEqualTo(STREAM_ID),
+                    () -> assertThat(OccurrentExtensionGetter.getStreamVersion(updated)).isEqualTo(2L),
+                    () -> assertThat(extension(stored, OccurrentCloudEventExtension.STREAM_ID)).isEqualTo(STREAM_ID),
+                    () -> assertThat(OccurrentExtensionGetter.getStreamVersion(stored)).isEqualTo(2L),
+                    () -> assertThat(eventStore().read(STREAM_ID).version()).isEqualTo(2),
+                    () -> assertThat(idsOf(eventStore().read(STREAM_ID))).containsExactly("a", "b"),
+                    () -> assertThat(eventStore().exists("forged-stream")).isFalse()
+            );
+        }
+
+        @Test
+        void keeps_the_events_own_position_even_when_the_update_function_returns_a_fresh_event() {
+            eventStore().write(STREAM_ID, List.of(event("a", DEFINED), event("b", CHANGED)));
+            CloudEvent original = queries().query(Filter.id("b")).findFirst().orElseThrow();
+            long originalPosition = OccurrentCloudEventExtension.getPosition(original);
+
+            // A fresh event built from scratch carries no position of its own. Position is store-owned the same way
+            // the append id and stream identity already are, so the update must not let a replacement event drop the
+            // position an earlier write stamped.
+            CloudEvent updated = operations().updateEvent("b", SOURCE, original2 -> event("b", "NameRewritten")).orElseThrow();
+
+            CloudEvent stored = queries().query(Filter.id("b")).findFirst().orElseThrow();
+            assertAll(
+                    () -> assertThat(OccurrentCloudEventExtension.getPosition(updated)).isEqualTo(originalPosition),
+                    () -> assertThat(OccurrentCloudEventExtension.getPosition(stored)).isEqualTo(originalPosition)
+            );
+        }
+
+        @Test
+        void rejects_a_forged_position_and_keeps_the_original() {
+            eventStore().write(STREAM_ID, List.of(event("a", DEFINED), event("b", CHANGED)));
+            CloudEvent original = queries().query(Filter.id("b")).findFirst().orElseThrow();
+            long originalPosition = OccurrentCloudEventExtension.getPosition(original);
+
+            // Position is store-owned, so an updater forging one of its own must not let it through.
+            CloudEvent updated = operations().updateEvent("b", SOURCE,
+                    original2 -> OccurrentCloudEventExtension.withPosition(event("b", "NameRewritten"), originalPosition + 999)).orElseThrow();
+
+            CloudEvent stored = queries().query(Filter.id("b")).findFirst().orElseThrow();
+            assertAll(
+                    () -> assertThat(OccurrentCloudEventExtension.getPosition(updated)).isEqualTo(originalPosition),
+                    () -> assertThat(OccurrentCloudEventExtension.getPosition(stored)).isEqualTo(originalPosition)
+            );
+        }
+
+        @Test
+        void keeps_no_dcb_tags_on_a_plain_stream_event_even_when_the_update_function_forges_some() {
+            eventStore().write(STREAM_ID, List.of(event("a", DEFINED)));
+
+            // DCB tags are store-owned the same way streamId, streamVersion, the append id and position already are,
+            // so an updater forging one onto a plain stream event that never carried any must not let it through.
+            CloudEvent updated = operations().updateEvent("a", SOURCE,
+                    original -> taggedEventWithId("a", "NameRewritten", "forged:1")).orElseThrow();
+
+            CloudEvent stored = queries().query(Filter.id("a")).findFirst().orElseThrow();
+            assertAll(
+                    () -> assertThat(DcbCloudEvents.isDcbEvent(updated)).isFalse(),
+                    () -> assertThat(DcbCloudEvents.isDcbEvent(stored)).isFalse()
+            );
         }
     }
 }
