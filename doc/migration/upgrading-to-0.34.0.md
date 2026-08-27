@@ -877,15 +877,16 @@ checkpoint if it is killed part way.
 ### What it will not fix, and you should know before you run it
 
 The repair rebuilds an event from what its document still holds. Where the old write-back destroyed the only copy
-of a value, the tool reports the event by `_id` rather than inventing one. Four cases end up there: a position that
-was never stored, a position another event already holds, a `position` string that is not a number, and a `position`
-string holding zero or a negative number, which is not a value any store assigns. The runbook says what to do about
-each.
+of a value, the tool reports the event by `_id` rather than inventing one. Five cases end up there: a position that
+was never stored, a position another event already holds, a `position` string that is not a number, one holding zero
+or a negative number, and one above the store's position counter. The last two are values no store ever assigns. The
+runbook says what to do about each.
 
 A position the tool does restore is the value the document holds, not one it can check. The old write-back kept
 whatever position the update function returned, so a function that set `position` itself left that number behind as a
-string like any other. A forged value another event already holds is refused by the unique index, and a forged zero
-or negative one is reported, but a positive value that happens to be free is indistinguishable from the event's own.
+string like any other. A forged value another event already holds is refused by the unique index, and a forged zero,
+negative, or above-the-counter one is reported, but a positive value inside the assigned range that happens to be free
+is indistinguishable from the event's own.
 The tool restores it and counts a repair. If your update functions set `position`, a clean repair is not the same as
 the positions being right, and you need an external record. If they left `position` alone, every restored position
 came from the event itself.

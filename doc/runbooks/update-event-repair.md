@@ -157,6 +157,12 @@ zero and every position query reads `position > 0`, so writing the value back wo
 event just as invisible. Only an update function that set `position` itself produces this, which makes the original
 value gone rather than misread. Treat it the way you treat `POSITION_LOST`. The tag array is repaired even so.
 
+**`POSITION_ABOVE_COUNTER`.** The stored position is above the store's position counter, the highest position it ever
+handed out, so the store never assigned it. A read clamps its upper bound to that same counter, so the event is as
+invisible as one at or below zero, and a later append reaching that number would collide with it. Treat it the way
+you treat `POSITION_LOST`. The tag array is repaired even so. If your store has no counter document there is no
+ceiling to compare against and this is never reported.
+
 **`UNREADABLE`.** The tool could not read the event well enough to repair it, which means its `dcbtags` was edited
 outside Occurrent. The run continues past it, so one such event does not hold up the rest.
 
@@ -197,11 +203,11 @@ an external record of what those events should be. The store cannot tell you.
 
 A position the tool restores is the value the document holds, not one it can check. The old write-back kept whatever
 position the update function returned, so a function that set `position` itself left that number behind as a string
-like any other. Two of those still get caught. A value another event already holds is refused by the unique index and
-reported as `POSITION_ALREADY_TAKEN`, and zero or a negative value is reported as `POSITION_NOT_POSITIVE`. A positive
-value that happens to be free, in a gap in the sequence for instance, is indistinguishable from the event's own. The
-tool converts it to a number, counts a repair and reports nothing, because nothing in the store records what the
-position was.
+like any other. Three of those still get caught. A value another event already holds is refused by the unique index,
+one that is zero or negative is reported as `POSITION_NOT_POSITIVE`, and one above the store's counter is reported as
+`POSITION_ABOVE_COUNTER`. What is left is a positive value inside the assigned range that happens to be free, in a gap
+in the sequence for instance, and nothing distinguishes it from the event's own. The tool converts it to a number,
+counts a repair and reports nothing, because nothing in the store records what the position was.
 
 This matters only if your update functions set `position`. If they did, step 6 passing is not the same as the
 positions being right, and the events those functions touched need checking against an external record. If they left

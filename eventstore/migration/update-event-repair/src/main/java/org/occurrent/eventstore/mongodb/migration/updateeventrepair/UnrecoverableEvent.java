@@ -72,6 +72,15 @@ public record UnrecoverableEvent(Object eventId, Reason reason, String detail) {
          */
         POSITION_NOT_POSITIVE,
         /**
+         * The event's {@code position} is a string holding a number above the store's position counter, which is the
+         * highest position the store has ever handed out, so no store assigned it. A read clamps its upper bound to
+         * that same counter, so writing the value back would count as a repair and leave the event exactly as
+         * invisible, and a later append reaching that number would collide with it. The counter is re-read before
+         * the event is reported, so a store that wrote while the repair walked cannot put an event here wrongly.
+         * A store with no counter document has no ceiling to compare against and this is not reported.
+         */
+        POSITION_ABOVE_COUNTER,
+        /**
          * The event could not be read well enough to repair it. Its {@code dcbtags} is not a string, is an explicit
          * null, or does not decode to a tag set. Nothing Occurrent writes produces any of those, so it points at a
          * document that was edited outside the library. A null is not the same as an absent field, which is an

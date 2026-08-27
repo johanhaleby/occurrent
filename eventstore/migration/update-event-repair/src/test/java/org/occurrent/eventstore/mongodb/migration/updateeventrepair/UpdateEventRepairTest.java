@@ -43,6 +43,7 @@ import org.occurrent.eventstore.api.dcb.DcbCriteria;
 import org.occurrent.eventstore.api.dcb.DcbReadOptions;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.internal.OccurrentCloudEventMongoDocumentMapper;
 import org.occurrent.eventstore.mongodb.spring.blocking.EventStoreConfig;
 import org.occurrent.eventstore.mongodb.spring.blocking.SpringMongoEventStore;
@@ -391,6 +392,69 @@ class UpdateEventRepairTest {
                 () -> assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
                         .as("a negative position is not a value any store assigned, so it must be left as it was found")
                         .isEqualTo("-1")
+        );
+    }
+
+    @Test
+    void an_event_whose_position_is_above_the_store_counter_is_reported_rather_than_written_back() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        // Only an update function that set position itself produces this. A read clamps its upper bound to the same
+        // counter, so a position above it is as invisible as one at or below zero.
+        long ceiling = eventStore.currentPosition();
+        events().updateOne(new Document("id", "a"),
+                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(ceiling + 1000))));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_ABOVE_COUNTER),
+                () -> assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
+                        .as("a position the store never handed out must be left exactly as it was found")
+                        .isEqualTo(String.valueOf(ceiling + 1000)),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:1"))))
+                        .as("the event stays outside a DCB read either way, which is what makes writing the value back a lie rather than a partial fix")
+                        .isEmpty()
+        );
+    }
+
+    @Test
+    void a_position_at_the_store_counter_is_repaired_rather_than_called_forged() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .as("the event's own position equals the counter, so a ceiling check that used the wrong comparison would condemn every healthy repair")
+                        .isEmpty(),
+                () -> assertThat(dcbEventIds(DcbCriteria.tags(Tag.parse("name:1"))))
+                        .containsExactly("a")
+        );
+    }
+
+    @Test
+    void a_store_with_no_position_counter_has_no_ceiling_and_nothing_is_called_forged() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        // Without a counter there is no ceiling to compare against. Reading a missing counter as zero and treating
+        // zero as the ceiling would condemn every event in the collection at once.
+        database.getCollection(DcbMarkerModel.positionCollectionName(EVENT_COLLECTION))
+                .deleteOne(new Document("_id", DcbMarkerModel.POSITION_DOCUMENT_ID));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .as("a missing counter means the ceiling is unknown, which is not the same as a ceiling of zero")
+                        .isEmpty(),
+                () -> assertThat(result.eventsRepaired())
+                        .as("the repair must go ahead, since nothing about the event says its position is wrong")
+                        .isEqualTo(1)
         );
     }
 

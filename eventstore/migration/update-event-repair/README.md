@@ -109,6 +109,11 @@ none of the original's extensions, so no position was stored. The tool will not 
   every position query reads `position > 0`, so writing such a value back would count as a repair and leave the event
   just as invisible. Only an update function that forged the position produces this. Reported as
   `POSITION_NOT_POSITIVE`. The tag array is still rebuilt.
+- **A `position` string above the store's position counter.** The counter is the highest position the store ever
+  handed out, and a read clamps its upper bound to that same counter, so a value above it is as invisible as one at
+  or below zero, and a later append reaching that number would collide with it. Only an update function that forged
+  the position produces this. Reported as `POSITION_ABOVE_COUNTER`. The tag array is still rebuilt. A store with no
+  counter document has no ceiling to compare against, so nothing is reported on that ground.
 
 `eventsWithLostPosition()` on the result is separate from all of these. It is asked of the collection when the run
 finishes rather than tallied as the run goes, so it still counts an event whose tag array an earlier run rebuilt.
@@ -116,10 +121,11 @@ Rebuilding that array is what stops an event looking damaged, so without this nu
 clean collection while a position was still gone.
 
 A position the tool does restore is the value the document holds, not one it can check. The old write-back kept
-whatever position the update function returned, so a forged one was stored as a string like any other. The two cases
-above catch a forged value that another event already holds and one that is zero or negative. A positive value that
-happens to be free, in a gap in the sequence for instance, is indistinguishable from the event's own. The tool
-converts it to a number and counts a repair. If you ran an update function that set `position` itself, the tool
+whatever position the update function returned, so a forged one was stored as a string like any other. The cases
+above catch a forged value that another event already holds, one that is zero or negative, and one above the store's
+counter. What is left is a positive value inside the assigned range that happens to be free, in a gap in the sequence
+for instance, and nothing distinguishes it from the event's own. The tool converts it to a number and counts a
+repair. If you ran an update function that set `position` itself, the tool
 cannot tell you whether the value it restored is the one the event had, and nothing in the store can.
 
 Two kinds of damage are invisible to the tool, both from an update function that returned a replacement event built

@@ -35,6 +35,7 @@ import org.jspecify.annotations.Nullable;
 import org.occurrent.eventstore.api.dcb.DcbCloudEvents;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.mongodb.dcb.internal.DcbDocumentMapper;
+import org.occurrent.eventstore.mongodb.dcb.internal.DcbMarkerModel;
 import org.occurrent.eventstore.mongodb.dcb.internal.PositionDocumentMapper;
 import org.occurrent.retry.RetryStrategy;
 import org.slf4j.Logger;
@@ -82,10 +83,11 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * <p>
  * A position it does restore is the value the document holds, not one it can check. The old write-back kept whatever
  * position the update function returned, so a function that forged one left that number behind as a string like any
- * other. Two of those the tool still catches. A value another event already holds is refused by the unique index, and
- * zero or a negative value is a position no store assigns. A positive value that happens to be free, in a gap in the
- * sequence for instance, is indistinguishable from the event's own. The tool converts it to an int64 and counts a
- * repair, because nothing in the store records what the position was.
+ * other. Three of those the tool still catches. A value another event already holds is refused by the unique index,
+ * zero or a negative value is a position no store assigns, and a value above the store's position counter is one it
+ * never handed out. What is left is a positive value inside the assigned range that happens to be free, in a gap in
+ * the sequence for instance, and nothing distinguishes it from the event's own. The tool converts it to an int64 and
+ * counts a repair, because nothing in the store records what the position was.
  * <p>
  * Two kinds of damage cannot be seen at all, both from an update function that returned a replacement event built
  * from scratch. One drops the {@code dcbtags} extension, leaving a document that no longer looks like a DCB event
@@ -122,6 +124,7 @@ public final class UpdateEventRepair {
 
     private final MongoCollection<Document> eventCollection;
     private final MongoCollection<Document> checkpointCollection;
+    private final MongoCollection<Document> positionCounterCollection;
 
     /**
      * Retries every MongoDB operation with exponential backoff from 100 ms up to 2 seconds, so a transient outage
@@ -143,6 +146,7 @@ public final class UpdateEventRepair {
         this.options = requireNonNull(options, "options cannot be null");
         this.eventCollection = database.getCollection(eventStoreCollectionName);
         this.checkpointCollection = database.getCollection(checkpointCollectionName(eventStoreCollectionName));
+        this.positionCounterCollection = database.getCollection(DcbMarkerModel.positionCollectionName(eventStoreCollectionName));
     }
 
     /**
@@ -183,6 +187,9 @@ public final class UpdateEventRepair {
         }
         long repaired = 0;
         List<UnrecoverableEvent> unrecoverable = new ArrayList<>();
+        // Read once up front. A damaged event predates this run, since no version from 0.34.0 on can create one, so
+        // its position cannot exceed the counter as it stands now.
+        long positionCeiling = positionCeiling();
 
         while (true) {
             Object resumeAfter = lastProcessedId;
@@ -201,7 +208,7 @@ public final class UpdateEventRepair {
             long repairedInBatch = 0;
             for (Document event : batch) {
                 List<UnrecoverableEvent> found = new ArrayList<>(1);
-                if (repairEvent(event, found)) {
+                if (repairEvent(event, found, positionCeiling)) {
                     repaired++;
                     repairedInBatch++;
                 }
@@ -277,7 +284,7 @@ public final class UpdateEventRepair {
      * @return whether this call's update reached the event. A write the server applied and then failed to acknowledge
      * counts, since the retry that follows it repairs nothing only because the first attempt already did.
      */
-    private boolean repairEvent(Document event, List<UnrecoverableEvent> unrecoverable) {
+    private boolean repairEvent(Document event, List<UnrecoverableEvent> unrecoverable, long positionCeiling) {
         Object eventId = event.get(ID);
         Object storedPosition = event.get(POSITION);
         Object rawTags = event.get(DcbCloudEvents.TAGS);
@@ -302,7 +309,20 @@ public final class UpdateEventRepair {
             Long position;
             try {
                 long parsedPosition = Long.parseLong(positionAsString);
-                if (parsedPosition > 0) {
+                if (parsedPosition > positionCeiling && positionCeiling > 0) {
+                    // Above the counter is as unassignable as at or below zero, and just as invisible, because a
+                    // read clamps its upper bound to this same counter. It is re-read here rather than trusted from the
+                    // start of the run, so a store that wrote while the repair walked cannot have an event wrongly
+                    // called forged. A counter of zero means there is no counter document to compare against.
+                    long ceilingNow = positionCeiling();
+                    if (ceilingNow > 0 && parsedPosition > ceilingNow) {
+                        unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ABOVE_COUNTER,
+                                positionAsString + ", and the store's position counter is " + ceilingNow));
+                        position = null;
+                    } else {
+                        position = parsedPosition;
+                    }
+                } else if (parsedPosition > 0) {
                     position = parsedPosition;
                 } else {
                     // A store's positions start above zero, and getPosition returns zero for an event that has none,
@@ -366,6 +386,19 @@ public final class UpdateEventRepair {
                 return false;
             }
         });
+    }
+
+    /**
+     * The highest position the store has ever handed out, which is the ceiling on any position it assigned. Reads
+     * clamp their upper bound to this same counter, so an event above it is as invisible as one at or below zero.
+     *
+     * @return the counter, or {@code 0} when there is no counter document, which is the value the stores themselves
+     * fall back to and which this treats as "no ceiling known" rather than as a ceiling of zero.
+     */
+    private long positionCeiling() {
+        Document counter = withRetry(() -> positionCounterCollection.find(eq(ID, DcbMarkerModel.POSITION_DOCUMENT_ID)).first());
+        Object value = counter == null ? null : counter.get(DcbMarkerModel.COUNTER_POSITION);
+        return value instanceof Number number ? number.longValue() : 0;
     }
 
     private @Nullable Document loadCheckpoint() {

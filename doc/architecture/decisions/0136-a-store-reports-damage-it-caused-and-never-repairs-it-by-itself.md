@@ -119,7 +119,7 @@ CloudEvent extension, which is a genuine string and so came through the coercion
 `PositionDocumentMapper` and `DcbCloudEvents.decodeTags`, so a repaired event is what a running store would write,
 including an empty tag set rebuilding to an empty array rather than an array holding one empty string.
 
-It is not a general recovery, and it does not present itself as one. Four kinds of damage survive it, reported per
+It is not a general recovery, and it does not present itself as one. Five kinds of damage survive it, reported per
 event by `_id` rather than guessed at:
 
 - A position that was dropped entirely. An update function returning an event built from scratch had no position
@@ -130,8 +130,13 @@ event by `_id` rather than guessed at:
 - A `position` string that is not a number, which no known path produces and so points somewhere else.
 - A `position` string holding zero or a negative number. Positions start above zero, `getPosition` returns zero for
   an event that has none, and every position query reads `position > 0`, so no store assigns such a value. Writing it
-  back as an int64 would count as a repair and leave the event exactly as invisible, which is the worst of the two
+  back as an int64 would count as a repair and leave the event exactly as invisible, which is the worse of the two
   outcomes, a silent failure reported as a success.
+- A `position` string above the store's position counter. The counter is the highest position the store ever handed
+  out, and a read clamps its upper bound to it, so a value above it is unassignable and equally invisible, and a later
+  append reaching that number would collide with it. The counter is re-read before the event is reported, so a store
+  written to while the repair walked cannot have an event wrongly condemned, and a store with no counter document has
+  no ceiling and is never reported on that ground.
 
 A completed run reports the events left without a position by asking the collection, not by adding up what the walk
 saw. Rebuilding a lost-position event's tag array is what stops it matching the damaged-event filter, so a run killed
