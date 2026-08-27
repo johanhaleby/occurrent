@@ -49,7 +49,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * An event that keeps failing for one instance is quarantined rather than retried forever. The first failure records
  * when the failing started and rethrows, which is what every version up to 0.33.0 did. Once the failing has lasted
  * at least {@link SagaRunnerConfig#quarantineAfter()}, the instance is marked
- * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} at that event's position and this class returns normally, so the
+ * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} on that event and this class returns normally, so the
  * subscription acknowledges the event and the saga's other instances stop waiting behind it.
  * <p>
  * Dispatch amplification: commands are dispatched before the save, and a lost compare-and-set retries the whole step, so a

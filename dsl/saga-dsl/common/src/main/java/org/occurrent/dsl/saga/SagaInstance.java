@@ -40,7 +40,7 @@ public interface SagaInstance {
     /** The instance id, which is the saga's correlation id. */
     String sagaId();
 
-    /** Whether the instance is still running or has completed. */
+    /** Whether the instance is running, has completed, or has stopped on an input it could not handle. */
     SagaStatus status();
 
     /** Whether the instance has completed. A completed instance holds no timers and ignores further events. */
@@ -60,10 +60,10 @@ public interface SagaInstance {
     /** When the instance was created, or {@code null} if the store did not record it. */
     @Nullable Instant createdAt();
 
-    /** When the instance was last saved, which is when it last folded an event or fired a timer. */
+    /** When the instance was last saved, which is when it last handled an input or recorded a failure. */
     @Nullable Instant updatedAt();
 
-    /** When the instance completed, or {@code null} while it is still active. */
+    /** When the instance completed, or {@code null} when it has not, which includes a quarantined one. */
     @Nullable Instant completedAt();
 
     /**

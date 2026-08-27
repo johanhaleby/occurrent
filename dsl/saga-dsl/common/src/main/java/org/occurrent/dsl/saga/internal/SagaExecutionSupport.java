@@ -105,10 +105,10 @@ public final class SagaExecutionSupport {
                                                                            SagaInput<E> input,
                                                                            EventMeta meta,
                                                                            Instant now) {
-        // Whether onStart has ever run, which is not the same question as whether a document exists. An instance whose
-        // very first event failed has an envelope holding nothing but that failure. Keying on the document would leave
-        // such an instance permanently "already started", so a later redelivery of its start event would skip onStart
-        // with nothing anywhere saying so.
+        // Whether a start transition was saved, which is neither "onStart was called" nor "a document exists". An
+        // instance whose very first event failed has an envelope holding nothing but that failure. Keying on the
+        // document would leave such an instance permanently "already started", so a later redelivery of its start event
+        // would skip onStart with nothing anywhere saying so.
         boolean hasStarted = current != null && current.started();
         @Nullable E startEvent = startEventOrNull(saga, hasStarted, input);
         if (!hasStarted && startEvent == null) {

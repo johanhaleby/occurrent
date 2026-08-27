@@ -42,10 +42,11 @@ import static java.util.Objects.requireNonNull;
  * @param createdAt         when the instance was created
  * @param updatedAt         when the instance was last saved
  * @param completedAt       when the instance completed, or {@code null} while active
- * @param started           whether {@code onStart} has ever run for this instance. Almost always {@code true}: it is
- *                          {@code false} only for an instance whose very first event failed, which is recorded against
- *                          an envelope that exists purely to hold that record. Start detection reads this rather than
- *                          whether a document exists, so a later redelivery of its start event still runs onStart.
+ * @param started           whether a start transition has been saved for this instance, which is not the same as
+ *                          whether {@code onStart} was ever called. An instance whose very first event failed after
+ *                          {@code onStart} had run still saves {@code false}, because the transition it belonged to
+ *                          was never saved, so the whole start is retried on a later redelivery. Start detection reads
+ *                          this rather than whether a document exists
  * @param failure           the input this instance is failing on, or {@code null} when it is not failing on anything.
  *                          Present from the first failure onwards, so it outlives a single attempt; {@code status}
  *                          says whether the failing has lasted past the runner's quarantine budget
@@ -112,7 +113,7 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         return status == SagaStatus.COMPLETED;
     }
 
-    /** Whether the instance is quarantined at the position of an input it could not handle. */
+    /** Whether the instance is quarantined on an input it could not handle. */
     public boolean isQuarantined() {
         return status == SagaStatus.QUARANTINED;
     }
