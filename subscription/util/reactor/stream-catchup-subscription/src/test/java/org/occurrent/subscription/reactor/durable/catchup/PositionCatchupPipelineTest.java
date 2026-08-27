@@ -61,11 +61,12 @@ class PositionCatchupPipelineTest {
     void a_low_position_event_that_commits_after_the_handover_advanced_past_it_is_still_delivered_exactly_once() {
         // The bulk read sees positions 1..5 but position 2 was reserved before commit (ADR 45) and had not committed
         // yet when the forward-only replay passed it, so the replay never reads it. The head does not move, so
-        // reconcile adds nothing. The live change stream, resuming from the pre-bulk token, re-delivers the boundary
-        // events (e4, e5, already in the dedup set) and the late e2 (not in the set). A position-watermark dedup that
-        // dropped live events with position <= 5 would drop e2 and lose it. Id-based dedup delivers it exactly once.
+        // reconcile adds nothing. The live stream carries only e2, because the resume checkpoint is taken before the
+        // replay and lands strictly past every event committed by then, so e4 and e5 are outside its range. A
+        // position-watermark dedup that dropped live events with position <= 5 would drop e2 and lose it. Id-based
+        // dedup delivers it exactly once.
         FakeReader reader = FakeReader.withEventsAt(1, 3, 4, 5).head(5);
-        FakeLiveSource live = new FakeLiveSource(events("e4", "e5", "e2"));
+        FakeLiveSource live = new FakeLiveSource(events("e2"));
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
 
         StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, 0).map(CloudEvent::getId))
@@ -74,11 +75,46 @@ class PositionCatchupPipelineTest {
     }
 
     @Test
+    void a_history_event_whose_write_committed_after_the_head_read_is_delivered_again_by_the_live_stream() {
+        // The #891 shape. e5 held a position at or below the head and committed after the head was read, so the
+        // history window reads it even though it is not history. Nothing the history read delivers is recorded, so
+        // the live delivery is the only one a recording projection can act on and the dedup must not suppress it.
+        // Feed the cache from the history windows again and e5 arrives once, during the replay, and is never
+        // recorded, which is the defect.
+        FakeReader reader = FakeReader.withEventsInRange(1, 5).head(5);
+        FakeLiveSource live = new FakeLiveSource(events("e5"));
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.catchup(live, LIVE_FILTER, DELIVER_EVERYTHING, 0).map(CloudEvent::getId))
+                .expectNext("e1", "e2", "e3", "e4", "e5", "e5")
+                .verifyComplete();
+    }
+
+    @Test
+    void the_named_catch_up_path_keeps_the_history_ids_out_of_the_cache() {
+        // replayApplying is what every named subscription runs through, so it is what a recording projection runs
+        // through, and the test above only covers the cold catchup(..) entry point. Cache a history id here and the
+        // live delivery of a write that was still in flight when the head was read is dropped, which is #891.
+        FakeReader reader = FakeReader.withEventsInRange(1, 4).headSupplier(headsOf(2, 4));
+        BoundedIdCache cache = new BoundedIdCache(1000);
+        PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 1000);
+
+        StepVerifier.create(pipeline.replayApplying(0, cache, () -> true, event -> Mono.empty(), () -> {
+        })).verifyComplete();
+
+        assertThat(cache.contains("e1")).as("read by a history window").isFalse();
+        assertThat(cache.contains("e2")).as("read by a history window").isFalse();
+        assertThat(cache.contains("e3")).as("read by the reconciliation window").isTrue();
+        assertThat(cache.contains("e4")).as("read by the reconciliation window").isTrue();
+    }
+
+    @Test
     void an_overlap_larger_than_the_old_1000_cap_delivers_each_event_exactly_once_when_the_ceiling_covers_it() {
-        // The replay emits 2000 events and the live stream re-delivers the newest 1500 of them, an overlap far past the
-        // old fixed 1000 cap. With a ceiling that covers the overlap the whole re-delivery is deduped, so every event
-        // is delivered exactly once.
-        FakeReader reader = FakeReader.withEventsInRange(1, 2000).head(2000);
+        // The head is 500 when the replay starts and 2000 when reconcile snapshots it, so 1500 events were written
+        // during the replay and the reconciliation pass reads them. Those are the events the live stream re-delivers,
+        // since they committed after the resume checkpoint, and the reconciliation pass is what fills the cache. The
+        // overlap is far past the old fixed 1000 cap, and with a ceiling that covers it every event arrives once.
+        FakeReader reader = FakeReader.withEventsInRange(1, 2000).headSupplier(headsOf(500, 2000));
         FakeLiveSource live = new FakeLiveSource(eventsInRange(501, 2000));
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 5000);
 
@@ -91,10 +127,11 @@ class PositionCatchupPipelineTest {
 
     @Test
     void an_overlap_beyond_the_ceiling_may_be_delivered_more_than_once_but_is_never_lost() {
-        // The overlap (500 re-delivered) exceeds the ceiling (100), so the oldest ids were evicted from the dedup set
-        // and are re-delivered. Eviction can only cause a duplicate, never a loss, so every event still appears at
-        // least once.
-        FakeReader reader = FakeReader.withEventsInRange(1, 500).head(500);
+        // Everything here was written during the replay, so the head is 0 at the start and 500 when reconcile
+        // snapshots it, and all 500 events come through the reconciliation pass that fills the cache. The overlap of
+        // 500 re-delivered exceeds the ceiling of 100, so the oldest ids were evicted and are re-delivered. Eviction
+        // can only cause a duplicate, never a loss, so every event still appears at least once.
+        FakeReader reader = FakeReader.withEventsInRange(1, 500).headSupplier(headsOf(0, 500));
         FakeLiveSource live = new FakeLiveSource(eventsInRange(1, 500));
         PositionCatchupPipeline pipeline = new PositionCatchupPipeline(reader, 1000, 100);
 
@@ -119,6 +156,13 @@ class PositionCatchupPipelineTest {
                 .expectNextSequence(idsInRangeList(1, 20))
                 .expectNext("live-1")
                 .verifyComplete();
+    }
+
+    // Answers the head reads in order, so a test can put a chosen number of events into the reconciliation pass
+    // rather than the history pass. The pipeline reads the head once for the bulk phase and once for reconcile.
+    private static LongSupplier headsOf(long bulkHead, long reconcileHead) {
+        AtomicBoolean bulkHeadRead = new AtomicBoolean(false);
+        return () -> bulkHeadRead.compareAndSet(false, true) ? bulkHead : reconcileHead;
     }
 
     private static LongSupplier advancingBy(long step) {

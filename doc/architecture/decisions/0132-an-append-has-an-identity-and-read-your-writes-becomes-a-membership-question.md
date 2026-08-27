@@ -624,13 +624,15 @@ separately.
   send the signals.
 - An append the projection applied during the second part of a catch-up is recorded, which closes the window
   [#890](https://github.com/johanhaleby/occurrent/issues/890) reported, where such an append could never be recorded
-  by any path and a wait for it never finished. Two losses remain and are worth naming rather than leaving to be
-  rediscovered. On the reactor stack a write whose position was reserved before the replay read the head, and that
-  committed after it, can still be read by a history window, and the reactor replay puts every id it reads into the
-  same cache its live delivery filters on, so no second delivery follows and that append is not recorded.
-  [#891](https://github.com/johanhaleby/occurrent/issues/891) tracks it. The blocking stacks do not have it, because
-  their history reads do not populate that cache and a second delivery follows. The other loss is the bound in
-  decision 7, an append dropped from the wait while a clear keeps failing.
+  by any path and a wait for it never finished. One loss remains, the bound in decision 7, an append dropped from
+  the wait while a clear keeps failing.
+
+  This bullet named a second one, on the reactor stack, where a write whose position was reserved before the replay
+  read the head and that committed after it could be read by a history window, with the reactor replay putting every
+  id it reads into the same cache its live delivery filters on, so no second delivery followed and that append was
+  never recorded. [#891](https://github.com/johanhaleby/occurrent/issues/891) reported it and
+  [ADR 135](0135-the-reactive-handover-dedup-is-fed-only-by-the-reconciliation-read.md) closed it, by having the
+  reactor history windows fill no cache, which is what the blocking stacks already did.
 - Closing it needed no ordering rule and no position comparison, which is what made it closable at all. A delivery is
   classified by which read produced it, and every closure that classified by position ran into what ADR 122 refuted.
 - Widening the two result records breaks external code two ways, and only one of them announces itself. An

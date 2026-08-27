@@ -47,8 +47,9 @@ import static java.util.Objects.requireNonNull;
  * The handover preserves the central invariant of the blocking catch-up. The live change-stream resume token is captured
  * before the bulk replay, not after, so a DCB event that commits during the replay is still delivered by the live
  * subscription. The replay pages the sequence in {@code position} windows (no count and no time sort, because
- * {@code position} is monotonic and server-assigned), then a reconciliation pass keeps paging until the head stops
- * advancing to deliver events written during the replay in order. The handover seam is deduplicated with a bounded id
+ * {@code position} is monotonic and server-assigned), then a reconciliation pass reads the head once more and drains
+ * up to that snapshot, delivering events written during the replay in order without letting a continuous write rate
+ * keep it from handing over. The handover seam is deduplicated with a bounded id
  * cache so a reconciliation event the live subscription also sees is delivered once.
  * <p>
  * Trade-off: if the replay runs longer than the change stream history (the MongoDB oplog window), the captured token
@@ -73,12 +74,12 @@ class ReactorDcbCatchupSubscriptionModel implements CheckpointAwareSubscriptionM
      */
     public static final long DEFAULT_POSITION_WINDOW_SIZE = 1000;
     /**
-     * Default ceiling on the number of event ids kept to dedupe the replay-to-live handover. Grows to cover the
-     * replay-to-live overlap (bounded by write volume during replay, not total history) and evicts oldest-first
-     * past this ceiling. Exceeding it causes extra duplicate deliveries, never loss (at-least-once); raise it to
-     * cut duplicates on a large rebuild or lower it to cap memory (each id is a short string). Well above the
-     * previous {@code 1000} so a rebuild under heavy concurrent writes no longer evicts the overlap before live
-     * re-delivers it.
+     * Default ceiling on the number of event ids kept to dedupe the replay-to-live handover. Only the reconciliation
+     * pass fills it, so it grows with what was written during the replay rather than with total history, and it
+     * evicts oldest-first past this ceiling. Exceeding it causes extra duplicate deliveries, never loss
+     * (at-least-once). Raise it to cut duplicates on a large rebuild, or lower it to cap memory, since each id is a
+     * short string. Well above the previous {@code 1000} so a rebuild under heavy concurrent writes no longer evicts
+     * the overlap before live re-delivers it.
      */
     public static final int DEFAULT_HANDOVER_CACHE_SIZE = 100_000;
 
