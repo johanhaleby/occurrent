@@ -75,8 +75,13 @@ class ReactiveMongoAppliedAppendStoreRecordAppliedRetryTest {
         verify(mongoOperations, times(2)).upsert(any(Query.class), any(UpdateDefinition.class), anyString());
     }
 
+    /**
+     * ADR 132 decision 5 asks for a retry so a transient outage does not fail a wait, not for one that never gives
+     * up, and the number of attempts it does give up after is {@code ReactiveMongoAppliedAppendStoreBoundsTest}'s.
+     * Seven failures in a row is well inside that, and well past the five attempts this default once stopped at.
+     */
     @Test
-    void the_default_retry_survives_more_failures_than_its_old_five_attempt_cap_because_adr_132_requires_an_unbounded_retry_on_both_stacks() {
+    void the_default_retry_rides_out_seven_failures_in_a_row_rather_than_giving_up_after_a_handful() {
         int failuresBeforeSuccess = 7;
         ReactiveMongoOperations mongoOperations = mock(ReactiveMongoOperations.class);
         ReactiveIndexOperations indexOperations = mock(ReactiveIndexOperations.class);

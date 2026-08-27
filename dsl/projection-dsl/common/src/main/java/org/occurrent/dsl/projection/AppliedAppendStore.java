@@ -21,6 +21,8 @@ import org.occurrent.eventstore.api.AppendId;
 import org.occurrent.retry.Backoff;
 
 import java.time.Duration;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -132,6 +134,25 @@ public interface AppliedAppendStore {
      * {@link #hasApplied(String, AppendId)} throws counts as not yet applied, so a store failure keeps the wait
      * polling toward its deadline rather than ending it, the same absorb-and-poll behavior the Mongo stores
      * establish with their own {@code RetryStrategy}.
+     * <p>
+     * A wait always reads at least once before it honours {@code timeout}, so a timeout of zero, or one a caller
+     * computed from a budget that has already run out, still asks the store rather than answering {@code false}
+     * without looking. That much every implementation owes.
+     * <p>
+     * What an implementation does with a read slower than the time left is its own choice, and the three in this
+     * repository choose differently. This default loop checks the deadline between polls and never during one, so
+     * it returns after {@code timeout} plus however long the {@link #hasApplied(String, AppendId)} already running
+     * takes to answer, which for {@link #inMemory()} is a map lookup and no difference at all. The blocking Mongo
+     * store does the same, because it cannot cancel a read it has started. The reactive Mongo store can cancel one,
+     * and does, so it returns within {@code timeout} and answers {@code false} for an append it would have found
+     * had it waited longer. Neither answer is free, and a caller who needs the answer more than the deadline reads
+     * {@link #hasApplied(String, AppendId)} directly, which has no deadline to cut it short.
+     * <p>
+     * The read this method must make is the exception to all of that, on every implementation, because a
+     * {@code timeout} of zero or one that has already elapsed leaves no remaining time to cut it short with. It
+     * runs with the same absence of a deadline {@link #hasApplied(String, AppendId)} runs with, so it ends when the
+     * store's client gives up, and against a connection that has stopped responding with no client timeout
+     * configured it does not end. Limiting the wall clock is the client's job on that path, and only the client's.
      *
      * @param appendId the append to wait for, never {@code null}. An append that persisted no events has no
      *                 identity to wait for in the first place, see {@code WriteResult}/{@code DcbAppendResult}.
@@ -181,18 +202,56 @@ public interface AppliedAppendStore {
     }
 
     /**
+     * How many recorded appends {@link #inMemory()} keeps per projection, 10,000. Ten times the number of appends
+     * the recording wrapper lets wait for a clear before it drops the oldest, and far more than a wait measured in
+     * seconds can still be looking for.
+     */
+    int DEFAULT_IN_MEMORY_MAX_RECORDED_APPENDS_PER_PROJECTION = 10_000;
+
+    /**
      * An {@code AppliedAppendStore} backed by a plain map, for tests and single-process applications with no store
-     * of their own to persist the recorded appends in. Recorded appends do not survive a restart.
+     * of their own to persist the recorded appends in. Keeps
+     * {@value #DEFAULT_IN_MEMORY_MAX_RECORDED_APPENDS_PER_PROJECTION} recorded appends per projection, see
+     * {@link #inMemory(int)} to choose a different number. Recorded appends do not survive a restart.
      */
     static AppliedAppendStore inMemory() {
+        return inMemory(DEFAULT_IN_MEMORY_MAX_RECORDED_APPENDS_PER_PROJECTION);
+    }
+
+    /**
+     * As {@link #inMemory()}, keeping {@code maxRecordedAppendsPerProjection} recorded appends per projection.
+     * Recording one more than that evicts the projection's oldest recorded append, and a wait for an evicted append
+     * times out, the same answer the Mongo stores give for a record their TTL index has expired.
+     * <p>
+     * Nothing limits how many projections the store holds appends for, since a projection id comes from the
+     * application's own configuration rather than from anything it records.
+     *
+     * @param maxRecordedAppendsPerProjection how many appends each projection keeps, at least 1.
+     */
+    static AppliedAppendStore inMemory(int maxRecordedAppendsPerProjection) {
+        if (maxRecordedAppendsPerProjection < 1) {
+            throw new IllegalArgumentException("maxRecordedAppendsPerProjection must be at least 1, a store that keeps no append at all answers false for one it was just told about.");
+        }
         return new AppliedAppendStore() {
             private final Map<String, Set<AppendId>> applied = new ConcurrentHashMap<>();
+
+            // Insertion-ordered rather than access-ordered, so a read never lets a newer append outlive an older
+            // one. Evicting oldest first is what the Mongo stores' TTL index does.
+            private Set<AppendId> boundedSet() {
+                Map<AppendId, Boolean> bounded = new LinkedHashMap<>() {
+                    @Override
+                    protected boolean removeEldestEntry(Map.Entry<AppendId, Boolean> eldest) {
+                        return size() > maxRecordedAppendsPerProjection;
+                    }
+                };
+                return Collections.newSetFromMap(Collections.synchronizedMap(bounded));
+            }
 
             @Override
             public void recordApplied(String projectionId, AppendId appendId) {
                 requireNonNull(projectionId, "projectionId cannot be null");
                 requireNonNull(appendId, "appendId cannot be null");
-                applied.computeIfAbsent(projectionId, __ -> ConcurrentHashMap.newKeySet()).add(appendId);
+                applied.computeIfAbsent(projectionId, __ -> boundedSet()).add(appendId);
             }
 
             @Override

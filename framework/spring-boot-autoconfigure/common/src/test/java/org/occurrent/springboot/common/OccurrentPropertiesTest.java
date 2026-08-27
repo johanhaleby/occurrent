@@ -327,4 +327,68 @@ class OccurrentPropertiesTest {
             assertThat(subscription.isRestartOnChangeStreamHistoryLost()).isTrue();
         }
     }
+
+    @Nested
+    class The_applied_append_attempt_limit {
+
+        @Test
+        void defaults_to_ten_attempts() {
+            OccurrentProperties properties = new OccurrentProperties();
+
+            assertThat(properties.getProjection().getAppliedAppend().getMaxAttempts()).isEqualTo(10);
+        }
+
+        @Test
+        void rejects_zero_because_a_store_that_is_never_called_records_nothing() {
+            OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =
+                    new OccurrentProperties().getProjection().getAppliedAppend();
+
+            assertThatThrownBy(() -> appliedAppend.setMaxAttempts(0))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("occurrent.projection.applied-append.max-attempts");
+        }
+
+        @Test
+        void rejects_a_negative_number_of_attempts() {
+            OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =
+                    new OccurrentProperties().getProjection().getAppliedAppend();
+
+            assertThatThrownBy(() -> appliedAppend.setMaxAttempts(-1))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("at least 1");
+        }
+
+        @Test
+        void rejects_more_attempts_than_the_store_would_ever_make() {
+            OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =
+                    new OccurrentProperties().getProjection().getAppliedAppend();
+
+            assertThatThrownBy(() -> appliedAppend.setMaxAttempts(
+                    OccurrentProperties.ProjectionProperties.AppliedAppendProperties.MAX_ATTEMPTS_CEILING + 1))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot exceed 1000")
+                    .hasMessageContaining("1001");
+        }
+
+        @Test
+        void allows_exactly_the_ceiling_the_store_stops_an_unstopping_policy_at() {
+            OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =
+                    new OccurrentProperties().getProjection().getAppliedAppend();
+            int ceiling = OccurrentProperties.ProjectionProperties.AppliedAppendProperties.MAX_ATTEMPTS_CEILING;
+
+            appliedAppend.setMaxAttempts(ceiling);
+
+            assertThat(appliedAppend.getMaxAttempts()).isEqualTo(ceiling);
+        }
+
+        @Test
+        void allows_a_single_attempt_meaning_no_retry_at_all() {
+            OccurrentProperties.ProjectionProperties.AppliedAppendProperties appliedAppend =
+                    new OccurrentProperties().getProjection().getAppliedAppend();
+
+            appliedAppend.setMaxAttempts(1);
+
+            assertThat(appliedAppend.getMaxAttempts()).isEqualTo(1);
+        }
+    }
 }
