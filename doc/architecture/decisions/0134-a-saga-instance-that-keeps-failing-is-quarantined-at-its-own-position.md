@@ -185,6 +185,13 @@ The identity of "the same input" is the redelivery key `EventMeta` already compu
 or the global position. An input the saga cannot recognise a redelivery of is already refused or warned about by
 ADR 109's `RedeliveryDetection`, so nothing new is needed there.
 
+**That key is also what the executor gates on, rather than the presence of a global position.** An event store that
+assigns no position, one built with `withoutStreamPosition()` or an upgrade where stream position stays disabled on an
+existing collection, still gives every event a stream id and a stream version. Gating on a position would leave
+quarantine inert for such a store while the startup gate reported quarantine as available, because whether a
+subscription model can be repositioned is a question about the model and not about what its events hold. The recorded
+position is therefore nullable, and it is a convenience beside the key rather than the thing that identifies the event.
+
 ### 4. An instance that has never started needs start detection to stop keying on document existence
 
 A start event whose `evolve` or `onStart` throws has no envelope to record anything against, so the first failure
@@ -232,8 +239,9 @@ answer, which its own javadoc states as whether the instance is still running an
 Discovery therefore needs no new query. `SagaInstances.findByStatus(QUARANTINED, Instant.now(), limit)` is the
 existing enumeration, and the Spring stack already publishes a `SagaInstances` per saga.
 
-`SagaInstance` gains one nullable accessor returning the quarantine record, holding the position the instance stopped
-at, the failing exception's class name and message, and when it started failing. The narrowness rule from ADR 70
+`SagaInstance` gains one nullable accessor returning the quarantine record, holding the redelivery key of the input
+the instance stopped on, its position where the store assigns one, the failing exception's class name and message, and
+when it started failing. The narrowness rule from ADR 70
 holds. The event payload and the stack trace stay out, because neither is lifecycle.
 
 Two implementation constraints follow from ADR 70's invariant that every envelope answers every `SagaInstance`

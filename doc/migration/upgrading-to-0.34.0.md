@@ -683,12 +683,19 @@ whatever fed it, and on a push feed behind a broker bridge that is what stages t
 The one copy this saga could ever be given would be gone at the moment of quarantine. Between an instance that blocks
 and an event that cannot be asked for again, this keeps the event.
 
-An event with no global position is never quarantined either. The failure record holds that position so you can find
-the event the instance stopped on, and refusing to quarantine keeps the 0.33.0 behaviour, which loses nothing.
+**An event with no redelivery key is not quarantined either.** The failure record identifies the failing event by its
+stream id with its stream version, or by its global position when it has no stream metadata. An event with neither
+cannot be told apart from its own redelivery, so the budget could never elapse for it, and the saga keeps the 0.33.0
+behaviour of blocking.
 
-Two setups reach that case. A stream-only event store built with `EventStoreConfig.Builder.withoutStreamPosition()`
-writes events with no global position, so a saga running against such a store keeps blocking however the budget is set.
-So does a feed that drops the CloudEvent extensions on the way in.
+A feed that drops the Occurrent CloudEvent extensions on the way in is how an event ends up like that.
+`SagaRunnerConfig.redeliveryDetection` already refuses such an event under `REQUIRED`, its default, before the saga
+sees it, so you reach this case only after setting that to `BEST_EFFORT`.
+
+An event store that assigns no global position is not one of these cases. A store built with
+`EventStoreConfig.Builder.withoutStreamPosition()`, and an upgrade where stream position stays disabled on an existing
+collection, both still give every event a stream id and a stream version, so a saga on such a store quarantines like
+any other and `SagaInstance.failure().position()` answers `null` for it.
 
 ### The five breaks
 
@@ -708,9 +715,9 @@ stuck.addAll(instances.findByStatus(SagaStatus.QUARANTINED, Instant.now(), 100))
 ```
 
 **`SagaInstance` gains a `failure()` method,** which breaks anyone implementing that interface outside this
-repository. It tells you what a quarantined instance stopped on, which is the failing event's position, the
-exception's class name and message, and when the failing started, and it answers `null` for an instance that is
-failing on nothing. `SagaEnvelope` implements it from its new `failure` component, so a store that carries that
+repository. It tells you what a quarantined instance stopped on, which is the failing event's redelivery key with its
+position beside it when the store assigns one, the exception's class name and message, and when the failing started,
+and it answers `null` for an instance that is failing on nothing. `SagaEnvelope` implements it from its new `failure` component, so a store that carries that
 component answers it for free.
 
 **`SagaEnvelope` gains two record components, `started` and `failure`,** which changes its canonical constructor and
