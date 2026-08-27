@@ -168,6 +168,19 @@ rather than something to retry. Losing it means another input advanced the insta
 likely a timer that fired successfully, so the failing input is now being applied to different state and may well
 succeed. The failure record is therefore discarded on a lost compare-and-set and the budget starts over.
 
+**Only the input a record names clears it, and the paragraph above reasoned about a timer that fires once.** A saga
+re-arms its timers explicitly, with a `StartTimeout` effect from a reaction, so a timer can fire far more often than
+the budget. Clearing the record on any successful input then puts the clock back to zero on every tick, and an event
+that never succeeds never reaches the budget, so it keeps blocking every other instance of that saga. That is the
+block this decision exists to remove, so a record now survives an input it does not name, `firstFailedAt` included,
+and only the failing input getting through clears it. `SagaFailure`'s own contract already said this, and the first
+implementation was what disagreed.
+
+The reasoning that a state change may unblock the event still holds, because the event is still redelivered and still
+clears the record when it succeeds. What the narrower rule removes is an unrelated input's ability to hide an event
+that never succeeds. So a lost compare-and-set on the failure write starts the budget over only for the first failure
+of an input, which has no record to keep, and a later one keeps the record the winning write left in place.
+
 The identity of "the same input" is the redelivery key `EventMeta` already computes, the stream id with its version,
 or the global position. An input the saga cannot recognise a redelivery of is already refused or warned about by
 ADR 109's `RedeliveryDetection`, so nothing new is needed there.

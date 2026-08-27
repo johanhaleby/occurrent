@@ -317,7 +317,7 @@ class SagaQuarantineSupportTest {
     class AnActiveInstance {
 
         @Test
-        void clears_a_failure_record_as_soon_as_any_input_gets_through() {
+        void clears_a_failure_record_when_the_input_it_names_gets_through() {
             SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minusSeconds(30)));
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
@@ -326,6 +326,53 @@ class SagaQuarantineSupportTest {
             assertAll(
                     () -> assertThat(outcome.processed()).isTrue(),
                     () -> assertThat(outcome.envelope().failure()).isNull()
+            );
+        }
+
+        @Test
+        void keeps_the_record_when_a_timer_fires_successfully_while_the_event_keeps_failing() {
+            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(4))));
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    saga(), "o1", failing, SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(TIMER))), EventMeta.NONE, NOW);
+
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.envelope().failure()).isNotNull(),
+                    () -> assertThat(outcome.envelope().failure().input()).isEqualTo("o1@7"),
+                    () -> assertThat(outcome.envelope().failure().firstFailedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(4)))
+            );
+        }
+
+        @Test
+        void keeps_the_record_when_a_different_event_gets_through() {
+            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(4))));
+
+            Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
+                    saga(), "o1", failing, SagaInput.event(new PaymentReserved("o1")), at(8), NOW);
+
+            assertAll(
+                    () -> assertThat(outcome.processed()).isTrue(),
+                    () -> assertThat(outcome.envelope().failure().input()).isEqualTo("o1@7"),
+                    () -> assertThat(outcome.envelope().failure().firstFailedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(4)))
+            );
+        }
+
+        @Test
+        void still_reaches_the_budget_after_a_timer_fired_so_a_recurring_timer_cannot_hide_a_poison_event() {
+            // The whole point of #818. A saga that re-arms a timer more often than the budget used to reset the clock on
+            // every tick, so the event never quarantined and every other instance stayed blocked behind it.
+            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(5))));
+
+            SagaEnvelope<OrderState> afterTimer = SagaExecutionSupport.process(
+                    saga(), "o1", failing, SagaInput.timeout(new SagaTimeout("o1", TimerName.parse(TIMER))), EventMeta.NONE, NOW).envelope();
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", afterTimer, at(7), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertAll(
+                    () -> assertThat(record).isNotNull(),
+                    () -> assertThat(record.quarantined()).isTrue(),
+                    () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.QUARANTINED)
             );
         }
     }

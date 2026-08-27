@@ -182,9 +182,7 @@ public final class SagaExecutionSupport {
                 // Derived from nextState by the envelope's constructor; nothing sensible to pass here.
                 null,
                 true,
-                // An input that got through clears the failure record. The budget is about an input that keeps
-                // failing, so any input the instance handles ends it.
-                null);
+                failureAfter(current, meta));
         return Outcome.processed(next, commands, expectedVersion);
     }
 
@@ -256,6 +254,17 @@ public final class SagaExecutionSupport {
         // another is still the same input failing, and the later exception is the more useful one to read.
         SagaFailure record = new SagaFailure(input, position, existing.firstFailedAt(), failure.getClass().getName(), failure.getMessage());
         return failureRecord(saga, sagaId, current, record, SagaStatus.QUARANTINED, now, true);
+    }
+
+    // Only the input the record names clears it. Letting any successful input clear it lets a saga that re-arms a timer
+    // more often than the budget reset the clock forever, so an event that never succeeds never reaches the budget and
+    // keeps blocking every other instance. A timer has no redelivery key, so it never matches.
+    private static <S extends @Nullable Object> @Nullable SagaFailure failureAfter(@Nullable SagaEnvelope<S> current, EventMeta meta) {
+        SagaFailure existing = current == null ? null : current.failure();
+        if (existing == null) {
+            return null;
+        }
+        return existing.input().equals(redeliveryKeyOf(meta)) ? null : existing;
     }
 
     /** The redelivery key that identifies one input, read the same way round as {@link #isRedelivery}. */
