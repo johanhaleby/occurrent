@@ -50,8 +50,10 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
     public SagaRunnerConfig {
         requireNonNull(timerPollInterval, "timerPollInterval cannot be null");
         requireNonNull(redeliveryDetection, "redeliveryDetection cannot be null");
-        if (quarantineAfter != null && quarantineAfter.isNegative()) {
-            throw new IllegalArgumentException("quarantineAfter cannot be negative");
+        if (quarantineAfter != null && (quarantineAfter.isZero() || quarantineAfter.isNegative())) {
+            // Zero is refused rather than read as "quarantine on the first failure", because the Spring property reads
+            // zero as never, and one literal meaning opposite things on the two paths is worse than refusing it here.
+            throw new IllegalArgumentException("quarantineAfter must be positive, or null to keep rethrowing forever");
         }
         if (timerPollInterval.isZero() || timerPollInterval.isNegative()) {
             throw new IllegalArgumentException("timerPollInterval must be positive");

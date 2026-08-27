@@ -52,6 +52,15 @@ class SagaQuarantineBudgetPropertyTest {
     }
 
     @Test
+    void refuses_a_zero_budget_passed_straight_to_the_config_rather_than_quarantining_on_the_first_failure() {
+        // The property reads zero as never, so accepting it here as "quarantine immediately" would make one literal
+        // mean opposite things depending on how the saga was configured.
+        assertThatThrownBy(() -> SagaRunnerConfig.defaults().withQuarantineAfter(Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("quarantineAfter must be positive");
+    }
+
+    @Test
     void reads_zero_as_the_pre_0_34_0_behaviour_of_retrying_forever() {
         assertThat(SagaAnnotationRegistrar.quarantineBudgetOf(Duration.ZERO)).isNull();
     }
@@ -64,7 +73,7 @@ class SagaQuarantineBudgetPropertyTest {
                 () -> assertThat(SagaAnnotationRegistrar.quarantineBudgetOf(negative)).isEqualTo(negative),
                 () -> assertThatThrownBy(() -> SagaRunnerConfig.defaults().withQuarantineAfter(negative))
                         .isInstanceOf(IllegalArgumentException.class)
-                        .hasMessageContaining("quarantineAfter cannot be negative")
+                        .hasMessageContaining("quarantineAfter must be positive")
         );
     }
 }
