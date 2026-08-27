@@ -23,6 +23,7 @@ import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 
@@ -49,12 +50,24 @@ public final class SagaExecutionSupport {
         public static final EventMeta NONE = new EventMeta(null, null, null);
 
         /**
-         * Whether this carries enough to tell a redelivery from a new event, which is a stream id together with a
-         * stream version, or a position. {@code isRedelivery} looks at the same two things, so the rule lives here
-         * instead of being written twice.
+         * The string that identifies this input across redeliveries, which is the stream id with its stream version
+         * when both are present and the global position otherwise, or {@code null} when the event carries neither.
+         * {@code isRedelivery} looks at the same two things, so the rule lives here instead of being written twice.
+         * <p>
+         * A stream id with a version is preferred over a position because it belongs to the event, while a position is
+         * a number one subscription model assigns. An event store that assigns no position at all, one built with
+         * {@code withoutStreamPosition()} for instance, still gives every event both of the first two.
          */
+        public @Nullable String redeliveryKey() {
+            if (streamId != null && streamVersion != null) {
+                return streamId + "@" + streamVersion;
+            }
+            return position == null ? null : "position:" + position;
+        }
+
+        /** Whether {@link #redeliveryKey()} exists, meaning a redelivery of this input can be told from a new one. */
         public boolean carriesRedeliveryKey() {
-            return (streamId != null && streamVersion != null) || position != null;
+            return redeliveryKey() != null;
         }
     }
 
@@ -92,20 +105,31 @@ public final class SagaExecutionSupport {
                                                                            SagaInput<E> input,
                                                                            EventMeta meta,
                                                                            Instant now) {
-        @Nullable E startEvent = startEventOrNull(saga, current, input);
-        boolean starting = current == null;
-        if (starting && startEvent == null) {
-            // A timeout never starts an instance, and a non-start event with no instance is skipped.
+        // Whether a start transition was saved, which is neither "onStart was called" nor "a document exists". An
+        // instance whose very first event failed has an envelope holding nothing but that failure. Keying on the
+        // document would leave such an instance permanently "already started", so a later redelivery of its start event
+        // would skip onStart with nothing anywhere saying so.
+        boolean hasStarted = current != null && current.started();
+        @Nullable E startEvent = startEventOrNull(saga, hasStarted, input);
+        if (!hasStarted && startEvent == null) {
+            // A timeout never starts an instance, and a non-start event for an instance that has not started is skipped.
             return Outcome.skip();
         }
-        if (!starting && current.isCompleted()) {
+        if (current != null && current.isCompleted()) {
             return Outcome.skip();
         }
-        if (!starting && isRedelivery(current, meta)) {
+        if (current != null && current.isQuarantined()) {
+            // A quarantined instance is inert. It skips every input addressed to it and its watermarks stay where they are.
+            // Advancing one would record an input as handled that the instance never applied, and nothing afterwards can
+            // tell that the state has a gap in it.
+            return Outcome.skip();
+        }
+        if (current != null && isRedelivery(current, meta)) {
             return Outcome.skip();
         }
 
-        S previousState = starting ? saga.initialState() : current.state();
+        boolean starting = !hasStarted;
+        S previousState = hasStarted ? current.state() : saga.initialState();
         S nextState = saga.evolve(previousState, input);
 
         List<SagaEffect<C>> effects = new ArrayList<>();
@@ -128,7 +152,7 @@ public final class SagaExecutionSupport {
 
         List<C> commands = new ArrayList<>();
         Map<String, TimerEntry> timers = new LinkedHashMap<>();
-        if (!starting) {
+        if (current != null) {
             for (TimerEntry timer : current.timers()) {
                 timers.put(timer.name(), timer);
             }
@@ -145,10 +169,11 @@ public final class SagaExecutionSupport {
             timers.clear();
         }
 
-        long expectedVersion = starting ? 0 : current.version();
-        Instant createdAt = starting ? now : current.createdAt();
-        Map<String, Long> streamWatermarks = starting ? new LinkedHashMap<>() : new LinkedHashMap<>(current.streamWatermarks());
-        Long positionWatermark = starting ? null : current.positionWatermark();
+        boolean isNew = current == null;
+        long expectedVersion = isNew ? 0 : current.version();
+        Instant createdAt = isNew ? now : current.createdAt();
+        Map<String, Long> streamWatermarks = isNew ? new LinkedHashMap<>() : new LinkedHashMap<>(current.streamWatermarks());
+        Long positionWatermark = isNew ? null : current.positionWatermark();
         if (meta.streamId() != null && meta.streamVersion() != null) {
             streamWatermarks.merge(meta.streamId(), meta.streamVersion(), Math::max);
         } else if (meta.position() != null) {
@@ -167,12 +192,144 @@ public final class SagaExecutionSupport {
                 now,
                 terminal ? now : null,
                 // Derived from nextState by the envelope's constructor; nothing sensible to pass here.
-                null);
+                null,
+                true,
+                failureAfter(current, meta, terminal));
         return Outcome.processed(next, commands, expectedVersion);
     }
 
-    private static <E, S extends @Nullable Object, C> @Nullable E startEventOrNull(Saga<E, S, C> saga, @Nullable SagaEnvelope<S> current, SagaInput<E> input) {
-        if (current != null || !(input instanceof SagaInput.Event<E> ev)) {
+    /**
+     * What to write when an input has failed. {@link #envelope()} holds the failure record to save with
+     * {@code compareAndSave(..., expectedVersion())}, and {@link #quarantined()} says whether the budget has now
+     * elapsed, meaning the executor stops rethrowing and lets the subscription move past the input.
+     */
+    public record FailureRecord<S extends @Nullable Object>(SagaEnvelope<S> envelope, long expectedVersion, boolean quarantined) {
+    }
+
+    /**
+     * Decide what a failed input costs the instance, or {@code null} when it costs it nothing and the exception should
+     * simply propagate the way it always has.
+     * <p>
+     * The first failure of an input records when it started failing. Every later failure of the same input compares the
+     * elapsed time against {@code quarantineAfter} and writes nothing while it is under it, so the cost is one store
+     * write per failing input rather than one per retry. Past the budget the instance is quarantined on the failing
+     * input.
+     * <p>
+     * "The same input" is {@link EventMeta#redeliveryKey()}, not the global position, so an event from a store that
+     * assigns no position is recorded and quarantined like any other. An input carrying no key at all is refused here,
+     * because a record naming it could never be matched against the input that wrote it.
+     * <p>
+     * A successful input clears the record only when it is the input the record names. Any other one leaves it alone,
+     * including {@code firstFailedAt}, because a saga re-arms its timers explicitly and a timer firing more often than
+     * the budget would otherwise put the clock back to zero forever.
+     * <p>
+     * The budget is wall-clock rather than an attempt count because the retry loop is not always Occurrent's. On the
+     * MongoDB subscription models it is a {@code RetryStrategy} the user can replace, and behind a broker bridge it is
+     * the broker's own redelivery. Those run at unrelated rates, so a count means a different amount of time on each
+     * while five minutes means five minutes on both. It also follows that a transport which never re-offers a failing
+     * input can never reach the budget, and such a saga keeps the behaviour it has always had.
+     *
+     * @param saga            the saga descriptor, needed for its initial state when the failing input is the one that
+     *                        would have created the instance
+     * @param sagaId          the correlation id of the instance
+     * @param current         the stored envelope, or {@code null} when the failing input would have created it
+     * @param meta            the failing event's delivery metadata, which has to carry a redelivery key
+     * @param failure         what the saga, or its dispatcher, threw
+     * @param now             the current instant
+     * @param quarantineAfter how long an input may keep failing before its instance is quarantined
+     */
+    public static <E, S extends @Nullable Object, C> @Nullable FailureRecord<S> onFailure(Saga<E, S, C> saga,
+                                                                                          String sagaId,
+                                                                                          @Nullable SagaEnvelope<S> current,
+                                                                                          EventMeta meta,
+                                                                                          Throwable failure,
+                                                                                          Instant now,
+                                                                                          Duration quarantineAfter) {
+        String input = meta.redeliveryKey();
+        if (input == null) {
+            // Nothing here tells one delivery of this input from the next, so a record written now could never be
+            // matched against the input that wrote it, and the budget could never elapse. That is the same event
+            // RedeliveryDetection already refuses under REQUIRED, its default, before it ever reaches the saga.
+            return null;
+        }
+        if (current != null && (current.isCompleted() || current.isQuarantined())) {
+            // Neither reaches the saga at all, so neither can be what threw. Defensive rather than reachable.
+            return null;
+        }
+        if (current != null && isRedelivery(current, meta)) {
+            // The save committed and its response was lost on the way back, so the reloaded instance already counts
+            // this input as handled. A record written here is never cleared, because the redelivery that would clear it
+            // is skipped as one, so keep the committed outcome instead.
+            return null;
+        }
+        SagaFailure existing = current == null ? null : current.failure();
+        if (existing == null || !existing.input().equals(input)) {
+            SagaFailure record = new SagaFailure(input, meta.position(), now, failure.getClass().getName(), shortened(failure.getMessage()));
+            return failureRecord(saga, sagaId, current, record, SagaStatus.ACTIVE, now, false);
+        }
+        if (Duration.between(existing.firstFailedAt(), now).compareTo(quarantineAfter) < 0) {
+            return null;
+        }
+        // Keep the instant the failing started, refresh what it is failing with, because an input that fails one way and then
+        // another is still the same input failing, and the later exception is the more useful one to read.
+        SagaFailure record = new SagaFailure(input, meta.position(), existing.firstFailedAt(), failure.getClass().getName(), shortened(failure.getMessage()));
+        return failureRecord(saga, sagaId, current, record, SagaStatus.QUARANTINED, now, true);
+    }
+
+    // Only the input the record names clears it. Letting any successful input clear it lets a saga that re-arms a timer
+    // more often than the budget reset the clock forever, so an event that never succeeds never reaches the budget and
+    // keeps blocking every other instance. A timer has no redelivery key, so it never matches.
+    // An exception message is application data and has no length the saga controls. A message big enough to push the
+    // instance over MongoDB's document limit would fail the failure write on every retry, so the instance would never
+    // quarantine and would keep blocking the subscription, which is the outcome this whole design removes. The log
+    // still gets the whole throwable.
+    static final int MAX_FAILURE_MESSAGE_LENGTH = 1000;
+
+    private static @Nullable String shortened(@Nullable String failureMessage) {
+        if (failureMessage == null || failureMessage.length() <= MAX_FAILURE_MESSAGE_LENGTH) {
+            return failureMessage;
+        }
+        return failureMessage.substring(0, MAX_FAILURE_MESSAGE_LENGTH) + "... (truncated)";
+    }
+
+    private static <S extends @Nullable Object> @Nullable SagaFailure failureAfter(@Nullable SagaEnvelope<S> current, EventMeta meta, boolean terminal) {
+        SagaFailure existing = current == null ? null : current.failure();
+        if (existing == null || terminal) {
+            // A completed instance can never quarantine, so a record left on it would describe a budget that can no
+            // longer run, and it would sit outside the two states SagaInstance.failure() describes.
+            return null;
+        }
+        return existing.input().equals(meta.redeliveryKey()) ? null : existing;
+    }
+
+    private static <E, S extends @Nullable Object, C> FailureRecord<S> failureRecord(Saga<E, S, C> saga, String sagaId,
+                                                                                     @Nullable SagaEnvelope<S> current,
+                                                                                     SagaFailure record, SagaStatus status,
+                                                                                     Instant now, boolean quarantined) {
+        if (current == null) {
+            // An instance whose very first event failed has nothing to attach the record to, so the record inserts one.
+            // It holds the initial state and started = false, which is honestly what it is, an instance that failed
+            // before it began. Start detection reads that flag rather than the document, so a later redelivery of the
+            // start event still runs onStart.
+            SagaEnvelope<S> inserted = new SagaEnvelope<>(sagaId, saga.initialState(), status, 1, List.of(), Map.of(),
+                    null, now, now, null, null, false, record);
+            return new FailureRecord<>(inserted, 0, quarantined);
+        }
+        return new FailureRecord<>(withFailure(current, record, status, now), current.version(), quarantined);
+    }
+
+    // Deliberately copies the watermarks and timers over untouched. A failure advances neither, because the input was not
+    // handled, and a quarantined instance's timers stop because the store's due-timer query asks for ACTIVE ones.
+    private static <S extends @Nullable Object> SagaEnvelope<S> withFailure(SagaEnvelope<S> current, SagaFailure record,
+                                                                           SagaStatus status, Instant now) {
+        return new SagaEnvelope<>(current.sagaId(), current.state(), status, current.version() + 1, current.timers(),
+                current.streamWatermarks(), current.positionWatermark(), current.createdAt(), now, current.completedAt(),
+                current.currentStep(), current.started(), record);
+    }
+
+
+    private static <E, S extends @Nullable Object, C> @Nullable E startEventOrNull(Saga<E, S, C> saga, boolean hasStarted, SagaInput<E> input) {
+        if (hasStarted || !(input instanceof SagaInput.Event<E> ev)) {
             return null;
         }
         E event = ev.event();

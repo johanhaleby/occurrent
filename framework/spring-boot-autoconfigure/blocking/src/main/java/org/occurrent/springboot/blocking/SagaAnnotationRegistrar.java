@@ -147,6 +147,7 @@ class SagaAnnotationRegistrar {
         StartAt startAt = push ? null : startPositionSupport.generateAgnosticStartAt(id, annotation.startAt(), annotation.startAtGlobalPosition(), annotation.resumeBehavior());
         SagaRunnerConfig config = SagaRunnerConfig.defaults()
                 .withTimerPollInterval(sagaTimerPollInterval())
+                .withQuarantineAfter(sagaQuarantineAfter())
                 .withRedeliveryDetection(redeliveryDetectionOf(annotation));
         boolean stream = annotation.capability() == org.occurrent.annotation.Capability.STREAM;
         SagaRunner<E, C> configured = stream ? SagaRunner.stream(subscribable, converter) : SagaRunner.agnostic(subscribable, converter);
@@ -180,15 +181,19 @@ class SagaAnnotationRegistrar {
             // this saga unable to look at the instances it already has, which is the decision manual mode exists for.
             publishSagaInstances(id, SagaInstances.of(stateStore));
             applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
+                refuseIfSagaSubscriptionBeanNameIsTaken(id);
                 SagaSubscription deferred = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
                 sagaSubscriptions.add(deferred);
+                registerSagaSubscriptionSingleton(id, deferred);
                 watchBackgroundCatchUpIfNobodyElseWill(annotation, id, deferred, waitUntilStarted);
             });
             return;
         }
 
+        refuseIfSagaSubscriptionBeanNameIsTaken(id);
         SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
         sagaSubscriptions.add(sagaSubscription);
+        registerSagaSubscriptionSingleton(id, sagaSubscription);
         if (push) {
             watchBackgroundCatchUpIfNobodyElseWill(annotation, id, sagaSubscription, waitUntilStarted);
         }
@@ -389,9 +394,49 @@ class SagaAnnotationRegistrar {
         beanFactory.registerSingleton(beanName, instances);
     }
 
+    /**
+     * Publish the running {@link SagaSubscription} under {@code sagaSubscription-<id>}, next to the read-only
+     * {@code sagaInstances-<id>} above and registered the same way, as a singleton after refresh rather than as a bean
+     * definition. It hands an application on the annotation path the running subscription itself, which the read-only
+     * {@link SagaInstances} does not expose.
+     * <p>
+     * A saga in manual mode gets this bean when the application starts that saga, not at refresh, since there is no
+     * subscription to publish before then.
+     */
+    private void registerSagaSubscriptionSingleton(String id, SagaSubscription sagaSubscription) {
+        String beanName = sagaSubscriptionBeanName(id);
+        if (!(applicationContext instanceof ConfigurableApplicationContext configurableContext)) {
+            log.warn("Cannot publish '{}' because the application context is not a ConfigurableApplicationContext. The saga runs fine, and its instances are still reachable through the SagaInstancesRegistry bean, but this per-saga handle to the running subscription is not published.", beanName);
+            return;
+        }
+        ConfigurableListableBeanFactory beanFactory = configurableContext.getBeanFactory();
+        refuseIfSagaSubscriptionBeanNameIsTaken(id);
+        beanFactory.registerSingleton(beanName, sagaSubscription);
+    }
+
+    /**
+     * Refuse a saga whose {@code sagaSubscription-<id>} name is already taken, before its subscription is started.
+     * Checking only at registration time would leave the saga running and delivering events while the caller was told
+     * it failed to start, and in manual mode the startup action is gone by then so there is nothing left to retry.
+     */
+    private void refuseIfSagaSubscriptionBeanNameIsTaken(String id) {
+        if (!(applicationContext instanceof ConfigurableApplicationContext configurableContext)) {
+            return;
+        }
+        String beanName = sagaSubscriptionBeanName(id);
+        if (configurableContext.getBeanFactory().containsBean(beanName)) {
+            throw new IllegalStateException("Cannot publish the SagaSubscription of saga '%s' as '%s' because a bean with that name already exists. Occurrent publishes each @Saga's SagaSubscription under 'sagaSubscription-<id>', so rename your bean or the saga.".formatted(id, beanName));
+        }
+    }
+
     /** The bean name the {@link SagaInstances} for {@code sagaId} is published under. */
     static String sagaInstancesBeanName(String sagaId) {
         return "sagaInstances-" + sagaId;
+    }
+
+    /** The bean name the {@link SagaSubscription} for {@code sagaId} is published under. */
+    static String sagaSubscriptionBeanName(String sagaId) {
+        return "sagaSubscription-" + sagaId;
     }
 
     // Gate the saga timer poller on the shared competing-consumer lease so only one instance polls, mirroring the
@@ -538,6 +583,18 @@ class SagaAnnotationRegistrar {
 
     private Duration sagaTimerPollInterval() {
         return occurrentProperties().getSaga().getTimerPollInterval();
+    }
+
+    private @Nullable Duration sagaQuarantineAfter() {
+        return quarantineBudgetOf(occurrentProperties().getSaga().getQuarantineAfter());
+    }
+
+    // Zero is how a Duration property says "never", since an unset property binds to the default rather than to null,
+    // and null is what SagaRunnerConfig takes for a saga that keeps retrying forever. A negative value is passed on
+    // untouched so SagaRunnerConfig rejects it, because reading a typo as "never" would quietly restore the blocking
+    // this feature removes.
+    static @Nullable Duration quarantineBudgetOf(@Nullable Duration configured) {
+        return configured == null || configured.isZero() ? null : configured;
     }
 
     // The saga state type is the second type argument of the factory return type Saga<E, S, C>.

@@ -34,6 +34,8 @@ import static java.util.Objects.requireNonNull;
  * A running saga: the underlying event {@link Subscription} plus the timer poller. Closing it stops the poller and, when
  * the poller was lease-gated, releases the timer lease so another instance can take over. The event subscription is
  * cancelled through the subscription model the way any subscription is (this handle only owns the poller it started).
+ * <p>
+ * {@link #instances()} is read-only, as ADR 70 intended.
  */
 public final class SagaSubscription implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(SagaSubscription.class);

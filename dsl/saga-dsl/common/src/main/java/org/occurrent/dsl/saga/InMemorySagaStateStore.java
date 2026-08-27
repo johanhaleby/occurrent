@@ -63,7 +63,9 @@ public final class InMemorySagaStateStore<S extends @Nullable Object> implements
         long nowMillis = now.toEpochMilli();
         List<SagaEnvelope<S>> due = new ArrayList<>();
         for (SagaEnvelope<S> envelope : store.values()) {
-            if (envelope.isCompleted()) {
+            // ACTIVE rather than "not completed", so a quarantined instance drops out of the poll and fires no timers.
+            // Firing one would advance its state across the gap the quarantine exists to hold open.
+            if (envelope.status() != SagaStatus.ACTIVE) {
                 continue;
             }
             OptionalLong earliest = envelope.earliestTimerFiresAtEpochMilli();

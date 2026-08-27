@@ -47,6 +47,11 @@ class InMemorySagaStateStoreTest {
         return new SagaEnvelope<>(sagaId, state, SagaStatus.COMPLETED, version, timers, Map.of(), null, NOW, NOW, NOW, null);
     }
 
+    private static SagaEnvelope<String> quarantinedEnvelope(String sagaId, String state, long version, List<TimerEntry> timers) {
+        SagaFailure failure = new SagaFailure("s@7", 7L, NOW, IllegalStateException.class.getName(), "boom");
+        return new SagaEnvelope<>(sagaId, state, SagaStatus.QUARANTINED, version, timers, Map.of(), null, NOW, NOW, null, null, true, failure);
+    }
+
     private static SagaEnvelope<String> activeEnvelopeUpdatedAt(String sagaId, Instant updatedAt) {
         return new SagaEnvelope<>(sagaId, "a", SagaStatus.ACTIVE, 1, List.of(), Map.of(), null, updatedAt, updatedAt, null, null);
     }
@@ -130,6 +135,15 @@ class InMemorySagaStateStoreTest {
         @Test
         void excludes_completed_instances_even_when_a_timer_is_due() {
             store.compareAndSave("completed", completedEnvelope("completed", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
+
+            List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
+
+            assertThat(due).isEmpty();
+        }
+
+        @Test
+        void excludes_quarantined_instances_even_when_a_timer_is_due() {
+            store.compareAndSave("quarantined", quarantinedEnvelope("quarantined", "a", 1, List.of(new TimerEntry("t", NOW.toEpochMilli()))), 0);
 
             List<SagaEnvelope<String>> due = store.findWithDueTimers(NOW, 10);
 

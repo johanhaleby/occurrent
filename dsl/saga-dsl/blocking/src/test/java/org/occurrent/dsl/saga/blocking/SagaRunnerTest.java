@@ -331,8 +331,13 @@ class SagaRunnerTest {
             return CloudEventBuilder.v1(event).withExtension(new OccurrentCloudEventExtension(orderId, 1L)).build();
         }
 
+        // Quarantine off, because these tests count saves and a failure record is a save of its own. What is under
+        // test here is the compare-and-set retry, not the budget.
         private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(SagaStateStore<OrderState> store, int maxCasAttempts) {
-            SagaRunnerConfig config = new SagaRunnerConfig(Duration.ofMinutes(1), 100, maxCasAttempts);
+            return execution(store, new SagaRunnerConfig(Duration.ofMinutes(1), 100, maxCasAttempts).withQuarantineAfter(null));
+        }
+
+        private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(SagaStateStore<OrderState> store, SagaRunnerConfig config) {
             return new SagaExecution<>("cas-retry", orderFulfillment(LONG_PAYMENT_TIMEOUT), store, command -> {
             }, converter, config);
         }
@@ -364,6 +369,19 @@ class SagaRunnerTest {
             assertThatThrownBy(() -> execution(store, 5).onCloudEvent(orderPlaced("order-cas-3")))
                     .isSameAs(storeDown);
             assertThat(store.saveAttempts).isEqualTo(1);
+        }
+
+        @Test
+        void keeps_the_original_failure_when_the_quarantine_write_throws_the_same_exception() {
+            // This store hands out one exception object for every save, so the quarantine write fails with the very
+            // object that got us here. Java refuses to suppress an exception under itself, and the caller would see
+            // IllegalArgumentException instead of the store failure.
+            RuntimeException storeDown = new IllegalStateException("saga store is down");
+            ScriptedCasStore store = new ScriptedCasStore(attempt -> false, storeDown);
+            SagaRunnerConfig quarantining = new SagaRunnerConfig(Duration.ofMinutes(1), 100, 5);
+
+            assertThatThrownBy(() -> execution(store, quarantining).onCloudEvent(orderPlaced("order-cas-4")))
+                    .isSameAs(storeDown);
         }
     }
 
@@ -641,7 +659,11 @@ class SagaRunnerTest {
             assertAll(
                     () -> assertThat(shipAttempts.get()).isGreaterThanOrEqualTo(2),
                     () -> assertThat(envelope.status()).isEqualTo(SagaStatus.COMPLETED),
-                    () -> assertThat(envelope.version()).isEqualTo(2)
+                    // Still two saves. InMemorySubscriptionModel cannot be resumed at a chosen position, so this runner
+                    // has no quarantine budget and the failed attempt writes nothing at all, not even the record that
+                    // would start one.
+                    () -> assertThat(envelope.version()).isEqualTo(2),
+                    () -> assertThat(envelope.failure()).isNull()
             );
         }
     }

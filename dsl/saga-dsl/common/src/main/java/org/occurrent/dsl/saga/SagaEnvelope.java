@@ -42,6 +42,14 @@ import static java.util.Objects.requireNonNull;
  * @param createdAt         when the instance was created
  * @param updatedAt         when the instance was last saved
  * @param completedAt       when the instance completed, or {@code null} while active
+ * @param started           whether a start transition has been saved for this instance, which is not the same as
+ *                          whether {@code onStart} was ever called. An instance whose very first event failed after
+ *                          {@code onStart} had run still saves {@code false}, because the transition it belonged to
+ *                          was never saved, so the whole start is retried on a later redelivery. Start detection reads
+ *                          this rather than whether a document exists
+ * @param failure           the input this instance is failing on, or {@code null} when it is not failing on anything.
+ *                          Present from the first failure onwards, so it outlives a single attempt; {@code status}
+ *                          says whether the failing has lasted past the runner's quarantine budget
  * @param currentStep       the step a flow saga is waiting in, derived from {@code state} whenever it is present. A
  *                          store may pass this directly, but only when it passes a {@code null} state: that is how a
  *                          store answers {@link SagaInstance#currentStep()} from a projected read without loading the
@@ -59,7 +67,9 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
                                                        @Nullable Instant createdAt,
                                                        @Nullable Instant updatedAt,
                                                        @Nullable Instant completedAt,
-                                                       @Nullable String currentStep) implements SagaInstance {
+                                                       @Nullable String currentStep,
+                                                       boolean started,
+                                                       @Nullable SagaFailure failure) implements SagaInstance {
 
     public SagaEnvelope {
         requireNonNull(sagaId, "sagaId cannot be null");
@@ -74,6 +84,22 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
         }
     }
 
+    /**
+     * An envelope for an instance that has started and is failing on nothing, which is every instance built before
+     * quarantine existed.
+     *
+     * @deprecated since 0.34.0. Use the canonical constructor and pass {@code started} and {@code failure} explicitly.
+     * This overload keeps a call site written against 0.33.0 compiling, and it can only ever answer {@code true} and
+     * {@code null} for the two it does not take, so an envelope that really is quarantined cannot be built through it.
+     */
+    @Deprecated(since = "0.34.0")
+    public SagaEnvelope(String sagaId, S state, SagaStatus status, long version, List<TimerEntry> timers,
+                        Map<String, Long> streamWatermarks, @Nullable Long positionWatermark, @Nullable Instant createdAt,
+                        @Nullable Instant updatedAt, @Nullable Instant completedAt, @Nullable String currentStep) {
+        this(sagaId, state, status, version, timers, streamWatermarks, positionWatermark, createdAt, updatedAt,
+                completedAt, currentStep, true, null);
+    }
+
     /** A pending timer: its name and when it should fire (epoch millis). */
     public record TimerEntry(String name, long firesAtEpochMilli) {
         public TimerEntry {
@@ -85,6 +111,11 @@ public record SagaEnvelope<S extends @Nullable Object>(String sagaId,
     @Override
     public boolean isCompleted() {
         return status == SagaStatus.COMPLETED;
+    }
+
+    /** Whether the instance is quarantined on an input it could not handle. */
+    public boolean isQuarantined() {
+        return status == SagaStatus.QUARANTINED;
     }
 
     /** The earliest firing time across all pending timers, or empty when there are none. Drives the due-timer query. */

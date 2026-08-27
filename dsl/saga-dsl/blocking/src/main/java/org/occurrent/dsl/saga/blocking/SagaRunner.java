@@ -31,8 +31,13 @@ import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.StreamSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.CompetingConsumerStrategy;
+import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
+import org.occurrent.subscription.api.blocking.SubscriptionModelCapability;
+import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.Subscription;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -75,9 +80,20 @@ import static java.util.Objects.requireNonNull;
  * <ul>
  *   <li><strong>Event path.</strong> An exception (including a {@link SagaConcurrencyException} once the retries are
  *       exhausted) propagates to the subscription model, which redelivers the event and retries the whole step. The
- *       event is not lost. But the subscription is a single ordered channel shared by every instance this saga handles,
- *       so an input that keeps failing blocks the events queued behind it until it succeeds or someone intervenes. One
- *       poisoned instance can stall the others on the same subscription.</li>
+ *       event is not lost. The subscription is a single ordered channel shared by every instance this saga handles, so
+ *       while one event keeps failing the events queued behind it wait. Three things have to hold for that wait to end
+ *       at {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. The budget has to be set, the
+ *       subscription model has to be resumable at a chosen position, and the event has to arrive with a stream id and
+ *       version or a global position, since an event the saga cannot recognise a redelivery of is never quarantined.
+ *       Where any of those is missing the wait is the one every version up to 0.33.0 had, which is unbounded. Once one
+ *       event has kept failing for one
+ *       instance that long, the instance becomes {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED}, the executor
+ *       stops rethrowing, and the subscription moves past the event so the saga's other instances keep going. The
+ *       quarantined instance stops there, and 0.34.0 has no operation that brings it back, so
+ *       {@code SagaStateStore.delete(sagaId)} is how you abandon it. Set {@code quarantineAfter} to {@code null} to
+ *       keep the pre-0.34.0 behaviour of blocking indefinitely instead, which is also what a subscription model that
+ *       cannot be resumed at a chosen position gets, since the event a quarantined instance stopped on could never be
+ *       obtained again there.</li>
  *   <li><strong>Timer path.</strong> A failing timeout is caught per instance, logged, and left due, so the next poll
  *       retries it while the other instances keep going. A timeout failure does not block the poller and does not
  *       propagate anywhere else, so only the poller ever retries it, never a subscription redelivery.</li>
@@ -91,6 +107,8 @@ import static java.util.Objects.requireNonNull;
  */
 @NullMarked
 public final class SagaRunner<E, C> {
+
+    private static final Logger log = LoggerFactory.getLogger(SagaRunner.class);
 
     private final Subscribable subscriptionModel;
     private final CloudEventConverter<E> cloudEventConverter;
@@ -187,7 +205,8 @@ public final class SagaRunner<E, C> {
         requireNonNull(config, "config cannot be null");
         requireNonNull(timersEnabled, "timersEnabled cannot be null");
 
-        SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, config);
+        SagaRunnerConfig effectiveConfig = quarantineOnlyIfTheEventCanBeAskedForAgain(subscriptionId, config);
+        SagaExecution<E, S, C> execution = new SagaExecution<>(subscriptionId, saga, stateStore, commandDispatcher, cloudEventConverter, effectiveConfig);
         SubscriptionFilter filter = toSubscriptionFilter.apply(SagaFilters.filterFor(cloudEventConverter, saga));
         Consumer<CloudEvent> action = execution::onCloudEvent;
         StartAt effectiveStartAt = startAt != null ? startAt : StartAt.subscriptionModelDefault();
@@ -231,6 +250,37 @@ public final class SagaRunner<E, C> {
         long intervalMillis = config.timerPollInterval().toMillis();
         poller.scheduleWithFixedDelay(pollTask, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
         return new SagaSubscription(subscription, poller, SagaInstances.of(stateStore), strategy, leaseKey, holderId);
+    }
+
+    /**
+     * Quarantine needs the failing event to be obtainable a second time, so it is available only on a subscription
+     * model that can be resumed at a chosen position. On any other model this returns a configuration with the budget
+     * switched off, and the saga keeps the behaviour it had before 0.34.0.
+     * <p>
+     * Refusing it rather than warning about it is the point. Quarantining means returning normally, which acknowledges
+     * the event to whatever fed it. On a push feed behind a broker bridge that is what stages the offset and moves past
+     * the record, so the one copy this saga could ever be given is gone at the moment of quarantine. Between an instance
+     * that blocks and an event that cannot be asked for again, this keeps the event, and it says so at startup rather
+     * than leaving it to be discovered during the incident.
+     */
+    private SagaRunnerConfig quarantineOnlyIfTheEventCanBeAskedForAgain(String subscriptionId, SagaRunnerConfig config) {
+        if (config.quarantineAfter() == null || canBeResumedAtAChosenPosition(subscriptionModel)) {
+            return config;
+        }
+        log.warn("Saga subscription '{}' runs on a subscription model that cannot be resumed at a chosen position ({}), so the event a quarantined instance stopped on could never be obtained again and quarantine is switched off for this saga. An event that keeps failing for one instance therefore blocks every other instance of this saga, which is the behaviour before 0.34.0. Run the saga on one of the MongoDB subscription models, or on a catch-up model over one of them, to get instance isolation.",
+                subscriptionId, subscriptionModel.getClass().getName());
+        return config.withQuarantineAfter(null);
+    }
+
+    // Asked of the model that owns the position, not of whatever wraps it. CatchupSubscriptionModel implements
+    // RepositionableSubscriptions whatever it wraps and throws when the wrapped model cannot reposition, so a lookup
+    // from the top alone answers yes for a deployment where every reposition fails.
+    private static boolean canBeResumedAtAChosenPosition(Subscribable subscriptionModel) {
+        SubscriptionModelCapability owningThePosition = subscriptionModel instanceof SubscriptionModelWrapper wrapper
+                ? wrapper.getWrappedSubscriptionModelRecursively()
+                : subscriptionModel;
+        return RepositionableSubscriptions.findIn(subscriptionModel).isPresent()
+                && RepositionableSubscriptions.findIn(owningThePosition).isPresent();
     }
 
     /**

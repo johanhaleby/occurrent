@@ -168,9 +168,29 @@ rather than something to retry. Losing it means another input advanced the insta
 likely a timer that fired successfully, so the failing input is now being applied to different state and may well
 succeed. The failure record is therefore discarded on a lost compare-and-set and the budget starts over.
 
+**Only the input a record names clears it, and the paragraph above reasoned about a timer that fires once.** A saga
+re-arms its timers explicitly, with a `StartTimeout` effect from a reaction, so a timer can fire far more often than
+the budget. Clearing the record on any successful input then puts the clock back to zero on every tick, and an event
+that never succeeds never reaches the budget, so it keeps blocking every other instance of that saga. That is the
+block this decision exists to remove, so a record now survives an input it does not name, `firstFailedAt` included,
+and only the failing input getting through clears it. `SagaFailure`'s own contract already said this, and the first
+implementation was what disagreed.
+
+The reasoning that a state change may unblock the event still holds, because the event is still redelivered and still
+clears the record when it succeeds. What the narrower rule removes is an unrelated input's ability to hide an event
+that never succeeds. So a lost compare-and-set on the failure write starts the budget over only for the first failure
+of an input, which has no record to keep, and a later one keeps the record the winning write left in place.
+
 The identity of "the same input" is the redelivery key `EventMeta` already computes, the stream id with its version,
 or the global position. An input the saga cannot recognise a redelivery of is already refused or warned about by
 ADR 109's `RedeliveryDetection`, so nothing new is needed there.
+
+**That key is also what the executor gates on, rather than the presence of a global position.** An event store that
+assigns no position, one built with `withoutStreamPosition()` or an upgrade where stream position stays disabled on an
+existing collection, still gives every event a stream id and a stream version. Gating on a position would leave
+quarantine inert for such a store while the startup gate reported quarantine as available, because whether a
+subscription model can be repositioned is a question about the model and not about what its events hold. The recorded
+position is therefore nullable, and it is a convenience beside the key rather than the thing that identifies the event.
 
 ### 4. An instance that has never started needs start detection to stop keying on document existence
 
@@ -178,11 +198,11 @@ A start event whose `evolve` or `onStart` throws has no envelope to record anyth
 write has to insert one. That insert breaks the executor unless start detection changes with it.
 `SagaExecutionSupport.startEventOrNull` returns null whenever `current != null`, and that null is what gates
 `saga.onStart`. So once a quarantine-only document exists, the instance is permanently treated as already started, and
-after a release and a replay its start event is skipped and `onStart` never runs, with no error anywhere.
+a later redelivery of its start event is skipped and `onStart` never runs, with no error anywhere.
 
 The decision is that the executor keys start detection on an explicit marker of whether the instance has ever been
 started, rather than on whether a document exists for it. A quarantine-only envelope is then honestly what it is, a
-record that this instance failed before it began, and the replay after a release starts it properly.
+record that this instance failed before it began, and a later redelivery of its start event starts it properly.
 
 The alternative was to exclude start-event failures from quarantine and leave them on today's path. That was rejected
 because it is a hole in exactly the rule this decision exists to keep. A saga whose first event throws for one
@@ -219,8 +239,9 @@ answer, which its own javadoc states as whether the instance is still running an
 Discovery therefore needs no new query. `SagaInstances.findByStatus(QUARANTINED, Instant.now(), limit)` is the
 existing enumeration, and the Spring stack already publishes a `SagaInstances` per saga.
 
-`SagaInstance` gains one nullable accessor returning the quarantine record, holding the position the instance stopped
-at, the failing exception's class name and message, and when it started failing. The narrowness rule from ADR 70
+`SagaInstance` gains one nullable accessor returning the quarantine record, holding the redelivery key of the input
+the instance stopped on, its position where the store assigns one, the failing exception's class name and message, and
+when it started failing. The narrowness rule from ADR 70
 holds. The event payload and the stack trace stay out, because neither is lifecycle.
 
 Two implementation constraints follow from ADR 70's invariant that every envelope answers every `SagaInstance`
@@ -229,7 +250,7 @@ member with no exemption. The quarantine fields are stored as top-level document
 enumeration projections. An instance whose state cannot be decoded is exactly the instance an operator is looking
 for, so a quarantined instance must be enumerable without reading its state.
 
-### 7. Release clears the record and restarts the subscription at the recorded position
+### 7. Release clears the record and restarts the subscription at the recorded position, and 0.34.0 does not ship it
 
 Release is two things and both are needed. Clear the record alone and the instance handles new events against state
 with a gap in it. Restarting the subscription alone re-runs the quarantine.
@@ -310,15 +331,37 @@ every non-default start and always replays from the beginning, so release has to
 and what it does per model when that capability is absent, rather than assuming a `Subscribable` can be restarted
 anywhere.
 
-`SagaStateStore.delete(sagaId)`, the escape hatch ADR 128 already names, stays available throughout. It abandons the
-instance deliberately instead of quietly.
+**0.34.0 does not ship release, and the reason is the capability named just above.** Implementation went looking for
+a subscription model that guarantees the replay this section requires, meaning one that hands the instance back the
+exact event it stopped on, and no model in this repository provides it. `RepositionableSubscriptions` is the closest
+thing and it is not that guarantee. `CatchupSubscriptionModel` implements the interface whatever it wraps and throws
+`UnsupportedOperationException` when the wrapped model cannot reposition, it answers `isRunning(id)` true while a
+catch-up child is running but hands `pauseSubscription(id)` to the live model where the subscription is not
+registered until handover, and a `GlobalCheckpoint` resume on the default MongoDB starter reaches
+`MongoCommons.applyStartPosition`, which treats a checkpoint it does not recognise as the model default.
+
+So the quarantine half ships and the release half does not. Quarantine on its own is what removes the block this
+decision exists to remove, and it needs no replay to do it. Release needs a replay capability that has to be
+designed and built in the subscription models rather than in the saga DSL, which is work of its own rather than a
+detail of this decision.
+
+The durable record identifies the failing input by its redelivery key rather than by a global position, which is what
+keeps that later work cheap. A position is a number one subscription model assigns, and the same event has a
+different one on a different replay path, or none at all. The redelivery key belongs to the event, so release can be
+added on top of instances written by 0.34.0 without migrating them.
+
+`SagaStateStore.delete(sagaId)`, the escape hatch ADR 128 already names, stays available throughout, and until release
+ships it is the only way out of quarantine. It abandons the instance deliberately instead of quietly.
 
 ### 8. The migration treatment for the shipped API this breaks
 
-`SagaStatus`, `SagaEnvelope` and `SagaInstance` all shipped in `occurrent-0.33.0`, verified with `git ls-tree`
-against the tag rather than inferred, so this decision breaks shipped API in four places. A new `SagaEnvelope`
-component changes its canonical constructor and record-pattern arity. A new `SagaInstance` accessor breaks anyone
-implementing that interface. And the new `SagaStatus` constant breaks in two further ways of its own.
+`SagaStatus`, `SagaEnvelope`, `SagaInstance` and `SagaRunnerConfig` all shipped in `occurrent-0.33.0`, verified with
+`git ls-tree` and `git show` against the tag rather than inferred, so this decision breaks shipped API in five places.
+A new `SagaEnvelope` component changes its canonical constructor and record-pattern arity. A new `SagaInstance`
+accessor breaks anyone implementing that interface. The budget in decision point 3 is a new `SagaRunnerConfig`
+component, which changes that record's canonical constructor and record-pattern arity the same way, and this break was
+missed when the decision was drafted and added during implementation after checking the tag. And the new `SagaStatus`
+constant breaks in two further ways of its own.
 
 The visible half is that an exhaustive Java `switch` or Kotlin `when` over `SagaStatus` stops compiling. Nothing in
 this repository does that, every reference here is an equality comparison or a `findByStatus` call, so the compile
@@ -350,16 +393,17 @@ restart. For every other instance those events were already handled, so at-least
 advancing costs them nothing.
 
 For the quarantined instance, at-least-once through the subscription channel is given up at that position and
-replaced by the recorded position plus a release. This is the real trade in this decision and it should be read as
-such. What the instance gets in exchange is that the property becomes explicit, durable and visible in
+replaced by the recorded position, which a release will later replay from. This is the real trade in this decision and
+it should be read as such. What the instance gets in exchange is that the property becomes explicit, durable and visible in
 `findByStatus`, rather than implicit in a channel that is no longer moving.
 
 A long store outage quarantines instances. Past the budget the design cannot tell an outage from an input that will
-never succeed, so it treats it as the latter, and an outage longer than the budget quarantines a set of instances. They are all recoverable by release, so this is operational work rather than lost data, but it is a
-real cost and the budget's default has to be chosen with it in mind.
+never succeed, so it treats it as the latter, and an outage longer than the budget quarantines a set of instances.
+Until release ships they cannot be brought back through the saga API, so the budget's default has to be chosen with
+that in mind.
 
-Releasing an instance pauses the saga's subscription while the replay catches up, so it is an operation with a
-visible cost rather than a background one. See Decision point 7.
+Releasing an instance would pause the saga's subscription while the replay catches up, so it is an operation with a
+visible cost rather than a background one. 0.34.0 does not ship it. See Decision point 7.
 
 Dispatch amplification is reduced rather than introduced. Today an input that will never succeed re-dispatches its
 whole command list on every one of the subscription's unlimited retries. Under the budget that stops when the
@@ -372,8 +416,9 @@ quarantine has to be noticed rather than left alone.
 **The change is not additive for out-of-tree callers, and the first draft was wrong to say it was.** The
 `SagaStateStore` methods keep their signatures, but `SagaEnvelope` is a public record, so a new component changes its
 canonical constructor and the arity of any record pattern over it, and a store built outside this repository
-constructs envelopes. `SagaInstance` is a public interface, so a new accessor breaks anyone implementing it. Both are
-shipped API and both break at compile time.
+constructs envelopes. `SagaRunnerConfig` is a public record too, and the budget adds a component to it.
+`SagaInstance` is a public interface, so a new accessor breaks anyone implementing it. All three are shipped API and
+all three break at compile time.
 
 Where a delegating or default member can absorb the break it should, and where it cannot the break is real and
 belongs in the migration guide next to the enum constant.
@@ -407,9 +452,10 @@ derived from a gap, and nothing downstream can detect that.
 Three questions were left for the gate rather than decided in the drafting, and all three are now closed. The
 budget's default was never among them, it is decided at five minutes in Decision point 3.
 
-1. **Migration.** One section in `doc/migration/upgrading-to-0.34.0.md` covering all four shipped breaks, meaning the
-   `SagaEnvelope` component, the `SagaInstance` accessor, the exhaustive switch over `SagaStatus` and the silent
-   change to what `findByStatus(ACTIVE, ...)` returns. No OpenRewrite recipe. Decision point 8.
+1. **Migration.** One section in `doc/migration/upgrading-to-0.34.0.md` covering all five shipped breaks, meaning the
+   `SagaEnvelope` component, the `SagaRunnerConfig` component, the `SagaInstance` accessor, the exhaustive switch over
+   `SagaStatus` and the silent change to what `findByStatus(ACTIVE, ...)` returns. No OpenRewrite recipe.
+   Decision point 8.
 2. **Retrying.** The executor keeps rethrowing and depends on something else re-offering the input. Owning the
    retrying itself would hold the subscription thread for the whole budget, which is a shorter version of the block
    this decision removes. A transport that never re-offers the input therefore cannot reach the budget and keeps
