@@ -264,7 +264,7 @@ public final class SagaExecutionSupport {
         }
         SagaFailure existing = current == null ? null : current.failure();
         if (existing == null || !existing.input().equals(input)) {
-            SagaFailure record = new SagaFailure(input, meta.position(), now, failure.getClass().getName(), failure.getMessage());
+            SagaFailure record = new SagaFailure(input, meta.position(), now, failure.getClass().getName(), shortened(failure.getMessage()));
             return failureRecord(saga, sagaId, current, record, SagaStatus.ACTIVE, now, false);
         }
         if (Duration.between(existing.firstFailedAt(), now).compareTo(quarantineAfter) < 0) {
@@ -272,13 +272,26 @@ public final class SagaExecutionSupport {
         }
         // Keep the instant the failing started, refresh what it is failing with, because an input that fails one way and then
         // another is still the same input failing, and the later exception is the more useful one to read.
-        SagaFailure record = new SagaFailure(input, meta.position(), existing.firstFailedAt(), failure.getClass().getName(), failure.getMessage());
+        SagaFailure record = new SagaFailure(input, meta.position(), existing.firstFailedAt(), failure.getClass().getName(), shortened(failure.getMessage()));
         return failureRecord(saga, sagaId, current, record, SagaStatus.QUARANTINED, now, true);
     }
 
     // Only the input the record names clears it. Letting any successful input clear it lets a saga that re-arms a timer
     // more often than the budget reset the clock forever, so an event that never succeeds never reaches the budget and
     // keeps blocking every other instance. A timer has no redelivery key, so it never matches.
+    // An exception message is application data and has no length the saga controls. A message big enough to push the
+    // instance over MongoDB's document limit would fail the failure write on every retry, so the instance would never
+    // quarantine and would keep blocking the subscription, which is the outcome this whole design removes. The log
+    // still gets the whole throwable.
+    static final int MAX_FAILURE_MESSAGE_LENGTH = 1000;
+
+    private static @Nullable String shortened(@Nullable String failureMessage) {
+        if (failureMessage == null || failureMessage.length() <= MAX_FAILURE_MESSAGE_LENGTH) {
+            return failureMessage;
+        }
+        return failureMessage.substring(0, MAX_FAILURE_MESSAGE_LENGTH) + "... (truncated)";
+    }
+
     private static <S extends @Nullable Object> @Nullable SagaFailure failureAfter(@Nullable SagaEnvelope<S> current, EventMeta meta) {
         SagaFailure existing = current == null ? null : current.failure();
         if (existing == null) {

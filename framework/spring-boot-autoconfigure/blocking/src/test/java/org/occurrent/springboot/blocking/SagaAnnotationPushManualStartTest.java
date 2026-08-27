@@ -30,6 +30,7 @@ import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.command.CommandDispatcher;
 import org.occurrent.dsl.saga.SagaEffect;
 import org.occurrent.dsl.saga.SagaInstances;
+import org.occurrent.dsl.saga.blocking.SagaSubscription;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.internal.SagaInstancesRegistryImpl;
 import org.occurrent.springboot.common.OccurrentProperties;
@@ -45,6 +46,7 @@ import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
  * {@code occurrent.subscription.mode=manual} against a {@code @Saga(source = PUSH)}. A push feed is a bean the
@@ -129,6 +131,27 @@ class SagaAnnotationPushManualStartTest {
             SagaInstances instances = context.getBean(SagaAnnotationRegistrar.sagaInstancesBeanName("manual-push-saga"), SagaInstances.class);
 
             assertThat(instances.find("order-1")).isEmpty();
+        });
+    }
+
+    @Test
+    void the_running_subscription_is_published_only_once_the_withheld_saga_is_started() {
+        runner.run(context -> {
+            String beanName = SagaAnnotationRegistrar.sagaSubscriptionBeanName("manual-push-saga");
+            // Nothing is running yet, so there is no subscription to hand anyone.
+            assertThat(context).doesNotHaveBean(beanName);
+
+            context.getBean(ManualStartPushSources.class).start("manual-push-saga");
+
+            SagaSubscription subscription = context.getBean(beanName, SagaSubscription.class);
+            SagaInstances published = context.getBean(SagaAnnotationRegistrar.sagaInstancesBeanName("manual-push-saga"), SagaInstances.class);
+
+            // Not the same object as the published one. A withheld saga gets its observation view at refresh, before
+            // there is a subscription to publish, so the two read the same store through different handles.
+            assertAll(
+                    () -> assertThat(subscription.id()).isEqualTo("manual-push-saga"),
+                    () -> assertThat(subscription.instances().find("order-1")).isEqualTo(published.find("order-1"))
+            );
         });
     }
 

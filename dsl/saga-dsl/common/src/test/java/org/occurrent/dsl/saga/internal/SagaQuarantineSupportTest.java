@@ -150,6 +150,31 @@ class SagaQuarantineSupportTest {
         }
 
         @Test
+        void shortens_a_failure_message_long_enough_to_threaten_the_document_limit() {
+            // The message is application data with no length the saga controls. One big enough to push the instance
+            // past MongoDB's document limit would fail this write on every retry, so the instance would never
+            // quarantine and would keep blocking the subscription.
+            String huge = "x".repeat(50_000);
+
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", active(3, Map.of("o1", 6L), 6L), at(7), new IllegalStateException(huge), NOW, BUDGET);
+
+            assertAll(
+                    () -> assertThat(record.envelope().failure().failureMessage())
+                            .hasSize(SagaExecutionSupport.MAX_FAILURE_MESSAGE_LENGTH + "... (truncated)".length()),
+                    () -> assertThat(record.envelope().failure().failureMessage()).endsWith("... (truncated)")
+            );
+        }
+
+        @Test
+        void keeps_a_failure_message_that_fits_exactly_as_it_is() {
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", active(3, Map.of("o1", 6L), 6L), at(7), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertThat(record.envelope().failure().failureMessage()).isEqualTo("boom");
+        }
+
+        @Test
         void a_later_failure_of_the_same_input_inside_the_budget_writes_nothing_at_all() {
             SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(4))));
 
