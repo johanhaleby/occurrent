@@ -203,6 +203,11 @@
             </dependency>
             <dependency>
                 <groupId>org.occurrent</groupId>
+                <artifactId>occurrent-eventstore-mongodb-update-event-repair</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.occurrent</groupId>
                 <artifactId>occurrent-common-mongodb-spring-filter-query-conversion</artifactId>
                 <version>${project.version}</version>
             </dependency>

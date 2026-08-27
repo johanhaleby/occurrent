@@ -35,6 +35,7 @@ import org.occurrent.eventstore.api.*;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.reactor.DcbEventStore;
 import org.occurrent.eventstore.api.internal.PositionBackfillValidator;
+import org.occurrent.eventstore.api.internal.UpdateEventRepairValidator;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
@@ -61,6 +62,7 @@ import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.ReactiveBulkOperations;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.schema.JsonSchemaObject;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.transaction.reactive.TransactionalOperator;
@@ -701,6 +703,10 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     // withoutStreamPosition()) and DCB are honored as-is. When position is only on by default, turn it off if the
     // collection already holds events without a position, so upgrading an existing store does not build the position
     // index over the whole collection at startup. The constructor already blocks, so the probe blocks too.
+    //
+    // Turning position off here means writesPosition() is false, so neither the damage warning nor the un-backfilled
+    // checks run and this warning is the only one the operator sees. An event whose position updateEvent dropped is
+    // enough to reach it, so the shared message carries the repair caveat rather than naming the backfill alone.
     private static boolean resolveStreamPositionEnabled(EventStoreConfig config, String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
         if (!config.streamPositionEnabled) {
             return false;
@@ -709,10 +715,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             return true;
         }
         if (hasPreExistingUnpositionedEvents(eventStoreCollectionName, mongoTemplate)) {
-            LOGGER.warn("Stream position is on by default, but the event collection '{}' already contains events without a 'position'. " +
-                    "Position will NOT be used for this store, to avoid building the position index over a large existing collection at startup. " +
-                    "To use position, enable it explicitly with EventStoreConfig.Builder.withStreamPosition() (or set occurrent.event-store.stream.position=true) " +
-                    "and backfill existing events first with the position-backfill module (see doc/runbooks/position-backfill.md).", eventStoreCollectionName);
+            LOGGER.warn(PositionBackfillValidator.positionDisabledByUnpositionedEventsMessage(eventStoreCollectionName));
             return false;
         }
         return true;
@@ -782,7 +785,11 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         }
 
         if (writesPosition) {
-            chain = chain.then(warnIfUnpositionedEventsExist(eventStoreCollectionName, mongoTemplate));
+            // Damage check first. The unpositioned check errors when requireBackfilledPosition is set, and an event
+            // whose position updateEvent dropped has no position field either, so it would fail startup naming the
+            // position backfill, and backfilling such an event assigns a wrong position for good.
+            chain = chain.then(warnOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate))
+                    .then(warnIfUnpositionedEventsExist(eventStoreCollectionName, mongoTemplate));
         }
 
         // SessionSynchronization must be ALWAYS for TransactionTemplate to work with MongoTemplate. See
@@ -811,6 +818,20 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
                 LOGGER.warn(PositionBackfillValidator.unpositionedEventsMessage(eventStoreCollectionName));
                 return Mono.empty();
             });
+        });
+    }
+
+    // Warns when the collection holds events that updateEvent damaged before 0.34.0, which stored position as a
+    // string. Those events are missing from every position query and from the conflict query behind a conditional
+    // append. A string position sits in its own type range in the position index, so this reads no keys at all on a
+    // store that was never damaged.
+    private static Mono<Void> warnOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
+        Query damagedQuery = new Query(where(OccurrentCloudEventExtension.POSITION).type(JsonSchemaObject.Type.STRING));
+        return mongoTemplate.exists(damagedQuery, eventStoreCollectionName).flatMap(hasDamagedEvents -> {
+            if (hasDamagedEvents) {
+                LOGGER.warn(UpdateEventRepairValidator.damagedEventsMessage(eventStoreCollectionName));
+            }
+            return Mono.<Void>empty();
         });
     }
 

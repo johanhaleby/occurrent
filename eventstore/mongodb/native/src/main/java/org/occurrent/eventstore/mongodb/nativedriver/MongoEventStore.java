@@ -21,6 +21,7 @@ import com.mongodb.client.*;
 import com.mongodb.client.model.*;
 import com.mongodb.client.result.UpdateResult;
 import io.cloudevents.CloudEvent;
+import org.bson.BsonType;
 import org.bson.Document;
 import org.bson.conversions.Bson;
 import org.jspecify.annotations.NullMarked;
@@ -33,6 +34,7 @@ import org.occurrent.eventstore.api.blocking.*;
 import org.occurrent.eventstore.api.dcb.*;
 import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.eventstore.api.internal.PositionBackfillValidator;
+import org.occurrent.eventstore.api.internal.UpdateEventRepairValidator;
 import org.occurrent.eventstore.api.internal.StreamReadFilterToFilterMapper;
 import org.occurrent.eventstore.api.internal.StreamReadFilterValidator;
 import org.occurrent.eventstore.api.internal.UpdateEventFunctionValidator;
@@ -146,6 +148,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         this.requireBackfilledPosition = config.requireBackfilledPosition;
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
         if (writesPosition()) {
+            // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
+            // position updateEvent dropped has no position field either, so that check would fail startup
+            // naming the position backfill, and backfilling such an event assigns a wrong position for good.
+            warnOnEventsDamagedByUpdateEvent(eventCollection);
             warnOrFailOnUnpositionedEvents(eventCollection, requireBackfilledPosition);
         }
     }
@@ -870,6 +876,10 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // withoutStreamPosition()) and DCB are honored as-is. When position is only on by default, turn it off if the
     // collection already holds events without a position, so upgrading an existing store does not build the position
     // index over the whole collection at startup. The user gets a warning naming how to turn it on and backfill.
+    //
+    // Turning position off here means writesPosition() is false, so neither the damage warning nor the un-backfilled
+    // checks run and this warning is the only one the operator sees. An event whose position updateEvent dropped is
+    // enough to reach it, so the shared message carries the repair caveat rather than naming the backfill alone.
     private static boolean resolveStreamPositionEnabled(EventStoreConfig config, MongoCollection<Document> eventCollection) {
         if (!config.streamPositionEnabled) {
             return false;
@@ -878,10 +888,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             return true;
         }
         if (hasPreExistingUnpositionedEvents(eventCollection)) {
-            log.warn("Stream position is on by default, but the event collection '{}' already contains events without a 'position'. " +
-                    "Position will NOT be used for this store, to avoid building the position index over a large existing collection at startup. " +
-                    "To use position, enable it explicitly with EventStoreConfig.Builder.withStreamPosition() (or set occurrent.event-store.stream.position=true) " +
-                    "and backfill existing events first with the position-backfill module (see doc/runbooks/position-backfill.md).", eventCollection.getNamespace().getCollectionName());
+            log.warn(PositionBackfillValidator.positionDisabledByUnpositionedEventsMessage(eventCollection.getNamespace().getCollectionName()));
             return false;
         }
         return true;
@@ -911,6 +918,21 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             throw PositionBackfillValidator.unpositionedEventsExist(collectionName);
         }
         log.warn(PositionBackfillValidator.unpositionedEventsMessage(collectionName));
+    }
+
+    // Warns when the collection holds events that updateEvent damaged before 0.34.0, which stored position as a
+    // string. Those events are missing from every position query and from the conflict query behind a conditional
+    // append. A string position sits in its own type range in the position index, so this reads no keys at all on a
+    // store that was never damaged.
+    private static void warnOnEventsDamagedByUpdateEvent(MongoCollection<Document> eventCollection) {
+        // Whether one exists, not what is in it. Without the projection this pulls a whole stored event, payload and
+        // all, into the startup path of an affected store. The Spring twins ask through exists() and never do.
+        Document firstDamagedEvent = eventCollection.find(Filters.type(OccurrentCloudEventExtension.POSITION, BsonType.STRING))
+                .limit(1).projection(Projections.include(ID)).first();
+        if (firstDamagedEvent == null) {
+            return;
+        }
+        log.warn(UpdateEventRepairValidator.damagedEventsMessage(eventCollection.getNamespace().getCollectionName()));
     }
 
     private static boolean collectionExists(MongoDatabase mongoDatabase, String collectionName) {

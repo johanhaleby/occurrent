@@ -3,7 +3,7 @@
 Each section describes one 0.34.0 change that requires action from a caller on 0.33.0, what the
 `UpgradeToOccurrent_0_34` OpenRewrite recipe rewrites for you, and what you have to do by hand.
 
-Nine things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
+Ten things are worth reading, three of them compile-time breaks. At compile time, if you use the flow saga's
 deprecated `join` or Kotlin's `expect<T>`, both are gone. Read
 [section 1](#1-a-flow-sagas-join-kotlins-expectt-and-expectation-are-removed). A flow saga's `stepWindow` now
 counts and evicts only the events its own steps declare, which most callers need to do nothing about. Read
@@ -28,9 +28,12 @@ Then a saga instance whose event keeps failing is now suspended instead of retri
 things about the saga API at once. `SagaEnvelope` gains two record components and `SagaRunnerConfig` gains one,
 `SagaInstance` gains a method, and `SagaStatus` gains a constant that `findByStatus(ACTIVE, ..)` no longer returns. Read
 [section 8](#8-a-saga-instance-that-keeps-failing-is-quarantined-and-four-saga-types-change-with-it).
-Finally, a reactor catch-up subscription now delivers an event a second time when a write that was in flight during the
+Then a reactor catch-up subscription now delivers an event a second time when a write that was in flight during the
 replay was read by a history window, which needs a handler that is safe to run twice on the same event. Read
 [section 9](#9-a-reactor-catch-up-subscription-can-deliver-a-concurrent-write-twice).
+Finally, if your application ever called `updateEvent` while running 0.33.0 or earlier, some of your stored
+events are damaged and a one-off repair puts them back. Read
+[section 10](#10-events-updateevent-damaged-before-0340-need-a-one-off-repair).
 
 ## 1. A flow saga's `join`, Kotlin's `expect<T>` and `Expectation` are removed
 
@@ -816,3 +819,80 @@ ids than it has room for.
 
 There is no recipe for this change. Nothing in your source code declares a requirement that an event arrives once, so
 there is nothing a rewrite could search for.
+## 10. Events `updateEvent` damaged before 0.34.0 need a one-off repair
+
+There is no recipe for this. It is not a code change, it is stored data that needs fixing, and only if your
+application called `EventStoreOperations.updateEvent` while running 0.33.0 or earlier.
+
+Up to and including 0.33.0, `updateEvent` rebuilt the stored document through the stream-only mapper, which writes
+`position` through the general CloudEvent extension writer. That writer has no `Long` overload, so `position` came
+back as a string instead of a number, and the indexed `dcbTags` array was dropped entirely. 0.34.0 fixes the write
+path on all three MongoDB stores. It does not repair events that are already stored.
+
+MongoDB compares values within a type, so a string `position` matches neither end of a numeric range. An event
+damaged this way is missing from DCB reads, from `exists` and `count`, from position-ordered stream reads in both
+directions, from position-based catch-up, and from the conflict query behind a conditional append, where it means
+an append that should have been refused is accepted. Nothing raises an error at any point.
+
+Note that the position half of this affects a store with stream position enabled even if it never used DCB.
+
+### How to tell whether this is you
+
+One query, which uses the `position` index and is cheap on a large collection:
+
+```javascript
+db.events.countDocuments({ position: { $type: "string" } })
+```
+
+Replace `events` with your event collection name. From 0.34.0 the store runs the same check when it starts and logs
+a warning naming the repair when it finds something, so an affected store tells you on its next deploy.
+
+An event whose position was dropped rather than turned into a string has no `position` field at all. Your store
+already warns about events without a position, but that warning names the position backfill, which is the wrong
+remedy here and will not fix it. If you see it and you have also called `updateEvent`, run the second query in the
+[repair runbook](../runbooks/update-event-repair.md) before assuming your history predates position.
+
+There is a third message worth knowing about. If stream position is on only by default, and the oldest event in the
+collection has no `position`, the store turns position off for itself and warns instead of checking anything further.
+That one event is enough, so a single event whose position `updateEvent` dropped puts an otherwise healthy store on
+that path, where it is the only warning you get. Every one of these messages names the repair runbook for that
+reason.
+
+### What to do about it
+
+Run the `occurrent-eventstore-mongodb-update-event-repair` module. The
+[runbook](../runbooks/update-event-repair.md) has the full sequence, and the
+[module README](../../eventstore/migration/update-event-repair/README.md) covers the options.
+
+```java
+MongoDatabase database = mongoClient.getDatabase("my-database");
+UpdateEventRepair repair = new UpdateEventRepair(database, "events", UpdateEventRepairOptions.defaults());
+UpdateEventRepairReport report = repair.report();   // counts the damage, writes nothing
+UpdateEventRepairResult result = repair.run();      // repairs it
+```
+
+The repair only touches events that still look damaged, so running it twice is safe, and it resumes from a
+checkpoint if it is killed part way.
+
+### What it will not fix, and you should know before you run it
+
+The repair rebuilds an event from what its document still holds. Where the old write-back destroyed the only copy
+of a value, the tool reports the event by `_id` rather than inventing one. Five cases end up there: a position that
+was never stored, a position another event already holds, a `position` string that is not a number, one holding zero
+or a negative number, and one above the store's position counter. The last two are values no store ever assigns. The
+runbook says what to do about each.
+
+A position the tool does restore is the value the document holds, not one it can check. The old write-back kept
+whatever position the update function returned, so a function that set `position` itself left that number behind as a
+string like any other. A forged value another event already holds is refused by the unique index, and a forged zero,
+negative, or above-the-counter one is reported, but a positive value inside the assigned range that happens to be free
+is indistinguishable from the event's own.
+The tool restores it and counts a repair. If your update functions set `position`, a clean repair is not the same as
+the positions being right, and you need an external record. If they left `position` alone, every restored position
+came from the event itself.
+
+One case is invisible even to the tool. If an update function returned a replacement event built from scratch,
+without the `dcbtags` extension, the document no longer looks like a DCB event and nothing distinguishes it from an
+ordinary stream event. If the extension was replaced rather than dropped, the repair rebuilds the tag array from
+the replacement tags, since that is all the document has left. If you know you ran an update function that built
+replacement events from scratch over DCB events, you need an external record of what those events should be.

@@ -20,6 +20,10 @@ package org.occurrent.eventstore.api.internal;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -27,14 +31,50 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PositionBackfillValidatorTest {
 
     private static final String COLLECTION = "events";
+    private static final String RUNBOOK = "doc/runbooks/position-backfill.md";
+
+    @ParameterizedTest
+    @MethodSource("everyMessage")
+    void every_message_names_the_collection_and_the_runbook(String message) {
+        assertThat(message).contains("'" + COLLECTION + "'").contains("doc/runbooks/position-backfill.md");
+    }
+
+    @ParameterizedTest
+    @MethodSource("everyMessage")
+    void every_message_that_names_the_backfill_names_the_repair_first(String message) {
+        // An event whose position the pre-0.34.0 updateEvent dropped reaches all of these looking like history that
+        // predates position. Backfilling it gives it a position it never had and nothing undoes that, so a message
+        // naming the backfill without naming the repair recommends the one remedy that cannot be taken back. This is
+        // parameterized rather than written out per message so a fourth message cannot be added without the caveat.
+        assertThat(message)
+                .contains("updateEvent")
+                .contains("doc/runbooks/update-event-repair.md")
+                .contains("cannot be undone");
+
+        // Order, not just presence. These go into a log, and a reader who acts on the first remedy the line names
+        // must not be acting on the one that cannot be taken back.
+        assertThat(message.indexOf("doc/runbooks/update-event-repair.md"))
+                .as("the repair has to be named before the backfill it warns about, otherwise this test is only checking that the words are somewhere in the line")
+                .isLessThan(message.indexOf(RUNBOOK));
+    }
 
     @Test
-    void both_messages_name_the_collection_and_the_runbook() {
-        String failure = PositionBackfillValidator.unpositionedEventsExist(COLLECTION).getMessage();
-        String warning = PositionBackfillValidator.unpositionedEventsMessage(COLLECTION);
+    void the_resolver_message_says_position_was_turned_off_rather_than_that_history_is_missing_it() {
+        String warning = PositionBackfillValidator.positionDisabledByUnpositionedEventsMessage(COLLECTION);
 
-        assertThat(failure).contains("'" + COLLECTION + "'").contains("doc/runbooks/position-backfill.md");
-        assertThat(warning).contains("'" + COLLECTION + "'").contains("doc/runbooks/position-backfill.md");
+        // This message is the only one a store on this path logs, and what it has to convey is that the store made a
+        // decision, not that a setting is unsatisfied. The other two describe a store that kept position on.
+        assertThat(warning)
+                .contains("Position will NOT be used for this store")
+                .contains("withStreamPosition()")
+                .doesNotContain("will not start");
+    }
+
+    private static Stream<String> everyMessage() {
+        return Stream.of(
+                PositionBackfillValidator.unpositionedEventsExist(COLLECTION).getMessage(),
+                PositionBackfillValidator.unpositionedEventsMessage(COLLECTION),
+                PositionBackfillValidator.positionDisabledByUnpositionedEventsMessage(COLLECTION));
     }
 
     @Test

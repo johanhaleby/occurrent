@@ -1,0 +1,93 @@
+/*
+ * Copyright 2026 Johan Haleby
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *        http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+
+package org.occurrent.eventstore.mongodb.migration.updateeventrepair;
+
+import org.jspecify.annotations.NullMarked;
+
+/**
+ * An event whose damage this tool cannot undo, named by its {@code _id} so an operator can look at it.
+ * <p>
+ * The repair rebuilds a stored event from what the document still holds. Where the old {@code updateEvent} write-back
+ * destroyed the only copy of a value, there is nothing left to rebuild it from, and the tool reports the event here
+ * rather than inventing one.
+ * <p>
+ * One of these is one finding, not one event. The reasons are independent, so a document whose {@code dcbtags} is not
+ * a string and whose position cannot be read produces two. {@code UpdateEventRepairResult.unrecoverableEventCount()}
+ * counts the events behind them.
+ *
+ * @param eventId The {@code _id} of the stored event.
+ * @param reason  Why the event could not be fully repaired.
+ * @param detail  The concrete value or error behind the reason, for an operator reading a report.
+ */
+@NullMarked
+public record UnrecoverableEvent(Object eventId, Reason reason, String detail) {
+
+    /**
+     * Why an event could not be fully repaired.
+     */
+    public enum Reason {
+        /**
+         * The event carries DCB tags, so it was written by a DCB append and had a position, but the document has no
+         * {@code position} field at all. An update function that returned a replacement event built from scratch
+         * dropped it, and the number exists nowhere else. Assigning a fresh position in {@code _id} order would look
+         * plausible and be wrong, because a consumer holding a checkpoint from before the damage would then disagree
+         * with the store, so the tool refuses to do it.
+         */
+        POSITION_LOST,
+        /**
+         * The event's {@code position} is a string whose value is already held, as a number, by another event. Two
+         * events claim one position, which the unique position index rejects. The old write-back preserved whatever
+         * position the update function returned, so a function that forged one produced this. Only one of the two
+         * events can keep the position and the tool cannot tell which.
+         */
+        POSITION_ALREADY_TAKEN,
+        /**
+         * The event's {@code position} is a string that is not a number, so the original position cannot be read back
+         * out of it. Nothing in the known {@code updateEvent} defect produces this, so it points at damage from
+         * somewhere else.
+         */
+        POSITION_NOT_A_NUMBER,
+        /**
+         * The event's {@code position} is a string holding zero or a negative number, which is not a position any
+         * store assigned. Positions start above zero, {@code OccurrentCloudEventExtension.getPosition} returns
+         * {@code 0} for an event that has none, and every position query reads {@code position > 0}. Writing such a
+         * value back as a number would count as a repair and leave the event exactly as invisible as it was, so the
+         * tool reports it instead. The old write-back preserved whatever position the update function returned, so a
+         * function that forged one produced this.
+         */
+        POSITION_NOT_POSITIVE,
+        /**
+         * The event's {@code position} is a string holding a number above the store's position counter, which is the
+         * highest position the store has ever handed out, so no store assigned it. A read clamps its upper bound to
+         * that same counter, so writing the value back would count as a repair and leave the event exactly as
+         * invisible, and a later append reaching that number would collide with it. The counter is re-read before
+         * the event is reported, so a store that wrote while the repair walked cannot put an event here wrongly.
+         * A store with no counter document has no ceiling to compare against and this is not reported.
+         */
+        POSITION_ABOVE_COUNTER,
+        /**
+         * The event could not be read well enough to repair it. Its {@code dcbtags} is not a string, is an explicit
+         * null, or does not decode to a tag set. Nothing Occurrent writes produces any of those, so it points at a
+         * document that was edited outside the library. A null is not the same as an absent field, which is an
+         * ordinary stream event rather than damage, and it is reported because the damaged-event filter matches it.
+         * The run continues past it rather than stopping, so one such event cannot hold up the repair of a whole
+         * collection.
+         */
+        UNREADABLE
+    }
+}
