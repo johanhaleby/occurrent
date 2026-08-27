@@ -140,9 +140,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (!stateStore.compareAndSave(sagaId, record.envelope(), record.expectedVersion())) {
                 // Another input advanced the instance while the failing one was being retried, most likely a timer that
                 // fired successfully. The failing event now meets different state and may well succeed, so discard this
-                // write rather than retry one whose premise has gone. That costs the budget nothing past the first
-                // failure of an input, because the winning write carries the record forward: only the failing input
-                // getting through clears it.
+                // write rather than retry one whose premise has gone. Only a first failure loses its budget that way.
+                // A later one keeps the record the winning write left in place, since only the failing input clears it.
                 return false;
             }
             if (!record.quarantined()) {
@@ -156,7 +155,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         } catch (RuntimeException storeFailure) {
             // The store itself is what is failing, so the first failure write fails too. Rethrowing the original is
             // today's behaviour, and it is the right one, because a saga whose store is unreachable cannot make progress anyway.
-            failure.addSuppressed(storeFailure);
+            if (storeFailure != failure) {
+                // Java refuses to suppress an exception under itself, and a store that rethrows the very object that
+                // reached us here would otherwise replace the real failure with IllegalArgumentException.
+                failure.addSuppressed(storeFailure);
+            }
             return false;
         }
     }
