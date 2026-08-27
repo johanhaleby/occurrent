@@ -22,6 +22,7 @@ import org.occurrent.application.converter.typemapper.CloudEventTypeMapper
 import org.occurrent.eventstore.api.dcb.DcbCriteria
 import org.occurrent.eventstore.api.dcb.DcbCriterion
 import org.occurrent.eventstore.api.dcb.Tag
+import org.occurrent.filter.internal.EventTypeExpansion
 import java.util.*
 import kotlin.reflect.KClass
 
@@ -60,20 +61,56 @@ class DcbCriteriaBuilder<E : Any> private constructor(
     /** Creates a builder that refines the given boundary criterion, backed by a [CloudEventConverter]. */
     constructor(cloudEventConverter: CloudEventConverter<E>, boundary: DcbCriterion) : this(CloudEventTypeGetter { cloudEventConverter.getCloudEventType(it) }, boundary)
 
-    /** A criterion matching events whose CloudEvent type is the type string mapped from [type]. */
-    fun type(type: Class<out E>): DcbCriterion {
-        val mapped = typeGetter.getCloudEventType(type)
-        return if (boundary != null) boundary.types(mapped) else DcbCriteria.type(mapped)
-    }
+    // Do not unify type/types below with a future buildDcbCriteria helper a separate epic is moving into this same
+    // module. By that epic's own plan the incoming helper narrows uniformly rather than applying the refuse policy
+    // type/types use here. This is not a claim about today's buildDcbCriteria (in SubscriptionAnnotations), which
+    // takes pre-resolved CloudEvent type strings rather than classes and expands nothing itself, it is about the
+    // version landing here. Two type-derivation helpers that look alike is not a reason to share an implementation.
+    // Sharing one picks a single policy for both, and whichever one loses either starts refusing a caller that was
+    // fine, or starts silently missing concrete subtypes it used to find.
 
-    /** A criterion matching events whose CloudEvent type is any of the type strings mapped from the supplied classes (any-of). */
-    fun types(first: Class<out E>, vararg rest: Class<out E>): DcbCriterion {
-        val mapped = ArrayList<String>(rest.size + 1)
-        mapped.add(typeGetter.getCloudEventType(first))
-        // A Java caller can still pass a null vararg element despite the non-null Kotlin type, so validate each explicitly.
-        for (type in rest) mapped.add(typeGetter.getCloudEventType(Objects.requireNonNull(type, "Type cannot be null")))
+    /**
+     * A criterion matching events whose CloudEvent type is any of the CloudEvent types [type] expands into.
+     *
+     * [type] is expanded the way every other type-filter derivation in the library expands a declared type, through
+     * [EventTypeExpansion]. A sealed type expands to the concrete types it permits, all the way down, and a type
+     * whose concrete types cannot all be found is refused rather than turned into a criterion that would miss some
+     * of them. The finding is the sealed-permits walk, which starts at the declared type, follows a `permits` clause
+     * through `Class.getPermittedSubclasses`, and stops at the first level that is not sealed. It reads no classpath
+     * and consults no index of subtypes, so a subclass declared outside a `permits` clause is beyond it.
+     *
+     * **A Kotlin `enum class` whose constants have bodies is refused, and the "make it final or sealed" way out the
+     * refusal message offers cannot be written for that construct.** Kotlin compiles such an enum as a concrete
+     * class that is neither final nor sealed, and each constant body as a separate class no `permits` clause points
+     * the walk at. The message's other two ways out both work here. Declare the constants,
+     * `types(MyEnum.A.javaClass, MyEnum.B.javaClass)`, since each body compiles to its own final class, or build
+     * the [DcbCriterion] yourself from the raw CloudEvent type string. Removing the constant bodies is a third
+     * option the message does not mention, by moving the per-constant behavior into a constructor parameter or a
+     * `when`, which makes the enum final again and lets `type(MyEnum::class.java)` work. Removing them also
+     * unblocks a sealed event interface above the enum, which an enum with constant bodies reopens and which is
+     * where the refusal usually reaches you. A Java enum with constant bodies is unaffected, since javac seals
+     * that construct implicitly (JLS 8.9).
+     */
+    fun type(type: Class<out E>): DcbCriterion {
+        val mapped = expandedCloudEventTypes(setOf(type))
         return if (boundary != null) boundary.types(mapped) else DcbCriteria.types(mapped)
     }
+
+    /**
+     * A criterion matching events whose CloudEvent type is any of the CloudEvent types the supplied classes expand
+     * into (any-of). Each declared type is expanded the way [type] expands one.
+     */
+    fun types(first: Class<out E>, vararg rest: Class<out E>): DcbCriterion {
+        val declaredTypes = LinkedHashSet<Class<out E>>(rest.size + 1)
+        declaredTypes.add(first)
+        // A Java caller can still pass a null vararg element despite the non-null Kotlin type, so validate each explicitly.
+        for (type in rest) declaredTypes.add(Objects.requireNonNull(type, "Type cannot be null"))
+        val mapped = expandedCloudEventTypes(declaredTypes)
+        return if (boundary != null) boundary.types(mapped) else DcbCriteria.types(mapped)
+    }
+
+    private fun expandedCloudEventTypes(declaredTypes: Set<Class<out E>>): List<String> =
+        EventTypeExpansion.expand(declaredTypes, ::cannotBuildCriterionOn).map { typeGetter.getCloudEventType(it) }
 
     /** A criterion matching events containing all the supplied DCB tags (all-of). */
     fun tags(first: Tag, vararg rest: Tag): DcbCriterion =
@@ -126,4 +163,28 @@ class DcbCriteriaBuilder<E : Any> private constructor(
             "$method() cannot refine a boundary criterion. Call criteria() without a boundary instead."
         }
     }
+}
+
+private fun cannotBuildCriterionOn(eventType: Class<*>): IllegalArgumentException {
+    if (eventType.isArray) {
+        return IllegalArgumentException(
+            "${eventType.typeName} cannot be a declared event type, since this expansion does not support an array. " +
+                "An array class is already concrete, so there is no narrower type to name, and it is refused for " +
+                "consistency with the other declared shapes rather than because nothing can be an instance of one. " +
+                "Build the DcbCriterion yourself with DcbCriteria.type(String)/types(String, ...) if you do mean to " +
+                "match an array type."
+        )
+    }
+    if (eventType.isPrimitive) {
+        return IllegalArgumentException(
+            "${eventType.typeName} cannot be a declared event type, since no event is ever an instance of a primitive type. Declare the concrete event types instead."
+        )
+    }
+    return IllegalArgumentException(
+        "the concrete event types dispatch would accept for ${eventType.name} cannot all be enumerated, so a criterion " +
+            "derived from it would miss some of them. Declare the concrete event types instead, make ${eventType.simpleName} " +
+            "and every level below it final or sealed, or build the DcbCriterion yourself with the raw type string, " +
+            "which is the way out when a CloudEventTypeMapper of your own maps the whole hierarchy onto a single " +
+            "CloudEvent type string."
+    )
 }
