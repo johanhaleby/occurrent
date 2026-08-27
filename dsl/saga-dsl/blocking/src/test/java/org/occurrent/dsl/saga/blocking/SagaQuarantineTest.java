@@ -187,6 +187,27 @@ class SagaQuarantineTest {
         }
 
         @Test
+        void does_not_stop_them_either_when_the_event_store_assigns_no_global_position() {
+            // The gate at startup passes here, because whether the model can be repositioned is a question about the
+            // model and not about what the events carry. Requiring a position in the failure record made quarantine
+            // silently inert for exactly this deployment: every retry recorded nothing, so the budget never elapsed.
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(streamOnlyCloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            model.push(streamOnlyCloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            model.push(streamOnlyCloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            model.push(streamOnlyCloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure().input()).isEqualTo(POISON + "@2"),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure().position()).isNull(),
+                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
+            ));
+        }
+
+        @Test
         void blocks_them_exactly_as_before_when_the_quarantine_budget_is_switched_off() throws Exception {
             ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
             run(model, CONFIG.withQuarantineAfter(null));
@@ -344,10 +365,19 @@ class SagaQuarantineTest {
     // The stream and position extensions an event store writes, added by hand because this feed is a plain list. Without
     // them the runner refuses the event outright, since it could not tell a redelivery from a new event.
     private CloudEvent cloudEvent(String streamId, long streamVersion, OrderEvent event) {
-        CloudEvent withStream = CloudEventBuilder.v1(converter.toCloudEvent(event))
+        position.incrementAndGet();
+        return OccurrentCloudEventExtension.withPosition(streamOnlyCloudEvent(streamId, streamVersion, event), position.get());
+    }
+
+    /**
+     * What an event store that assigns no global position writes: the stream extensions and nothing else. A store built
+     * with {@code withoutStreamPosition()} feeds a saga events of this shape, and so does an upgraded deployment whose
+     * existing collection left stream position disabled.
+     */
+    private CloudEvent streamOnlyCloudEvent(String streamId, long streamVersion, OrderEvent event) {
+        return CloudEventBuilder.v1(converter.toCloudEvent(event))
                 .withExtension(OccurrentCloudEventExtension.occurrent(streamId, streamVersion))
                 .build();
-        return OccurrentCloudEventExtension.withPosition(withStream, position.incrementAndGet());
     }
 
     private final java.util.concurrent.atomic.AtomicLong position = new java.util.concurrent.atomic.AtomicLong();

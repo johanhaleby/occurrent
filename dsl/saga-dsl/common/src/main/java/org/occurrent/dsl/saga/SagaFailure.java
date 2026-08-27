@@ -35,19 +35,25 @@ import static java.util.Objects.requireNonNull;
  * for why.
  * <p>
  * What is here and what is not follows the same rule as the rest of {@link SagaInstance}. An operator asking why an
- * instance stopped needs the exception's type and message, and the position to find the event by. The event payload and
- * the stack trace are not lifecycle, so they stay in the log the executor already wrote them to.
+ * instance stopped needs the exception's type and message, and enough to find the event by. The event payload and the
+ * stack trace are not lifecycle, so they stay in the log the executor already wrote them to.
+ * <p>
+ * {@code input} is what identifies the failing event, and {@code position} is a convenience beside it. An event store
+ * that assigns no global position, one built with {@code withoutStreamPosition()} for instance, still gives its events
+ * a stream id and a stream version, so such an event is recorded and quarantined like any other and answers
+ * {@code null} here. Read {@code input} when you want the identity and {@code position} when you have a feed that
+ * numbers its events and you want the number.
  *
  * @param input          the failing input's redelivery key, which is its stream id with its version, or its global
  *                       position. The same string the executor compares against to tell one failing input from the next
- * @param position       the global subscription position of the failing event, which is where in the event stream the
- *                       instance stopped
+ * @param position       the global subscription position of the failing event, or {@code null} when the event carries
+ *                       none, in which case {@code input} holds its stream id and version instead
  * @param firstFailedAt  when this input first failed, which is when the quarantine budget started running
  * @param failureType    the class name of the exception the saga or its dispatcher threw
  * @param failureMessage that exception's message, or {@code null} when it had none
  */
 public record SagaFailure(String input,
-                          long position,
+                          @Nullable Long position,
                           Instant firstFailedAt,
                           String failureType,
                           @Nullable String failureMessage) {
@@ -56,7 +62,7 @@ public record SagaFailure(String input,
         requireNonNull(input, "input cannot be null");
         requireNonNull(firstFailedAt, "firstFailedAt cannot be null");
         requireNonNull(failureType, "failureType cannot be null");
-        if (position < 0) {
+        if (position != null && position < 0) {
             throw new IllegalArgumentException("position cannot be negative, was " + position);
         }
     }

@@ -96,6 +96,15 @@ class SagaQuarantineSupportTest {
         return new SagaFailure("o1@" + position, position, firstFailedAt, IllegalStateException.class.getName(), "boom");
     }
 
+    /** What an event store that assigns no global position gives a saga: a stream id and a stream version, nothing else. */
+    private static EventMeta streamOnly(long streamVersion) {
+        return new EventMeta("o1", streamVersion, null);
+    }
+
+    private static SagaFailure failedWithoutPositionOn(long streamVersion, Instant firstFailedAt) {
+        return new SagaFailure("o1@" + streamVersion, null, firstFailedAt, IllegalStateException.class.getName(), "boom");
+    }
+
     @Nested
     class TheTimeBudget {
 
@@ -109,7 +118,7 @@ class SagaQuarantineSupportTest {
                     () -> assertThat(record.quarantined()).isFalse(),
                     () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(record.envelope().failure()).isEqualTo(
-                            new SagaFailure("o1@7", 7, NOW, IllegalStateException.class.getName(), "boom")),
+                            new SagaFailure("o1@7", 7L, NOW, IllegalStateException.class.getName(), "boom")),
                     () -> assertThat(record.expectedVersion()).isEqualTo(3),
                     () -> assertThat(record.envelope().version()).isEqualTo(4)
             );
@@ -199,11 +208,45 @@ class SagaQuarantineSupportTest {
         }
 
         @Test
-        void an_event_carrying_no_position_is_never_quarantined_because_nothing_could_replay_it() {
+        void an_event_with_a_stream_id_and_version_but_no_position_still_records_a_first_failure() {
+            // An event store built with withoutStreamPosition(), and an upgrade that leaves stream position disabled on
+            // an existing collection, both feed a saga events like this. Requiring a position here made quarantine
+            // inert for them: every retry returned without recording anything, so the budget never elapsed and the
+            // instance went on blocking every other one.
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", active(3, Map.of("o1", 6L), null), streamOnly(7), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertAll(
+                    () -> assertThat(record).isNotNull(),
+                    () -> assertThat(record.quarantined()).isFalse(),
+                    () -> assertThat(record.envelope().failure().input()).isEqualTo("o1@7"),
+                    () -> assertThat(record.envelope().failure().position()).isNull(),
+                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW)
+            );
+        }
+
+        @Test
+        void an_event_with_a_stream_id_and_version_but_no_position_quarantines_past_the_budget() {
+            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedWithoutPositionOn(7, NOW.minus(Duration.ofMinutes(6))));
+
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", failing, streamOnly(7), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertAll(
+                    () -> assertThat(record).isNotNull(),
+                    () -> assertThat(record.quarantined()).isTrue(),
+                    () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(record.envelope().failure().input()).isEqualTo("o1@7"),
+                    () -> assertThat(record.envelope().failure().position()).isNull()
+            );
+        }
+
+        @Test
+        void an_event_carrying_neither_a_stream_version_nor_a_position_records_nothing_because_its_record_could_never_be_matched() {
             SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofHours(1))));
 
             FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
-                    saga(), "o1", failing, new EventMeta("o1", 7L, null), new IllegalStateException("boom"), NOW, BUDGET);
+                    saga(), "o1", failing, new EventMeta("o1", null, null), new IllegalStateException("boom"), NOW, BUDGET);
 
             assertThat(record).isNull();
         }

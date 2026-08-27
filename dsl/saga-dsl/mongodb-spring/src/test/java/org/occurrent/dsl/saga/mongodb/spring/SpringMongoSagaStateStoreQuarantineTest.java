@@ -69,7 +69,7 @@ class SpringMongoSagaStateStoreQuarantineTest {
     }
 
     private static SagaFailure failure() {
-        return new SagaFailure("order-1@7", 7, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom");
+        return new SagaFailure("order-1@7", 7L, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom");
     }
 
     private static SagaEnvelope<String> quarantined(String sagaId) {
@@ -91,6 +91,24 @@ class SpringMongoSagaStateStoreQuarantineTest {
                 () -> assertThat(read.failure()).isEqualTo(failure()),
                 () -> assertThat(read.streamWatermarks()).isEqualTo(Map.of("order-1", 6L)),
                 () -> assertThat(read.positionWatermark()).isEqualTo(6L)
+        );
+    }
+
+    @Test
+    void a_failure_record_from_a_store_with_no_global_position_round_trips_with_a_null_position() {
+        // An event store built with withoutStreamPosition() gives its events a stream id and version and no position,
+        // so the record that quarantines such an instance has none to hold either.
+        SagaFailure withoutPosition = new SagaFailure("order-2@7", null, NOW.minusSeconds(300), IllegalStateException.class.getName(), "boom");
+        SagaStateStore<String> store = new SpringMongoSagaStateStore<>(mongoOperations(), COLLECTION, String.class);
+        store.compareAndSave("order-2", new SagaEnvelope<>("order-2", "awaiting-payment", SagaStatus.QUARANTINED, 1,
+                List.of(), Map.of("order-2", 6L), null, NOW.minusSeconds(600), NOW, null, null, true, withoutPosition), 0);
+
+        SagaEnvelope<String> read = store.find("order-2").orElseThrow();
+
+        assertAll(
+                () -> assertThat(read.status()).isEqualTo(SagaStatus.QUARANTINED),
+                () -> assertThat(read.failure()).isEqualTo(withoutPosition),
+                () -> assertThat(read.failure().position()).isNull()
         );
     }
 

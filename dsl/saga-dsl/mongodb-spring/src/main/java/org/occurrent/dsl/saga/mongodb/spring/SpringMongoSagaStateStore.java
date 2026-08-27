@@ -316,9 +316,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         SagaFailure failure = envelope.failure();
         if (failure != null) {
             document.append(FAILURE_INPUT, failure.input())
-                    .append(FAILURE_POSITION, failure.position())
                     .append(FAILURE_FIRST_FAILED_AT, failure.firstFailedAt().toEpochMilli())
                     .append(FAILURE_TYPE, failure.failureType());
+            // Omitted rather than written as null when the event store assigns no global position. The input is what
+            // identifies the failing event, and the position is a convenience beside it.
+            if (failure.position() != null) {
+                document.append(FAILURE_POSITION, failure.position());
+            }
             if (failure.failureMessage() != null) {
                 document.append(FAILURE_MESSAGE, failure.failureMessage());
             }
@@ -450,8 +454,9 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
         if (input == null) {
             return null;
         }
+        Object position = document.get(FAILURE_POSITION);
         return new SagaFailure(input,
-                ((Number) Objects.requireNonNull(document.get(FAILURE_POSITION), "failurePosition")).longValue(),
+                position == null ? null : ((Number) position).longValue(),
                 Objects.requireNonNull(readInstant(document, FAILURE_FIRST_FAILED_AT), "failureFirstFailedAt"),
                 Objects.requireNonNull(document.getString(FAILURE_TYPE), "failureType"),
                 document.getString(FAILURE_MESSAGE));

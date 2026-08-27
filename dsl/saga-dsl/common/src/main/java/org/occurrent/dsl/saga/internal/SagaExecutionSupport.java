@@ -50,12 +50,24 @@ public final class SagaExecutionSupport {
         public static final EventMeta NONE = new EventMeta(null, null, null);
 
         /**
-         * Whether this carries enough to tell a redelivery from a new event, which is a stream id together with a
-         * stream version, or a position. {@code isRedelivery} looks at the same two things, so the rule lives here
-         * instead of being written twice.
+         * The string that identifies this input across redeliveries, which is the stream id with its stream version
+         * when both are present and the global position otherwise, or {@code null} when the event carries neither.
+         * {@code isRedelivery} looks at the same two things, so the rule lives here instead of being written twice.
+         * <p>
+         * A stream id with a version is preferred over a position because it belongs to the event, while a position is
+         * a number one subscription model assigns. An event store that assigns no position at all, one built with
+         * {@code withoutStreamPosition()} for instance, still gives every event both of the first two.
          */
+        public @Nullable String redeliveryKey() {
+            if (streamId != null && streamVersion != null) {
+                return streamId + "@" + streamVersion;
+            }
+            return position == null ? null : "position:" + position;
+        }
+
+        /** Whether {@link #redeliveryKey()} exists, meaning a redelivery of this input can be told from a new one. */
         public boolean carriesRedeliveryKey() {
-            return (streamId != null && streamVersion != null) || position != null;
+            return redeliveryKey() != null;
         }
     }
 
@@ -200,8 +212,16 @@ public final class SagaExecutionSupport {
      * <p>
      * The first failure of an input records when it started failing. Every later failure of the same input compares the
      * elapsed time against {@code quarantineAfter} and writes nothing while it is under it, so the cost is one store
-     * write per failing input rather than one per retry. Past the budget the instance is quarantined at the failing
-     * input's position.
+     * write per failing input rather than one per retry. Past the budget the instance is quarantined on the failing
+     * input.
+     * <p>
+     * "The same input" is {@link EventMeta#redeliveryKey()}, not the global position, so an event from a store that
+     * assigns no position is recorded and quarantined like any other. An input carrying no key at all is refused here,
+     * because a record naming it could never be matched against the input that wrote it.
+     * <p>
+     * A successful input clears the record only when it is the input the record names. Any other one leaves it alone,
+     * including {@code firstFailedAt}, because a saga re-arms its timers explicitly and a timer firing more often than
+     * the budget would otherwise put the clock back to zero forever.
      * <p>
      * The budget is wall-clock rather than an attempt count because the retry loop is not always Occurrent's. On the
      * MongoDB subscription models it is a {@code RetryStrategy} the user can replace, and behind a broker bridge it is
@@ -213,7 +233,7 @@ public final class SagaExecutionSupport {
      *                        would have created the instance
      * @param sagaId          the correlation id of the instance
      * @param current         the stored envelope, or {@code null} when the failing input would have created it
-     * @param meta            the failing event's delivery metadata
+     * @param meta            the failing event's delivery metadata, which has to carry a redelivery key
      * @param failure         what the saga, or its dispatcher, threw
      * @param now             the current instant
      * @param quarantineAfter how long an input may keep failing before its instance is quarantined
@@ -225,10 +245,11 @@ public final class SagaExecutionSupport {
                                                                                           Throwable failure,
                                                                                           Instant now,
                                                                                           Duration quarantineAfter) {
-        Long position = meta.position();
-        if (position == null) {
-            // The record holds the position so an operator can find the event, and there is none to hold. Refusing
-            // here keeps the 0.33.0 behaviour of rethrowing, which loses nothing.
+        String input = meta.redeliveryKey();
+        if (input == null) {
+            // Nothing here tells one delivery of this input from the next, so a record written now could never be
+            // matched against the input that wrote it, and the budget could never elapse. That is the same event
+            // RedeliveryDetection already refuses under REQUIRED, its default, before it ever reaches the saga.
             return null;
         }
         if (current != null && (current.isCompleted() || current.isQuarantined())) {
@@ -241,10 +262,9 @@ public final class SagaExecutionSupport {
             // is skipped as one, so keep the committed outcome instead.
             return null;
         }
-        String input = redeliveryKeyOf(meta);
         SagaFailure existing = current == null ? null : current.failure();
         if (existing == null || !existing.input().equals(input)) {
-            SagaFailure record = new SagaFailure(input, position, now, failure.getClass().getName(), failure.getMessage());
+            SagaFailure record = new SagaFailure(input, meta.position(), now, failure.getClass().getName(), failure.getMessage());
             return failureRecord(saga, sagaId, current, record, SagaStatus.ACTIVE, now, false);
         }
         if (Duration.between(existing.firstFailedAt(), now).compareTo(quarantineAfter) < 0) {
@@ -252,7 +272,7 @@ public final class SagaExecutionSupport {
         }
         // Keep the instant the failing started, refresh what it is failing with, because an input that fails one way and then
         // another is still the same input failing, and the later exception is the more useful one to read.
-        SagaFailure record = new SagaFailure(input, position, existing.firstFailedAt(), failure.getClass().getName(), failure.getMessage());
+        SagaFailure record = new SagaFailure(input, meta.position(), existing.firstFailedAt(), failure.getClass().getName(), failure.getMessage());
         return failureRecord(saga, sagaId, current, record, SagaStatus.QUARANTINED, now, true);
     }
 
@@ -264,15 +284,7 @@ public final class SagaExecutionSupport {
         if (existing == null) {
             return null;
         }
-        return existing.input().equals(redeliveryKeyOf(meta)) ? null : existing;
-    }
-
-    /** The redelivery key that identifies one input, read the same way round as {@link #isRedelivery}. */
-    private static String redeliveryKeyOf(EventMeta meta) {
-        if (meta.streamId() != null && meta.streamVersion() != null) {
-            return meta.streamId() + "@" + meta.streamVersion();
-        }
-        return "position:" + meta.position();
+        return existing.input().equals(meta.redeliveryKey()) ? null : existing;
     }
 
     private static <E, S extends @Nullable Object, C> FailureRecord<S> failureRecord(Saga<E, S, C> saga, String sagaId,

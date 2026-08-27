@@ -48,7 +48,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>
  * An event that keeps failing for one instance is quarantined rather than retried forever. The first failure records
  * when the failing started and rethrows, which is what every version up to 0.33.0 did. Once the failing has lasted
- * longer than {@link SagaRunnerConfig#quarantineAfter()}, the instance is marked
+ * at least {@link SagaRunnerConfig#quarantineAfter()}, the instance is marked
  * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} at that event's position and this class returns normally, so the
  * subscription acknowledges the event and the saga's other instances stop waiting behind it.
  * <p>
@@ -127,7 +127,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * the shared channel keeps going. A false answer means the exception propagates exactly as it always has.
      * <p>
      * Only the event path calls this. A failing timeout is already isolated per instance by the poller and blocks
-     * nothing, and a timeout has no position of its own, so there would be nothing to quarantine it at.
+     * nothing, and a timeout carries no redelivery key of its own, so there would be nothing to quarantine it on.
      */
     private boolean quarantine(String sagaId, EventMeta meta, RuntimeException failure, Duration quarantineAfter) {
         try {
@@ -138,18 +138,20 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return false;
             }
             if (!stateStore.compareAndSave(sagaId, record.envelope(), record.expectedVersion())) {
-                // Another input advanced the instance while the failing one was being retried, most likely a timer that fired
-                // successfully. The failing event now meets different state and may well succeed, so discard the record
-                // and let the budget start over rather than retry a write whose premise has gone.
+                // Another input advanced the instance while the failing one was being retried, most likely a timer that
+                // fired successfully. The failing event now meets different state and may well succeed, so discard this
+                // write rather than retry one whose premise has gone. That costs the budget nothing past the first
+                // failure of an input, because the winning write carries the record forward: only the failing input
+                // getting through clears it.
                 return false;
             }
             if (!record.quarantined()) {
-                log.warn("Saga '{}' instance '{}' failed on the event at position {} and is being retried by the subscription. It is quarantined if it keeps failing for {}.",
-                        subscriptionId, sagaId, meta.position(), quarantineAfter, failure);
+                log.warn("Saga '{}' instance '{}' failed on the event '{}' and is being retried by the subscription. It is quarantined if it keeps failing for {}.",
+                        subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                 return false;
             }
-            log.error("Saga '{}' instance '{}' kept failing on the event at position {} for {} and is now QUARANTINED. It skips every further event and fires no timers, so the saga's other instances are no longer blocked behind it. Find it with findByStatus(QUARANTINED, ..).",
-                    subscriptionId, sagaId, meta.position(), quarantineAfter, failure);
+            log.error("Saga '{}' instance '{}' kept failing on the event '{}' for {} and is now QUARANTINED. It skips every further event and fires no timers, so the saga's other instances are no longer blocked behind it. Find it with findByStatus(QUARANTINED, ..).",
+                    subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
             return true;
         } catch (RuntimeException storeFailure) {
             // The store itself is what is failing, so the first failure write fails too. Rethrowing the original is
