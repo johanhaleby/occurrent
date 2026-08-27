@@ -413,16 +413,18 @@ class SagaQuarantineSupportTest {
         }
 
         @Test
-        void keeps_the_record_when_a_different_event_gets_through() {
-            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(4))));
+        void clears_the_record_when_an_unrelated_input_completes_the_instance() {
+            // A completed instance can never quarantine, so a record left on it would describe a budget that can no
+            // longer run, and the next redelivery of the failing event is skipped as completed either way.
+            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(9, NOW.minus(Duration.ofMinutes(4))));
 
             Outcome<OrderState, OrderCommand> outcome = SagaExecutionSupport.process(
                     saga(), "o1", failing, SagaInput.event(new PaymentReserved("o1")), at(8), NOW);
 
             assertAll(
                     () -> assertThat(outcome.processed()).isTrue(),
-                    () -> assertThat(outcome.envelope().failure().input()).isEqualTo("o1@7"),
-                    () -> assertThat(outcome.envelope().failure().firstFailedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(4)))
+                    () -> assertThat(outcome.envelope().status()).isEqualTo(SagaStatus.COMPLETED),
+                    () -> assertThat(outcome.envelope().failure()).isNull()
             );
         }
 

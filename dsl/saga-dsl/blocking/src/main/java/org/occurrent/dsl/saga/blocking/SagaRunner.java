@@ -81,8 +81,12 @@ import static java.util.Objects.requireNonNull;
  *   <li><strong>Event path.</strong> An exception (including a {@link SagaConcurrencyException} once the retries are
  *       exhausted) propagates to the subscription model, which redelivers the event and retries the whole step. The
  *       event is not lost. The subscription is a single ordered channel shared by every instance this saga handles, so
- *       while one event keeps failing the events queued behind it wait. That wait is bounded by
- *       {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. Once one event has kept failing for one
+ *       while one event keeps failing the events queued behind it wait. Three things have to hold for that wait to end
+ *       at {@link SagaRunnerConfig#quarantineAfter()}, five minutes by default. The budget has to be set, the
+ *       subscription model has to be resumable at a chosen position, and the event has to arrive with a stream id and
+ *       version or a global position, since an event the saga cannot recognise a redelivery of is never quarantined.
+ *       Where any of those is missing the wait is the one every version up to 0.33.0 had, which is unbounded. Once one
+ *       event has kept failing for one
  *       instance that long, the instance becomes {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED}, the executor
  *       stops rethrowing, and the subscription moves past the event so the saga's other instances keep going. The
  *       quarantined instance stops there, and 0.34.0 has no operation that brings it back, so

@@ -194,7 +194,7 @@ public final class SagaExecutionSupport {
                 // Derived from nextState by the envelope's constructor; nothing sensible to pass here.
                 null,
                 true,
-                failureAfter(current, meta));
+                failureAfter(current, meta, terminal));
         return Outcome.processed(next, commands, expectedVersion);
     }
 
@@ -292,9 +292,11 @@ public final class SagaExecutionSupport {
         return failureMessage.substring(0, MAX_FAILURE_MESSAGE_LENGTH) + "... (truncated)";
     }
 
-    private static <S extends @Nullable Object> @Nullable SagaFailure failureAfter(@Nullable SagaEnvelope<S> current, EventMeta meta) {
+    private static <S extends @Nullable Object> @Nullable SagaFailure failureAfter(@Nullable SagaEnvelope<S> current, EventMeta meta, boolean terminal) {
         SagaFailure existing = current == null ? null : current.failure();
-        if (existing == null) {
+        if (existing == null || terminal) {
+            // A completed instance can never quarantine, so a record left on it would describe a budget that can no
+            // longer run, and it would sit outside the two states SagaInstance.failure() describes.
             return null;
         }
         return existing.input().equals(meta.redeliveryKey()) ? null : existing;
