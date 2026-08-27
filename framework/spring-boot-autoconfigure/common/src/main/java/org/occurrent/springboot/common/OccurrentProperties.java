@@ -717,11 +717,12 @@ public class OccurrentProperties {
 
         /**
          * How long one event may keep failing for one saga instance before that instance is quarantined and the
-         * subscription moves past the event, so the saga's other instances stop waiting behind it. Defaults to five
-         * minutes, matching {@code SagaRunnerConfig.defaults()}.
+         * subscription moves past the event, so the saga's other instances stop waiting behind it. The instance is
+         * quarantined once the failing has lasted at least this long. Defaults to five minutes, matching
+         * {@code SagaRunnerConfig.defaults()}.
          * <p>
          * Set it to zero to keep the pre-0.34.0 behaviour, where the event is retried forever and every other instance
-         * of that saga waits behind it. Quarantine is switched off on its own, with a warning at startup, on a
+         * of that saga waits behind it. A negative value is rejected at startup rather than read as zero. Quarantine is switched off on its own, with a warning at startup, on a
          * subscription model that cannot be resumed at a chosen position, since the event could never be obtained
          * again there.
          */

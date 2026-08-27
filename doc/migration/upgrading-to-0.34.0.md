@@ -657,7 +657,7 @@ every other correlation id behind it, for as long as nobody noticed.
 
 From 0.34.0 the executor times the failing rather than counting the attempts. The first failure of an event records
 the instant it started failing and rethrows, exactly as before. Once that event has kept failing for the same
-instance for longer than `SagaRunnerConfig.quarantineAfter`, five minutes by default, the instance moves to the new
+instance for at least `SagaRunnerConfig.quarantineAfter`, five minutes by default, the instance moves to the new
 `SagaStatus.QUARANTINED` and the executor stops rethrowing, so the subscription acknowledges the event and delivers
 the rest to everybody else.
 

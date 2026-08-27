@@ -406,7 +406,7 @@ class SagaAnnotationRegistrar {
     private void registerSagaSubscriptionSingleton(String id, SagaSubscription sagaSubscription) {
         String beanName = sagaSubscriptionBeanName(id);
         if (!(applicationContext instanceof ConfigurableApplicationContext configurableContext)) {
-            log.warn("Cannot publish '{}' because the application context is not a ConfigurableApplicationContext. The saga runs fine, but SagaSubscription.instances(), which is how a quarantined instance is found, is only reachable from a context that can hold the bean.", beanName);
+            log.warn("Cannot publish '{}' because the application context is not a ConfigurableApplicationContext. The saga runs fine, and its instances are still reachable through the SagaInstancesRegistry bean, but this per-saga handle to the running subscription is not published.", beanName);
             return;
         }
         ConfigurableListableBeanFactory beanFactory = configurableContext.getBeanFactory();
@@ -590,9 +590,11 @@ class SagaAnnotationRegistrar {
     }
 
     // Zero is how a Duration property says "never", since an unset property binds to the default rather than to null,
-    // and null is what SagaRunnerConfig takes for a saga that keeps retrying forever.
+    // and null is what SagaRunnerConfig takes for a saga that keeps retrying forever. A negative value is passed on
+    // untouched so SagaRunnerConfig rejects it, because reading a typo as "never" would quietly restore the blocking
+    // this feature removes.
     static @Nullable Duration quarantineBudgetOf(@Nullable Duration configured) {
-        return configured == null || configured.isZero() || configured.isNegative() ? null : configured;
+        return configured == null || configured.isZero() ? null : configured;
     }
 
     // The saga state type is the second type argument of the factory return type Saga<E, S, C>.

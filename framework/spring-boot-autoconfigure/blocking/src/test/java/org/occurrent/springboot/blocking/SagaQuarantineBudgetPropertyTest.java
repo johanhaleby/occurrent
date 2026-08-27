@@ -26,6 +26,7 @@ import org.occurrent.springboot.common.OccurrentProperties;
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 
 /**
@@ -56,7 +57,14 @@ class SagaQuarantineBudgetPropertyTest {
     }
 
     @Test
-    void reads_a_negative_budget_the_same_way_rather_than_quarantining_on_the_first_failure() {
-        assertThat(SagaAnnotationRegistrar.quarantineBudgetOf(Duration.ofSeconds(-1))).isNull();
+    void passes_a_negative_budget_on_so_SagaRunnerConfig_rejects_it_rather_than_reading_a_typo_as_never() {
+        Duration negative = Duration.ofSeconds(-1);
+
+        assertAll(
+                () -> assertThat(SagaAnnotationRegistrar.quarantineBudgetOf(negative)).isEqualTo(negative),
+                () -> assertThatThrownBy(() -> SagaRunnerConfig.defaults().withQuarantineAfter(negative))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("quarantineAfter cannot be negative")
+        );
     }
 }
