@@ -34,10 +34,13 @@ import org.occurrent.springboot.common.SubscriptionAnnotations.StreamSubscriptio
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.DcbStartAt;
 import org.occurrent.subscription.StartAt;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -61,6 +64,52 @@ class SubscriptionAnnotationRegistrar {
         this.startPositionSupport = startPositionSupport;
     }
 
+    // Resolves the bean to invoke the handler on, and the Method to invoke on it, falling back to the raw bean
+    // whenever the proxy isn't something the handler can safely run on. Three such cases, and each one ran fine on
+    // the raw bean before this class started resolving the proxy at all, so falling back here never regresses that.
+    //
+    // Any event delivered while beanName is still being created falls back to the raw bean, not just a
+    // WAIT_UNTIL_STARTED replay. A subscription waits for its own registration to finish starting by default,
+    // unless startupMode = BACKGROUND, so even a plain subscription with no explicit startup configuration can
+    // occasionally receive a live event in that window. Looking the bean up there deadlocks Spring Boot startup,
+    // because the bean factory's lenient singleton locking re-enters bean creation on this delivering thread
+    // instead of blocking it. This fallback is a deliberate, permanent exception, not a gap to close later. Every
+    // event delivered while the bean is still being created runs with no advice applied, including @Transactional,
+    // and startAt = BEGINNING with startupMode = WAIT_UNTIL_STARTED is the deterministic case, since its whole
+    // history replay runs synchronously in that window. Do not remove this branch to make the advice apply there
+    // too. The only way to do that is to defer the lookup until after the bean has finished creating, which is the
+    // afterSingletonsInstantiated move this class is fenced out of. Once a subscription has started, every later
+    // delivery resolves the proxy as usual.
+    //
+    // A JDK interface proxy (spring.aop.proxy-target-class=false) may not implement the handler method at all,
+    // since method was captured from the concrete pre-proxy class, and invoking it on such a proxy throws.
+    // A private or final handler method is never overridden by a CGLIB proxy either, so invoking it there runs
+    // against the proxy's own uninitialized fields instead of the real bean's, since Spring builds that proxy
+    // without ever running its constructor.
+    private HandlerInvocation resolveHandlerInvocation(Object bean, String beanName, Method method) {
+        boolean beanStillBeingCreated = ((ConfigurableApplicationContext) applicationContext).getBeanFactory().isCurrentlyInCreation(beanName);
+        if (beanStillBeingCreated) {
+            return new HandlerInvocation(bean, method);
+        }
+        Object target = applicationContext.getBean(beanName);
+        if (target == bean) {
+            return new HandlerInvocation(target, method);
+        }
+        Method invocableMethod;
+        try {
+            invocableMethod = AopUtils.selectInvocableMethod(method, target.getClass());
+        } catch (IllegalStateException e) {
+            return new HandlerInvocation(bean, method);
+        }
+        if (Modifier.isFinal(invocableMethod.getModifiers())) {
+            return new HandlerInvocation(bean, method);
+        }
+        return new HandlerInvocation(target, invocableMethod);
+    }
+
+    private record HandlerInvocation(Object target, Method method) {
+    }
+
     void registerSubscriptions(Object bean, String beanName) {
         Class<?> managedBeanClass = bean.getClass();
         for (Method method : managedBeanClass.getDeclaredMethods()) {
@@ -73,11 +122,11 @@ class SubscriptionAnnotationRegistrar {
                 throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @Subscription, @StreamSubscription, @DcbSubscription and @SynchronousSubscription, use only one.".formatted(bean.getClass().getName(), method.getName()));
             }
             if (streamSubscription != null) {
-                processSubscribeAnnotation(bean, method, StreamSubscriptionDefinition.from(streamSubscription));
+                processSubscribeAnnotation(beanName, bean, method, StreamSubscriptionDefinition.from(streamSubscription));
             } else if (subscription != null) {
-                processAgnosticSubscribeAnnotation(bean, method, subscription);
+                processAgnosticSubscribeAnnotation(beanName, bean, method, subscription);
             } else if (dcbSubscription != null) {
-                processDcbSubscribeAnnotation(bean, method, dcbSubscription);
+                processDcbSubscribeAnnotation(beanName, bean, method, dcbSubscription);
             } else if (synchronousSubscription != null) {
                 processSynchronousSubscribeAnnotation(beanName, bean, method, synchronousSubscription);
             }
@@ -85,14 +134,16 @@ class SubscriptionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E> void processSubscribeAnnotation(Object bean, Method method, StreamSubscriptionDefinition subscription) {
+    private <E> void processSubscribeAnnotation(String beanName, Object bean, Method method, StreamSubscriptionDefinition subscription) {
         String id = subscription.id();
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, subscription.eventTypes(), subscription.annotationName(), applicationContext.getBean(CloudEventConverter.class));
         List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
         Filter filter = resolved.filter();
 
+        // See resolveHandlerInvocation for why this is not just applicationContext.getBean(beanName).
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            invoke(method, bean, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+            HandlerInvocation invocation = resolveHandlerInvocation(bean, beanName, method);
+            invoke(invocation.method(), invocation.target(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
 
@@ -109,14 +160,16 @@ class SubscriptionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E> void processAgnosticSubscribeAnnotation(Object bean, Method method, Subscription annotation) {
+    private <E> void processAgnosticSubscribeAnnotation(String beanName, Object bean, Method method, Subscription annotation) {
         String id = annotation.id();
         SubscriptionAnnotations.ResolvedTypeFilter resolved = SubscriptionAnnotations.<E>resolveTypeFilter(id, bean, method, annotation.eventTypes(), "@Subscription", applicationContext.getBean(CloudEventConverter.class));
         List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
         Filter filter = resolved.filter();
 
+        // See resolveHandlerInvocation for why this is not just applicationContext.getBean(beanName).
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            invoke(method, bean, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+            HandlerInvocation invocation = resolveHandlerInvocation(bean, beanName, method);
+            invoke(invocation.method(), invocation.target(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
 
@@ -141,14 +194,10 @@ class SubscriptionAnnotationRegistrar {
         List<SubscriptionAnnotations.HandlerParameter> parameters = resolved.parameters();
         Filter filter = resolved.filter();
 
-        // Resolve the handler from the ApplicationContext lazily, at dispatch time, rather than closing over the raw
-        // bean instance captured here. This BeanPostProcessor runs in postProcessBeforeInitialization, before Spring
-        // wraps the bean in its AOP proxy, so the instance handed to us is the raw target. Invoking through it would
-        // bypass any handler-side @Transactional (or other) advice. Looking the bean up by name yields the proxy,
-        // so a handler-side @Transactional is honored when the synchronous handler is invoked.
+        // See resolveHandlerInvocation for why this is not just applicationContext.getBean(beanName).
         Function2<EventMetadata, E, Unit> consumer = (metadata, event) -> {
-            Object target = applicationContext.getBean(beanName);
-            invoke(method, target, SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
+            HandlerInvocation invocation = resolveHandlerInvocation(bean, beanName, method);
+            invoke(invocation.method(), invocation.target(), SubscriptionAnnotations.bindArguments(parameters, event, metadata, metadata));
             return Unit.INSTANCE;
         };
 
@@ -160,7 +209,7 @@ class SubscriptionAnnotationRegistrar {
     }
 
     @SuppressWarnings("unchecked")
-    private <E> void processDcbSubscribeAnnotation(Object bean, Method method, DcbSubscription annotation) {
+    private <E> void processDcbSubscribeAnnotation(String beanName, Object bean, Method method, DcbSubscription annotation) {
         String id = annotation.id();
         final DcbCriteria criteria;
         final List<SubscriptionAnnotations.HandlerParameter> parameters;
@@ -183,10 +232,12 @@ class SubscriptionAnnotationRegistrar {
             throw new IllegalArgumentException("A @DcbSubscription method must declare an event parameter, but %s#%s has none.".formatted(bean.getClass().getName(), method.getName()));
         }
 
+        // See resolveHandlerInvocation for why this is not just applicationContext.getBean(beanName).
         BiConsumer<DcbEventMetadata, E> consumer = (dcbMetadata, event) -> {
+            HandlerInvocation invocation = resolveHandlerInvocation(bean, beanName, method);
             boolean hasDcbEventMetadataParam = parameters.stream().anyMatch(p -> p.type() == DcbEventMetadata.class);
             Object metadataArgument = hasDcbEventMetadataParam ? dcbMetadata : dcbMetadata.eventMetadata();
-            invoke(method, bean, SubscriptionAnnotations.bindArguments(parameters, event, metadataArgument, dcbMetadata.eventMetadata()));
+            invoke(invocation.method(), invocation.target(), SubscriptionAnnotations.bindArguments(parameters, event, metadataArgument, dcbMetadata.eventMetadata()));
         };
 
         long startAtDcbPosition = annotation.startAtDcbPosition();
