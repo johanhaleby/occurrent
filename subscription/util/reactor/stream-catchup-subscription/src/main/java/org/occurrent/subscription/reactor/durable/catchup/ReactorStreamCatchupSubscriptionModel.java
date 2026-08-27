@@ -64,8 +64,8 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * The live resume token is captured before the bulk replay, not after, so an event that commits during the replay is
  * still delivered by the live subscription. The replay pages the sequence in {@code position} windows, then a
- * reconciliation pass keeps paging until the head stops advancing so events written during the replay are delivered
- * in order. A bounded id cache dedupes events that both the reconciliation pass and the live subscription see. The
+ * reconciliation pass reads the head once more and drains up to that snapshot, so events written during the replay
+ * are delivered in order and a continuous write rate cannot keep the replay from handing over. A bounded id cache dedupes events that both the reconciliation pass and the live subscription see. The
  * history windows fill nothing, so an event a history window read is delivered again if the live subscription also
  * sees it.
  * <p>

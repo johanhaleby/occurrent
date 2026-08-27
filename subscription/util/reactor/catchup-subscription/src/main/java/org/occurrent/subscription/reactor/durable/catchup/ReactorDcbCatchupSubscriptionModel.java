@@ -47,8 +47,9 @@ import static java.util.Objects.requireNonNull;
  * The handover preserves the central invariant of the blocking catch-up. The live change-stream resume token is captured
  * before the bulk replay, not after, so a DCB event that commits during the replay is still delivered by the live
  * subscription. The replay pages the sequence in {@code position} windows (no count and no time sort, because
- * {@code position} is monotonic and server-assigned), then a reconciliation pass keeps paging until the head stops
- * advancing to deliver events written during the replay in order. The handover seam is deduplicated with a bounded id
+ * {@code position} is monotonic and server-assigned), then a reconciliation pass reads the head once more and drains
+ * up to that snapshot, delivering events written during the replay in order without letting a continuous write rate
+ * keep it from handing over. The handover seam is deduplicated with a bounded id
  * cache so a reconciliation event the live subscription also sees is delivered once.
  * <p>
  * Trade-off: if the replay runs longer than the change stream history (the MongoDB oplog window), the captured token

@@ -123,9 +123,11 @@ to any other live delivery.
   [Upgrading to 0.34.0](../../migration/upgrading-to-0.34.0.md#8-a-reactor-catch-up-subscription-can-deliver-a-concurrent-write-twice)
   instead of rewritten.
 - `handoverCacheSize` now sizes the reconciliation overlap alone, which is what the blocking `cacheSize` already
-  means and what the property's own javadoc already claimed. Under the previous behaviour a rebuild larger than the
-  cache filled it with history ids and evicted them again, so the caching ADR 38 asked for did not happen at all for
-  any replay longer than the cache.
+  means and what the property's own javadoc already claimed. Under the previous behaviour the history ids went in
+  first, and `BoundedIdCache` evicts the eldest, so the reconciliation ids displaced them rather than the other way
+  round and the overlap ADR 38 wanted covered was covered either way. What the history ids bought was the
+  suppression this ADR removes, and what they cost was that a live delivery arriving while the replay was still
+  running was tested against a cache holding nothing else.
 - The two stacks converge. Teaching the blocking stacks the reactive caching instead would reintroduce #891 on three
   more paths and was not a candidate.
 - The blocking stacks need no change and get none.

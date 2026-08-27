@@ -772,12 +772,14 @@ handled. This section is the migration.
 ## 9. A reactor catch-up subscription can deliver a concurrent write twice
 
 A reactor catch-up subscription now delivers an event a second time when a write that was still in flight during the
-replay was read by a history window. Before this release that second delivery was suppressed.
+replay was read by a history window. Before this release the cache suppressed that second delivery whenever the
+event's id was still in it, and since it holds the most recently replayed `handoverCacheSize` ids, for an event this
+close to the head it was.
 
 A position is reserved before its write commits, so a write in flight when the replay read the head holds a position
 at or below that head, and a history window reads it even though it is not history. The replay used to put every id
 it read into the cache the live delivery filters on, the history reads included, so the change stream's own delivery
-of that event was dropped. The history windows now fill no cache, which is what all three blocking paths already did,
+of that event was dropped for as long as its id stayed in the cache. The history windows now fill no cache, which is what all three blocking paths already did,
 so the live subscription delivers that event again. The reasoning is in
 [ADR 135](../architecture/decisions/0135-the-reactive-handover-dedup-is-fed-only-by-the-reconciliation-read.md).
 
@@ -795,9 +797,10 @@ deployments where it does not. Under a secondary read preference or a sharded `m
 can lag entries already in the oplog, and the catch-up constructors take any `CheckpointAwareSubscriptionModel`, so
 one of your own can answer whatever it likes. Where the checkpoint lags, the live stream delivers pre-replay history
 too, and the cache no longer suppresses it, so the repeats reach as far back as the lag rather than covering
-concurrent writes alone. That suppression was already unreliable there, since a replay longer than
-`handoverCacheSize` evicted its own history ids before the live stream asked about them, but it is gone now rather
-than partial. The handler you need is the same one either way.
+concurrent writes alone. That suppression was never the guarantee it looks like, because the cache holds only the most recently replayed
+`handoverCacheSize` ids and evicts the eldest, so a lag wider than the cache already produced these repeats before
+this release. What is gone is the suppression of everything inside that window. The handler you need is the same one
+either way.
 
 Catch-up delivery on these models has always been at-least-once, and the same composition already re-delivers a whole
 replay when a stopped catch-up is started again, so a handler written to tolerate a repeat needs no change. What
