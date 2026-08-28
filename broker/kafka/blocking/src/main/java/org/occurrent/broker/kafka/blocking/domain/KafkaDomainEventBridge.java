@@ -60,12 +60,15 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * decision 5.
  * <p>
  * <strong>Acknowledgement</strong> follows the {@link RoutingOutcome} {@code acceptCloudEvent(...)} returns, exactly
- * as {@code KafkaCloudEventBridge} follows the one its own model reports. {@link RoutingOutcome#DELIVERED} or
- * {@link RoutingOutcome#FILTERED} stages this record's offset for the next commit, {@link RoutingOutcome#NOT_DELIVERABLE}
- * and a thrown exception both apply this bridge's configured {@link DeliveryFailurePolicy} instead.
- * {@link RoutingOutcome#DEFERRED} also never commits, but always seeks back the same way
- * {@link DeliveryFailurePolicy#REDELIVER} does, bypassing {@link DeliveryFailurePolicy} entirely: nothing here is
- * broken, only not ready yet, and {@code PARK} exists for failures, not for pacing.
+ * as {@code KafkaCloudEventBridge} follows the one its own model reports, and by reading the same
+ * {@link RoutingOutcome#disposition()} that bridge reads. {@link RoutingOutcome.Disposition#ACKNOWLEDGE} stages
+ * this record's offset for the next commit. {@link RoutingOutcome.Disposition#FAIL} and a thrown exception both
+ * apply this bridge's configured {@link DeliveryFailurePolicy} instead.
+ * {@link RoutingOutcome.Disposition#HOLD} does not commit either, and seeks back the same way
+ * {@link DeliveryFailurePolicy#REDELIVER} does, bypassing {@link DeliveryFailurePolicy} entirely, since nothing
+ * here is broken, only not ready yet, and {@code PARK} exists for failures rather than for pacing.
+ * {@link RoutingOutcome.Disposition#STOP} stops this bridge for good, the same way
+ * {@link UnreadableLiveFilterException} below does.
  * <p>
  * <strong>{@link UnreadableLiveFilterException} is different, and permanent.</strong> It means the projection this
  * feed carries was registered with a {@code data} payload filter this feed has no
@@ -504,23 +507,39 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                     "offset {}.", record.topic(), record.partition(), record.offset(), e);
             return toHandleResult(record, toCommit, failureAction.apply(record));
         }
-        if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
-            stage(record, toCommit);
-            return HandleResult.RESOLVED;
-        }
-        if (outcome == RoutingOutcome.DEFERRED) {
-            // Bypasses DeliveryFailurePolicy (and any parking) entirely: nothing here is broken, only not ready
-            // yet. REDELIVER, without ever calling failureAction.apply(record), reuses the same seek-back and
-            // throttledUntilNanos pacing processBatch(..) already applies for a partition it stops early.
-            return HandleResult.REDELIVER;
-        }
-        // Unreachable today: DomainEventFeed#acceptCloudEvent never returns NOT_DELIVERABLE (see its own javadoc),
-        // it only ever returns FILTERED, DELIVERED or DEFERRED, or throws one of the two exceptions caught above.
-        // Kept as a defensive fallback rather than an assertion, so a future outcome this bridge does not yet know
-        // about still fails safe through the configured policy instead of silently landing nowhere.
-        log.debug("A record on topic \"{}\" partition {} offset {} reported an outcome this bridge does not " +
-                "recognize. Routing it as a failure.", record.topic(), record.partition(), record.offset());
-        return toHandleResult(record, toCommit, failureAction.apply(record));
+        return switch (outcome.disposition()) {
+            case ACKNOWLEDGE -> {
+                stage(record, toCommit);
+                yield HandleResult.RESOLVED;
+            }
+            case HOLD -> {
+                // Bypasses DeliveryFailurePolicy (and any parking) entirely, since nothing here is broken, only
+                // not ready yet. REDELIVER, without ever calling failureAction.apply(record), reuses the same
+                // seek-back and throttledUntilNanos pacing processBatch(..) already applies for a partition it
+                // stops early. DomainEventFeed#acceptCloudEvent reports DEFERRED for this today, not UNAVAILABLE, per
+                // its own javadoc, and both share this disposition either way.
+                yield HandleResult.REDELIVER;
+            }
+            case FAIL -> {
+                // DomainEventFeed#acceptCloudEvent does not report NOT_DELIVERABLE today, per its own javadoc, so
+                // this branch is what a later one would reach rather than a path a shipped feed takes.
+                log.debug("A record on topic \"{}\" partition {} offset {} could not be delivered. Routing it " +
+                        "through the configured delivery failure policy.",
+                        record.topic(), record.partition(), record.offset());
+                yield toHandleResult(record, toCommit, failureAction.apply(record));
+            }
+            case STOP -> {
+                // Same permanent stop the two exceptions above get, for a refusal reported as an outcome rather
+                // than thrown. Offering the record again gets the same refusal, so the failure policy is the
+                // wrong place for it.
+                log.error("A record on topic \"{}\" partition {} offset {} was permanently refused. Stopping "
+                        + "this bridge and leaving its consumer group rather than redelivering into the same "
+                        + "refusal. The record is left uncommitted so it survives for the next consumer once the "
+                        + "refusing registration is fixed and restarted.",
+                        record.topic(), record.partition(), record.offset());
+                yield HandleResult.PERMANENT_STOP;
+            }
+        };
     }
 
     private static HandleResult toHandleResult(ConsumerRecord<String, byte[]> record, Map<TopicPartition, OffsetAndMetadata> toCommit,

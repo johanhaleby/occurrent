@@ -59,13 +59,13 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * model, not the catch-up wrapper in front of it.
  * <p>
  * <strong>Acknowledgement.</strong> {@code acceptRedeliverable(...)} throwing (a handler exception, or a
- * subscription filter that failed to evaluate) never commits. A normal return with {@link RoutingOutcome#DELIVERED}
- * or {@link RoutingOutcome#FILTERED} stages this record's offset for the next commit. A normal return with
- * {@link RoutingOutcome#UNAVAILABLE} never does either, and is seeked back and paced rather than sent through a
- * failure policy, see below. A normal return with {@link RoutingOutcome#NOT_DELIVERABLE} cannot happen, since that
- * outcome always comes with an exception, the filter's own or a transient action refusal's. A
- * {@link RoutingOutcome#REFUSED} stops this bridge for
- * good, also below. For every other failure this bridge's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) seeks the consumer back to this record's offset,
+ * subscription filter that failed to evaluate) never commits. A normal return is decided by
+ * {@link RoutingOutcome#disposition()} alone, so this bridge stages a record's offset for the next commit exactly
+ * when {@link RoutingOutcome#mayAcknowledge()} answers true for the outcome.
+ * {@link RoutingOutcome.Disposition#HOLD} seeks back and paces the record rather than sending it through a failure
+ * policy, see below, and {@link RoutingOutcome.Disposition#STOP} stops this bridge for good, also below. A normal
+ * return with {@link RoutingOutcome#NOT_DELIVERABLE} cannot happen, since that outcome always comes with an
+ * exception, the filter's own or a transient action refusal's. For every other failure this bridge's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) seeks the consumer back to this record's offset,
  * {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only once that publish is confirmed
  * treats this record as resolved, exactly as a delivered one. A normal return with {@link RoutingOutcome#DEFERRED},
  * a {@link CatchupThenPushSubscriptionModel} wrapping {@code model} still replaying or draining, say, also never
@@ -522,25 +522,44 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
                     record.topic(), record.partition(), record.offset());
             return resolve(record, toCommit, failureAction.apply(record));
         }
-        if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
-            stage(record, toCommit);
-            return true;
-        }
-        if (outcome == RoutingOutcome.DEFERRED || outcome == RoutingOutcome.UNAVAILABLE) {
-            // DEFERRED and UNAVAILABLE are paced identically, unconditionally, with no re-read of the model's own
-            // running state. See the class javadoc for why an earlier revision's re-read was removed. Bypasses DeliveryFailurePolicy (and any parking) entirely: nothing here is broken, only not
-            // ready yet, or paced behind the model's own lifecycle state. Returning false, without ever calling
-            // failureAction.apply(record), reuses the same seek-back and throttledUntilNanos pacing processBatch(..)
-            // already applies for a partition it stops early, exactly the mechanism the pre-existing
-            // readinessSource-gated path already relied on.
-            return false;
-        }
-        // NOT_DELIVERABLE, whether the filter itself failed to answer or a transient refusal reported it. It
-        // always arrives with an exception, which the catch above already routed, so reaching here means a
-        // future outcome this bridge has not been taught yet. Routed as a failure either way.
-        log.debug("A record on topic \"{}\" partition {} offset {} reported an outcome this bridge does not " +
-                "recognize. Routing it as a failure.", record.topic(), record.partition(), record.offset());
-        return resolve(record, toCommit, failureAction.apply(record));
+        return switch (outcome.disposition()) {
+            case ACKNOWLEDGE -> {
+                stage(record, toCommit);
+                yield true;
+            }
+            case HOLD -> {
+                // DEFERRED and UNAVAILABLE are paced identically, unconditionally, with no re-read of the model's
+                // own running state. See the class javadoc for why an earlier revision's re-read was removed.
+                // Bypasses DeliveryFailurePolicy (and any parking) entirely, since nothing here is broken, only
+                // not ready yet, or paced behind the model's own lifecycle state. Yielding false, without ever
+                // calling failureAction.apply(record), reuses the same seek-back and throttledUntilNanos pacing
+                // processBatch(..) already applies for a partition it stops early, exactly the mechanism the
+                // pre-existing readinessSource-gated path already relied on.
+                yield false;
+            }
+            case FAIL -> {
+                // NOT_DELIVERABLE, whether the filter itself failed to answer or a transient refusal reported it.
+                // It normally arrives with an exception, which the catch above already routed, so this branch is
+                // for one that arrived on its own.
+                log.debug("A record on topic \"{}\" partition {} offset {} could not be delivered. Routing it " +
+                        "through the configured delivery failure policy.",
+                        record.topic(), record.partition(), record.offset());
+                yield resolve(record, toCommit, failureAction.apply(record));
+            }
+            case STOP -> {
+                // REFUSED arriving on its own, with the refusal's own cause not propagating out of
+                // acceptRedeliverable(..) for the catch above to read. Stopped rather than routed through the
+                // failure policy, because offering the record again gets the same refusal.
+                log.error("A record on topic \"{}\" partition {} offset {} was permanently refused. Stopping "
+                        + "this bridge rather than committing or redelivering into the same refusal. The record "
+                        + "is left uncommitted so it is refetched by the next consumer in this group once the "
+                        + "refusing registration is fixed and restarted.",
+                        record.topic(), record.partition(), record.offset());
+                permanentlyStopped = true;
+                running = false;
+                yield false;
+            }
+        };
     }
 
     private boolean resolve(ConsumerRecord<String, byte[]> record, Map<TopicPartition, OffsetAndMetadata> toCommit,

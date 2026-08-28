@@ -62,13 +62,13 @@ import static java.util.Objects.requireNonNull;
  * builds one from the same {@link PushSubscriptionModel} this bridge is given, in front of it, not instead of it.
  * <p>
  * <strong>Acknowledgement.</strong> {@code acceptRedeliverable(...)} throwing (a handler exception, or a
- * subscription filter that failed to evaluate) never acknowledges. A normal return with
- * {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED} acknowledges. A normal return with
- * {@link RoutingOutcome#UNAVAILABLE} never acknowledges either, and is held and paced rather than sent through a
- * failure policy, see below. A normal return with {@link RoutingOutcome#NOT_DELIVERABLE} cannot happen, since that
- * outcome always comes with an exception, the filter's own or a transient action refusal's. A
- * {@link RoutingOutcome#REFUSED} stops this bridge for
- * good, also below. For every other failure this bridge's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) negatively
+ * subscription filter that failed to evaluate) never acknowledges. A normal return is decided by
+ * {@link RoutingOutcome#disposition()} alone, so this bridge acknowledges an outcome exactly when
+ * {@link RoutingOutcome#mayAcknowledge()} answers true for it.
+ * {@link RoutingOutcome.Disposition#HOLD} holds the delivery unacknowledged and paces it rather than sending it
+ * through a failure policy, see below, and {@link RoutingOutcome.Disposition#STOP} stops this bridge for good, also
+ * below. A normal return with {@link RoutingOutcome#NOT_DELIVERABLE} cannot happen, since that outcome always comes
+ * with an exception, the filter's own or a transient action refusal's. For every other failure this bridge's configured {@link DeliveryFailurePolicy} applies, {@link DeliveryFailurePolicy#REDELIVER} (the default) negatively
  * acknowledges with requeue, {@link DeliveryFailurePolicy#PARK} republishes to a parking destination and only then
  * acknowledges the original. A normal return with {@link RoutingOutcome#DEFERRED}, a
  * {@link CatchupThenPushSubscriptionModel} wrapping {@code model} still replaying or draining, say, also never
@@ -194,7 +194,9 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
     private final Deque<Long> heldFailedDeliveryTags = new ConcurrentLinkedDeque<>();
     private volatile boolean permanentlyStopped;
 
-    private RabbitMqCloudEventBridge(PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, Channel consumeChannel,
+    // Package-private rather than private so RabbitMqCloudEventBridgeOutcomeRoutingTest can build one over a
+    // mocked Channel. Nothing here talks to a broker, the builder's own start(..) does that.
+    RabbitMqCloudEventBridge(PushSubscriptionModel model, RoutingOutcomeChannel outcomeChannel, Channel consumeChannel,
                                       String queue, int prefetchCount, Duration pollInterval, RabbitMqDeliveryFailureAction failureAction,
                                       Predicate<String> readinessSource) {
         this.model = model;
@@ -388,29 +390,57 @@ public final class RabbitMqCloudEventBridge implements AutoCloseable {
             routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
         }
-        if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
-            ackNow(deliveryTag);
-        } else if (outcome == RoutingOutcome.DEFERRED || outcome == RoutingOutcome.UNAVAILABLE) {
-            // DEFERRED (a catch-up-then-live wrapper still replaying or draining) and UNAVAILABLE
-            // (the sole subscription paused, or the model not running at all) are paced identically: held unacked
-            // rather than nacked here, so with prefetchCount == 1 (the default) the broker sends nothing further on
-            // this consumer until reconcileConsumption's own poll releases it, at most once per pollInterval. An
-            // earlier revision of this bridge cancelled its own consumer and redelivered a lifecycle
-            // lifecycle state immediately instead, to keep it visible sooner than a full pollInterval away, and that
-            // immediate cancel-and-redeliver raced this bridge's own stopPermanently() for the same delivery tag,
-            // since both a lifecycle check and a permanent stop can be deciding the same tag's fate at once, so it
-            // is gone. Never takes consumeLock here: this callback can run concurrently with reconcileConsumption,
-            // which already holds it across a blocking AMQP call, so this only ever hands the tag off for that poll
-            // thread to act on instead.
-            heldDeferredDeliveryTags.add(deliveryTag);
-        } else {
-            // NOT_DELIVERABLE, whether the filter itself failed to answer or a transient refusal reported it. It
-            // always arrives with an exception, which the catch above already routed, so reaching here means a
-            // future outcome this bridge has not been taught yet. Routed as a failure either way.
-            log.debug("A message on queue \"{}\", delivery tag {}, reported an outcome this bridge does not " +
-                    "recognize. Routing it as a failure.", queue, deliveryTag);
-            routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
-        }
+        route(outcome, deliveryTag, delivery.getProperties(), delivery.getBody());
+    }
+
+    // Acts on one outcome and reports which of the four dispositions it acted on. Package-private, and returning
+    // that disposition rather than nothing, so RabbitMqCloudEventBridgeOutcomeRoutingTest can drive all six
+    // outcomes through it with no broker behind it. A switch expression rather than a switch statement because
+    // javac only checks an expression for exhaustiveness, so a statement here would compile clean with a
+    // disposition missing.
+    RoutingOutcome.Disposition route(RoutingOutcome outcome, long deliveryTag, BasicProperties properties, byte[] body) {
+        return switch (outcome.disposition()) {
+            case ACKNOWLEDGE -> {
+                ackNow(deliveryTag);
+                yield RoutingOutcome.Disposition.ACKNOWLEDGE;
+            }
+            case HOLD -> {
+                // DEFERRED (a catch-up-then-live wrapper still replaying or draining) and UNAVAILABLE
+                // (the sole subscription paused, or the model not running at all) are paced identically, held
+                // unacked rather than nacked here, so with prefetchCount == 1 (the default) the broker sends
+                // nothing further on this consumer until reconcileConsumption's own poll releases it, at most once
+                // per pollInterval. An earlier revision of this bridge cancelled its own consumer and redelivered
+                // a lifecycle state immediately instead, to keep it visible sooner than a full pollInterval away,
+                // and that immediate cancel-and-redeliver raced this bridge's own stopPermanently() for the same
+                // delivery tag, since both a lifecycle check and a permanent stop can be deciding the same tag's
+                // fate at once, so it is gone. Never takes consumeLock here, this callback can run concurrently
+                // with reconcileConsumption, which already holds it across a blocking AMQP call, so this only ever
+                // hands the tag off for that poll thread to act on instead.
+                heldDeferredDeliveryTags.add(deliveryTag);
+                yield RoutingOutcome.Disposition.HOLD;
+            }
+            case FAIL -> {
+                // NOT_DELIVERABLE, whether the filter itself failed to answer or a transient refusal reported it.
+                // It normally arrives with an exception, which the catch in handleDelivery already routed, so this
+                // branch is for one that arrived on its own.
+                log.debug("A message on queue \"{}\", delivery tag {}, could not be delivered. Routing it " +
+                        "through the configured delivery failure policy.", queue, deliveryTag);
+                routeFailure(deliveryTag, properties, body);
+                yield RoutingOutcome.Disposition.FAIL;
+            }
+            case STOP -> {
+                // REFUSED arriving on its own, with the refusal's own cause not propagating out of
+                // acceptRedeliverable(..) for the catch in handleDelivery to read. Stopped rather than routed
+                // through the failure policy, because offering the message again gets the same refusal.
+                log.error("A message on queue \"{}\", delivery tag {}, was permanently refused. Stopping this "
+                        + "bridge rather than parking or committing into the same refusal. That tag, and every "
+                        + "other tag this bridge is still holding, is requeued by the channel this permanent stop "
+                        + "closes, so it stays visible on the queue until the refusing registration is fixed and "
+                        + "restarted.", queue, deliveryTag);
+                stopPermanently();
+                yield RoutingOutcome.Disposition.STOP;
+            }
+        };
     }
 
     // Under consumeLock, the lock reconcileConsumption also holds across its own blocking Channel calls, so two

@@ -20,10 +20,14 @@ package org.occurrent.subscription;
  * What a single routing evaluation decided for one event, on the blocking and reactor {@code RegisteringSubscribable}
  * and everything built on it ({@code PushObserver}, and {@code DomainEventFeed}'s live match).
  * <p>
- * A caller that acknowledges an externally sourced event (a broker message, say) acknowledges on {@link #DELIVERED}
- * and {@link #FILTERED} and on nothing else. Those two describe an event a filter evaluated and either accepted or
- * declined on its own terms. The other four each say something different about why the event was not consumed, and
- * each calls for a different response.
+ * A caller that acknowledges an externally sourced event (a broker message, say) reads {@link #disposition()}
+ * rather than testing the six constants itself. That answer is one of four {@link Disposition} values, and it is
+ * what decides whether the event is acknowledged, held for later, sent through the caller's own failure policy, or
+ * stopped on. {@link #mayAcknowledge()} answers the one question a broker bridge asks most.
+ * <p>
+ * {@link #DELIVERED} and {@link #FILTERED} describe an event a filter evaluated and either accepted or declined on
+ * its own terms, which is why those two share a disposition. The other four each say something different about why
+ * the event was not consumed, and each calls for a different response.
  * <ul>
  *   <li>{@link #DEFERRED} and {@link #UNAVAILABLE} mean nothing is wrong. Offer the event again later.</li>
  *   <li>{@link #NOT_DELIVERABLE} means the filter failed to answer, or a registered action refused the event
@@ -111,5 +115,61 @@ public enum RoutingOutcome {
      * subscribing again, or building a new projection feed. A refusal that can clear on its own reports
      * {@link #NOT_DELIVERABLE} instead, so this outcome alone is enough to decide on.
      */
-    REFUSED
+    REFUSED;
+
+    /**
+     * What a caller that owns the event does with it now. Four answers over these six outcomes, so a broker
+     * bridge decides on this rather than on the constants themselves.
+     *
+     * @return the disposition this outcome calls for
+     */
+    public Disposition disposition() {
+        return switch (this) {
+            case DELIVERED, FILTERED -> Disposition.ACKNOWLEDGE;
+            case DEFERRED, UNAVAILABLE -> Disposition.HOLD;
+            case NOT_DELIVERABLE -> Disposition.FAIL;
+            case REFUSED -> Disposition.STOP;
+        };
+    }
+
+    /**
+     * Whether this outcome lets a caller acknowledge the event to whatever handed it over. True for
+     * {@link #DELIVERED} and {@link #FILTERED}, false for the other four.
+     *
+     * @return true when {@link #disposition()} is {@link Disposition#ACKNOWLEDGE}
+     */
+    public boolean mayAcknowledge() {
+        return disposition() == Disposition.ACKNOWLEDGE;
+    }
+
+    /**
+     * What a caller does with an event once {@link #disposition()} has read its outcome. Four values rather than
+     * six, because a caller responds the same way to {@link #DELIVERED} and {@link #FILTERED}, and the same way
+     * again to {@link #DEFERRED} and {@link #UNAVAILABLE}.
+     */
+    public enum Disposition {
+
+        /**
+         * Acknowledge the event to whatever handed it over, and expect no redelivery of it.
+         */
+        ACKNOWLEDGE,
+
+        /**
+         * Hold the event unacknowledged and offer it again later. Nothing about it is broken, so this bypasses
+         * the caller's own failure policy, including any parking that policy does.
+         */
+        HOLD,
+
+        /**
+         * Let the caller's own failure policy decide, which is what a redelivery limit and a parking destination
+         * are for.
+         */
+        FAIL,
+
+        /**
+         * Stop consuming for good. Offering the event again gets the same answer, so recovery is a lifecycle
+         * action rather than a redelivery.
+         */
+        STOP
+    }
 }
