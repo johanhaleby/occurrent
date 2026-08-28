@@ -67,9 +67,11 @@ import static java.util.Objects.requireNonNull;
  * {@link RoutingOutcome#disposition()} that bridge reads. {@link RoutingOutcome.Disposition#ACKNOWLEDGE}
  * acknowledges. {@link RoutingOutcome.Disposition#FAIL} and a thrown exception both apply this bridge's configured
  * {@link DeliveryFailurePolicy} instead, without acknowledging directly.
- * {@link RoutingOutcome.Disposition#HOLD} does not acknowledge either, and negatively acknowledges with requeue,
- * bypassing {@link DeliveryFailurePolicy} entirely, since nothing here is broken, only not ready yet, and
- * {@code PARK} exists for failures rather than for pacing. {@link RoutingOutcome.Disposition#STOP} stops this
+ * {@link RoutingOutcome.Disposition#HOLD} does not acknowledge either. That delivery is held unacknowledged for
+ * this bridge's own poll to negatively acknowledge with requeue, at most once per
+ * {@link Builder#pollInterval(Duration)}, rather than nacked on the spot, bypassing {@link DeliveryFailurePolicy}
+ * entirely, since nothing here is broken, only not ready yet, and {@code PARK} exists for failures rather than for
+ * pacing. {@link RoutingOutcome.Disposition#STOP} stops this
  * bridge for good, the same way {@link UnreadableLiveFilterException} below does.
  * <p>
  * <strong>{@link UnreadableLiveFilterException} is different, and permanent.</strong> It means the projection this
