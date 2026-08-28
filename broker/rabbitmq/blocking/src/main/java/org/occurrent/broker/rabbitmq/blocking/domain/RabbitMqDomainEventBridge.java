@@ -63,12 +63,14 @@ import static java.util.Objects.requireNonNull;
  * decision 5.
  * <p>
  * <strong>Acknowledgement</strong> follows the {@link RoutingOutcome} {@code acceptCloudEvent(...)} returns, exactly
- * as {@link RabbitMqCloudEventBridge} follows the one its own model reports:
- * {@link RoutingOutcome#DELIVERED} or {@link RoutingOutcome#FILTERED} acknowledges, {@link RoutingOutcome#NOT_DELIVERABLE}
- * and a thrown exception both apply this bridge's configured {@link DeliveryFailurePolicy} instead, never
- * acknowledging directly. {@link RoutingOutcome#DEFERRED} also never acknowledges, but always negatively
- * acknowledges with requeue, bypassing {@link DeliveryFailurePolicy} entirely: nothing here is broken, only not
- * ready yet, and {@code PARK} exists for failures, not for pacing.
+ * as {@link RabbitMqCloudEventBridge} follows the one its own model reports, and by reading the same
+ * {@link RoutingOutcome#disposition()} that bridge reads. {@link RoutingOutcome.Disposition#ACKNOWLEDGE}
+ * acknowledges. {@link RoutingOutcome.Disposition#FAIL} and a thrown exception both apply this bridge's configured
+ * {@link DeliveryFailurePolicy} instead, without acknowledging directly.
+ * {@link RoutingOutcome.Disposition#HOLD} does not acknowledge either, and negatively acknowledges with requeue,
+ * bypassing {@link DeliveryFailurePolicy} entirely, since nothing here is broken, only not ready yet, and
+ * {@code PARK} exists for failures rather than for pacing. {@link RoutingOutcome.Disposition#STOP} stops this
+ * bridge for good, the same way {@link UnreadableLiveFilterException} below does.
  * <p>
  * <strong>{@link UnreadableLiveFilterException} is different, and permanent.</strong> It means the projection this
  * feed carries was registered with a {@code data} payload filter this feed has no {@link org.occurrent.filtermatching.DataFieldReader}
@@ -208,7 +210,9 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
     private boolean everReadyForLiveDelivery;
     private boolean readinessFailureLogged;
 
-    private RabbitMqDomainEventBridge(DomainEventFeed<E> feed, Channel consumeChannel, String queue, int prefetchCount,
+    // Package-private rather than private so RabbitMqDomainEventBridgeOutcomeRoutingTest can build one over a
+    // mocked Channel. Nothing here talks to a broker, the builder's own start(..) does that.
+    RabbitMqDomainEventBridge(DomainEventFeed<E> feed, Channel consumeChannel, String queue, int prefetchCount,
                                        Duration pollInterval, RabbitMqDeliveryFailureAction failureAction) {
         this.feed = feed;
         this.consumeChannel = consumeChannel;
@@ -401,22 +405,49 @@ public final class RabbitMqDomainEventBridge<E> implements AutoCloseable {
             routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
             return;
         }
-        if (outcome == RoutingOutcome.DELIVERED || outcome == RoutingOutcome.FILTERED) {
-            ackNow(deliveryTag);
-        } else if (outcome == RoutingOutcome.DEFERRED) {
-            // Held unacked rather than nacked here, deliberately. Never takes consumeLock here, see
-            // heldDeferredDeliveryTags's own javadoc for the full reasoning.
-            heldDeferredDeliveryTags.add(deliveryTag);
-        } else {
-            // Unreachable today: DomainEventFeed#acceptCloudEvent never returns NOT_DELIVERABLE (see its own
-            // javadoc), it only ever returns FILTERED, DELIVERED or DEFERRED, or throws one of the two exceptions
-            // caught above. Kept as a defensive fallback rather than an assertion, so a future outcome this bridge
-            // does not yet know about still fails safe through the configured policy instead of silently landing
-            // nowhere.
-            log.debug("A message on queue \"{}\", delivery tag {}, reported an outcome this bridge does not " +
-                    "recognize. Routing it as a failure.", queue, deliveryTag);
-            routeFailure(deliveryTag, delivery.getProperties(), delivery.getBody());
-        }
+        route(outcome, deliveryTag, delivery.getProperties(), delivery.getBody());
+    }
+
+    // Acts on one outcome and reports which of the four dispositions it acted on. Package-private, and returning
+    // that disposition rather than nothing, so RabbitMqDomainEventBridgeOutcomeRoutingTest can drive all six
+    // outcomes through it with no broker behind it. A switch expression rather than a switch statement because
+    // javac only checks an expression for exhaustiveness, so a statement here would compile clean with a
+    // disposition missing.
+    RoutingOutcome.Disposition route(RoutingOutcome outcome, long deliveryTag, BasicProperties properties, byte[] body) {
+        return switch (outcome.disposition()) {
+            case ACKNOWLEDGE -> {
+                ackNow(deliveryTag);
+                yield RoutingOutcome.Disposition.ACKNOWLEDGE;
+            }
+            case HOLD -> {
+                // Held unacked rather than nacked here, deliberately. Never takes consumeLock here, see
+                // heldDeferredDeliveryTags's own javadoc for the full reasoning. DomainEventFeed#acceptCloudEvent
+                // reports DEFERRED for this today, not UNAVAILABLE, per its own javadoc, and both share this
+                // disposition either way.
+                heldDeferredDeliveryTags.add(deliveryTag);
+                yield RoutingOutcome.Disposition.HOLD;
+            }
+            case FAIL -> {
+                // DomainEventFeed#acceptCloudEvent does not report NOT_DELIVERABLE today, per its own javadoc, so
+                // this branch is what a later one would reach rather than a path a shipped feed takes.
+                log.debug("A message on queue \"{}\", delivery tag {}, could not be delivered. Routing it " +
+                        "through the configured delivery failure policy.", queue, deliveryTag);
+                routeFailure(deliveryTag, properties, body);
+                yield RoutingOutcome.Disposition.FAIL;
+            }
+            case STOP -> {
+                // Same permanent stop UnreadableLiveFilterException and a permanently failed catch-up get, for a
+                // refusal reported as an outcome rather than thrown. Offering the message again gets the same
+                // refusal, so the failure policy is the wrong place for it.
+                log.error("A message on queue \"{}\", delivery tag {}, was permanently refused. Stopping this "
+                        + "bridge rather than parking or committing into the same refusal. That tag, and every "
+                        + "other tag this bridge is still holding, is requeued by the channel this permanent stop "
+                        + "closes, so it stays visible on the queue until the refusing registration is fixed and "
+                        + "restarted.", queue, deliveryTag);
+                stopPermanently();
+                yield RoutingOutcome.Disposition.STOP;
+            }
+        };
     }
 
     // Under consumeLock, the lock reconcileConsumption also holds across its own blocking Channel calls, so two
