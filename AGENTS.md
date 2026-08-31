@@ -45,7 +45,7 @@ gh issue comment <N> --body "Claimed by an AI session on <UTC timestamp>, branch
 
 The claim is a lease, not a deed. Release it when the work is done or abandoned:
 
-- When a pull request is opened, reference the issue from the PR body (`Fixes #N`) and drop the label — the PR is a stronger, self-updating claim than the label is.
+- When a pull request is opened, reference the issue from the PR body (`Fixes #N`) and drop the label. The PR is a stronger, self-updating claim than the label is.
 - If you stop without a PR, remove the label and comment that you are dropping it, so the issue does not stay silently blocked.
 - A claim with no branch, no PR, and no activity for a day or so is stale. Take it over, but say in a comment that you are doing it.
 
@@ -64,6 +64,10 @@ Three things this protocol has already been caught out by:
 ADRs live in `doc/architecture/decisions/`, **not** `doc/adr/`. Filenames are `NNNN-kebab-case-title.md`, numbered sequentially from the highest existing number. Write one for architectural decisions, not for minor implementation details.
 
 An ADR that has shipped in a release is immutable. Correct or change a released decision with a new ADR that supersedes or amends the old one by reference, and touch the released file only to update its Status section with a pointer to the successor, the way [ADR 111](doc/architecture/decisions/0111-a-projection-records-the-position-it-has-applied.md) points at its withdrawer. An ADR that has not shipped in any release yet may still be updated in place when that is the best option.
+
+## Writing for people
+
+**Write `changelog.md`, the migration guides under `doc/migration/`, javadoc, and the documentation site the way you would explain the change to another developer out loud.** Plain words, no term standing in for a plain statement the reader can act on, and nothing beyond what they need in order to act. A paragraph that needs a second reading gets rewritten, not extended.
 
 ## Changelog
 
@@ -200,7 +204,7 @@ is for, and what it is allowed to cost.
 - Focused test class: `mvn -pl <module-path> -am -Dtest=<TestClass> -Dsurefire.failIfNoSpecifiedTests=false test`.
 - Release: `mvn_release.sh` (Java 21, `mvn deploy -Prelease`, GPG signing, Sonatype Central publishing).
 - Publishing exclusions: when you add a new aggregate parent POM (a `packaging` of `pom` that only groups `<modules>` and has no publishable artifact of its own), add its `artifactId` to `<excludeArtifacts>` in the root `pom.xml` under the `central-publishing-maven-plugin` config. Aggregate POMs flatten to metadata-less POMs, so if one is left in the release it fails Central validation with missing name, description, url, license, scm, and developers. The `bom` is the only pom-packaged module that is published (it uses `flattenMode=bom` to keep that metadata), so it stays off the exclude list.
-- New publishable modules (Maven Central): when you add a new publishable leaf module (a normal `jar` artifact), (1) register it in its parent aggregator's `<modules>` and add a `${project.version}` dependency entry to `bom/pom.xml`; (2) do NOT add it to `<excludeArtifacts>`, since leaf modules are published by default; (3) do NOT redeclare `name`, `description`, `url`, `licenses`, `developers`, `scm`, or the source/javadoc/GPG/flatten plugins, because they are all inherited from the root `pom.xml` (keep the POM as minimal as the `occurrent-command-dispatch` sibling); (4) verify a release install (`mvn -Prelease ... install`, or `mvn_local_snapshot.sh`) emits the main jar plus `-sources.jar`, `-javadoc.jar`, and a flattened consumer POM, and that the module is not reported as skipped by `central-publishing-maven-plugin`.
+- New publishable modules (Maven Central): when you add a new publishable leaf module (a normal `jar` artifact), (1) register it in its parent aggregator's `<modules>` and add a `${project.version}` dependency entry to `bom/pom.xml`. (2) Do NOT add it to `<excludeArtifacts>`, since leaf modules are published by default. (3) Do NOT redeclare `name`, `description`, `url`, `licenses`, `developers`, `scm`, or the source/javadoc/GPG/flatten plugins, because they are all inherited from the root `pom.xml` (keep the POM as minimal as the `occurrent-command-dispatch` sibling). (4) Verify a release install (`mvn -Prelease ... install`, or `mvn_local_snapshot.sh`) emits the main jar plus `-sources.jar`, `-javadoc.jar`, and a flattened consumer POM, and that the module is not reported as skipped by `central-publishing-maven-plugin`.
 
 ## Deeper context
 
