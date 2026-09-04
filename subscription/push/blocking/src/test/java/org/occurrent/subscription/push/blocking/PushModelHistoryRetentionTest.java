@@ -98,7 +98,31 @@ class PushModelHistoryRetentionTest {
         assertThat(HistoryRetainingSubscriptions.findIn(model).orElseThrow().retains(event("never-written"))).isFalse();
     }
 
+    /**
+     * A CloudEvent is identified by its source and id together, so an event carrying a familiar id from a source this
+     * store never wrote is not the stored one. Matching on the id alone would call it retained and let a quarantine
+     * acknowledge the only copy of it.
+     */
+    @Test
+    void an_event_sharing_an_id_with_a_stored_one_from_another_source_is_not_retained() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("orders", List.of(event("shared-id")));
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        HistoryRetainingSubscriptions retention = HistoryRetainingSubscriptions.findIn(model).orElseThrow();
+
+        assertAll(
+                () -> assertThat(retention.retains(event("shared-id"))).isTrue(),
+                () -> assertThat(retention.retains(eventFrom("shared-id", URI.create("urn:another-service")))).isFalse()
+        );
+    }
+
     private static CloudEvent event(String id) {
-        return CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("OrderPlaced").build();
+        return eventFrom(id, URI.create("urn:test"));
+    }
+
+    private static CloudEvent eventFrom(String id, URI source) {
+        return CloudEventBuilder.v1().withId(id).withSource(source).withType("OrderPlaced").build();
     }
 }

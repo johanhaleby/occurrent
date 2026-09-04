@@ -40,6 +40,7 @@ import org.occurrent.subscription.internal.ReplayFilters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.OptionalLong;
@@ -99,19 +100,23 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * Reads a single position rather than scanning, when the event carries one. An event with no position is looked
      * up by id alone, which a store may answer with a scan, and the caller is expected to ask this rarely.
      * <p>
-     * Fails closed. An event without an id and a read that throws both answer {@code false}, because a caller uses
-     * this to decide whether it may stop retrying an event and a question that cannot be answered has to cost the
-     * event nothing. A reader with no position needs no branch here, since the constructor already refuses one.
+     * Fails closed. An event missing either half of its identity, and a read that throws, both answer {@code false},
+     * because a caller uses this to decide whether it may stop retrying an event and a question that cannot be
+     * answered has to cost the event nothing. A reader with no position needs no branch here, since the constructor
+     * already refuses one.
      */
     @Override
     public boolean retains(CloudEvent event) {
         String id = event.getId();
-        if (id == null) {
+        URI source = event.getSource();
+        if (id == null || source == null) {
             return false;
         }
         long position = OccurrentCloudEventExtension.getPosition(event);
         PositionRange range = position > 0 ? PositionRange.between(position - 1, position) : PositionRange.fromBeginning();
-        try (Stream<CloudEvent> stored = reader.readInPositionOrder(Filter.id(id), range)) {
+        // Matched on source as well as id, since a CloudEvent is identified by the pair. An id alone would let a local
+        // event from another source stand in for the one that arrived over the feed, which is the reading that loses it.
+        try (Stream<CloudEvent> stored = reader.readInPositionOrder(Filter.cloudEvent(id, source), range)) {
             return stored.findAny().isPresent();
         } catch (RuntimeException e) {
             log.warn("Could not check whether the event '{}' is still in the event store, so it is treated as gone. The caller keeps retrying it rather than dropping it.", id, e);

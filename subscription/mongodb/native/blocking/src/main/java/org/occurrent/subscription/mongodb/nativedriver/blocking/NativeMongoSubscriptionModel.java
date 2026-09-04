@@ -82,8 +82,10 @@ import static org.occurrent.subscription.mongodb.internal.MongoCommons.cannotFin
 public class NativeMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions {
 
     /**
-     * Every event this model delivers comes from the event store's own change stream, so the store it reads is the
-     * store the event is in and it is still there once a handler returns.
+     * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
+     * advances a checkpoint and removes no event, and the store keeps its events on its own terms. An event erased
+     * through {@code EventStoreOperations} is gone by that erasure rather than by the acknowledgement, so answering
+     * {@code false} for it would only strand an instance on an event nobody can supply.
      */
     @Override
     public boolean retains(CloudEvent event) {

@@ -44,21 +44,30 @@ import java.util.Optional;
 public interface HistoryRetainingSubscriptions extends SubscriptionModelCapability {
 
     /**
-     * Whether {@code event} is still obtainable from the source this model reads, so that returning normally does not
-     * lose it.
+     * Whether acknowledging {@code event} to the source this model reads leaves it obtainable, rather than destroying
+     * the only copy of it that exists.
+     * <p>
+     * The question is what the acknowledgement costs, not whether the event happens to be present at this instant, and
+     * the two come apart in one direction worth naming. A model reading a store that keeps its own events answers
+     * {@code true} whatever later becomes of the event, because acknowledging is not what would remove it. An event an
+     * operator erases through {@code EventStoreOperations} is gone by that erasure, and answering {@code false} for it
+     * would leave an instance blocked forever on an event nobody can supply.
+     * <p>
+     * Where the acknowledgement is what removes it, a broker committing an offset for an event no store here holds,
+     * the answer is {@code false} and the caller has to keep retrying instead.
      * <p>
      * Answer {@code false} rather than throwing when the source cannot be reached or cannot be asked, since a caller
      * uses this to decide whether it may drop an event and an unanswerable question has to read the same way as a no.
      *
      * @param event The event a caller is about to stop retrying.
-     * @return {@code true} when the event can still be obtained, {@code false} when it cannot or cannot be checked.
+     * @return {@code true} when acknowledging costs nothing, {@code false} when it destroys the last copy or cannot be checked.
      */
     boolean retains(CloudEvent event);
 
     /**
-     * Whether every event this model delivers is obtainable, so {@link #retains(CloudEvent)} is a formality rather
-     * than a real question. A model reading the event store's own change stream answers {@code true}, since the store
-     * it reads is the store the events are in.
+     * Whether acknowledging costs nothing for every event this model delivers, so {@link #retains(CloudEvent)} is a
+     * formality rather than a real question. A model reading the event store's own change stream answers {@code true},
+     * since acknowledging advances a checkpoint and removes nothing.
      * <p>
      * Told rather than worked out, because a caller cannot infer it from one {@code true} answer, and it changes what
      * is worth saying at startup. A model whose answer can vary is worth warning about before an incident. One that
