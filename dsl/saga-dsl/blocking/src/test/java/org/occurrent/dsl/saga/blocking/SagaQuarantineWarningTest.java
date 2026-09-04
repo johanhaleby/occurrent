@@ -128,9 +128,10 @@ class SagaQuarantineWarningTest {
     }
 
     /**
-     * A model that can answer but not always yes is worth a line before the incident, since that saga is quarantined
-     * for some events and not for others. The verdict per event is not knowable at startup, so the message says what
-     * the answer depends on rather than pretending to give it.
+     * A model that does not guarantee holding everything is worth a line before the incident, since that saga may be
+     * quarantined for some events and not for others. The verdict per event is not knowable at startup, and neither is
+     * whether this particular feed will ever produce a refusal, so the message says what the answer depends on rather
+     * than diagnosing a source it cannot see.
      */
     @Test
     void says_that_quarantine_depends_on_the_event_when_the_model_holds_only_some_of_them() {
@@ -138,7 +139,7 @@ class SagaQuarantineWarningTest {
 
         assertAll(
                 () -> assertThat(warnings()).hasSize(1),
-                () -> assertThat(warning()).contains("does not hold every event it delivers"),
+                () -> assertThat(warning()).contains("cannot guarantee it holds every event it delivers"),
                 () -> assertThat(warning()).contains("depends on the event it stopped on"),
                 () -> assertThat(warning()).contains("that refusal is logged when it happens")
         );

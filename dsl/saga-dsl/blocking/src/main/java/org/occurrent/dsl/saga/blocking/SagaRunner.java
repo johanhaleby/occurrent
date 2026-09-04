@@ -264,9 +264,10 @@ public final class SagaRunner<E, C> {
      * of quarantine. Between an instance that blocks and an event that cannot be asked for again, this keeps the event,
      * and it says so at startup rather than leaving it to be discovered during the incident.
      * <p>
-     * A model that can answer says at startup whether it holds everything. One that does is left alone. One that does
-     * not guarantee it is named here, because that saga may get a quarantine for some events and not for others, and
-     * the difference otherwise first shows up in the middle of an incident.
+     * A model that can answer says at startup whether it guarantees holding everything. One that does is left alone.
+     * One that does not is named here, which is a statement about the guarantee rather than about the feed: such a
+     * model may hold every event it is ever given, and it may not, and a saga on it may get a quarantine for some
+     * events and not for others. The difference otherwise first shows up in the middle of an incident.
      */
     private SagaRunnerConfig quarantineOnlyIfTheEventCanBeAskedForAgain(String subscriptionId, SagaRunnerConfig config) {
         if (config.quarantineAfter() == null) {
@@ -279,7 +280,7 @@ public final class SagaRunner<E, C> {
             return config.withQuarantineAfter(null);
         }
         if (!retention.get().retainsEveryEvent()) {
-            log.warn("Saga subscription '{}' runs on a subscription model that does not hold every event it delivers ({}), so whether an instance can be quarantined depends on the event it stopped on rather than on the saga. An event this model can still obtain is quarantined normally. One it cannot, which is what a feed delivering another application's events gives you, leaves the instance blocking the saga's other instances, and that refusal is logged when it happens.",
+            log.warn("Saga subscription '{}' runs on a subscription model that cannot guarantee it holds every event it delivers ({}), so whether an instance can be quarantined depends on the event it stopped on rather than on the saga. An event this model can still obtain is quarantined normally. One it cannot, which is what a feed delivering another application's events gives you, leaves the instance blocking the saga's other instances, and that refusal is logged when it happens.",
                     subscriptionId, subscriptionModel.getClass().getName());
         }
         return config;
