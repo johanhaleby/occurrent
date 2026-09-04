@@ -60,6 +60,16 @@ class SnapshotViewKotlinTest {
     }
 
     @Test
+    fun `snapshotView with no argument starts from null like initialState null`() {
+        // A witness with no ? still receives a nullable state, since the no-argument overload forces S?.
+        val view = snapshotView<Int, LedgerEvent> {
+            on<Deposited> { balance, e -> (balance ?: 0) + e.amount }
+        }
+
+        assertThat(view.view().initialState()).isNull()
+    }
+
+    @Test
     fun `dcbSnapshotView dsl registers a metadata-aware fold that receives the real event metadata`() {
         val dcbView = dcbSnapshotView<String, LedgerEvent>(initialState = "") {
             on<Deposited> { _, metadata, _ -> "${metadata.streamId}@${metadata.streamVersion}" }

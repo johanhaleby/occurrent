@@ -390,4 +390,20 @@ class SagaExtensionsTest {
             assertThat(saga.eventTypes()).containsExactly(OpenGameEvent::class.java)
         }
     }
+
+    @Nested
+    inner class NoArgDsl {
+
+        @Test
+        fun `saga with no argument starts from null like initialState null`() {
+            // A witness with no ? still receives a nullable state, since the no-argument overload forces S?.
+            val saga = saga<GameEvent, GameState, GameCommand> {
+                correlateAll { it.gameId }
+                startsOn<GameStarted>()
+                evolve<GameStarted> { state, e -> state ?: InProgress(e.gameId) }
+            }
+
+            assertThat(saga.initialState()).isNull()
+        }
+    }
 }

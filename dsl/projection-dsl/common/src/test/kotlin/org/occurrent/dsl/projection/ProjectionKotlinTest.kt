@@ -193,4 +193,28 @@ class ProjectionKotlinTest {
             assertThat(projection.projection().view().evolve(false, AccountRegistered("1", "bob"))).isTrue()
         }
     }
+
+    @Nested
+    inner class NoArgDsl {
+
+        @Test
+        fun `projection with no argument starts from null like initialState null`() {
+            // A witness with no ? still receives a nullable state, since the no-argument overload forces S?.
+            val projection = projection<Boolean, AccountEvent, String> {
+                id { it.accountId }
+                on<AccountRegistered> { state, _ -> state ?: true }
+            }
+
+            assertThat(projection.view().initialState()).isNull()
+        }
+
+        @Test
+        fun `singletonProjection with no argument starts from null like initialState null`() {
+            val projection = singletonProjection<Boolean, AccountEvent> {
+                on<AccountRegistered> { state, _ -> state ?: true }
+            }
+
+            assertThat(projection.view().initialState()).isNull()
+        }
+    }
 }

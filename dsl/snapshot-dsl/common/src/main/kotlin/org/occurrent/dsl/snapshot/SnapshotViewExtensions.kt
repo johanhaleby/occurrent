@@ -44,6 +44,14 @@ fun <S, E : Any> snapshotView(initialState: S, block: SnapshotViewBuilder<S, E>.
 }
 
 /**
+ * Builds a [SnapshotView] whose fold begins from no state. The block and the returned `SnapshotView` see `S?`
+ * rather than `S`, since the fold starts from `null` until a handler replaces it. See [snapshotView] for the
+ * handler block.
+ */
+fun <S, E : Any> snapshotView(block: SnapshotViewBuilder<S?, E>.() -> Unit): SnapshotView<S?, E> =
+    snapshotView(null, block)
+
+/**
  * Receiver for the [snapshotView] block. Delegates to the Java [SnapshotView.Builder] so the Java and Kotlin surfaces
  * produce the same descriptor from one dispatch implementation.
  */
