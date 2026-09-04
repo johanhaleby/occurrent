@@ -27,7 +27,7 @@ import static java.util.Objects.requireNonNull;
 /**
  * Where an event goes on RabbitMQ: an exchange, a routing key and application headers. Publishing uses every
  * component. A consumer declaring a binding uses only the exchange and the routing key, so a
- * {@link DestinationResolver#destinationsFor(org.occurrent.subscription.SubscriptionFilter)} result leaves
+ * {@link DestinationResolver#destinationsFor(org.occurrent.filter.Filter)} result leaves
  * {@code headers} empty and reads {@code routingKey} as a binding pattern rather than one message's exact key.
  *
  * @param exchange   The exchange to publish to, or to bind against. At most {@value #SHORTSTR_MAX_BYTES} bytes when

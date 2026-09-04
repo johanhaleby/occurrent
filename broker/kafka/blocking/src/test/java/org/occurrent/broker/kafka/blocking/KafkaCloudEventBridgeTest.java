@@ -581,6 +581,45 @@ class KafkaCloudEventBridgeTest extends KafkaTestSupport {
         }
     }
 
+    /**
+     * The plain {@link Filter} overload of {@code bindingFilter}, which wraps into an
+     * {@link org.occurrent.subscription.AgnosticSubscriptionFilter} and delegates. Narrows to the same one topic
+     * the {@link StreamSubscriptionFilter} case above does, and a record published to another topic never arrives.
+     */
+    @Test
+    void a_plain_filter_bindingFilter_narrows_the_subscribed_topics_the_same_way_a_wrapped_one_does() throws Exception {
+        String eventATopic = EventA.class.getName();
+        String eventBTopic = EventB.class.getName();
+        createNamedTopic(eventATopic, 1);
+        createNamedTopic(eventBTopic, 1);
+        KafkaTopicPerTypeDestinationResolver resolver = new KafkaTopicPerTypeDestinationResolver("", ReflectionCloudEventTypeMapper.qualified());
+
+        String groupId = "group-" + UUID.randomUUID();
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
+
+        try (KafkaCloudEventBridge bridge = KafkaCloudEventBridge.builder(consumerConfig(groupId), model, outcomeChannel)
+                .resolver(resolver)
+                .bindingFilter(Filter.type(eventATopic))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publishCloudEvent(eventBTopic, "stream-1", CloudEventBuilder.v1()
+                    .withId("id-b").withSource(URI.create("urn:test")).withType(eventBTopic)
+                    .withExtension("streamid", "stream-1").build());
+            publishCloudEvent(eventATopic, "stream-1", CloudEventBuilder.v1()
+                    .withId("id-a").withSource(URI.create("urn:test")).withType(eventATopic)
+                    .withExtension("streamid", "stream-1").build());
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(handled).extracting(CloudEvent::getId).containsExactly("id-a"));
+        } finally {
+            deleteTopic(eventATopic);
+            deleteTopic(eventBTopic);
+        }
+    }
+
     @Test
     void resolver_alone_falls_back_to_catchAllDestination_subscribing_by_literal_topic_for_the_shared_topic_resolver() throws Exception {
         KafkaSharedTopicDestinationResolver resolver = new KafkaSharedTopicDestinationResolver(topic);

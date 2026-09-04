@@ -79,6 +79,14 @@
         </dependency>
 
         <!-- Test -->
+        <!-- DestinationResolverTest builds a DcbSubscriptionFilter directly, and that needs a DcbCriteria to wrap,
+             so it's declared rather than left to arrive transitively through occurrent-subscription-core. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-eventstore-api-dcb</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-inmemory</artifactId>

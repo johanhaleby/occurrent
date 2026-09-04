@@ -58,7 +58,7 @@ class KafkaTopologyTest {
             }
 
             @Override
-            public Optional<Set<KafkaDestination>> destinationsFor(SubscriptionFilter filter) {
+            public Optional<Set<KafkaDestination>> destinationsFor(Filter filter) {
                 return Optional.empty();
             }
 

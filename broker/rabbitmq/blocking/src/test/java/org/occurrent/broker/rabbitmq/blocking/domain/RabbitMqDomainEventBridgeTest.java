@@ -23,6 +23,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTestSupport;
@@ -37,6 +38,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -49,6 +52,67 @@ import static org.awaitility.Awaitility.await;
 class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
 
     private static final Duration POLL_INTERVAL = Duration.ofMillis(50);
+
+    /**
+     * The plain {@link Filter} overload of {@code bindingFilter}, which wraps into an
+     * {@link org.occurrent.subscription.AgnosticSubscriptionFilter} and delegates. {@link NarrowingRecorder}
+     * narrows to the routing key the event is published with and its catch-all is a routing key nothing publishes
+     * on, so an overload that stopped delegating would bind the dead key and nothing would arrive.
+     */
+    @Test
+    void a_plain_filter_bindingFilter_binds_the_narrowed_routing_key_rather_than_the_catch_all() throws Exception {
+        String queue = "domain-bridge-plain-filter-" + UUID.randomUUID();
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+        Filter bindingFilter = Filter.type(TestOrderPlaced.class.getName());
+        NarrowingRecorder resolver = new NarrowingRecorder(exchange, TestOrderPlaced.class.getName());
+
+        try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = RabbitMqDomainEventBridge.builder(connection(), feed, queue)
+                .resolver(resolver)
+                .bindingFilter(bindingFilter)
+                .pollInterval(POLL_INTERVAL)
+                .build()) {
+            publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
+            assertThat(resolver.received).isSameAs(bindingFilter);
+        }
+    }
+
+    /**
+     * Narrows any filter to {@code narrowedRoutingKey} and answers {@link #catchAllDestination()} with a routing
+     * key nothing in this test publishes on, so which of the two a bridge bound is visible in whether an event
+     * arrives at all.
+     */
+    private static final class NarrowingRecorder implements DestinationResolver<RabbitMqDestination> {
+
+        private final String exchange;
+        private final String narrowedRoutingKey;
+        private Filter received;
+
+        private NarrowingRecorder(String exchange, String narrowedRoutingKey) {
+            this.exchange = exchange;
+            this.narrowedRoutingKey = narrowedRoutingKey;
+        }
+
+        @Override
+        public RabbitMqDestination destinationFor(CloudEvent cloudEvent) {
+            return RabbitMqDestination.of(exchange, narrowedRoutingKey);
+        }
+
+        @Override
+        public Optional<Set<RabbitMqDestination>> destinationsFor(Filter filter) {
+            received = filter;
+            return Optional.of(Set.of(RabbitMqDestination.of(exchange, narrowedRoutingKey)));
+        }
+
+        @Override
+        public RabbitMqDestination catchAllDestination() {
+            return RabbitMqDestination.of(exchange, "nothing.publishes.on.this");
+        }
+    }
 
     @Test
     void acks_on_delivered_and_the_message_does_not_stay_on_the_queue() throws Exception {

@@ -44,12 +44,21 @@
             <artifactId>occurrent-cloudevent-converter-api</artifactId>
             <version>${project.version}</version>
         </dependency>
-        <!-- SubscriptionFilter (and its AgnosticSubscriptionFilter/StreamSubscriptionFilter wrappers) appears
-             directly in this module's own public API (DestinationResolver#destinationsFor), so it's declared
-             rather than left to arrive transitively through occurrent-broker-api-blocking. -->
+        <!-- SubscriptionFilter appears in this module's own public API through the destinationsFor overload every
+             resolver here inherits from DestinationResolver, and RabbitMqCloudEventBridge takes one on
+             bindingFilter, so it's declared rather than left to arrive transitively through
+             occurrent-broker-api-blocking. -->
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-subscription-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- Filter appears directly in this module's own public API (DestinationResolver#destinationsFor, which
+             RabbitMqTopicExchangeDestinationResolver implements), so it's declared rather than left to arrive
+             transitively through occurrent-broker-api-blocking. -->
+        <dependency>
+            <groupId>org.occurrent</groupId>
+            <artifactId>occurrent-filter</artifactId>
             <version>${project.version}</version>
         </dependency>
         <!-- EventMetadata appears directly in this module's own public API (RabbitMqDomainEventSink#publish), so
@@ -107,16 +116,6 @@
         </dependency>
 
         <!-- Test -->
-        <!-- The walk that once lived here moved into EventTypeNarrowing's own module, so nothing in this
-             module's main code touches Filter or Condition any more. RabbitMqTopicExchangeDestinationResolverTest
-             still builds Filter/Condition instances directly to exercise that resolver's destinationsFor, so this
-             stays a test-scope dependency rather than being dropped. -->
-        <dependency>
-            <groupId>org.occurrent</groupId>
-            <artifactId>occurrent-filter</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
         <dependency>
             <groupId>org.occurrent</groupId>
             <artifactId>occurrent-cloudevent-type-mapper-reflection</artifactId>

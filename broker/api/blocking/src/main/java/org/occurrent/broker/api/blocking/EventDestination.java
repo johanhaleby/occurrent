@@ -23,7 +23,7 @@ package org.occurrent.broker.api.blocking;
  * <p>
  * A destination means slightly different things depending on direction. Publishing uses every component of it.
  * A consumer declaring a binding uses only the routing components, an exchange and routing key on RabbitMQ or a
- * topic on Kafka, so a {@link DestinationResolver#destinationsFor(org.occurrent.subscription.SubscriptionFilter)}
+ * topic on Kafka, so a {@link DestinationResolver#destinationsFor(org.occurrent.filter.Filter)}
  * result leaves the per-message components empty.
  */
 public interface EventDestination {

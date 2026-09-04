@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.condition.Condition;
+import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -133,6 +134,14 @@ class RabbitMqTopicExchangeDestinationResolverTest {
         Optional<Set<RabbitMqDestination>> destinations = resolver.destinationsFor(filter);
 
         assertThat(destinations).isEmpty();
+    }
+
+    @Test
+    void destinationsFor_the_subscription_filter_overload_is_the_one_this_resolver_inherits() throws NoSuchMethodException {
+        Class<?> declaringClass = RabbitMqTopicExchangeDestinationResolver.class
+                .getMethod("destinationsFor", SubscriptionFilter.class).getDeclaringClass();
+
+        assertThat(declaringClass).isEqualTo(DestinationResolver.class);
     }
 
     private CloudEvent cloudEventOfType(String type) {
