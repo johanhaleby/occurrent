@@ -87,10 +87,10 @@ public final class SnapshotView<S extends @Nullable Object, E> {
     }
 
     /**
-     * Starts building a {@code SnapshotView} whose fold begins from no state. The handler for the first event
-     * received sees {@code null} rather than an initial value. Register a handler per event type with
-     * {@link Builder#on(Class, BiFunction)}, set the {@link Builder#schemaVersion(int) schemaVersion}, and
-     * optionally an explicit {@link Builder#filter(Filter) filter}, then call {@link Builder#build()}.
+     * Starts building a {@code SnapshotView} whose fold begins from no state. The state stays {@code null} until a
+     * handler replaces it. Register a handler per event type with {@link Builder#on(Class, BiFunction)}, set the
+     * {@link Builder#schemaVersion(int) schemaVersion}, and optionally an explicit {@link Builder#filter(Filter)
+     * filter}, then call {@link Builder#build()}.
      */
     public static <S extends @Nullable Object, E> Builder<S, E> builder() {
         return builder(null);

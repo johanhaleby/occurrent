@@ -149,8 +149,9 @@ public final class Projection<S extends @Nullable Object, E, ID> {
     }
 
     /**
-     * Starts building a {@code Projection} whose fold begins from no state. The handler for the first event received
-     * sees {@code null} rather than an initial value. Register a handler per event type with
+     * Starts building a {@code Projection} whose fold begins from no state. The state stays {@code null} until a
+     * handler replaces it, rather than starting from a value an initial-state overload would supply. Register a
+     * handler per event type with
      * {@link Builder#on(Class, BiFunction)}, an {@link Builder#id(Function) id} function, and optionally an explicit
      * {@link Builder#filter(Filter) filter}, then call {@link Builder#build()}.
      */
@@ -172,9 +173,8 @@ public final class Projection<S extends @Nullable Object, E, ID> {
     }
 
     /**
-     * Starts building a single-instance {@code Projection} whose fold begins from no state. The handler for the first
-     * event received sees {@code null} rather than an initial value. See {@link #singletonBuilder(Object)} for what
-     * single-instance means.
+     * Starts building a single-instance {@code Projection} whose fold begins from no state. The state stays
+     * {@code null} until a handler replaces it. See {@link #singletonBuilder(Object)} for what single-instance means.
      */
     public static <S extends @Nullable Object, E> Builder<S, E, String> singletonBuilder() {
         return singletonBuilder(null);
