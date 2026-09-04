@@ -66,9 +66,9 @@ in-memory subscription model that consumes it, move from `Consumer<Stream<CloudE
 `Consumer<List<CloudEvent>>` for the same reason as the write API, since they are always handed an
 already-materialized batch.
 
-> **Amended on 2026-08-16, for #760.** This ADR argues the write side at length and never says anything about
-> the read that feeds a decision, which is a gap #760 found. `ApplicationService#execute` takes a
-> `Function<List<E>, List<E>>` for exactly the reason stated above, but the events reaching that function come
+> **Amended on 2026-08-16 and again on 2026-09-04, for #760.** This ADR argues the write side at length and never
+> says anything about the read that feeds a decision, which is a gap #760 found. `ApplicationService#execute` takes
+> a `Function<List<E>, List<E>>` for exactly the reason stated above, but the events reaching that function come
 > from a read, and this record's "the read side is untouched" claim does not cover them.
 >
 > `EventStore.read`, `query`, and `CloudEventConverter.toDomainEvents` are still lazy, and the stores still read
@@ -81,8 +81,27 @@ already-materialized batch.
 > history to build its state, so it reads every event regardless of the input's shape. `CommandConversion` and
 > `StreamCommandComposition` already collected composed commands into a `List` before this change.
 > `SequentialFunctionComposer` re-reads the events already seen for each command in a chain, which a single-use
-> `Stream` cannot do. And `execute` retries the whole read-decide-write path when the write condition is not
-> fulfilled, which replays from the store regardless of what shape the first attempt read.
+> `Stream` cannot do. An earlier revision of this amendment gave a fourth reason, that `execute` retries the whole
+> read-decide-write path on a write-condition conflict and replays from the store either way. That is true and it
+> argues nothing, because the read sits inside the retry, so every attempt builds a fresh stream whichever type the
+> domain function takes. #760 pointed that out, and the reason is withdrawn.
+>
+> The constraint this record never stated is the one that actually decides the question. A lazy variant cannot be
+> an overload of `execute`, because `Function<List<E>, List<E>>` and `Function<Stream<E>, List<E>>` erase to the
+> same signature and `javac` rejects the declaration outright. Giving the lazy form its own functional interface
+> makes the erasures differ and moves the failure to the call site, where a lambda written without explicit
+> parameter types is ambiguous between the two overloads. A lazy form therefore needs a second method name on
+> `ApplicationService`, plus a `Sequence` twin in Kotlin, which is the adapter cost this ADR set out to remove, far
+> smaller than the old `CommandConversion` and `StreamCommandComposition` family but permanent. It also has to
+> close the cursor itself. Today `toList()` drains the read and closes it, whereas a domain function handed the
+> `Stream` may stop early and leave it open, so `execute` would need a `finally`, and the domain code would run
+> while the cursor is still open.
+>
+> Only the blocking stack lost anything. Before this change the blocking `GenericApplicationService` handed the
+> cursor-backed `Stream` straight to the domain function, so building state there really did read one event at a
+> time. The reactor implementation already called `eventStream.events().collectList()` and built its `Stream<E>`
+> over that materialized list, so `Function<Stream<E>, Stream<E>>` was lazy in type only and the reactor stack's
+> memory behaviour is unchanged by the move to `List`. Any lazy variant would be a blocking-side addition.
 >
 > A stream with a genuinely large number of events still has two ways out that keep the replay itself small.
 > `ExecuteOptions.fromStreamVersion(long)` tells `execute` to skip everything up to a version already reduced to
@@ -93,6 +112,9 @@ already-materialized batch.
 > [ADR 61](0061-first-class-snapshot-support.md) loads a snapshot, reads only the events after it, and saves a new
 > snapshot automatically. A caller who wants to reduce over a huge stream without loading it at all can still do so
 > outside the application service, since `eventStore.read(...)` and `toDomainEvents` stay lazy.
+>
+> Whether to add that second method is open, and waits on a workload where holding the list is the measured
+> problem rather than being noticed in the signature. Until then `execute` keeps the one `List` form.
 
 The view DSL's `evolve`, `evolveAll`, and `evolveFrom` helpers gained `List` and `Iterable` overloads but keep
 their `Stream` (Java) and `Sequence` (Kotlin) forms. A view fold is a read-side operation, so a lazily-queried
