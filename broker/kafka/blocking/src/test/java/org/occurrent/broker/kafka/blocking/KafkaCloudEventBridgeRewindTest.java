@@ -16,10 +16,12 @@
 
 package org.occurrent.broker.kafka.blocking;
 
+import io.cloudevents.CloudEvent;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.WakeupException;
@@ -30,6 +32,7 @@ import org.mockito.ArgumentCaptor;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.filtermatching.DataFieldReader;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
 import org.slf4j.LoggerFactory;
 
@@ -38,6 +41,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +53,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -70,6 +75,7 @@ class KafkaCloudEventBridgeRewindTest {
 
     private static final TopicPartition PARTITION_0 = new TopicPartition("test-topic", 0);
     private static final TopicPartition PARTITION_1 = new TopicPartition("test-topic", 1);
+    private static final TopicPartition PARTITION_2 = new TopicPartition("test-topic", 2);
 
     /**
      * The bug: an exception escaping the per-record loop, a failing {@code seek} most often, must rewind every
@@ -205,6 +211,53 @@ class KafkaCloudEventBridgeRewindTest {
         assertThat(pausedCaptor.getValue())
                 .as("only the partition whose record kept failing should be paused")
                 .containsExactly(PARTITION_1);
+    }
+
+    /**
+     * The bug behind #948: once a record's outcome decides a permanent stop, {@code REFUSED} here, the rest of
+     * this poll must never be offered to a model that has already given up, on this partition or any other.
+     * Partition 0 resolves before partition 1's record decides the stop, so it stays committed. Partition 2 is
+     * never reached at all, proving the fix regardless of which partition the loop happens to still have left,
+     * since {@code id-2} is never offered to the model and its partition is rewound instead of left at whatever
+     * position {@code poll()} already advanced it to.
+     */
+    @Test
+    void a_permanent_stop_mid_batch_rewinds_every_partition_it_had_not_yet_reached() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mockConsumer();
+
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = mock(PushSubscriptionModel.class);
+        List<String> offered = new ArrayList<>();
+        doAnswer(invocation -> {
+            CloudEvent cloudEvent = invocation.getArgument(0);
+            offered.add(cloudEvent.getId());
+            RoutingOutcome outcome = "id-1".equals(cloudEvent.getId()) ? RoutingOutcome.REFUSED : RoutingOutcome.DELIVERED;
+            outcomeChannel.observe(cloudEvent, outcome);
+            return null;
+        }).when(model).acceptRedeliverable(any(CloudEvent.class));
+        KafkaCloudEventBridge bridge = bridgeForTesting(consumer, model, outcomeChannel);
+
+        Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
+        batch.put(PARTITION_0, List.of(record(PARTITION_0, 5L, "id-0")));
+        batch.put(PARTITION_1, List.of(record(PARTITION_1, 10L, "id-1")));
+        batch.put(PARTITION_2, List.of(record(PARTITION_2, 20L, "id-2")));
+        ConsumerRecords<String, byte[]> records = new ConsumerRecords<>(batch);
+
+        invokeProcessBatch(bridge, records);
+
+        assertThat(offered)
+                .as("id-2 must never be offered to a model that has already given up for good")
+                .containsExactly("id-0", "id-1");
+        verify(consumer).seek(PARTITION_1, 10L);
+        verify(consumer).seek(PARTITION_2, 20L);
+        verify(consumer, never()).seek(eq(PARTITION_0), anyLong());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<TopicPartition, OffsetAndMetadata>> commitCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(consumer).commitSync(commitCaptor.capture());
+        assertThat(commitCaptor.getValue())
+                .as("id-0 resolved before the stop and must still commit")
+                .containsOnlyKeys(PARTITION_0);
     }
 
     private static Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> anyMapArg() {

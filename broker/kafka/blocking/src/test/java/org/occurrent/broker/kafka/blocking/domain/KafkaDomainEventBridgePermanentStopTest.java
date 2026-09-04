@@ -60,6 +60,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -84,6 +85,7 @@ class KafkaDomainEventBridgePermanentStopTest {
 
     private static final TopicPartition PARTITION_0 = new TopicPartition("test-topic", 0);
     private static final TopicPartition PARTITION_1 = new TopicPartition("test-topic", 1);
+    private static final TopicPartition PARTITION_2 = new TopicPartition("test-topic", 2);
 
     @Test
     @Timeout(10)
@@ -114,7 +116,7 @@ class KafkaDomainEventBridgePermanentStopTest {
 
         Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
         batch.put(PARTITION_0, List.of(undecodableRecord(PARTITION_0, 5L)));
-        batch.put(PARTITION_1, List.of(decodableRecord(PARTITION_1, 7L)));
+        batch.put(PARTITION_1, List.of(decodableRecord(PARTITION_1, 7L, "id-1")));
         ConsumerRecords<String, byte[]> records = new ConsumerRecords<>(batch);
 
         boolean shouldContinue = invokeProcessBatch(bridge, records);
@@ -137,10 +139,56 @@ class KafkaDomainEventBridgePermanentStopTest {
                 .containsExactly(Map.entry(PARTITION_0, new OffsetAndMetadata(6L)));
     }
 
-    private static ConsumerRecord<String, byte[]> decodableRecord(TopicPartition partition, long offset) {
+    /**
+     * The bug behind #948: once partition 1's record decides the permanent stop above, partition 2's own record,
+     * later in the same batch, must never reach the feed at all. Before the fix, this loop kept walking the rest
+     * of the batch into the same permanent refusal, one partition at a time, offering a feed that had already
+     * given up a record it could only ever refuse again. Proven with a spy on the feed itself rather than on a
+     * mocked {@code Consumer} call, since the defect was calling {@code acceptCloudEvent} at all, not any seek or
+     * commit around it.
+     */
+    @Test
+    @Timeout(10)
+    void a_permanent_stop_mid_batch_never_reaches_the_feed_for_a_partition_it_had_not_yet_processed() throws Exception {
+        KafkaConsumer<String, byte[]> consumer = mock(KafkaConsumer.class);
+        when(consumer.groupMetadata()).thenReturn(new ConsumerGroupMetadata("test-group"));
+
+        DomainEventFeed<String> realFeed = new DomainEventFeed<>(new InMemoryEventStore(), new IdentityConverter(), orderId -> orderId);
+        realFeed.register("proj", orderId -> {
+        }, Filter.data("amount", Condition.eq(42)));
+        realFeed.goLive("proj");
+        DomainEventFeed<String> feed = spy(realFeed);
+
+        @SuppressWarnings("unchecked")
+        Producer<String, byte[]> parkingProducer = mock(Producer.class);
+        when(parkingProducer.send(any())).thenReturn(CompletableFuture.completedFuture(
+                new RecordMetadata(new TopicPartition("parking-topic", 0), 0L, 0, 0L, 0, 0)));
+        KafkaDeliveryFailureAction failureAction = failureActionForTesting(
+                DeliveryFailurePolicy.PARK, parkingProducer, KafkaDestination.of("parking-topic"));
+
+        KafkaDomainEventBridge<String> bridge = bridgeForTesting(consumer, feed, failureAction);
+
+        Map<TopicPartition, List<ConsumerRecord<String, byte[]>>> batch = new LinkedHashMap<>();
+        batch.put(PARTITION_0, List.of(undecodableRecord(PARTITION_0, 5L)));
+        batch.put(PARTITION_1, List.of(decodableRecord(PARTITION_1, 7L, "id-1")));
+        batch.put(PARTITION_2, List.of(decodableRecord(PARTITION_2, 9L, "id-2")));
+        ConsumerRecords<String, byte[]> records = new ConsumerRecords<>(batch);
+
+        boolean shouldContinue = invokeProcessBatch(bridge, records);
+
+        assertThat(shouldContinue).isFalse();
+        // Partition 0's record never decodes, so it never reaches the feed either. Only partition 1's record, the
+        // one that actually triggered the permanent stop, may.
+        verify(feed, times(1)).acceptCloudEvent(any());
+        // Rewound to its own earliest fetched record instead, so the next consumer in this group refetches it,
+        // rather than left at whatever position poll() already advanced it to.
+        verify(consumer).seek(PARTITION_2, 9L);
+    }
+
+    private static ConsumerRecord<String, byte[]> decodableRecord(TopicPartition partition, long offset, String id) {
         RecordHeaders headers = new RecordHeaders();
         headers.add("ce_specversion", "1.0".getBytes(StandardCharsets.UTF_8));
-        headers.add("ce_id", "id-1".getBytes(StandardCharsets.UTF_8));
+        headers.add("ce_id", id.getBytes(StandardCharsets.UTF_8));
         headers.add("ce_source", "urn:test".getBytes(StandardCharsets.UTF_8));
         headers.add("ce_type", "com.acme.OrderPlaced".getBytes(StandardCharsets.UTF_8));
         byte[] value = "order-1".getBytes(StandardCharsets.UTF_8);

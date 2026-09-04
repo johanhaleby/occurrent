@@ -46,8 +46,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -104,6 +107,12 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * past it at all. It stays exactly where the last successful commit left it until an operator fixes the
  * registration and starts a new bridge, or a rebalance hands this group's partitions to another consumer, so the
  * event survives rather than being lost.
+ * <p>
+ * A permanent stop, whether from {@link UnreadableLiveFilterException}, {@link DomainEventFeed#refusesPermanently()},
+ * or the record-level {@code STOP} below, also cuts this poll short rather than finishing it out. This bridge stops
+ * offering the rest of the batch to the feed, rewinding every partition it had not yet reached back to its own
+ * earliest fetched record instead of walking each one into a refusal that would only repeat. Whatever this batch
+ * already resolved before the stop, on this partition or any other, is still committed.
  * <p>
  * <strong>One dedicated thread owns the {@code Consumer} end to end</strong>, unlike {@code RabbitMqDomainEventBridge}'s
  * split between a scheduler thread and an AMQP callback thread. A Kafka {@code Consumer} is not thread-safe, so this
@@ -323,7 +332,14 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
     // iterates. A partition whose own seek keeps failing stays at risk until its assignment is resolved, but the
     // rest of the batch is not held hostage to it.
     private void seekToEarliestFetched(ConsumerRecords<String, byte[]> records) {
-        for (TopicPartition partition : records.partitions()) {
+        seekToEarliestFetched(records, records.partitions());
+    }
+
+    // Same rewind, restricted to partitions. Used by processBatch(...) to rewind only the partitions a permanent
+    // stop left untouched, rather than every partition in the batch, since a partition already fully walked by the
+    // time the stop happened resolved legitimately and must keep what it staged.
+    private void seekToEarliestFetched(ConsumerRecords<String, byte[]> records, Collection<TopicPartition> partitions) {
+        for (TopicPartition partition : partitions) {
             try {
                 consumer.seek(partition, records.records(partition).get(0).offset());
             } catch (RuntimeException e) {
@@ -344,7 +360,10 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         boolean permanentStop = false;
         Set<TopicPartition> seekedBackPartitions = new HashSet<>();
         try {
-            for (TopicPartition partition : records.partitions()) {
+            List<TopicPartition> partitions = new ArrayList<>(records.partitions());
+            partitionLoop:
+            for (int i = 0; i < partitions.size(); i++) {
+                TopicPartition partition = partitions.get(i);
                 for (ConsumerRecord<String, byte[]> record : records.records(partition)) {
                     HandleResult result = handleRecord(record, toCommit);
                     if (result == HandleResult.PERMANENT_STOP) {
@@ -362,7 +381,12 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
                         running = false;
                         permanentlyStopped = true;
                         consumer.seek(partition, record.offset());
-                        break;
+                        // The rest of this batch, this partition's remaining records and every partition after
+                        // it, was fetched by poll() but never reached, so it is rewound to its own earliest
+                        // fetched record here rather than being offered to a feed that has already given up for
+                        // good.
+                        seekToEarliestFetched(records, partitions.subList(i + 1, partitions.size()));
+                        break partitionLoop;
                     } else if (result == HandleResult.REDELIVER) {
                         consumer.seek(partition, record.offset());
                         seekedBackPartitions.add(partition);
