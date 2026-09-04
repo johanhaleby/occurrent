@@ -390,4 +390,18 @@ class SagaExtensionsTest {
             assertThat(saga.eventTypes()).containsExactly(OpenGameEvent::class.java)
         }
     }
+
+    @Nested
+    inner class NoArgDsl {
+
+        @Test
+        fun `saga with no argument starts from null like initialState null`() {
+            val saga = saga<GameEvent, GameState?, GameCommand> {
+                correlateAll { it.gameId }
+                startsOn<GameStarted>()
+            }
+
+            assertThat(saga.initialState()).isNull()
+        }
+    }
 }

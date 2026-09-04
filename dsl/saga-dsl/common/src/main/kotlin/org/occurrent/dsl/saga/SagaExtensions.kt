@@ -53,6 +53,14 @@ fun <E : Any, S, C : Any> saga(initialState: S, block: SagaBuilder<E, S, C>.() -
 }
 
 /**
+ * Builds a [Saga] whose fold begins from no state. The state stays `null` until an `evolve` handler replaces it.
+ * See [saga] for the handler block.
+ */
+@Suppress("UNCHECKED_CAST")
+fun <E : Any, S, C : Any> saga(block: SagaBuilder<E, S, C>.() -> Unit): Saga<E, S, C> =
+    saga(null as S, block)
+
+/**
  * Receiver for the [saga] block. Delegates to the Java [Saga.Builder] so the Java and Kotlin surfaces produce the same
  * descriptor from one dispatch implementation.
  */

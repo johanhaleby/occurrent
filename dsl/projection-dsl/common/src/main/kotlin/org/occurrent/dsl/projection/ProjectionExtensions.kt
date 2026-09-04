@@ -45,6 +45,14 @@ fun <S, E : Any, ID : Any> projection(initialState: S, block: ProjectionBuilder<
 }
 
 /**
+ * Builds a [Projection] whose fold begins from no state. The state stays `null` until a handler replaces it. See
+ * [projection] for the handler block.
+ */
+@Suppress("UNCHECKED_CAST")
+fun <S, E : Any, ID : Any> projection(block: ProjectionBuilder<S, E, ID>.() -> Unit): Projection<S, E, ID> =
+    projection(null as S, block)
+
+/**
  * Builds a keyed [DcbProjection] with the same handler block as [projection], plus a DCB read boundary. Supply the
  * boundary with [DcbProjectionBuilder.tags] (a tag filter such as `tags("kind:account")`) or an explicit
  * [DcbProjectionBuilder.criteria]. With neither, the boundary defaults to [DcbCriteria.all]. For a single view over all
@@ -85,6 +93,14 @@ fun <S, E : Any> singletonProjection(initialState: S, block: ProjectionBuilder<S
     builder.block()
     return builder.build()
 }
+
+/**
+ * Builds a single-instance [Projection] whose fold begins from no state. The state stays `null` until a handler
+ * replaces it. See [singletonProjection] for what single-instance means.
+ */
+@Suppress("UNCHECKED_CAST")
+fun <S, E : Any> singletonProjection(block: ProjectionBuilder<S, E, String>.() -> Unit): Projection<S, E, String> =
+    singletonProjection(null as S, block)
 
 /**
  * Builds a single-instance [DcbProjection] (see [singletonProjection]) with a DCB read boundary. Supply the boundary
