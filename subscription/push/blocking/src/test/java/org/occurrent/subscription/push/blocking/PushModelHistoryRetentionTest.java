@@ -21,6 +21,7 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
@@ -100,6 +101,23 @@ class PushModelHistoryRetentionTest {
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
 
         assertThat(HistoryRetainingSubscriptions.findIn(model).orElseThrow().retains(event("never-written"))).isFalse();
+    }
+
+    /**
+     * The position an event arrives with is whoever produced it, and a local write assigns its own, so the two
+     * disagree for an event that reached the feed from elsewhere and was also stored here. Reading only the arriving
+     * position would miss it and refuse a quarantine the store could have supported.
+     */
+    @Test
+    void an_event_stored_here_under_a_different_position_is_still_found() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("orders", List.of(event("same-identity")));
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        CloudEvent arrivedWithAnotherPosition = OccurrentCloudEventExtension.withPosition(event("same-identity"), 4711);
+
+        assertThat(HistoryRetainingSubscriptions.findIn(model).orElseThrow().retains(arrivedWithAnotherPosition)).isTrue();
     }
 
     /**

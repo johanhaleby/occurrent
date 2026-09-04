@@ -97,8 +97,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
      * service's events delivers what this store never had, while a feed carrying this application's own writes
      * delivers what it did, and nothing about this model's construction says which of the two it was given.
      * <p>
-     * Reads a single position rather than scanning, when the event carries one. An event with no position is looked
-     * up by id alone, which a store may answer with a scan, and the caller is expected to ask this rarely.
+     * Reads the event's own position first, where it has one, so the ordinary case costs one lookup instead of a
+     * scan. That position comes from whoever produced the event though, and a local write assigns its own, so a miss
+     * there is not an answer and the identity is looked for across the store before giving up. The caller is expected
+     * to ask this rarely.
      * <p>
      * Fails closed. An event missing either half of its identity, and a read that throws, both answer {@code false},
      * because a caller uses this to decide whether it may stop retrying an event and a question that cannot be
@@ -112,15 +114,27 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         if (id == null || source == null) {
             return false;
         }
-        long position = OccurrentCloudEventExtension.getPosition(event);
-        PositionRange range = position > 0 ? PositionRange.between(position - 1, position) : PositionRange.fromBeginning();
         // Matched on source as well as id, since a CloudEvent is identified by the pair. An id alone would let a local
         // event from another source stand in for the one that arrived over the feed, which is the reading that loses it.
-        try (Stream<CloudEvent> stored = reader.readInPositionOrder(Filter.cloudEvent(id, source), range)) {
-            return stored.findAny().isPresent();
+        Filter identity = Filter.cloudEvent(id, source);
+        long position = OccurrentCloudEventExtension.getPosition(event);
+        try {
+            // The position the event arrives with belongs to whoever produced it, and a local write assigns its own, so
+            // the two disagree for an event that reached the feed from elsewhere and was stored here as well. Reading
+            // the one position first keeps the common case off a scan, and finding nothing there proves nothing.
+            if (position > 0 && found(identity, PositionRange.between(position - 1, position))) {
+                return true;
+            }
+            return found(identity, PositionRange.fromBeginning());
         } catch (RuntimeException e) {
             log.warn("Could not check whether the event '{}' is still in the event store, so it is treated as gone. The caller keeps retrying it rather than dropping it.", id, e);
             return false;
+        }
+    }
+
+    private boolean found(Filter identity, PositionRange range) {
+        try (Stream<CloudEvent> stored = reader.readInPositionOrder(identity, range)) {
+            return stored.findAny().isPresent();
         }
     }
 

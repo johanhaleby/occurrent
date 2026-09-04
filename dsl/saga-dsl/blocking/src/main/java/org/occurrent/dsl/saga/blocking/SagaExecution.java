@@ -145,11 +145,10 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             if (record.quarantined() && !stillObtainable.test(cloudEvent)) {
                 // Checked before the write, not after, because quarantining returns normally and that acknowledges the
-                // event to whatever fed it. Where the event is not in what this subscription reads, acknowledging drops
-                // the only copy, so the instance keeps blocking and the exception propagates as it did before 0.34.0.
-                // Nothing is saved, which leaves the failure record the earlier attempts wrote and lets the next
-                // redelivery ask again.
-                log.warn("Saga '{}' instance '{}' has kept failing on the event '{}' for {} and is not quarantined, because that event cannot be obtained again from what this subscription reads. Quarantining acknowledges the event, which would drop the only copy of it, so this instance keeps blocking the saga's other instances instead. A feed carrying another application's events is where this happens, and https://github.com/johanhaleby/occurrent/issues/918 is the path to closing it.",
+                // event to whatever fed it. An unconfirmed answer is treated as a no, so the instance keeps blocking
+                // and the exception propagates as it did before 0.34.0. Nothing is saved, which leaves the failure
+                // record the earlier attempts wrote and lets the next redelivery ask again.
+                log.warn("Saga '{}' instance '{}' has kept failing on the event '{}' for {} and is not quarantined, because the subscription could not confirm that the event is still obtainable from what it reads. Either it is gone, or the check could not be completed, and quarantining acknowledges the event, which might drop the only copy of it. This instance keeps blocking the saga's other instances instead. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                         subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                 return false;
             }
