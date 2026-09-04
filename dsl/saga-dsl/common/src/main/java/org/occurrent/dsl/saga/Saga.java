@@ -323,6 +323,15 @@ public interface Saga<E, S extends @Nullable Object, C> {
     }
 
     /**
+     * Starts building a saga whose fold begins from no state. The handler for the first event received sees
+     * {@code null} rather than an initial value. Register correlation, start types, and the per-event-type and
+     * per-timer folds and reactions on the returned {@link Builder}.
+     */
+    static <E, S extends @Nullable Object, C> Builder<E, S, C> builder() {
+        return builder(null);
+    }
+
+    /**
      * Create a saga from functions instead of the {@link Builder}, the escape hatch mirroring {@code Decider#create}. The
      * supplied {@code evolve}/{@code react} handle the whole {@link SagaInput} union themselves. This saga is never
      * terminal and has no {@code onStart}. Implement the interface directly for those. {@code startEventTypes} must be

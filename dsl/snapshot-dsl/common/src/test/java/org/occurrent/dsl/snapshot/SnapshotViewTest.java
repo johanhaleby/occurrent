@@ -64,6 +64,15 @@ class SnapshotViewTest {
     }
 
     @Test
+    void builder_with_no_argument_starts_from_null_like_builder_of_null() {
+        SnapshotView<Integer, LedgerEvent> view = SnapshotView.<Integer, LedgerEvent>builder()
+                .on(Deposited.class, (balance, e) -> balance + e.amount())
+                .build();
+
+        assertThat(view.view().initialState()).isNull();
+    }
+
+    @Test
     void adapt_widens_the_event_type_and_ignores_foreign_events() {
         SnapshotView<Integer, Deposited> deposits = SnapshotView.<Integer, Deposited>builder(0)
                 .on(Deposited.class, (balance, e) -> balance + e.amount())

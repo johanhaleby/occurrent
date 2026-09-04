@@ -149,6 +149,16 @@ public final class Projection<S extends @Nullable Object, E, ID> {
     }
 
     /**
+     * Starts building a {@code Projection} whose fold begins from no state. The handler for the first event received
+     * sees {@code null} rather than an initial value. Register a handler per event type with
+     * {@link Builder#on(Class, BiFunction)}, an {@link Builder#id(Function) id} function, and optionally an explicit
+     * {@link Builder#filter(Filter) filter}, then call {@link Builder#build()}.
+     */
+    public static <S extends @Nullable Object, E, ID> Builder<S, E, ID> builder() {
+        return builder(null);
+    }
+
+    /**
      * Starts building a single-instance {@code Projection}: one view folded from every event, like a leaderboard, rather
      * than one instance per key, so it needs no {@code id}. The single slot is keyed at run time by the projection's own
      * identity (the subscription id, or the {@code @Projection} id), a {@code String}, so a single-instance projection is
@@ -159,6 +169,15 @@ public final class Projection<S extends @Nullable Object, E, ID> {
         Builder<S, E, String> builder = new Builder<>(initialState);
         builder.singleton();
         return builder;
+    }
+
+    /**
+     * Starts building a single-instance {@code Projection} whose fold begins from no state. The handler for the first
+     * event received sees {@code null} rather than an initial value. See {@link #singletonBuilder(Object)} for what
+     * single-instance means.
+     */
+    public static <S extends @Nullable Object, E> Builder<S, E, String> singletonBuilder() {
+        return singletonBuilder(null);
     }
 
     /**
