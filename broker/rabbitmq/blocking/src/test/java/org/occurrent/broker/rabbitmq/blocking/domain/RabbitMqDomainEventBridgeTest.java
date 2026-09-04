@@ -22,12 +22,11 @@ import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventMapper;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqDestination;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqTestSupport;
-import org.occurrent.broker.rabbitmq.blocking.RabbitMqTopicExchangeDestinationResolver;
 import org.occurrent.condition.Condition;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.dsl.view.MaterializedView;
@@ -39,6 +38,8 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -54,27 +55,62 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
 
     /**
      * The plain {@link Filter} overload of {@code bindingFilter}, which wraps into an
-     * {@link org.occurrent.subscription.AgnosticSubscriptionFilter} and delegates. The bridge declares the queue
-     * and binds only the routing key that filter narrows to, so an event of another type never reaches the
-     * projection.
+     * {@link org.occurrent.subscription.AgnosticSubscriptionFilter} and delegates. {@link NarrowingRecorder}
+     * narrows to the routing key the event is published with and its catch-all is a routing key nothing publishes
+     * on, so an overload that stopped delegating would bind the dead key and nothing would arrive.
      */
     @Test
-    void a_plain_filter_bindingFilter_binds_only_the_routing_keys_that_filter_narrows_to() throws Exception {
+    void a_plain_filter_bindingFilter_binds_the_narrowed_routing_key_rather_than_the_catch_all() throws Exception {
         String queue = "domain-bridge-plain-filter-" + UUID.randomUUID();
         List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
         DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
         feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()));
         feed.goLive("proj");
+        Filter bindingFilter = Filter.type(TestOrderPlaced.class.getName());
+        NarrowingRecorder resolver = new NarrowingRecorder(exchange, TestOrderPlaced.class.getName());
 
         try (RabbitMqDomainEventBridge<TestOrderPlaced> bridge = RabbitMqDomainEventBridge.builder(connection(), feed, queue)
-                .resolver(new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified()))
-                .bindingFilter(Filter.type(TestOrderPlaced.class.getName()))
+                .resolver(resolver)
+                .bindingFilter(bindingFilter)
                 .pollInterval(POLL_INTERVAL)
                 .build()) {
-            publish(TestSomethingElse.class.getName(), "id-something-else", "order-ignored");
             publish(TestOrderPlaced.class.getName(), "id-1", "order-1");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
+            assertThat(resolver.received).isSameAs(bindingFilter);
+        }
+    }
+
+    /**
+     * Narrows any filter to {@code narrowedRoutingKey} and answers {@link #catchAllDestination()} with a routing
+     * key nothing in this test publishes on, so which of the two a bridge bound is visible in whether an event
+     * arrives at all.
+     */
+    private static final class NarrowingRecorder implements DestinationResolver<RabbitMqDestination> {
+
+        private final String exchange;
+        private final String narrowedRoutingKey;
+        private Filter received;
+
+        private NarrowingRecorder(String exchange, String narrowedRoutingKey) {
+            this.exchange = exchange;
+            this.narrowedRoutingKey = narrowedRoutingKey;
+        }
+
+        @Override
+        public RabbitMqDestination destinationFor(CloudEvent cloudEvent) {
+            return RabbitMqDestination.of(exchange, narrowedRoutingKey);
+        }
+
+        @Override
+        public Optional<Set<RabbitMqDestination>> destinationsFor(Filter filter) {
+            received = filter;
+            return Optional.of(Set.of(RabbitMqDestination.of(exchange, narrowedRoutingKey)));
+        }
+
+        @Override
+        public RabbitMqDestination catchAllDestination() {
+            return RabbitMqDestination.of(exchange, "nothing.publishes.on.this");
         }
     }
 
@@ -549,9 +585,6 @@ class RabbitMqDomainEventBridgeTest extends RabbitMqTestSupport {
      */
     private void assertAcknowledged(String queue) throws Exception {
         await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(queueMessageCount(queue)).isZero());
-    }
-
-    private static final class TestSomethingElse {
     }
 
     private record TestOrderPlaced(String orderId) {

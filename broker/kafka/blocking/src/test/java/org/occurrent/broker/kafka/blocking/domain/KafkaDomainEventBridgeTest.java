@@ -24,8 +24,8 @@ import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
+import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.kafka.blocking.KafkaDestination;
-import org.occurrent.broker.kafka.blocking.KafkaSharedTopicDestinationResolver;
 import org.occurrent.broker.kafka.blocking.KafkaTestSupport;
 import org.occurrent.condition.Condition;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
@@ -39,6 +39,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -58,26 +59,64 @@ class KafkaDomainEventBridgeTest extends KafkaTestSupport {
 
     /**
      * The plain {@link Filter} overload of {@code bindingFilter}, which wraps into an
-     * {@link org.occurrent.subscription.AgnosticSubscriptionFilter} and delegates. The shared-topic resolver
-     * narrows to its one topic either way, so what this asserts is that the plain filter reaches the resolver at
-     * all and the bridge ends up subscribed.
+     * {@link org.occurrent.subscription.AgnosticSubscriptionFilter} and delegates. {@link NarrowingRecorder}
+     * narrows to the topic the event is published on and its catch-all is a different, empty topic, so an overload
+     * that stopped delegating would subscribe to the empty one and nothing would arrive.
      */
     @Test
-    void a_plain_filter_bindingFilter_reaches_the_resolver_and_the_bridge_subscribes_to_what_it_derives() throws Exception {
+    void a_plain_filter_bindingFilter_subscribes_to_the_narrowed_topic_rather_than_the_catch_all() throws Exception {
+        String emptyTopic = createTopic(1);
         String groupId = "group-" + UUID.randomUUID();
         List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
         DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
         feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()));
         feed.goLive("proj");
+        Filter bindingFilter = Filter.type(TestOrderPlaced.class.getName());
+        NarrowingRecorder resolver = new NarrowingRecorder(topic, emptyTopic);
 
         try (KafkaDomainEventBridge<TestOrderPlaced> bridge = KafkaDomainEventBridge.builder(consumerConfig(groupId), feed)
-                .resolver(new KafkaSharedTopicDestinationResolver(topic))
-                .bindingFilter(Filter.type(TestOrderPlaced.class.getName()))
+                .resolver(resolver)
+                .bindingFilter(bindingFilter)
                 .pollTimeout(POLL_TIMEOUT)
                 .build()) {
             publish("stream-1", "id-1", "order-1");
 
             await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
+            assertThat(resolver.received).isSameAs(bindingFilter);
+        } finally {
+            deleteTopic(emptyTopic);
+        }
+    }
+
+    /**
+     * Narrows any filter to {@code narrowedTopic} and answers {@link #catchAllDestination()} with a different one,
+     * so which of the two a bridge subscribed to is visible in whether an event arrives at all.
+     */
+    private static final class NarrowingRecorder implements DestinationResolver<KafkaDestination> {
+
+        private final String narrowedTopic;
+        private final String catchAllTopic;
+        private Filter received;
+
+        private NarrowingRecorder(String narrowedTopic, String catchAllTopic) {
+            this.narrowedTopic = narrowedTopic;
+            this.catchAllTopic = catchAllTopic;
+        }
+
+        @Override
+        public KafkaDestination destinationFor(CloudEvent cloudEvent) {
+            return KafkaDestination.of(narrowedTopic);
+        }
+
+        @Override
+        public Optional<Set<KafkaDestination>> destinationsFor(Filter filter) {
+            received = filter;
+            return Optional.of(Set.of(KafkaDestination.of(narrowedTopic)));
+        }
+
+        @Override
+        public KafkaDestination catchAllDestination() {
+            return KafkaDestination.of(catchAllTopic);
         }
     }
 
