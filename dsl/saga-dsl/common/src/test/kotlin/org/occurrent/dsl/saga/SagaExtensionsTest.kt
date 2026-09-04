@@ -396,9 +396,11 @@ class SagaExtensionsTest {
 
         @Test
         fun `saga with no argument starts from null like initialState null`() {
-            val saga = saga<GameEvent, GameState?, GameCommand> {
+            // A witness with no ? still receives a nullable state, since the no-argument overload forces S?.
+            val saga = saga<GameEvent, GameState, GameCommand> {
                 correlateAll { it.gameId }
                 startsOn<GameStarted>()
+                evolve<GameStarted> { state, e -> state ?: InProgress(e.gameId) }
             }
 
             assertThat(saga.initialState()).isNull()

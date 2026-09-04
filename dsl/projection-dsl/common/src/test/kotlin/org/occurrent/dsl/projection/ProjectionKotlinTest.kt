@@ -199,8 +199,10 @@ class ProjectionKotlinTest {
 
         @Test
         fun `projection with no argument starts from null like initialState null`() {
-            val projection = projection<Boolean?, AccountEvent, String> {
+            // A witness with no ? still receives a nullable state, since the no-argument overload forces S?.
+            val projection = projection<Boolean, AccountEvent, String> {
                 id { it.accountId }
+                on<AccountRegistered> { state, _ -> state ?: true }
             }
 
             assertThat(projection.view().initialState()).isNull()
@@ -208,7 +210,9 @@ class ProjectionKotlinTest {
 
         @Test
         fun `singletonProjection with no argument starts from null like initialState null`() {
-            val projection = singletonProjection<Boolean?, AccountEvent> { }
+            val projection = singletonProjection<Boolean, AccountEvent> {
+                on<AccountRegistered> { state, _ -> state ?: true }
+            }
 
             assertThat(projection.view().initialState()).isNull()
         }
