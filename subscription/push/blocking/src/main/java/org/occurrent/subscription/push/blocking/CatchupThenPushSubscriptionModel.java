@@ -19,6 +19,7 @@ package org.occurrent.subscription.push.blocking;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
@@ -26,6 +27,7 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
+import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
@@ -86,7 +88,36 @@ import java.util.stream.Stream;
  * delegated per-subscription to {@link BlockingHandover}, shared with {@code CatchupProjectionFeed}.
  */
 @NullMarked
-public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptions, ReplayAwareSubscriptions {
+public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptions, ReplayAwareSubscriptions, HistoryRetainingSubscriptions {
+
+    /**
+     * Whether the store this model replays from holds {@code event}, asked of the store rather than assumed from the
+     * fact that this model replays one. The reader and the live feed are independent: a bridge consuming another
+     * service's events delivers what this store never had, while a feed carrying this application's own writes
+     * delivers what it did, and nothing about this model's construction says which of the two it was given.
+     * <p>
+     * Reads a single position rather than scanning, when the event carries one. An event with no position is looked
+     * up by id alone, which a store may answer with a scan, and the caller is expected to ask this rarely.
+     * <p>
+     * Fails closed. An event without an id and a read that throws both answer {@code false}, because a caller uses
+     * this to decide whether it may stop retrying an event and a question that cannot be answered has to cost the
+     * event nothing. A reader with no position needs no branch here, since the constructor already refuses one.
+     */
+    @Override
+    public boolean retains(CloudEvent event) {
+        String id = event.getId();
+        if (id == null) {
+            return false;
+        }
+        long position = OccurrentCloudEventExtension.getPosition(event);
+        PositionRange range = position > 0 ? PositionRange.between(position - 1, position) : PositionRange.fromBeginning();
+        try (Stream<CloudEvent> stored = reader.readInPositionOrder(Filter.id(id), range)) {
+            return stored.findAny().isPresent();
+        } catch (RuntimeException e) {
+            log.warn("Could not check whether the event '{}' is still in the event store, so it is treated as gone. The caller keeps retrying it rather than dropping it.", id, e);
+            return false;
+        }
+    }
 
     // Named so subscribe(..) can build the action before taking the monitor and register it inside, rather than
     // spelling a multi-line lambda out in the middle of a synchronized block.

@@ -29,6 +29,7 @@ import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.subscription.GlobalCheckpoint;
 import org.occurrent.subscription.StartAt;
 import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscribable;
 import org.occurrent.subscription.api.blocking.SubscriptionModel;
@@ -243,10 +244,9 @@ class SagaQuarantineTest {
         }
 
         @Test
-        void blocks_them_exactly_as_before_on_a_wrapper_that_advertises_repositioning_it_cannot_honour() throws Exception {
-            // A wrapper forwards the reposition to the model it wraps, so implementing RepositionableSubscriptions says
-            // nothing about whether the reposition works. CatchupSubscriptionModel is the real case, implementing it
-            // unconditionally and throwing UnsupportedOperationException when its delegate cannot reposition.
+        void blocks_them_exactly_as_before_on_a_wrapper_over_a_model_that_retains_nothing() throws Exception {
+            // A plain wrapper declares no retention of its own, so the lookup unwraps to the delegate and the delegate
+            // decides. The delegate here keeps nothing, which is the answer the whole chain gives.
             SagaSubscription subscription = run(new ForwardingWrapper(subscriptionModel), CONFIG);
             write(POISON, new OrderPlaced("1", POISON));
             write(HEALTHY, new OrderPlaced("2", HEALTHY));
@@ -263,18 +263,74 @@ class SagaQuarantineTest {
         }
 
         @Test
-        void are_isolated_from_it_on_a_wrapper_whose_delegate_can_really_be_repositioned() {
-            ReplayableSubscriptionModel repositionable = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(new ForwardingWrapper(repositionable), CONFIG);
-            repositionable.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
-            repositionable.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
-            repositionable.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
-            repositionable.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+        void are_isolated_from_it_on_a_wrapper_whose_delegate_retains_what_it_delivered() {
+            ReplayableSubscriptionModel retaining = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(new ForwardingWrapper(retaining), CONFIG);
+            retaining.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            retaining.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            retaining.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            retaining.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
 
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
                     () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
                     () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
             ));
+        }
+
+        @Test
+        void are_isolated_from_it_on_a_model_that_retains_what_it_delivered_without_being_repositionable() {
+            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(new RetainsWithoutRepositioning(feed), CONFIG);
+            feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            feed.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
+            ));
+        }
+
+        /**
+         * The model can answer, and for this event the answer is no. Quarantining would acknowledge an event nothing
+         * can hand back, so the instance keeps blocking instead, which is what a saga fed another application's events
+         * gets. Distinct from the feed that declares nothing, since here quarantine was available and was refused on
+         * the event.
+         */
+        @Test
+        void blocks_them_exactly_as_before_when_the_event_it_stopped_on_cannot_be_obtained_again() throws Exception {
+            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(new RetainsNothingItDelivered(feed), CONFIG);
+            feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            feed.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            TimeUnit.SECONDS.sleep(2);
+
+            assertAll(
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY))
+            );
+        }
+
+        @Test
+        void blocks_them_exactly_as_before_on_a_feed_that_retains_nothing() throws Exception {
+            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(new RetainsNothing(feed), CONFIG);
+            feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            feed.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            TimeUnit.SECONDS.sleep(2);
+
+            assertAll(
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure()).isNull(),
+                    () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY))
+            );
         }
     }
 
@@ -333,9 +389,9 @@ class SagaQuarantineTest {
     }
 
     /**
-     * Advertises {@link RepositionableSubscriptions} while forwarding the reposition to the model it wraps, which is
-     * what {@code CatchupSubscriptionModel} does. Whether a reposition works is therefore a question about the
-     * delegate rather than about this class.
+     * A wrapper that claims no capability of its own, so a lookup through it unwraps to the delegate and the delegate
+     * answers. This is how the wrappers a saga actually runs behind are built, meaning
+     * {@code CompetingConsumerSubscriptionModel} and {@code DurableSubscriptionModel}.
      */
     private record ForwardingWrapper(SubscriptionModel delegate)
             implements Subscribable, SubscriptionModelWrapper, RepositionableSubscriptions {
@@ -355,6 +411,62 @@ class SagaQuarantineTest {
             return RepositionableSubscriptions.findIn(delegate)
                     .orElseThrow(() -> new UnsupportedOperationException(delegate.getClass().getSimpleName() + " is not repositionable"))
                     .resumeSubscription(subscriptionId, startAt);
+        }
+    }
+
+    /**
+     * Retains what it delivers while refusing to resume at a chosen position, which is the combination the old gate
+     * turned away. Deliberately not a {@link SubscriptionModelWrapper}, so the lookup answers from here and never
+     * reaches the delegate's repositioning.
+     */
+    private record RetainsWithoutRepositioning(ReplayableSubscriptionModel delegate)
+            implements Subscribable, HistoryRetainingSubscriptions {
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public boolean retains(CloudEvent event) {
+            return true;
+        }
+
+        @Override
+        public boolean retainsEveryEvent() {
+            return true;
+        }
+    }
+
+    /**
+     * Answers for the event rather than for itself, which is what a model replaying one store while taking live events
+     * from another does. Everything it is asked about here is delivered the same way, so an instance that is refused a
+     * quarantine is refused on the event alone.
+     */
+    private record RetainsNothingItDelivered(ReplayableSubscriptionModel delegate)
+            implements Subscribable, HistoryRetainingSubscriptions {
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public boolean retains(CloudEvent event) {
+            return false;
+        }
+    }
+
+    /**
+     * Delivers and re-offers exactly as {@link RetainsWithoutRepositioning} does and keeps nothing, which is what a
+     * push feed is. Paired with that one deliberately, since the two differ in retention and in nothing else, so a
+     * difference in outcome can only be retention.
+     */
+    private record RetainsNothing(ReplayableSubscriptionModel delegate) implements Subscribable {
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
         }
     }
 
@@ -383,12 +495,23 @@ class SagaQuarantineTest {
     private final java.util.concurrent.atomic.AtomicLong position = new java.util.concurrent.atomic.AtomicLong();
 
     /**
-     * A subscription model that keeps every event it is handed and can be resumed at a chosen position, which is what
-     * the runner requires before it turns quarantine on and which {@link InMemorySubscriptionModel} does not have.
-     * Deliberately minimal, meaning one subscription, one delivery thread, and a retry loop that keeps re-offering an
-     * event whose handler threw, which is what makes a time budget reachable at all.
+     * A subscription model that keeps every event it is handed, which is what the runner requires before it turns
+     * quarantine on and which {@link InMemorySubscriptionModel} does not do. Deliberately minimal, meaning one
+     * subscription, one delivery thread, and a retry loop that keeps re-offering an event whose handler threw, which is
+     * what makes a time budget reachable at all.
      */
-    private final class ReplayableSubscriptionModel implements SubscriptionModel, RepositionableSubscriptions {
+    private final class ReplayableSubscriptionModel implements SubscriptionModel, RepositionableSubscriptions, HistoryRetainingSubscriptions {
+
+        @Override
+        public boolean retains(CloudEvent event) {
+            return true;
+        }
+
+        @Override
+        public boolean retainsEveryEvent() {
+            return true;
+        }
+
 
         private final List<CloudEvent> log = new CopyOnWriteArrayList<>();
         private volatile @Nullable Consumer<CloudEvent> action;

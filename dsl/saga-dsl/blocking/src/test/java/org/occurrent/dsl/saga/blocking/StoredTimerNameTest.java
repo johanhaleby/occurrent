@@ -123,7 +123,7 @@ class StoredTimerNameTest {
     private <S> SagaExecution<LobbyEvent, S, LobbyCommand> execution(Saga<LobbyEvent, S, LobbyCommand> saga,
                                                                      SagaStateStore<S> store,
                                                                      CommandDispatcher<LobbyCommand> dispatcher) {
-        return new SagaExecution<>("stored-timer-name", saga, store, dispatcher, converter, SagaRunnerConfig.defaults());
+        return new SagaExecution<>("stored-timer-name", saga, store, dispatcher, converter, SagaRunnerConfig.defaults(), event -> true);
     }
 
     private static <S> SagaEnvelope<S> storedWith(S state, String sagaId, String storedTimerName) {

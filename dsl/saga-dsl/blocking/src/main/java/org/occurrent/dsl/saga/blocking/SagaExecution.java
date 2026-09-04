@@ -36,6 +36,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.function.Predicate;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -78,9 +79,14 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // contention on one instance points at a hot correlation id or an under-sized maxCasAttempts.
     private final int warnThreshold;
     private final AtomicBoolean dedupUnavailableWarningLogged = new AtomicBoolean();
+    // Answers whether the failing event can still be obtained from wherever the subscription reads. Asked at the moment
+    // of quarantine rather than at startup, since a model that replays one store while taking live events from another
+    // holds some of what it delivers and not the rest.
+    private final Predicate<CloudEvent> stillObtainable;
 
     SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
-                  CloudEventConverter<E> converter, SagaRunnerConfig config) {
+                  CloudEventConverter<E> converter, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable) {
+        this.stillObtainable = stillObtainable;
         this.subscriptionId = subscriptionId;
         this.saga = saga;
         this.stateStore = stateStore;
@@ -115,7 +121,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         try {
             process(sagaId, input, meta, null);
         } catch (RuntimeException e) {
-            if (!quarantine(sagaId, meta, e, quarantineAfter)) {
+            if (!quarantine(sagaId, cloudEvent, meta, e, quarantineAfter)) {
                 throw e;
             }
         }
@@ -129,12 +135,22 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * Only the event path calls this. A failing timeout is already isolated per instance by the poller and blocks
      * nothing, and a timeout carries no redelivery key of its own, so there would be nothing to quarantine it on.
      */
-    private boolean quarantine(String sagaId, EventMeta meta, RuntimeException failure, Duration quarantineAfter) {
+    private boolean quarantine(String sagaId, CloudEvent cloudEvent, EventMeta meta, RuntimeException failure, Duration quarantineAfter) {
         try {
             Instant now = Instant.now();
             SagaEnvelope<S> current = stateStore.find(sagaId).orElse(null);
             FailureRecord<S> record = SagaExecutionSupport.onFailure(saga, sagaId, current, meta, failure, now, quarantineAfter);
             if (record == null) {
+                return false;
+            }
+            if (record.quarantined() && !stillObtainable.test(cloudEvent)) {
+                // Checked before the write, not after, because quarantining returns normally and that acknowledges the
+                // event to whatever fed it. Where the event is not in what this subscription reads, acknowledging drops
+                // the only copy, so the instance keeps blocking and the exception propagates as it did before 0.34.0.
+                // Nothing is saved, which leaves the failure record the earlier attempts wrote and lets the next
+                // redelivery ask again.
+                log.warn("Saga '{}' instance '{}' has kept failing on the event '{}' for {} and is not quarantined, because that event cannot be obtained again from what this subscription reads. Quarantining acknowledges the event, which would drop the only copy of it, so this instance keeps blocking the saga's other instances instead. A feed carrying another application's events is where this happens, and https://github.com/johanhaleby/occurrent/issues/918 is the path to closing it.",
+                        subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                 return false;
             }
             if (!stateStore.compareAndSave(sagaId, record.envelope(), record.expectedVersion())) {

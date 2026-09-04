@@ -289,11 +289,46 @@ unwrapping to the delegate to reposition would go around the wrapper's own lock 
 settle whether release is restricted to the node holding the lease or whether it coordinates across nodes, and that
 is named here as open work rather than assumed to fall out.
 
-**A source that cannot replay does not get quarantine at all, and refusing only the release would have been wrong.**
+**A source that retains nothing does not get quarantine at all, and refusing only the release would have been wrong.**
 The first draft refused the release and allowed the quarantine, which loses the event at the moment of quarantine
 rather than at the release. Returning normally acknowledges the input to the source, and for a push-fed saga
 configured with `catchup = NONE` under ADR 96 there is no local history holding it, so on a queue it can be gone
 immediately. Nothing later can replay what was never retained.
+
+**The question asked is retention, it is asked of the store rather than of whoever wired it, and the capability that
+asks it is `HistoryRetainingSubscriptions`.** A model implementing it answers, for one event, whether that event is
+still obtainable from what the model reads. The two MongoDB models answer yes to everything, since they read the
+event store's own change stream. `CatchupSubscriptionModel` does not implement it, because it is a
+`SubscriptionModelWrapper` and the lookup reaches whatever it wraps. `PushSubscriptionModel` does not implement it
+either, so `catchup = NONE` comes out unquarantined without anything checking for that attribute.
+
+**The fact varies per event inside a single wiring, which is why it cannot be a property of the model or of the
+configuration.** `CatchupThenPushSubscriptionModel` is the case. It replays an event store and takes live events from
+a feed, and the two are independent. An event this application wrote is in the store, and an event that arrived over
+a bridge from another service, which the amendment to ADR 133 describes as the reason such a bridge exists, never
+was. The repository's own RabbitMQ example is exactly this mixture, writing its orders locally and publishing them,
+while its readiness test injects one message whose order id was never written here. Any answer given once at
+construction, or once by a `catchup` attribute, would be wrong for some of the events that wiring delivers. Asking
+the store per event is right for both halves of it.
+
+So the model looks. `PositionOrderedReader` already gives a filtered, position-ordered read, so the check is a lookup
+by event id, narrowed to the event's own position where there is one. It runs when an instance has already been
+failing for the whole budget, never per delivered event, and a model that holds everything is not asked at all.
+
+**Checking beats declaring because a declaration here cannot be checked by the person making it.** The fact is that
+every event the live source delivers is also durably in the store the model replays from, and is there by the time
+the handler returns. That last clause is the one a user would get silently wrong, since a wiring that publishes
+before its local append commits satisfies the loose reading and still loses the event. A wrong declaration costs
+events with no test failing. A check has no wrong answer to give, and it is correct for a user who configured the
+wrong thing.
+
+The failure directions are deliberate. An event with no id, and a read that throws, both answer no, so an
+unanswerable question costs the event nothing and the instance keeps blocking. A reader with no position needs no
+answer, since `CatchupThenPushSubscriptionModel` refuses one at construction.
+
+Retention means the event remains obtainable from that source, not that the model fetches it again by itself. A
+MongoDB model has moved past the event and has no intention of reading it again, and the event is still there, which
+is all quarantine needs. Going back for it is release's problem, and release is not in this version.
 
 This turns on whether the source retains history, not on which retry loop re-offers the input, so it is unchanged by
 the transport differences in Decision point 3. A push feed behind the Kafka bridge does re-offer a failing record,
@@ -302,8 +337,16 @@ quarantine is what stages the offset and moves past the record.
 
 So for such a source the executor keeps rethrowing and the instance keeps blocking, which is today's behaviour.
 
-**For this configuration the two halves of the isolation rule cannot both hold, and this decision keeps the
-no-loss half.** AGENTS.md states the rule as both at once, no design may lose events and no consumer may be blocked
+**Repositioning was the wrong question even though it reached the right answer.** The first implementation gated on
+`RepositionableSubscriptions`, which is a different property. A model can be repositionable without keeping what it
+delivered, and it can keep everything while refusing a chosen start. That the two agreed on every model in this
+repository is a coincidence of what exists here, not a reason to ask the narrower one, and the startup message it
+justified told push operators to move to a catch-up model over MongoDB, which is the configuration they were already
+running. [#952](https://github.com/johanhaleby/occurrent/issues/952) is where the gate becomes the retention question
+this section states. Repositioning stays the question release asks, at the point release repositions.
+
+**For a source that genuinely retains nothing the two halves of the isolation rule cannot both hold, and this
+decision keeps the no-loss half.** AGENTS.md states the rule as both at once, no design may lose events and no consumer may be blocked
 by another being faulty. Here quarantining would break the first and refusing to quarantine breaks the second, so
 there is no answer that keeps both, and between them the loss is the one that cannot be undone afterwards.
 
@@ -460,7 +503,9 @@ budget's default was never among them, it is decided at five minutes in Decision
    retrying itself would hold the subscription thread for the whole budget, which is a shorter version of the block
    this decision removes. A transport that never re-offers the input therefore cannot reach the budget and keeps
    today's behaviour, which Decision point 3 states rather than implies.
-3. **A non-replayable source.** The behaviour stands, meaning the quarantine is refused and the instance keeps
-   blocking. The framing does not. This ships as a narrowing of the isolation rule rather than as its end state, and
-   [#918](https://github.com/johanhaleby/occurrent/issues/918) on milestone 0.35.0 is the recorded path to closing
-   it. Decision point 7.
+3. **A source that retains nothing.** The behaviour stands, meaning the quarantine is refused and the instance
+   keeps blocking. The framing does not. This ships as a narrowing of the isolation rule rather than as its end
+   state, and [#918](https://github.com/johanhaleby/occurrent/issues/918) on milestone 0.35.0 is the recorded path to
+   closing it. It reaches an event rather than a saga, so a push saga catching up from an event store is quarantined
+   for the events that store holds and refused for the ones that only ever arrived over the feed. A saga on a feed that can
+   answer for nothing, meaning `catchup = NONE`, is refused for all of them. Decision point 7.

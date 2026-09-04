@@ -339,7 +339,7 @@ class SagaRunnerTest {
 
         private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(SagaStateStore<OrderState> store, SagaRunnerConfig config) {
             return new SagaExecution<>("cas-retry", orderFulfillment(LONG_PAYMENT_TIMEOUT), store, command -> {
-            }, converter, config);
+            }, converter, config, event -> true);
         }
 
         @Test
@@ -692,7 +692,7 @@ class SagaRunnerTest {
         }
 
         private SagaExecution<OrderEvent, OrderState, OrderCommand> execution(CommandDispatcher<OrderCommand> dispatcher) {
-            return new SagaExecution<>("dispatch-all", issuesTwoCommandsOnStart(), SagaStateStore.inMemory(), dispatcher, converter, SagaRunnerConfig.defaults());
+            return new SagaExecution<>("dispatch-all", issuesTwoCommandsOnStart(), SagaStateStore.inMemory(), dispatcher, converter, SagaRunnerConfig.defaults(), event -> true);
         }
 
         @Test
