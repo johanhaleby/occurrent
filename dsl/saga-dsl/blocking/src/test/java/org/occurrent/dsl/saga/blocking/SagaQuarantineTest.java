@@ -17,6 +17,9 @@
 package org.occurrent.dsl.saga.blocking;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.*;
@@ -36,6 +39,7 @@ import org.occurrent.subscription.api.blocking.SubscriptionModel;
 import org.occurrent.subscription.api.blocking.SubscriptionModelWrapper;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemorySubscriptionModel;
+import org.slf4j.LoggerFactory;
 
 import io.cloudevents.core.builder.CloudEventBuilder;
 
@@ -313,6 +317,39 @@ class SagaQuarantineTest {
                     () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
                     () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY))
             );
+        }
+
+        /**
+         * A refused instance is re-offered the same event for as long as the source keeps retrying, so the refusal has
+         * to be announced once rather than at that cadence. Retention is still rechecked every time, which is what
+         * lets a store coming back be noticed.
+         */
+        @Test
+        void says_why_it_refused_once_rather_than_on_every_redelivery() throws Exception {
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
+                SagaSubscription subscription = run(new RetainsNothingItDelivered(feed), CONFIG);
+                feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+                feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+
+                TimeUnit.SECONDS.sleep(3);
+
+                long refusals = appender.list.stream()
+                        .map(ILoggingEvent::getFormattedMessage)
+                        .filter(message -> message.contains("is not quarantined"))
+                        .count();
+                assertAll(
+                        () -> assertThat(refusals).isEqualTo(1),
+                        () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE)
+                );
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
         }
 
         @Test

@@ -35,8 +35,13 @@ import java.util.Optional;
  * store beats asking whoever wired it, since a promise about a broker and an event store on someone else's machine
  * is a promise nobody can check and the failure is silent.
  * <p>
- * A model that keeps nothing does not implement this. There is no answer meaning never, so absence is the only way
- * to say it, and a caller that finds nothing has to read that as the event being gone once it returns.
+ * A model that cannot answer the question at all does not implement this, and absence therefore means unable to say
+ * rather than a no. The two are different and a caller treats them differently. Nothing found means the question
+ * cannot be put to this model, and a caller has to give up on quarantining anything it delivers. A model that is
+ * found and answers {@code false} has answered, about one event, and the next event may well get a yes.
+ * <p>
+ * Implement it only where the answer can be worked out. A model that would have to guess is more useful saying
+ * nothing, since a caller can then tell that nobody knows rather than being told no by something that never knew.
  *
  * @see #retains(CloudEvent)
  */
@@ -83,9 +88,9 @@ public interface HistoryRetainingSubscriptions extends SubscriptionModelCapabili
 
     /**
      * The retaining model behind {@code subscriptionModel}, unwrapping a {@link SubscriptionModelWrapper} until one is
-     * found. An empty result means nothing in the chain declares that it can answer, which is not the same as having
-     * established that the event is gone. A caller has to treat the two alike and keep the event, since a model that
-     * cannot be asked cannot be relied on to still have it.
+     * found. An empty result means nothing in the chain declares that it can answer, which is not a finding that the
+     * event is gone. A caller has to act the same way on both, keeping the event, since a model that cannot be asked
+     * cannot be relied on to still have it.
      * <p>
      * A wrapper that declares nothing is answered by what it wraps, which is how a catch-up model over one of the
      * MongoDB models reaches a yes.
@@ -94,7 +99,8 @@ public interface HistoryRetainingSubscriptions extends SubscriptionModelCapabili
      *                          or a {@link SubscriptionModelWrapper} around one of these. Typed as {@link SubscriptionModelCapability}
      *                          because callers hold different subsets of a subscription model's capabilities, and no
      *                          existing type names their union.
-     * @return The retaining model, or empty if nothing in the chain retains.
+     * @return The model that can answer, or empty when nothing in the chain can be asked, which is not a finding
+     *         that the chain retains nothing.
      */
     static Optional<HistoryRetainingSubscriptions> findIn(SubscriptionModelCapability subscriptionModel) {
         return subscriptionModel.capability(HistoryRetainingSubscriptions.class);
