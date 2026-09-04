@@ -41,8 +41,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
@@ -163,6 +166,12 @@ import static org.occurrent.retry.internal.RetryExecution.executeWithRetry;
  * On {@link RoutingOutcome#REFUSED} this bridge logs at error once and stops the poll loop for good, leaving the
  * triggering record's offset uncommitted so it is refetched by the next consumer in this group once the wrapper's
  * catch-up is fixed and restarted, rather than being parked or redelivered forever into the same permanent refusal.
+ * <p>
+ * A permanent stop, decided inside {@link #handleRecord} on {@code REFUSED} or the record-level {@code STOP} below,
+ * also cuts this poll short rather than finishing it out. This bridge stops offering the rest of the batch to the
+ * model, rewinding every partition it had not yet reached back to its own earliest fetched record instead of
+ * walking each one into a refusal that would only repeat. Whatever this batch already resolved before the stop, on
+ * this partition or any other, is still committed.
  * <p>
  * <strong>Ordering.</strong> A partitioned topic gives no global order. Two events on different partitions can be
  * processed in either order by this bridge, whatever their publish order was. Events for one stream stay in order
@@ -369,7 +378,14 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
     // iterates. A partition whose own seek keeps failing stays at risk until its assignment is resolved, but the
     // rest of the batch is not held hostage to it.
     private void seekToEarliestFetched(ConsumerRecords<String, byte[]> records) {
-        for (TopicPartition partition : records.partitions()) {
+        seekToEarliestFetched(records, records.partitions());
+    }
+
+    // Same rewind, restricted to partitions. Used by processBatch(...) to rewind only the partitions a permanent
+    // stop left untouched, rather than every partition in the batch, since a partition already fully walked by the
+    // time the stop happened resolved legitimately and must keep what it staged.
+    private void seekToEarliestFetched(ConsumerRecords<String, byte[]> records, Collection<TopicPartition> partitions) {
+        for (TopicPartition partition : partitions) {
             try {
                 consumer.seek(partition, records.records(partition).get(0).offset());
             } catch (RuntimeException e) {
@@ -386,11 +402,23 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         Map<TopicPartition, OffsetAndMetadata> toCommit = new HashMap<>();
         Set<TopicPartition> seekedBackPartitions = new HashSet<>();
         try {
-            for (TopicPartition partition : records.partitions()) {
+            List<TopicPartition> partitions = new ArrayList<>(records.partitions());
+            partitionLoop:
+            for (int i = 0; i < partitions.size(); i++) {
+                TopicPartition partition = partitions.get(i);
                 for (ConsumerRecord<String, byte[]> record : records.records(partition)) {
                     if (!handleRecord(record, toCommit)) {
                         consumer.seek(partition, record.offset());
                         seekedBackPartitions.add(partition);
+                        if (permanentlyStopped) {
+                            // handleRecord just set running false for good (REFUSED or STOP), so this poll loop
+                            // never comes back around to offer the rest of this batch to a model that has already
+                            // given up. Every partition after this one was fetched by poll() but never reached, so
+                            // it is rewound to its own earliest fetched record here rather than left to be routed
+                            // to that same permanent refusal one record at a time.
+                            seekToEarliestFetched(records, partitions.subList(i + 1, partitions.size()));
+                            break partitionLoop;
+                        }
                         break; // Stop this partition's remaining records for this poll. Other partitions are unaffected.
                     }
                 }
