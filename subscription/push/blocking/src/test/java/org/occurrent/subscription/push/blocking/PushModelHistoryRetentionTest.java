@@ -134,6 +134,45 @@ class PushModelHistoryRetentionTest {
         assertThat(HistoryRetainingSubscriptions.findIn(model).orElseThrow().retains(event("written-here"))).isFalse();
     }
 
+    /**
+     * A store that answers the one position and fails the wider read, which is what a narrow read succeeding while the
+     * fallback times out looks like. The answer has to stay no, and the outage has to stay reported.
+     */
+    @Test
+    void a_fallback_that_keeps_failing_is_not_treated_as_a_healthy_store() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(new NarrowReadsOnlyReader(), feed, null);
+        CloudEvent positioned = OccurrentCloudEventExtension.withPosition(event("somewhere"), 7);
+
+        HistoryRetainingSubscriptions retention = HistoryRetainingSubscriptions.findIn(model).orElseThrow();
+
+        assertAll(
+                () -> assertThat(retention.retains(positioned)).isFalse(),
+                () -> assertThat(retention.retains(positioned)).isFalse()
+        );
+    }
+
+    /** Answers a bounded range with nothing and fails an unbounded one. */
+    private static final class NarrowReadsOnlyReader implements PositionOrderedReader {
+        @Override
+        public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            if (range.afterPosition().isEmpty()) {
+                throw new IllegalStateException("the wider read timed out");
+            }
+            return Stream.of();
+        }
+
+        @Override
+        public long currentPosition() {
+            return 0;
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return true;
+        }
+    }
+
     /** Writes a position, so the model accepts it, and fails every read, which is what a store outage looks like. */
     private static final class ThrowingReader implements PositionOrderedReader {
         @Override

@@ -126,10 +126,12 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             // The position the event arrives with belongs to whoever produced it, and a local write assigns its own, so
             // the two disagree for an event that reached the feed from elsewhere and was stored here as well. Reading
             // the one position first keeps the common case off a scan, and finding nothing there proves nothing.
-            if (position > 0 && found(identity, PositionRange.between(position - 1, position))) {
-                return true;
-            }
-            return found(identity, PositionRange.fromBeginning());
+            boolean present = (position > 0 && found(identity, PositionRange.between(position - 1, position)))
+                    || found(identity, PositionRange.fromBeginning());
+            // Cleared here rather than inside the read, so a narrow read that succeeds and finds nothing does not
+            // report the store healthy while the wider read behind it is still failing.
+            retentionReadFailureLogged.set(false);
+            return present;
         } catch (RuntimeException e) {
             // Said once per outage rather than per attempt. A caller asks again on every redelivery, which is what
             // notices the store coming back, so without this the same failure is logged at the retry cadence.
@@ -150,9 +152,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     private boolean found(Filter identity, PositionRange range) {
         try (Stream<CloudEvent> stored = reader.readInPositionOrder(identity, range)) {
-            boolean present = stored.findAny().isPresent();
-            retentionReadFailureLogged.set(false);
-            return present;
+            return stored.findAny().isPresent();
         }
     }
 
