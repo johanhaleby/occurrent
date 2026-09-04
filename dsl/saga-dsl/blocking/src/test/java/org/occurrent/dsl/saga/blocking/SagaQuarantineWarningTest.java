@@ -138,7 +138,7 @@ class SagaQuarantineWarningTest {
 
         assertAll(
                 () -> assertThat(warnings()).hasSize(1),
-                () -> assertThat(warning()).contains("holds some of what it delivers and not the rest"),
+                () -> assertThat(warning()).contains("does not hold every event it delivers"),
                 () -> assertThat(warning()).contains("depends on the event it stopped on"),
                 () -> assertThat(warning()).contains("that refusal is logged when it happens")
         );

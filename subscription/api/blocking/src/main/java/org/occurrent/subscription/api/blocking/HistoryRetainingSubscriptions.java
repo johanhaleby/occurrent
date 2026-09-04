@@ -83,7 +83,9 @@ public interface HistoryRetainingSubscriptions extends SubscriptionModelCapabili
 
     /**
      * The retaining model behind {@code subscriptionModel}, unwrapping a {@link SubscriptionModelWrapper} until one is
-     * found. An empty result means nothing in the chain keeps a delivered event.
+     * found. An empty result means nothing in the chain declares that it can answer, which is not the same as having
+     * established that the event is gone. A caller has to treat the two alike and keep the event, since a model that
+     * cannot be asked cannot be relied on to still have it.
      * <p>
      * A wrapper that declares nothing is answered by what it wraps, which is how a catch-up model over one of the
      * MongoDB models reaches a yes.

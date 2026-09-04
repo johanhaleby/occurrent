@@ -389,9 +389,9 @@ class SagaQuarantineTest {
     }
 
     /**
-     * A wrapper that claims no capability of its own, so a lookup through it unwraps to the delegate and the delegate
-     * answers. This is how the wrappers a saga actually runs behind are built, meaning
-     * {@code CompetingConsumerSubscriptionModel} and {@code DurableSubscriptionModel}.
+     * A wrapper that declares no retention of its own, so a lookup for it unwraps to the delegate and the delegate
+     * answers. It does declare {@link RepositionableSubscriptions}, which is what the wrappers a saga actually runs
+     * behind do, meaning {@code CompetingConsumerSubscriptionModel} and {@code DurableSubscriptionModel}.
      */
     private record ForwardingWrapper(SubscriptionModel delegate)
             implements Subscribable, SubscriptionModelWrapper, RepositionableSubscriptions {

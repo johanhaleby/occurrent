@@ -264,9 +264,9 @@ public final class SagaRunner<E, C> {
      * of quarantine. Between an instance that blocks and an event that cannot be asked for again, this keeps the event,
      * and it says so at startup rather than leaving it to be discovered during the incident.
      * <p>
-     * A model that can answer says at startup whether it always will. One that holds everything it delivers is left
-     * alone, and one whose answer varies per event is named here, because that saga gets a quarantine for some events
-     * and not for others and the difference first shows up in the middle of an incident.
+     * A model that can answer says at startup whether it holds everything. One that does is left alone. One that does
+     * not guarantee it is named here, because that saga may get a quarantine for some events and not for others, and
+     * the difference otherwise first shows up in the middle of an incident.
      */
     private SagaRunnerConfig quarantineOnlyIfTheEventCanBeAskedForAgain(String subscriptionId, SagaRunnerConfig config) {
         if (config.quarantineAfter() == null) {
@@ -274,12 +274,12 @@ public final class SagaRunner<E, C> {
         }
         Optional<HistoryRetainingSubscriptions> retention = HistoryRetainingSubscriptions.findIn(subscriptionModel);
         if (retention.isEmpty()) {
-            log.warn("Saga subscription '{}' runs on a subscription model that cannot say whether it still holds an event it delivered ({}), so the event a quarantined instance stopped on could not be obtained again, and quarantine is switched off for this saga. An event that keeps failing for one instance therefore blocks every other instance of it, which is the behaviour before 0.34.0. A model answers by implementing HistoryRetainingSubscriptions, which the MongoDB subscription models do, and so does a catch-up model over one of them. A push feed on its own does not, because the events it is handed come from outside this application and no event store here is holding them. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+            log.warn("Saga subscription '{}' runs on a subscription model that cannot say whether it still holds an event it delivered ({}), so the event a quarantined instance stopped on has to be treated as one that could not be obtained again, and quarantine is switched off for this saga. An event that keeps failing for one instance therefore blocks every other instance of it, which is the behaviour before 0.34.0. A model answers by implementing HistoryRetainingSubscriptions, which the MongoDB subscription models do, and so does a catch-up model over one of them. A push feed on its own does not, because the events it is handed come from outside this application and no event store here is holding them. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                     subscriptionId, subscriptionModel.getClass().getName());
             return config.withQuarantineAfter(null);
         }
         if (!retention.get().retainsEveryEvent()) {
-            log.warn("Saga subscription '{}' runs on a subscription model that holds some of what it delivers and not the rest ({}), so whether an instance can be quarantined depends on the event it stopped on rather than on the saga. An event this model can still obtain is quarantined normally. One it cannot, which is what a feed carrying another application's events delivers, leaves the instance blocking the saga's other instances, and that refusal is logged when it happens.",
+            log.warn("Saga subscription '{}' runs on a subscription model that does not hold every event it delivers ({}), so whether an instance can be quarantined depends on the event it stopped on rather than on the saga. An event this model can still obtain is quarantined normally. One it cannot, which is what a feed delivering another application's events gives you, leaves the instance blocking the saga's other instances, and that refusal is logged when it happens.",
                     subscriptionId, subscriptionModel.getClass().getName());
         }
         return config;

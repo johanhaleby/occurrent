@@ -21,11 +21,15 @@ import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.eventstore.api.PositionRange;
+import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
+import org.occurrent.filter.Filter;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 
 import java.net.URI;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -96,6 +100,38 @@ class PushModelHistoryRetentionTest {
         CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
 
         assertThat(HistoryRetainingSubscriptions.findIn(model).orElseThrow().retains(event("never-written"))).isFalse();
+    }
+
+    /**
+     * The path that decides what a store outage costs. A reader that throws cannot say whether the event is there, and
+     * an unanswerable question has to read as a no, so the instance keeps blocking rather than acknowledging an event
+     * that may be the only copy. Asserted rather than assumed, because this branch runs exactly when something is
+     * already wrong and nothing else would catch it going the other way.
+     */
+    @Test
+    void a_reader_that_throws_answers_no_rather_than_letting_the_failure_escape() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(new ThrowingReader(), feed, null);
+
+        assertThat(HistoryRetainingSubscriptions.findIn(model).orElseThrow().retains(event("written-here"))).isFalse();
+    }
+
+    /** Writes a position, so the model accepts it, and fails every read, which is what a store outage looks like. */
+    private static final class ThrowingReader implements PositionOrderedReader {
+        @Override
+        public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+            throw new IllegalStateException("the store is unreachable");
+        }
+
+        @Override
+        public long currentPosition() {
+            return 0;
+        }
+
+        @Override
+        public boolean writesPosition() {
+            return true;
+        }
     }
 
     /**
