@@ -16,6 +16,9 @@
 
 package org.occurrent.subscription.push.blocking;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.DisplayNameGeneration;
@@ -27,6 +30,7 @@ import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
+import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.util.List;
@@ -146,10 +150,27 @@ class PushModelHistoryRetentionTest {
 
         HistoryRetainingSubscriptions retention = HistoryRetainingSubscriptions.findIn(model).orElseThrow();
 
-        assertAll(
-                () -> assertThat(retention.retains(positioned)).isFalse(),
-                () -> assertThat(retention.retains(positioned)).isFalse()
-        );
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        Logger modelLog = (Logger) LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
+        modelLog.addAppender(appender);
+        try {
+            boolean first = retention.retains(positioned);
+            boolean second = retention.retains(positioned);
+
+            long outageWarnings = appender.list.stream()
+                    .map(ILoggingEvent::getFormattedMessage)
+                    .filter(message -> message.contains("Could not check whether the event"))
+                    .count();
+            assertAll(
+                    () -> assertThat(first).isFalse(),
+                    () -> assertThat(second).isFalse(),
+                    () -> assertThat(outageWarnings).isEqualTo(1)
+            );
+        } finally {
+            modelLog.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     /** Answers a bounded range with nothing and fails an unbounded one. */
