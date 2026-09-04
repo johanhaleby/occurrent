@@ -30,7 +30,9 @@ import org.apache.kafka.common.serialization.StringDeserializer;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.broker.api.blocking.DestinationResolver;
+import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.push.blocking.CatchupThenPushSubscriptionModel;
@@ -646,6 +648,16 @@ public final class KafkaCloudEventBridge implements AutoCloseable {
         public Builder bindingFilter(SubscriptionFilter bindingFilter) {
             this.bindingFilter = requireNonNull(bindingFilter, "bindingFilter cannot be null");
             return this;
+        }
+
+        /**
+         * The same narrowing for a plain {@link Filter}, wrapped in an {@link AgnosticSubscriptionFilter} so it
+         * applies whichever event store the events came from. Pass a {@link SubscriptionFilter} instead when the
+         * narrowing has to be stream-specific or DCB-specific.
+         */
+        public Builder bindingFilter(Filter bindingFilter) {
+            requireNonNull(bindingFilter, "bindingFilter cannot be null");
+            return bindingFilter(AgnosticSubscriptionFilter.filter(bindingFilter));
         }
 
         /**

@@ -18,7 +18,7 @@ package org.occurrent.broker.kafka.blocking;
 
 import io.cloudevents.CloudEvent;
 import org.occurrent.broker.api.blocking.DestinationResolver;
-import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.filter.Filter;
 
 import java.util.Optional;
 import java.util.Set;
@@ -61,7 +61,7 @@ import static org.occurrent.broker.kafka.blocking.KafkaDestinations.streamIdOf;
  * gives for refusing a parking bridge with no {@code parkingDestination} of its own. A default destination name is
  * precisely the thing an operator has to know, not something a library should guess on their behalf.
  * <p>
- * {@link #destinationsFor(SubscriptionFilter)} returns this one topic regardless of what {@code filter} asks for.
+ * {@link #destinationsFor(Filter)} returns this one topic regardless of what {@code filter} asks for.
  * With a single topic, narrowing has nothing left to do, every consumer binds to the same place either way, so the
  * feed stays the sole decider of which events a subscription actually receives, ADR 133 decision 5 working exactly
  * as designed rather than a gap this resolver needs to fill. That is also why this resolver has no use for
@@ -98,15 +98,21 @@ public final class KafkaSharedTopicDestinationResolver implements DestinationRes
      * The one topic this resolver ever derives a destination for, regardless of {@code filter}. Never
      * {@link Optional#empty()}, since with a single topic there is nothing left to narrow, the feed remains the
      * decider of which events a subscription actually receives either way.
+     * <p>
+     * A {@link org.occurrent.subscription.SubscriptionFilter} with no {@link Filter} in it, a
+     * {@link org.occurrent.subscription.DcbSubscriptionFilter} or a custom one, never reaches here at all. The
+     * inherited {@link DestinationResolver#destinationsFor(org.occurrent.subscription.SubscriptionFilter)} answers
+     * those with {@link Optional#empty()}, and a caller reading that binds {@link #catchAllDestination()}, which
+     * under this resolver is the same one topic.
      */
     @Override
-    public Optional<Set<KafkaDestination>> destinationsFor(SubscriptionFilter filter) {
+    public Optional<Set<KafkaDestination>> destinationsFor(Filter filter) {
         requireNonNull(filter, "filter cannot be null");
         return Optional.of(Set.of(KafkaDestination.of(topic)));
     }
 
     /**
-     * The same one topic {@link #destinationFor(CloudEvent)} and {@link #destinationsFor(SubscriptionFilter)}
+     * The same one topic {@link #destinationFor(CloudEvent)} and {@link #destinationsFor(Filter)}
      * already return, since under this resolver it is also the destination that receives every event.
      */
     @Override

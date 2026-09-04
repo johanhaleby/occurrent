@@ -185,15 +185,24 @@ mapping, which is also why two projections reading the same event type get two q
 ```java
 D destinationFor(CloudEvent cloudEvent);
 
-Optional<Set<D>> destinationsFor(SubscriptionFilter filter);
+Optional<Set<D>> destinationsFor(Filter filter);
+
+default Optional<Set<D>> destinationsFor(SubscriptionFilter subscriptionFilter) { ... }
 
 D catchAllDestination();
 ```
 
-The reverse method returns an `Optional` because a resolver often cannot answer it. `CloudEventTypeMapper` translates
-a known class to a type and a known type back to a class, and it cannot list every event type an application has, so
-there is no set of destinations that means "everything". An empty result therefore means the resolver could not narrow
-this filter, and decision 5 says what a consumer does with that.
+An implementer writes `destinationsFor(Filter)`. `Filter` is the type that holds the condition, and the default
+method is what unwraps an `AgnosticSubscriptionFilter` or a `StreamSubscriptionFilter` down to it, so the unwrapping
+is written once here instead of once per resolver. A `DcbSubscriptionFilter` holds DCB criteria rather than a
+`Filter`, and a custom `SubscriptionFilter` is a type this interface knows nothing about, so the default answers both
+with an empty result.
+
+`destinationsFor(Filter)` returns an `Optional` because a resolver often cannot answer it. `CloudEventTypeMapper`
+translates a known class to a type and a known type back to a class, and it cannot list every event type an
+application has, so there is no set of destinations that means "everything". An empty result therefore means the
+resolver could not narrow this filter, and decision 5 says what a consumer does with that. The `SubscriptionFilter`
+method inherits that contract, including for the two it cannot unwrap.
 
 The shipped implementations derive the destination from the cloud event type through `CloudEventTypeMapper`. That is
 the point of putting the mapping here. A publisher and a consumer agree because they read one mapping, the same one
@@ -336,8 +345,8 @@ metadata refuses it at delivery.
 
 ### 5. A binding derived from a filter narrows what arrives, and never decides what is handled
 
-`destinationsFor(SubscriptionFilter)` exists so a consumer can bind only the routing keys it wants, or subscribe to
-only the topics it wants, instead of taking everything and discarding most of it.
+`destinationsFor` exists so a consumer can bind only the routing keys it wants, or subscribe to only the topics it
+wants, instead of taking everything and discarding most of it.
 
 It works for the event-type part of a filter and for nothing else, because the event type is the only part of a filter
 the destination mapping knows about. A stream id, a data field, a time range and a DCB criteria are all invisible to
@@ -746,9 +755,11 @@ decision 7 already specifies. That guarantee also assumes the topic's partition 
 to it and stays there. Kafka hashes a key against the topic's current partition count, so growing that count
 later remaps an existing stream id onto a different partition and can silently break ordering for whatever
 streams are still in flight at that moment, a concrete operational rule rather than a caveat to hedge with. Its
-`destinationsFor` returns that one topic regardless of the filter it is asked to narrow, since with a single
-topic narrowing has nothing left to do and decision 5's rule that the feed remains the decider already covers the
-rest. `KafkaTopicPerTypeDestinationResolver` stays exactly as it is, unchanged in behaviour, the documented
+`destinationsFor(Filter)` returns that one topic regardless of the filter it is asked to narrow, since with a
+single topic narrowing has nothing left to do and decision 5's rule that the feed remains the decider already
+covers the rest. A `SubscriptionFilter` with no `Filter` in it never reaches that method, and a consumer reading the empty
+result the inherited method gives back binds `catchAllDestination()`, which under this resolver is that same one
+topic. `KafkaTopicPerTypeDestinationResolver` stays exactly as it is, unchanged in behaviour, the documented
 alternative for a deployment that wants per-type topics and either has single-type streams or accepts the
 narrower guarantee.
 

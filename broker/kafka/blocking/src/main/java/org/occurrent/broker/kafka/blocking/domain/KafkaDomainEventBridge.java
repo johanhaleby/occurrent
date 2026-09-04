@@ -36,7 +36,9 @@ import org.occurrent.broker.kafka.blocking.KafkaDeliveryFailureAction;
 import org.occurrent.broker.kafka.blocking.KafkaDestination;
 import org.occurrent.broker.kafka.blocking.KafkaTopology;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.filter.Filter;
 import org.occurrent.retry.RetryStrategy;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.UnreadableLiveFilterException;
@@ -624,6 +626,16 @@ public final class KafkaDomainEventBridge<E> implements AutoCloseable {
         public Builder<E> bindingFilter(SubscriptionFilter bindingFilter) {
             this.bindingFilter = requireNonNull(bindingFilter, "bindingFilter cannot be null");
             return this;
+        }
+
+        /**
+         * The same narrowing for a plain {@link Filter}, wrapped in an {@link AgnosticSubscriptionFilter} so it
+         * applies whichever event store the events came from. Pass a {@link SubscriptionFilter} instead when the
+         * narrowing has to be stream-specific or DCB-specific.
+         */
+        public Builder<E> bindingFilter(Filter bindingFilter) {
+            requireNonNull(bindingFilter, "bindingFilter cannot be null");
+            return bindingFilter(AgnosticSubscriptionFilter.filter(bindingFilter));
         }
 
         /**

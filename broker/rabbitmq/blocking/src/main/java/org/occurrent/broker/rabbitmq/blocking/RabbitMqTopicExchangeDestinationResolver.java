@@ -20,7 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.api.blocking.EventTypeNarrowing;
-import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.filter.Filter;
 
 import java.util.Optional;
 import java.util.Set;
@@ -35,7 +35,7 @@ import static java.util.Objects.requireNonNull;
  * {@code CloudEventConverter}, so a publisher and a consumer agree by reading one mapping rather than by matching
  * two hand written strings.
  * <p>
- * Both {@link #destinationFor(CloudEvent)} and {@link #destinationsFor(SubscriptionFilter)} round-trip the cloud
+ * Both {@link #destinationFor(CloudEvent)} and {@link #destinationsFor(Filter)} round-trip the cloud
  * event type through {@code typeMapper}, {@code getCloudEventType(getDomainEventType(type))}, rather than trusting
  * the string on the event or in the filter as-is. A type the mapper does not recognise makes that round trip throw
  * whatever {@code typeMapper} throws for it, which is a configuration bug the caller should see immediately rather
@@ -69,12 +69,12 @@ public final class RabbitMqTopicExchangeDestinationResolver implements Destinati
     }
 
     /**
-     * The event-type narrowing {@link EventTypeNarrowing#narrow(SubscriptionFilter)} derives, one routing key per
-     * type it finds, or {@link Optional#empty()} when {@code filter} cannot be narrowed, exactly as
-     * {@link DestinationResolver#destinationsFor(SubscriptionFilter)} requires.
+     * The event-type narrowing {@link EventTypeNarrowing#narrow(Filter)} derives, one routing key per type it
+     * finds, or {@link Optional#empty()} when {@code filter} cannot be narrowed, exactly as
+     * {@link DestinationResolver#destinationsFor(Filter)} requires.
      */
     @Override
-    public Optional<Set<RabbitMqDestination>> destinationsFor(SubscriptionFilter filter) {
+    public Optional<Set<RabbitMqDestination>> destinationsFor(Filter filter) {
         requireNonNull(filter, "filter cannot be null");
         return EventTypeNarrowing.narrow(filter).map(types -> types.stream()
                 .map(this::canonicalRoutingKey)

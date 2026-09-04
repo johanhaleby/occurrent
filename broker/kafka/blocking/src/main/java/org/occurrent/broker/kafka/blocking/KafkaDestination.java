@@ -28,12 +28,12 @@ import static java.util.Objects.requireNonNull;
  * The topic, message key and application headers describing where an event goes on Kafka. Publishing uses every
  * component. A
  * consumer declaring a binding uses only the topic, so a
- * {@link DestinationResolver#destinationsFor(org.occurrent.subscription.SubscriptionFilter)} result leaves
+ * {@link DestinationResolver#destinationsFor(org.occurrent.filter.Filter)} result leaves
  * {@code key} and {@code headers} empty, the same convention {@code RabbitMqDestination} follows for its own
  * per-message components.
  * <p>
  * {@code topic} carries a dual meaning depending on which method produced it. {@link DestinationResolver#destinationFor(io.cloudevents.CloudEvent)}
- * and {@link DestinationResolver#destinationsFor(org.occurrent.subscription.SubscriptionFilter)} always return a
+ * and {@link DestinationResolver#destinationsFor(org.occurrent.filter.Filter)} always return a
  * literal topic name on both shipped resolvers. {@link KafkaTopicPerTypeDestinationResolver#catchAllDestination()}
  * is the one shipped case where {@code topic} is not a literal name but a Kafka topic-matching pattern instead,
  * meant for {@code KafkaConsumer.subscribe(java.util.regex.Pattern)} rather than for publishing, exactly as

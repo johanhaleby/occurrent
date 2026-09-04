@@ -19,6 +19,7 @@ package org.occurrent.broker.kafka.blocking;
 import io.cloudevents.CloudEvent;
 import io.cloudevents.core.builder.CloudEventBuilder;
 import org.junit.jupiter.api.Test;
+import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.filter.Filter;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.occurrent.subscription.SubscriptionFilter;
@@ -111,13 +112,22 @@ class KafkaSharedTopicDestinationResolverTest {
     }
 
     @Test
-    void destinationsFor_a_subscription_filter_this_resolver_does_not_understand_still_returns_the_one_configured_topic() {
+    void destinationsFor_a_subscription_filter_this_resolver_does_not_understand_cannot_narrow_but_the_catch_all_is_the_same_topic() {
         SubscriptionFilter filter = new SubscriptionFilter() {
         };
 
         Optional<Set<KafkaDestination>> destinations = resolver.destinationsFor(filter);
 
-        assertThat(destinations).contains(Set.of(KafkaDestination.of("my-topic")));
+        assertThat(destinations).isEmpty();
+        assertThat(resolver.catchAllDestination()).isEqualTo(KafkaDestination.of("my-topic"));
+    }
+
+    @Test
+    void destinationsFor_the_subscription_filter_overload_is_the_one_this_resolver_inherits() throws NoSuchMethodException {
+        Class<?> declaringClass = KafkaSharedTopicDestinationResolver.class
+                .getMethod("destinationsFor", SubscriptionFilter.class).getDeclaringClass();
+
+        assertThat(declaringClass).isEqualTo(DestinationResolver.class);
     }
 
     private CloudEvent cloudEventOfType(String type, String streamId) {

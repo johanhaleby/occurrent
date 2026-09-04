@@ -18,9 +18,6 @@ package org.occurrent.broker.api.blocking;
 
 import org.occurrent.condition.Condition;
 import org.occurrent.filter.Filter;
-import org.occurrent.subscription.AgnosticSubscriptionFilter;
-import org.occurrent.subscription.StreamSubscriptionFilter;
-import org.occurrent.subscription.SubscriptionFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,22 +28,19 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Derives the set of cloud event types a {@link SubscriptionFilter} narrows to, the one part of a filter a
- * {@link DestinationResolver#destinationsFor(SubscriptionFilter)} implementation can see. Named only
- * {@link SubscriptionFilter} and {@link Filter}, both stack-neutral and transport-neutral, so it lives here rather
- * than in either transport module, and both {@code RabbitMqTopicExchangeDestinationResolver} and
- * {@code KafkaTopicPerTypeDestinationResolver} call it instead of each walking the filter tree on its own. What
- * this decides is which events a consumer's binding lets through, so two copies of the walk drifting apart would
- * be a correctness divergence between the transports, not untidiness, which is exactly what ADR 133 decision 7
- * exists to rule out between them.
+ * Derives the set of cloud event types a {@link Filter} narrows to, the one part of a filter a
+ * {@link DestinationResolver#destinationsFor(Filter)} implementation can see. Named only {@link Filter}, which is
+ * stack-neutral and transport-neutral, so it lives here rather than in either transport module, and both
+ * {@code RabbitMqTopicExchangeDestinationResolver} and {@code KafkaTopicPerTypeDestinationResolver} call it
+ * instead of each walking the filter tree on its own. What this decides is which events a consumer's binding lets
+ * through, so two copies of the walk drifting apart would be a correctness divergence between the transports, not
+ * untidiness, which is exactly what ADR 133 decision 7 exists to rule out between them.
  * <p>
- * Works for {@link AgnosticSubscriptionFilter} and {@link StreamSubscriptionFilter}, both of which wrap a plain
- * {@link Filter}, and only for the part of that {@link Filter} that constrains {@value Filter#TYPE} by equality or
- * membership. Anything else, a {@link org.occurrent.subscription.DcbSubscriptionFilter}, a custom
- * {@link SubscriptionFilter}, a {@link Filter} on a different field, an {@code OR} branch that leaves one
- * alternative unconstrained, a range or negation condition on {@value Filter#TYPE}, resolves to
- * {@link Optional#empty()} rather than a guess, exactly as
- * {@link DestinationResolver#destinationsFor(SubscriptionFilter)} requires of its own return value.
+ * Only the part of a {@link Filter} that constrains {@value Filter#TYPE} by equality or membership narrows
+ * anything. A {@link Filter} on a different field, an {@code OR} branch that leaves one alternative
+ * unconstrained, a range or negation condition on {@value Filter#TYPE}, all resolve to {@link Optional#empty()}
+ * rather than a guess, exactly as {@link DestinationResolver#destinationsFor(Filter)} requires of its own return
+ * value.
  */
 public final class EventTypeNarrowing {
 
@@ -60,14 +54,10 @@ public final class EventTypeNarrowing {
      * Never returns an {@link Optional} holding an empty {@link Set}, empty and absent mean different things here,
      * absent means "could not narrow, bind everything", empty would wrongly mean "narrows to nothing".
      */
-    public static Optional<Set<String>> narrow(SubscriptionFilter subscriptionFilter) {
-        Optional<Set<String>> narrowed = switch (subscriptionFilter) {
-            case AgnosticSubscriptionFilter(Filter filter) -> typesIn(filter);
-            case StreamSubscriptionFilter(Filter filter) -> typesIn(filter);
-            default -> Optional.empty();
-        };
+    public static Optional<Set<String>> narrow(Filter filter) {
+        Optional<Set<String>> narrowed = typesIn(filter);
         if (narrowed.isPresent() && narrowed.get().isEmpty()) {
-            log.warn("Filter {} narrowed to no event types at all, which almost always means it can never match an event. Binding to every event type instead of none, since a binding this narrow would silently deliver nothing.", subscriptionFilter);
+            log.warn("Filter {} narrowed to no event types at all, which almost always means it can never match an event. Binding to every event type instead of none, since a binding this narrow would silently deliver nothing.", filter);
             return Optional.empty();
         }
         return narrowed;

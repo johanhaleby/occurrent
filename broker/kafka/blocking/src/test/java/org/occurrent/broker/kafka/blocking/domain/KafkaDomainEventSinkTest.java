@@ -27,6 +27,7 @@ import org.occurrent.broker.kafka.blocking.KafkaCloudEventSink;
 import org.occurrent.broker.kafka.blocking.KafkaDestination;
 import org.occurrent.broker.kafka.blocking.KafkaTestSupport;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.filter.Filter;
 import org.occurrent.subscription.SubscriptionFilter;
 
 import java.net.URI;
@@ -141,7 +142,7 @@ class KafkaDomainEventSinkTest extends KafkaTestSupport {
         }
 
         @Override
-        public Optional<Set<KafkaDestination>> destinationsFor(SubscriptionFilter filter) {
+        public Optional<Set<KafkaDestination>> destinationsFor(Filter filter) {
             throw new UnsupportedOperationException();
         }
 

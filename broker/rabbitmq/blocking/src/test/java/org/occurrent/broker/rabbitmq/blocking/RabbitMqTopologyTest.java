@@ -58,7 +58,7 @@ class RabbitMqTopologyTest {
             }
 
             @Override
-            public Optional<Set<RabbitMqDestination>> destinationsFor(SubscriptionFilter filter) {
+            public Optional<Set<RabbitMqDestination>> destinationsFor(Filter filter) {
                 return Optional.empty();
             }
 

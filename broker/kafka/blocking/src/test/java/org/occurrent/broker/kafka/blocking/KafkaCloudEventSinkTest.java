@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.typemapper.ReflectionCloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DestinationResolver;
+import org.occurrent.filter.Filter;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.slf4j.LoggerFactory;
 
@@ -361,7 +362,7 @@ class KafkaCloudEventSinkTest extends KafkaTestSupport {
         }
 
         @Override
-        public Optional<Set<KafkaDestination>> destinationsFor(SubscriptionFilter filter) {
+        public Optional<Set<KafkaDestination>> destinationsFor(Filter filter) {
             throw new UnsupportedOperationException();
         }
 

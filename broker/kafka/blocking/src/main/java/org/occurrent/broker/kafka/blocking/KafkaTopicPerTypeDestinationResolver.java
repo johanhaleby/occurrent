@@ -20,7 +20,7 @@ import io.cloudevents.CloudEvent;
 import org.occurrent.application.converter.typemapper.CloudEventTypeMapper;
 import org.occurrent.broker.api.blocking.DestinationResolver;
 import org.occurrent.broker.api.blocking.EventTypeNarrowing;
-import org.occurrent.subscription.SubscriptionFilter;
+import org.occurrent.filter.Filter;
 
 import java.util.Optional;
 import java.util.Set;
@@ -62,7 +62,7 @@ import static org.occurrent.broker.kafka.blocking.KafkaDestinations.streamIdOf;
  * the same partition, trading that topic's throughput away for order across every stream of that one type, still
  * not across types.
  * <p>
- * Both {@link #destinationFor(CloudEvent)} and {@link #destinationsFor(SubscriptionFilter)} round-trip the cloud
+ * Both {@link #destinationFor(CloudEvent)} and {@link #destinationsFor(Filter)} round-trip the cloud
  * event type through {@code topicMapper}, {@code getCloudEventType(getDomainEventType(type))}, rather than trusting
  * the string on the event or in the filter as-is. A type the mapper does not recognise makes that round trip throw
  * whatever {@code topicMapper} throws for it, which is a configuration bug the caller should see immediately rather
@@ -98,12 +98,12 @@ public final class KafkaTopicPerTypeDestinationResolver implements DestinationRe
     }
 
     /**
-     * The event-type narrowing {@link EventTypeNarrowing#narrow(SubscriptionFilter)} derives, one topic per type it
-     * finds, or {@link Optional#empty()} when {@code filter} cannot be narrowed, exactly as
-     * {@link DestinationResolver#destinationsFor(SubscriptionFilter)} requires.
+     * The event-type narrowing {@link EventTypeNarrowing#narrow(Filter)} derives, one topic per type it finds, or
+     * {@link Optional#empty()} when {@code filter} cannot be narrowed, exactly as
+     * {@link DestinationResolver#destinationsFor(Filter)} requires.
      */
     @Override
-    public Optional<Set<KafkaDestination>> destinationsFor(SubscriptionFilter filter) {
+    public Optional<Set<KafkaDestination>> destinationsFor(Filter filter) {
         requireNonNull(filter, "filter cannot be null");
         return EventTypeNarrowing.narrow(filter).map(types -> types.stream()
                 .map(this::canonicalTopic)
