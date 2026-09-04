@@ -304,6 +304,33 @@ class RabbitMqCloudEventBridgeTest extends RabbitMqTestSupport {
         }
     }
 
+    /**
+     * The plain {@link Filter} overload of {@code bindingFilter}, which wraps into an
+     * {@link org.occurrent.subscription.AgnosticSubscriptionFilter} and delegates. The queue binds only the routing
+     * key that filter narrows to, so an event of another type published first never reaches the handler.
+     */
+    @Test
+    void a_plain_filter_bindingFilter_binds_only_the_routing_keys_that_filter_narrows_to() throws Exception {
+        String queue = "bridge-plain-filter-" + UUID.randomUUID();
+        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+        RoutingOutcomeChannel outcomeChannel = new RoutingOutcomeChannel();
+        PushSubscriptionModel model = new PushSubscriptionModel(DataFieldReader.refusing(), outcomeChannel);
+        List<CloudEvent> handled = new CopyOnWriteArrayList<>();
+        model.subscribe("sub", cloudEvent -> handled.add(cloudEvent));
+
+        try (RabbitMqCloudEventBridge bridge = RabbitMqCloudEventBridge.builder(connection(), model, outcomeChannel, queue)
+                .resolver(resolver)
+                .bindingFilter(Filter.type(OrderPlaced.class.getName()))
+                .pollInterval(POLL_INTERVAL)
+                .build()) {
+            publish(SomethingElse.class.getName(), "id-something-else");
+            publish(OrderPlaced.class.getName(), "id-placed");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(handled).extracting(CloudEvent::getId).containsExactly("id-placed"));
+        }
+    }
+
     private String declareAndBindQueue(String routingKey) throws Exception {
         // Not auto-delete. The default no-arg queueDeclare() is exclusive and auto-delete, so the queue itself
         // would vanish the instant the bridge's consumer disconnects, which is exactly what assertAcknowledged(..)

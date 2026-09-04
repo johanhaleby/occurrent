@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * {@link DestinationResolver#destinationsFor(SubscriptionFilter)} is the one place a {@link SubscriptionFilter} is
  * unwrapped into the {@link Filter} a resolver actually narrows, so what a resolver returns for a wrapped filter
- * and for the bare {@link Filter} inside it can only agree if that unwrapping is right. These cases are what fails
+ * and for the bare {@link Filter} inside it can only agree if that unwrapping is right. These cases are what fail
  * if it stops delegating.
  */
 class DestinationResolverTest {

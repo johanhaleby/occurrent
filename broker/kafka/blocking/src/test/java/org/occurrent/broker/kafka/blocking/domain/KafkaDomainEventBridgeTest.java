@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.broker.api.blocking.DeliveryFailurePolicy;
 import org.occurrent.broker.kafka.blocking.KafkaDestination;
+import org.occurrent.broker.kafka.blocking.KafkaSharedTopicDestinationResolver;
 import org.occurrent.broker.kafka.blocking.KafkaTestSupport;
 import org.occurrent.condition.Condition;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
@@ -54,6 +55,31 @@ import static org.awaitility.Awaitility.await;
 class KafkaDomainEventBridgeTest extends KafkaTestSupport {
 
     private static final Duration POLL_TIMEOUT = Duration.ofMillis(100);
+
+    /**
+     * The plain {@link Filter} overload of {@code bindingFilter}, which wraps into an
+     * {@link org.occurrent.subscription.AgnosticSubscriptionFilter} and delegates. The shared-topic resolver
+     * narrows to its one topic either way, so what this asserts is that the plain filter reaches the resolver at
+     * all and the bridge ends up subscribed.
+     */
+    @Test
+    void a_plain_filter_bindingFilter_reaches_the_resolver_and_the_bridge_subscribes_to_what_it_derives() throws Exception {
+        String groupId = "group-" + UUID.randomUUID();
+        List<TestOrderPlaced> handled = new CopyOnWriteArrayList<>();
+        DomainEventFeed<TestOrderPlaced> feed = new DomainEventFeed<>(new InMemoryEventStore(), new TestOrderPlacedConverter(), TestOrderPlaced::orderId);
+        feed.register("proj", handled::add, Filter.type(TestOrderPlaced.class.getName()));
+        feed.goLive("proj");
+
+        try (KafkaDomainEventBridge<TestOrderPlaced> bridge = KafkaDomainEventBridge.builder(consumerConfig(groupId), feed)
+                .resolver(new KafkaSharedTopicDestinationResolver(topic))
+                .bindingFilter(Filter.type(TestOrderPlaced.class.getName()))
+                .pollTimeout(POLL_TIMEOUT)
+                .build()) {
+            publish("stream-1", "id-1", "order-1");
+
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(handled).containsExactly(new TestOrderPlaced("order-1")));
+        }
+    }
 
     @Test
     void commits_on_delivered_and_the_committed_offset_advances() throws Exception {
