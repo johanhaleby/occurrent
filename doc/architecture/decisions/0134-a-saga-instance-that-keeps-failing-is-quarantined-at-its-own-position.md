@@ -358,10 +358,12 @@ more acceptable. [#918](https://github.com/johanhaleby/occurrent/issues/918), mi
 path. It holds the two candidate closings, holding the event for this case or refusing the topology the way ADR 90
 refused a shared acknowledgement, and choosing between them is its work rather than this decision's.
 
-**Until it closes, the limitation is stated at startup rather than discovered during an incident.** A saga wired to a
-source that cannot replay says so where an operator sees it when the application comes up. The difference between
-this configuration and every other one first matters in the middle of an outage, which is the worst moment to learn
-that quarantine was never available here.
+**Until it closes, the limitation is stated at startup rather than discovered during an incident.** What is knowable
+at startup is not the verdict but what it will depend on, so that is what is said. A model that cannot establish
+retention at all says so and gets no quarantine. A model that can, without guaranteeing it holds everything, says
+that quarantine depends on the event an instance stops on. A model that holds everything it delivers says nothing,
+because there is nothing to warn about. The refusal itself is logged against the event when it happens, which is the
+one part that cannot be known before it does.
 
 The replay boundary is inclusive of the recorded position, and this needs saying because the existing vocabulary
 points the other way. `GlobalCheckpoint.of(p)` means resume after `p`, so restarting from the position of the event

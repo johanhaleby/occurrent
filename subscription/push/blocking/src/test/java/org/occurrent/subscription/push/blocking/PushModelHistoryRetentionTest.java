@@ -172,6 +172,22 @@ class PushModelHistoryRetentionTest {
         );
     }
 
+    /**
+     * An external producer can put anything in the position extension, and an unreadable one is only a lost
+     * optimization. Letting it throw would refuse an event the identity lookup finds perfectly well.
+     */
+    @Test
+    void an_unreadable_position_falls_back_to_the_identity_lookup() {
+        PushSubscriptionModel feed = new PushSubscriptionModel();
+        InMemoryEventStore store = new InMemoryEventStore(feed::accept);
+        store.write("orders", List.of(event("stored")));
+
+        CatchupThenPushSubscriptionModel model = new CatchupThenPushSubscriptionModel(store, feed, null);
+        CloudEvent malformed = CloudEventBuilder.v1(event("stored")).withExtension("position", "not-a-number").build();
+
+        assertThat(HistoryRetainingSubscriptions.findIn(model).orElseThrow().retains(malformed)).isTrue();
+    }
+
     private static CloudEvent event(String id) {
         return eventFrom(id, URI.create("urn:test"));
     }

@@ -117,8 +117,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // Matched on source as well as id, since a CloudEvent is identified by the pair. An id alone would let a local
         // event from another source stand in for the one that arrived over the feed, which is the reading that loses it.
         Filter identity = Filter.cloudEvent(id, source);
-        long position = OccurrentCloudEventExtension.getPosition(event);
         try {
+            // Read inside the guard, because an external producer can put anything in the extension and an unreadable
+            // one is only a lost optimization. Letting it throw would refuse an event the identity lookup would find.
+            long position = readablePosition(event);
             // The position the event arrives with belongs to whoever produced it, and a local write assigns its own, so
             // the two disagree for an event that reached the feed from elsewhere and was stored here as well. Reading
             // the one position first keeps the common case off a scan, and finding nothing there proves nothing.
@@ -129,6 +131,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         } catch (RuntimeException e) {
             log.warn("Could not check whether the event '{}' is still in the event store, so it is treated as gone. The caller keeps retrying it rather than dropping it.", id, e);
             return false;
+        }
+    }
+
+    private static long readablePosition(CloudEvent event) {
+        try {
+            return OccurrentCloudEventExtension.getPosition(event);
+        } catch (RuntimeException e) {
+            return 0;
         }
     }
 

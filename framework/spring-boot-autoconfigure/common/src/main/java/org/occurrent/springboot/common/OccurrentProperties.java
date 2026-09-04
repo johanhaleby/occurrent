@@ -722,9 +722,10 @@ public class OccurrentProperties {
          * {@code SagaRunnerConfig.defaults()}.
          * <p>
          * Set it to zero to keep the pre-0.34.0 behaviour, where the event is retried forever and every other instance
-         * of that saga waits behind it. A negative value is rejected at startup rather than read as zero. Quarantine is switched off on its own, with a warning at startup, on a
-         * subscription model that cannot be resumed at a chosen position, since the event could never be obtained
-         * again there.
+         * of that saga waits behind it. A negative value is rejected at startup rather than read as zero. Quarantine is switched off on its own,
+         * with a warning at startup, on a subscription model that cannot say whether it still holds an event it
+         * delivered. A model that can say is asked about the event an instance stopped on, and an instance is left
+         * blocking rather than quarantined where that answer cannot be confirmed.
          */
         private Duration quarantineAfter = Duration.ofMinutes(5);
 

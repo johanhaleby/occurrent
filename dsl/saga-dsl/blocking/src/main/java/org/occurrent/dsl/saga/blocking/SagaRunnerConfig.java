@@ -41,8 +41,9 @@ import static java.util.Objects.requireNonNull;
  * @param quarantineAfter      how long one event may keep failing for one instance before that instance is quarantined
  *                             on that event and the subscription is allowed past it, or {@code null} to keep
  *                             rethrowing forever, which is what every version up to 0.33.0 did. A runner whose
- *                             subscription model cannot be resumed at a chosen position ignores this and keeps
- *                             rethrowing, because a quarantined instance there could never be replayed
+ *                             subscription model cannot say whether it still holds a delivered event ignores this
+ *                             and keeps rethrowing, and one that can is asked per event, so an instance stopped on an
+ *                             event the model cannot confirm keeps blocking rather than losing it
  */
 public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts,
                                RedeliveryDetection redeliveryDetection, @Nullable Duration quarantineAfter) {
