@@ -175,8 +175,8 @@ public final class EventTypeExpansion {
      * is both, so it keeps itself and gains what it permits.
      * <p>
      * An enum covers the class of each of its constants, which is the constant's own class when that constant has a
-     * body and the enum class itself when it does not. An enum with no constants covers nothing and is refused, since
-     * no event can ever be an instance of it.
+     * body and the enum class itself when it does not. Only a Kotlin enum whose constants have bodies has its
+     * constants read, which initializes it. Every other enum is final or sealed and is answered from metadata alone.
      * <p>
      * A concrete class that is neither final nor sealed is refused, because anything extending it is stored under its
      * own name where no walk can reach it. That refusal is new in 0.34.0, and up to 0.33.0 such a type was accepted
@@ -207,10 +207,12 @@ public final class EventTypeExpansion {
         if (!visited.add(type)) {
             return true;
         }
-        // An enum closes its own hierarchy the way a permits clause does, since neither Java nor Kotlin lets anything
-        // outside the declaration extend an enum type, so its constants are every class an instance can have. Read
-        // through the constants rather than getPermittedSubclasses because only javac seals this construct.
-        if (type.isEnum()) {
+        // An enum closes its own hierarchy, since neither Java nor Kotlin lets anything outside the declaration extend
+        // an enum type, so its constants are every class an instance can have, and they decide whether the enum class
+        // itself is one of them. Only a Kotlin enum whose constants have bodies is read this way, because javac seals
+        // the same construct and every other enum is final, so both are answered below without it. Kept to that one
+        // enum because getEnumConstants runs the enum's constructors and static initializers.
+        if (type.isEnum() && !type.isSealed() && !Modifier.isFinal(type.getModifiers())) {
             for (Object constant : type.getEnumConstants()) {
                 // A constant with a body has its own class, one without is an instance of the enum class itself.
                 concrete.add((Class<? extends E>) constant.getClass());

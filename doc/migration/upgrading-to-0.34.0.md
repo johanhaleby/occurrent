@@ -336,7 +336,6 @@ constant with a body has its own class, `PaymentEvent$Reserved`, while a constan
 `ReflectionCloudEventTypeMapper` maps whichever class it is handed. Decide whether a constant has a body before you
 have events in the store rather than after.
 
-An `enum class` with no constants at all is refused, since no event can ever be an instance of it.
 
 ### Seal the hierarchy
 

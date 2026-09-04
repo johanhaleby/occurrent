@@ -529,6 +529,36 @@ class EventTypeExpansionTest {
     enum EmptyEvent {
     }
 
+    // Reading an enum through Class#getEnumConstants runs its static initializer, so these two record whether that
+    // happened to a plain final enum and to a Java enum javac sealed, both of which the walk answers from metadata
+    // alone. The flags live outside the enums because touching the enum to read them would initialize it.
+    static final class Initialized {
+        static volatile boolean plain = false;
+        static volatile boolean bodied = false;
+    }
+
+    enum PlainEnumWithStaticInitializer {
+        FIRST, SECOND;
+
+        static {
+            Initialized.plain = true;
+        }
+    }
+
+    enum SealedEnumWithStaticInitializer {
+        FIRST {
+            String label() {
+                return "first";
+            }
+        };
+
+        static {
+            Initialized.bodied = true;
+        }
+
+        abstract String label();
+    }
+
     @Test
     void a_java_enum_with_constant_bodies_expands_into_its_constant_classes() {
         Set<Class<?>> expanded = EventTypeExpansion.expand(Set.of(JavaPaymentEvent.class), REFUSAL);
@@ -548,10 +578,33 @@ class EventTypeExpansionTest {
     }
 
     @Test
-    void an_enum_with_no_constants_is_refused() {
-        // Nothing can ever be an instance of it, so there is no concrete type to name.
-        assertThatThrownBy(() -> EventTypeExpansion.expand(Set.of(EmptyEvent.class), REFUSAL))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(EmptyEvent.class.getName());
+    void an_enum_with_no_constants_expands_to_itself() {
+        // An enum with no constants is final, so it is answered the same way any other final class is.
+        Set<Class<?>> expanded = EventTypeExpansion.expand(Set.of(EmptyEvent.class), REFUSAL);
+
+        assertThat(expanded).containsExactly(EmptyEvent.class);
+    }
+
+    @Test
+    void expanding_a_plain_enum_does_not_initialize_it() {
+        // A plain enum is final, so the walk stops at it without reading its constants. Reading them would run the
+        // static initializer below, and a caller whose enum initializes anything would pay for that on every filter
+        // it builds, or fail with ExceptionInInitializerError where 0.33.0 was fine.
+        Set<Class<?>> expanded = EventTypeExpansion.expand(Set.of(PlainEnumWithStaticInitializer.class), REFUSAL);
+
+        assertThat(expanded).containsExactly(PlainEnumWithStaticInitializer.class);
+        assertThat(Initialized.plain).isFalse();
+    }
+
+    @Test
+    void expanding_a_java_enum_with_constant_bodies_does_not_initialize_it() {
+        // javac seals this enum, so the permits walk finds the constant classes from metadata and never reads a value.
+        Set<Class<?>> expanded = EventTypeExpansion.expand(Set.of(SealedEnumWithStaticInitializer.class), REFUSAL);
+        // Read before naming a constant below, since naming one initializes the enum and would set this itself.
+        boolean initializedByTheWalk = Initialized.bodied;
+
+        assertThat(initializedByTheWalk).isFalse();
+        assertThat(expanded).containsExactlyInAnyOrder(
+                SealedEnumWithStaticInitializer.class, SealedEnumWithStaticInitializer.FIRST.getClass());
     }
 }

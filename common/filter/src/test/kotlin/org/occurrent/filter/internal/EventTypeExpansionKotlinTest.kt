@@ -60,10 +60,21 @@ enum class KotlinShipmentEvent {
     open fun label() = "delivered"
 }
 
+// The flag lives outside the enum because touching the enum to read it would initialize it.
+object KotlinEnumInitialized {
+    @JvmField
+    @Volatile
+    var bodiless = false
+}
+
 // No constant body, so Kotlin compiles the enum final and the walk stops at it.
 enum class KotlinBodilessPaymentEvent(private val label: String) {
     Reserved("reserved"),
     Settled("settled");
+
+    init {
+        KotlinEnumInitialized.bodiless = true
+    }
 
     override fun toString() = label
 }
@@ -181,10 +192,21 @@ class EventTypeExpansionKotlinTest {
     }
 
     @Test
-    fun `a Kotlin enum with no constants is refused`() {
-        // Nothing can ever be an instance of it, so there is no concrete type to name.
-        assertThatThrownBy { EventTypeExpansion.expand<Any>(setOf(KotlinEnumWithoutConstants::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") } }
-            .isInstanceOf(IllegalArgumentException::class.java)
-            .hasMessageContaining(KotlinEnumWithoutConstants::class.java.name)
+    fun `a Kotlin enum with no constants expands to itself`() {
+        // Kotlin compiles an enum with no constants final, so it is answered the same way any other final class is.
+        val expanded = EventTypeExpansion.expand<Any>(setOf(KotlinEnumWithoutConstants::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") }
+
+        assertThat(expanded).containsExactly(KotlinEnumWithoutConstants::class.java)
+    }
+
+    @Test
+    fun `expanding a Kotlin enum with no constant bodies does not initialize it`() {
+        // Reading an enum through getEnumConstants runs its static initializer, and a bodiless enum is final, so the
+        // walk stops at it and never reads a value. Only an enum whose constants have bodies is read that way.
+        val expanded = EventTypeExpansion.expand<Any>(setOf(KotlinBodilessPaymentEvent::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") }
+        val initializedByTheWalk = KotlinEnumInitialized.bodiless
+
+        assertThat(initializedByTheWalk).isFalse()
+        assertThat(expanded).containsExactly(KotlinBodilessPaymentEvent::class.java)
     }
 }
