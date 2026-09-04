@@ -494,4 +494,64 @@ class EventTypeExpansionTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(PlainOpenEvent.class.getName());
     }
+
+    // javac seals an enum whose constants have bodies implicitly, listing each constant body as a permitted subclass
+    // (JLS 8.9), so the walk always reached these. They are here to hold that still true now that an enum is expanded
+    // through its constants rather than through the permits clause javac happens to write.
+    enum JavaPaymentEvent {
+        RESERVED {
+            String label() {
+                return "reserved";
+            }
+        },
+        SETTLED {
+            String label() {
+                return "settled";
+            }
+        };
+
+        abstract String label();
+    }
+
+    enum JavaShipmentEvent {
+        DISPATCHED {
+            String label() {
+                return "dispatched";
+            }
+        },
+        DELIVERED;
+
+        String label() {
+            return "delivered";
+        }
+    }
+
+    enum EmptyEvent {
+    }
+
+    @Test
+    void a_java_enum_with_constant_bodies_expands_into_its_constant_classes() {
+        Set<Class<?>> expanded = EventTypeExpansion.expand(Set.of(JavaPaymentEvent.class), REFUSAL);
+
+        assertThat(expanded).containsExactlyInAnyOrder(
+                JavaPaymentEvent.class, JavaPaymentEvent.RESERVED.getClass(), JavaPaymentEvent.SETTLED.getClass());
+    }
+
+    @Test
+    void a_java_enum_with_bodies_on_only_some_constants_expands_into_the_enum_and_the_bodied_constant() {
+        // DELIVERED has no body, so it is an instance of the enum class itself and that class is what it is stored
+        // under, which is why the enum class belongs in the expansion alongside DISPATCHED's own class.
+        Set<Class<?>> expanded = EventTypeExpansion.expand(Set.of(JavaShipmentEvent.class), REFUSAL);
+
+        assertThat(expanded).containsExactlyInAnyOrder(JavaShipmentEvent.class, JavaShipmentEvent.DISPATCHED.getClass());
+        assertThat(JavaShipmentEvent.DELIVERED.getClass()).isEqualTo(JavaShipmentEvent.class);
+    }
+
+    @Test
+    void an_enum_with_no_constants_is_refused() {
+        // Nothing can ever be an instance of it, so there is no concrete type to name.
+        assertThatThrownBy(() -> EventTypeExpansion.expand(Set.of(EmptyEvent.class), REFUSAL))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(EmptyEvent.class.getName());
+    }
 }

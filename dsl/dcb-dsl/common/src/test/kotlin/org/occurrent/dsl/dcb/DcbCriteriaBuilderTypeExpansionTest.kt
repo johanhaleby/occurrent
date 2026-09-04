@@ -55,8 +55,8 @@ enum class EnumWithBodies : EnumRoot {
 
 sealed interface BodilessEnumRoot
 
-// The same two constants with their behavior moved off the constant bodies, which is one of the two remedies the
-// type KDoc offers a Kotlin caller whose enum is refused.
+// The same two constants with their behavior moved off the constant bodies, which Kotlin compiles final and stores
+// under one CloudEvent type where the bodied version stores one per constant.
 enum class EnumWithoutBodies(private val label: String) : BodilessEnumRoot {
     A("a"),
     B("b");
@@ -117,32 +117,33 @@ class DcbCriteriaBuilderTypeExpansionTest {
     }
 
     @Test
-    fun type_refuses_a_kotlin_enum_with_constant_bodies_declared_directly() {
-        // Given: unlike javac, which makes such an enum implicitly sealed with each constant body as a permitted
-        // subclass (JLS 8.9), Kotlin compiles EnumWithBodies itself as a plain non-final, non-sealed class, so
-        // EventTypeExpansion can see it is concrete but cannot see A and B as its permitted subclasses. This is a
-        // shared EventTypeExpansion limitation, verified here, not something a change in this class can fix.
+    fun type_expands_a_kotlin_enum_with_constant_bodies_declared_directly() {
+        // Given: javac seals such an enum implicitly with each constant body as a permitted subclass (JLS 8.9) and
+        // Kotlin compiles it as a plain class with no permits clause at all. The expansion reads the enum constants
+        // instead, which both compilers answer the same way, so A and B are found either way.
         val builder = DcbCriteriaBuilder(simpleNameConverter<EnumWithBodies>())
 
-        assertThatThrownBy { builder.type(EnumWithBodies::class.java) }
-            .isInstanceOf(IllegalArgumentException::class.java)
-            .hasMessageContaining(EnumWithBodies::class.java.name)
+        val criterion = builder.type(EnumWithBodies::class.java)
+
+        assertThat(criterion).isEqualTo(DcbCriteria.types(listOf("EnumWithBodies", "A", "B")))
     }
 
     @Test
-    fun type_refuses_the_sealed_interface_a_kotlin_enum_with_constant_bodies_reopens() {
+    fun type_expands_the_sealed_interface_above_a_kotlin_enum_with_constant_bodies() {
+        // Given: the event root is what a caller declares, so this is where the refusal used to reach them rather
+        // than on the enum itself.
         val builder = DcbCriteriaBuilder(simpleNameConverter<EnumRoot>())
 
-        assertThatThrownBy { builder.type(EnumRoot::class.java) }
-            .isInstanceOf(IllegalArgumentException::class.java)
-            .hasMessageContaining(EnumRoot::class.java.name)
+        val criterion = builder.type(EnumRoot::class.java)
+
+        assertThat(criterion).isEqualTo(DcbCriteria.types(listOf("EnumRoot", "A", "B")))
     }
 
     @Test
     fun type_accepts_a_kotlin_enum_whose_constants_have_no_bodies() {
-        // Given: the second remedy the KDoc offers, moving the per-constant behavior into a constructor parameter.
-        // Kotlin compiles an enum with no constant bodies as a final class, so the walk stops at it and accepts it,
-        // where the same enum with bodies is refused. Without this test the KDoc advises a change nothing verifies.
+        // Given: Kotlin compiles an enum with no constant bodies as a final class, so the walk stops at the enum
+        // itself and the constants add nothing beyond it. An enum with bodies and one without are stored under
+        // different CloudEvent types, which is the reason to keep both covered.
         val builder = DcbCriteriaBuilder(simpleNameConverter<EnumWithoutBodies>())
 
         val criterion = builder.type(EnumWithoutBodies::class.java)
@@ -166,11 +167,9 @@ class DcbCriteriaBuilderTypeExpansionTest {
 
     @Test
     fun type_accepts_a_sealed_interface_whose_only_member_is_a_kotlin_enum_without_bodies() {
-        // Given: a caller declaring a bodiless enum directly is the easy half. The refusal they actually meet comes
-        // from the sealed event interface above it, which type_refuses_the_sealed_interface_a_kotlin_enum_with_constant_bodies_reopens
-        // shows an enum with constant bodies reopens.
-        // Dropping the bodies has to fix that shape too, or the advice only helps someone who already knew to
-        // declare the enum rather than the interface.
+        // Given: a caller declares the sealed event interface far more often than the enum under it, so the root is
+        // what has to work. type_expands_the_sealed_interface_above_a_kotlin_enum_with_constant_bodies is
+        // the same root over an enum whose constants do have bodies.
         val builder = DcbCriteriaBuilder(simpleNameConverter<BodilessEnumRoot>())
 
         val criterion = builder.type(BodilessEnumRoot::class.java)
@@ -180,8 +179,8 @@ class DcbCriteriaBuilderTypeExpansionTest {
 
     @Test
     fun types_declared_on_each_enum_constant_class_directly_still_works() {
-        // Given: the "declare the concrete event types instead" remedy the refusal message offers is real here.
-        // Each constant body compiles to its own final class, so naming them individually works around the gap.
+        // Given: each constant body compiles to its own final class, so naming them individually has always worked
+        // and still does. It narrows to those two constants, where declaring the enum also names the enum itself.
         val builder = DcbCriteriaBuilder(simpleNameConverter<EnumWithBodies>())
 
         val criterion = builder.types(EnumWithBodies.A.javaClass, EnumWithBodies.B.javaClass)

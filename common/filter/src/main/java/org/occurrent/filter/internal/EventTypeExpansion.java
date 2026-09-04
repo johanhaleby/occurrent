@@ -35,9 +35,9 @@ import static java.util.Objects.requireNonNull;
  * <strong>The rule this exists to enforce. The derived filter must name every event type that dispatch would accept.</strong>
  * Dispatch accepts an event by assignability, through {@code isInstance} and a handler lookup that walks superclasses and
  * interfaces, so a declared supertype accepts every concrete subtype. A filter that names fewer types than that loses
- * events with nothing to show for it. So a sealed type expands to the concrete types it permits, all the way down, and a
- * declared type whose concrete types cannot all be found is refused rather than turned into a filter that would miss
- * some of them.
+ * events with nothing to show for it. So a sealed type expands to the concrete types it permits, all the way down, an
+ * enum expands to the classes of its constants, and a declared type whose concrete types cannot all be found is refused
+ * rather than turned into a filter that would miss some of them.
  * <p>
  * Nothing is exempt from that rule any more. Up to 0.33.0 a non-sealed concrete class declared directly was accepted
  * with only itself in the filter. Under every {@code CloudEventTypeMapper} Occurrent ships, which store a subclass
@@ -54,8 +54,9 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * The rule above governs {@link #expand}, {@link #concreteTypesOf} and {@link #deriveFilter}, which is {@code expand}
  * carried the rest of the way to a {@link org.occurrent.filter.Filter}. {@link #expandWhatCanBeFound} walks the same
- * hierarchy for a caller that was handed an explicit filter and so derives none, and it still refuses an array or a
- * primitive. Nothing here relaxes the rule, because a caller with no derived filter has no filter for it to be true of.
+ * hierarchy for a caller that derives no filter at all, or one that derives an exclusive filter, and it still refuses an
+ * array or a primitive. Nothing here relaxes the rule, since neither of those callers has an inclusive filter for it to
+ * be true of.
  */
 public final class EventTypeExpansion {
 
@@ -114,11 +115,16 @@ public final class EventTypeExpansion {
      * The declared types plus every concrete type they cover that can be found, in the same order {@link #expand} uses.
      * A declared type whose concrete types cannot all be found contributes the ones that can, instead of being refused.
      * <p>
-     * <strong>Only for a caller that is not deriving a filter.</strong> The rule at the top of this class is enforced by
-     * {@link #expand}, and this method does not enforce it, so a filter built from what comes back here can miss event
-     * types that dispatch would accept. It exists for a caller that has been given an explicit filter and so derives
-     * none, and still wants to report which event types it handles. The saga DSL's {@code replacementFilter(Filter)} is
-     * the one such caller.
+     * <strong>Never for deriving a filter that decides what gets read.</strong> The rule at the top of this class is
+     * enforced by {@link #expand}, and this method does not enforce it, so an inclusive filter built from what comes
+     * back here can miss event types that dispatch would accept.
+     * <p>
+     * Two callers are safe, for different reasons. The saga DSL's {@code replacementFilter(Filter)} has been given an
+     * explicit filter and so derives none, and only wants to report which event types it handles.
+     * {@code ExecuteFilter.excludeTypes} derives an exclusive filter, where a type this walk misses narrows what gets
+     * excluded rather than what gets read, so an event the caller wanted out stays in rather than the reverse. Widening
+     * is the direction this method is safe in, which is why the same incompleteness that would lose events in an
+     * inclusive filter is tolerable in an exclusive one.
      * <p>
      * An array and a primitive are still refused, through {@code cannotExpand}, and for two different strengths of
      * reason worth keeping apart. A primitive can match nothing at all, since {@code int.class.isInstance(..)} is false
@@ -168,6 +174,10 @@ public final class EventTypeExpansion {
      * name, and every concrete type it permits when it is sealed. Never empty. A sealed class that can be instantiated
      * is both, so it keeps itself and gains what it permits.
      * <p>
+     * An enum covers the class of each of its constants, which is the constant's own class when that constant has a
+     * body and the enum class itself when it does not. An enum with no constants covers nothing and is refused, since
+     * no event can ever be an instance of it.
+     * <p>
      * A concrete class that is neither final nor sealed is refused, because anything extending it is stored under its
      * own name where no walk can reach it. That refusal is new in 0.34.0, and up to 0.33.0 such a type was accepted
      * with only itself in the filter.
@@ -195,6 +205,20 @@ public final class EventTypeExpansion {
     @SuppressWarnings("unchecked")
     private static <E> boolean collect(Class<? extends E> type, Set<Class<? extends E>> concrete, Set<Class<?>> visited) {
         if (!visited.add(type)) {
+            return true;
+        }
+        // An enum closes its own hierarchy the way a permits clause does, since neither Java nor Kotlin lets anything
+        // outside the declaration extend an enum type. Its constants are therefore every class an instance can have,
+        // which is what makes this exact rather than a guess, and it is read from the constants rather than from
+        // getPermittedSubclasses because only javac seals this construct. Kotlin compiles an enum whose constants have
+        // bodies as a plain class with no permits clause at all, so the walk used to stop there and refuse it.
+        if (type.isEnum()) {
+            for (Object constant : type.getEnumConstants()) {
+                // A constant with a body has its own final class, one without is an instance of the enum class itself,
+                // and either way the constant's own class is what the event is stored under. An enum with no constants
+                // adds nothing and is refused above, since no event can ever be an instance of it.
+                concrete.add((Class<? extends E>) constant.getClass());
+            }
             return true;
         }
         boolean stored = isStoredUnderItsOwnName(type);

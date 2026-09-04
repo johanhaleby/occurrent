@@ -41,6 +41,35 @@ open class KotlinOpenOrderPlaced(val orderId: String)
 
 class KotlinSpecialOrderPlaced(orderId: String) : KotlinOpenOrderPlaced(orderId)
 
+// Kotlin compiles an enum whose constants have bodies without the implicit sealing javac gives the same construct
+// (JLS 8.9). KotlinPaymentEvent declares an abstract member, so every constant needs a body and the enum class is
+// abstract. KotlinShipmentEvent declares an open member, so one constant has a body and the enum class is concrete.
+sealed interface KotlinEnumEvent
+
+enum class KotlinPaymentEvent : KotlinEnumEvent {
+    Reserved { override fun label() = "reserved" },
+    Settled { override fun label() = "settled" };
+
+    abstract fun label(): String
+}
+
+enum class KotlinShipmentEvent {
+    Dispatched { override fun label() = "dispatched" },
+    Delivered;
+
+    open fun label() = "delivered"
+}
+
+// No constant body, so Kotlin compiles the enum final and the walk stops at it.
+enum class KotlinBodilessPaymentEvent(private val label: String) {
+    Reserved("reserved"),
+    Settled("settled");
+
+    override fun toString() = label
+}
+
+enum class KotlinEnumWithoutConstants
+
 @DisplayName("EventTypeExpansion over Kotlin types")
 @DisplayNameGeneration(ReplaceUnderscores::class)
 class EventTypeExpansionKotlinTest {
@@ -83,5 +112,79 @@ class EventTypeExpansionKotlinTest {
         val expanded = EventTypeExpansion.expand<KotlinOrderEvent>(setOf(KotlinOrderPlaced::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") }
 
         assertThat(expanded).containsExactly(KotlinOrderPlaced::class.java)
+    }
+
+    @Test
+    fun `a Kotlin enum with constant bodies expands into its constant classes`() {
+        // Kotlin marks neither the enum nor a permits clause, so the constants are reachable only through the enum
+        // constants themselves. The enum class is abstract here, so no event is ever stored under its own name.
+        val expanded = EventTypeExpansion.expand<Any>(setOf(KotlinPaymentEvent::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") }
+
+        assertThat(expanded).containsExactlyInAnyOrder(
+            KotlinPaymentEvent::class.java,
+            KotlinPaymentEvent.Reserved.javaClass,
+            KotlinPaymentEvent.Settled.javaClass
+        )
+    }
+
+    @Test
+    fun `a Kotlin enum with bodies on only some constants expands into the enum and the bodied constants`() {
+        // Delivered has no body, so it is an instance of the enum class itself and that is what it is stored under,
+        // which is why the enum class belongs in the expansion alongside Dispatched's own class.
+        val expanded = EventTypeExpansion.expand<Any>(setOf(KotlinShipmentEvent::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") }
+
+        assertThat(expanded).containsExactlyInAnyOrder(
+            KotlinShipmentEvent::class.java,
+            KotlinShipmentEvent.Dispatched.javaClass
+        )
+        assertThat(KotlinShipmentEvent.Delivered.javaClass).isEqualTo(KotlinShipmentEvent::class.java)
+    }
+
+    @Test
+    fun `a sealed interface above a Kotlin enum with constant bodies expands`() {
+        // The refusal reaches a caller here rather than on the enum, since the event root is what they declare.
+        val expanded = EventTypeExpansion.expand<KotlinEnumEvent>(setOf(KotlinEnumEvent::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") }
+
+        assertThat(expanded).containsExactlyInAnyOrder(
+            KotlinEnumEvent::class.java,
+            KotlinPaymentEvent.Reserved.javaClass,
+            KotlinPaymentEvent.Settled.javaClass
+        )
+    }
+
+    @Test
+    fun `expandWhatCanBeFound finds the constant classes of a Kotlin enum with constant bodies`() {
+        // expandWhatCanBeFound never refused the enum, it quietly found only the enum class, so an exclusion derived
+        // from it excluded nothing at all under a mapper that stores each class under its own name.
+        val expanded = EventTypeExpansion.expandWhatCanBeFound<Any>(setOf(KotlinPaymentEvent::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") }
+
+        assertThat(expanded).containsExactlyInAnyOrder(
+            KotlinPaymentEvent::class.java,
+            KotlinPaymentEvent.Reserved.javaClass,
+            KotlinPaymentEvent.Settled.javaClass
+        )
+    }
+
+    @Test
+    fun `a Kotlin enum with no constant bodies still expands to itself`() {
+        val expanded = EventTypeExpansion.expand<Any>(setOf(KotlinBodilessPaymentEvent::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") }
+
+        assertThat(expanded).containsExactly(KotlinBodilessPaymentEvent::class.java)
+    }
+
+    @Test
+    fun `a Kotlin enum constant class declared directly still expands to itself`() {
+        // The way out the refusal message offered before the enum expanded, and it has to keep working.
+        val expanded = EventTypeExpansion.expand<Any>(setOf(KotlinPaymentEvent.Reserved.javaClass)) { type -> IllegalArgumentException("${type.name} cannot be expanded") }
+
+        assertThat(expanded).containsExactly(KotlinPaymentEvent.Reserved.javaClass)
+    }
+
+    @Test
+    fun `a Kotlin enum with no constants is refused`() {
+        // Nothing can ever be an instance of it, so there is no concrete type to name.
+        assertThatThrownBy { EventTypeExpansion.expand<Any>(setOf(KotlinEnumWithoutConstants::class.java)) { type -> IllegalArgumentException("${type.name} cannot be expanded") } }
+            .isInstanceOf(IllegalArgumentException::class.java)
+            .hasMessageContaining(KotlinEnumWithoutConstants::class.java.name)
     }
 }
