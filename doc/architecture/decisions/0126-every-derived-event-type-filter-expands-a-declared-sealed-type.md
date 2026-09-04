@@ -23,6 +23,17 @@ is gone, and with it the `Outcome.EXEMPT_AND_MISSES_SUBCLASSES` outcome named be
 now has only the two outcomes left. Everything else here is unchanged. See the changelog's breaking changes and section 3 of
 [the 0.34.0 upgrade guide](../../migration/upgrading-to-0.34.0.md#3-declaring-an-event-type-whose-concrete-subtypes-cannot-be-found-is-refused).
 
+Amended again in 0.34.0 by [#939](https://github.com/johanhaleby/occurrent/issues/939), on what counts as a
+hierarchy that closes itself. A sealed type is not the only one. An enum closes its own hierarchy too, since
+neither Java nor Kotlin lets anything outside the declaration extend an enum type, so the walk reads an enum
+through its constants. It has to be read that way rather than through a `permits` clause, because only javac
+seals an enum whose constants have bodies, and Kotlin compiles the same construct as a plain class. Such an
+enum was refused, under advice to make it final or sealed that cannot be written for an enum at all. Every
+passage below describing the walk as following a `permits` clause and nothing else is corrected in place, on
+the same reasoning as the amendment above, that this ADR has not shipped in any release. The decision itself
+is unchanged, since an enum was always meant to fall under the rule this ADR states rather than to be an
+exception to it.
+
 125 was the highest ADR number claimed anywhere at write time, across all 75 remote branches
 that exist, not main alone, matching the convention ADR 124 adopted after this repository's
 prior numbering collisions. The audit ran again immediately before this file was written.
