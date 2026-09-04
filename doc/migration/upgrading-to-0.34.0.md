@@ -318,7 +318,9 @@ release of loss in front of it.
 
 An enum closes its own hierarchy, since neither Java nor Kotlin lets anything outside the declaration extend an
 enum type, so its constants are every class an instance can have. Declaring one is accepted, and so is declaring a
-sealed event interface above one.
+sealed event interface above one. On 0.33.0 a saga or an annotation-based subscription refused a Kotlin enum whose
+constants have bodies, because Kotlin compiles that construct without the implicit sealing javac gives it, so this
+is the one part of section 3 that accepts a declaration 0.33.0 rejected rather than the other way round.
 
 ```kotlin
 // Accepted. Matches PaymentEvent$Reserved and PaymentEvent$Settled
