@@ -1062,4 +1062,19 @@ class SagaTest {
                     .isInstanceOf(NullPointerException.class);
         }
     }
+
+    @Nested
+    class NoArgBuilder {
+
+        @Test
+        void builder_with_no_argument_starts_from_null_like_builder_of_null() {
+            Saga<OrderEvent, OrderState, OrderCommand> saga = Saga.<OrderEvent, OrderState, OrderCommand>builder()
+                    .correlateAll(OrderEvent::orderId)
+                    .startsOn(OrderPlaced.class)
+                    .evolve(OrderPlaced.class, (state, e) -> new AwaitingPayment(e.orderId()))
+                    .build();
+
+            assertThat(saga.initialState()).isNull();
+        }
+    }
 }

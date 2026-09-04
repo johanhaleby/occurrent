@@ -385,4 +385,25 @@ class ProjectionTest {
             assertThat(widened.eventTypes()).containsExactly(AccountRegistered.class);
         }
     }
+
+    @Nested
+    class NoArgBuilder {
+
+        @Test
+        void builder_with_no_argument_starts_from_null_like_builder_of_null() {
+            Projection<Boolean, AccountEvent, String> projection = Projection.<Boolean, AccountEvent, String>builder()
+                    .id(AccountEvent::accountId)
+                    .build();
+
+            assertThat(projection.view().initialState()).isNull();
+        }
+
+        @Test
+        void singleton_builder_with_no_argument_starts_from_null_like_singleton_builder_of_null() {
+            Projection<Boolean, AccountEvent, String> projection = Projection.<Boolean, AccountEvent>singletonBuilder()
+                    .build();
+
+            assertThat(projection.view().initialState()).isNull();
+        }
+    }
 }

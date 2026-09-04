@@ -87,6 +87,16 @@ public final class SnapshotView<S extends @Nullable Object, E> {
     }
 
     /**
+     * Starts building a {@code SnapshotView} whose fold begins from no state. The state stays {@code null} until a
+     * handler replaces it. Register a handler per event type with {@link Builder#on(Class, BiFunction)}, set the
+     * {@link Builder#schemaVersion(int) schemaVersion}, and optionally an explicit {@link Builder#filter(Filter)
+     * filter}, then call {@link Builder#build()}.
+     */
+    public static <S extends @Nullable Object, E> Builder<S, E> builder() {
+        return builder(null);
+    }
+
+    /**
      * Widens a {@code SnapshotView} to a broader event type, mirroring {@code Decider#adapt}. The fold ignores events
      * that are not {@code eventType} (it leaves the state unchanged), so the widened view can fold a stream carrying
      * other events.
