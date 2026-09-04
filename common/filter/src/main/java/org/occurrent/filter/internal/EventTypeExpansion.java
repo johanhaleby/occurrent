@@ -209,9 +209,8 @@ public final class EventTypeExpansion {
         }
         // An enum closes its own hierarchy, since neither Java nor Kotlin lets anything outside the declaration extend
         // an enum type, so its constants are every class an instance can have, and they decide whether the enum class
-        // itself is one of them. Only a Kotlin enum whose constants have bodies is read this way, because javac seals
-        // the same construct and every other enum is final, so both are answered below without it. Kept to that one
-        // enum because getEnumConstants runs the enum's constructors and static initializers.
+        // itself is one of them. Only Kotlin's enum is read this way, because javac seals the same construct and every
+        // other enum is final, so both are answered below. Reading runs the enum's constructors and static initializers.
         if (type.isEnum() && !type.isSealed() && !Modifier.isFinal(type.getModifiers())) {
             for (Object constant : type.getEnumConstants()) {
                 // A constant with a body has its own class, one without is an instance of the enum class itself.

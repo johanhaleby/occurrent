@@ -147,8 +147,8 @@ subscription too, so read it even if the six places above are not what you use. 
 `ExecuteFilter.excludeTypes` mostly sits outside this refusal. A declared type it cannot fully expand is
 widened to every concrete subtype a downward walk can find instead, since excluding a supertype has to
 exclude everything under it, and widening can only exclude more. That walk starts at the declared type, follows
-a `permits` clause through `Class.getPermittedSubclasses`, expands an enum through its constants, and stops at
-the first level that is neither sealed nor an enum, so a type it cannot reach means an event you wanted out
+a `permits` clause through `Class.getPermittedSubclasses`, reads the constants of an enum that has no such
+clause, and stops at the first level that is neither sealed nor an enum, so a type it cannot reach means an event you wanted out
 stays in, rather than the reverse. That widening needs no migration step by itself. It still refuses an array or a
 primitive declared type, the same two shapes `type`/`includeTypes` refuse, though for two different reasons.
 No event is ever an instance of a primitive class, so declaring one is a mistake and the concrete event types
@@ -314,7 +314,7 @@ The reason the refusal is worth the break for everyone else is that the alternat
 explain it, and no later release makes that loss visible without the same break. Waiting only adds another
 release of loss in front of it.
 
-### An enum with constant bodies is expanded through its constants
+### An enum with constant bodies is expanded into its constant classes
 
 An enum closes its own hierarchy, since neither Java nor Kotlin lets anything outside the declaration extend an
 enum type, so its constants are every class an instance can have. Declaring one is accepted, and so is declaring a

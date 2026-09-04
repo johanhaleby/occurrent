@@ -118,9 +118,9 @@ class DcbCriteriaBuilderTypeExpansionTest {
 
     @Test
     fun type_expands_a_kotlin_enum_with_constant_bodies_declared_directly() {
-        // Given: javac seals such an enum implicitly with each constant body as a permitted subclass (JLS 8.9) and
-        // Kotlin compiles it as a plain class with no permits clause at all. The expansion reads the enum constants
-        // instead, which both compilers answer the same way, so A and B are found either way.
+        // Given: javac seals such an enum implicitly with each constant body as a permitted subclass (JLS 8.9), so
+        // the permits walk finds them there. Kotlin compiles it as a plain class with no permits clause, so its
+        // constants are read instead. A and B are found either way, through permits here and the constants there.
         val builder = DcbCriteriaBuilder(simpleNameConverter<EnumWithBodies>())
 
         val criterion = builder.type(EnumWithBodies::class.java)

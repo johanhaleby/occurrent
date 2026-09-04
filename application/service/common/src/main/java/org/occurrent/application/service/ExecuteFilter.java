@@ -95,8 +95,10 @@ public interface ExecuteFilter<E> {
      * exclusion silently lets the excluded family of events through.
      * <p>
      * <strong>The walk doing the finding follows a hierarchy that closes itself.</strong> It starts at the declared
-     * type, follows a {@code permits} clause through {@link Class#getPermittedSubclasses}, expands an enum through
-     * its constants, and stops at the first level that is neither sealed nor an enum. It reads no classpath and
+     * type, follows a {@code permits} clause through {@link Class#getPermittedSubclasses}, reads the constants of an
+     * enum that has no such clause, and stops at the first level that is neither sealed nor an enum. javac seals an
+     * enum whose constants have bodies and lists each body in that clause, so only Kotlin's enum is read through its
+     * constants. It reads no classpath and
      * consults no index of subtypes, so a subclass declared outside a {@code permits} clause is beyond it. For a declared type {@code T} and a {@link CloudEventTypeGetter}
      * {@code g}, the filter excludes the CloudEvent types {@code g} returns for {@code T} itself and for every
      * concrete type that walk reaches below {@code T}. Growing that set only takes events out of the read, so a

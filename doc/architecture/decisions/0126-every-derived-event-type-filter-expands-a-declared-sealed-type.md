@@ -25,9 +25,12 @@ now has only the two outcomes left. Everything else here is unchanged. See the c
 
 Amended again in 0.34.0 by [#939](https://github.com/johanhaleby/occurrent/issues/939), on what counts as a
 hierarchy that closes itself. A sealed type is not the only one. An enum closes its own hierarchy too, since
-neither Java nor Kotlin lets anything outside the declaration extend an enum type, so the walk reads an enum
-through its constants. It has to be read that way rather than through a `permits` clause, because only javac
-seals an enum whose constants have bodies, and Kotlin compiles the same construct as a plain class. Such an
+neither Java nor Kotlin lets anything outside the declaration extend an enum type, so an enum's constants are
+every class an instance of it can have. How the walk reaches them differs by compiler, and that difference
+decides whether the enum is initialized. javac seals an enum whose constants have bodies and lists each body in its `permits` clause, so
+the existing walk already finds them from metadata. Kotlin seals nothing, so its enum is read through
+`Class.getEnumConstants`, which runs the enum's constructors and static initializers, and is therefore confined
+to an enum that is neither final nor sealed so no other declared type pays that cost. Such an
 enum was refused, under advice to make it final or sealed that cannot be written for an enum at all. Every
 passage below describing the walk as following a `permits` clause and nothing else is corrected in place, on
 the same reasoning as the amendment above, that this ADR has not shipped in any release. The decision itself
@@ -316,9 +319,9 @@ request records that direction-dependent choice and its reasoning. `DcbCriteriaB
 exclusive derivation to reach.
 
 Both directions mean one walk when they say a concrete type can or cannot be found. It starts at the declared
-type, follows a `permits` clause through `Class.getPermittedSubclasses`, expands an enum through its constants,
-and stops at the first level that is neither sealed nor an enum, reading no classpath and consulting no index of
-subtypes. An enum is read through its constants because only javac seals that construct. The inclusive direction refuses a
+type, follows a `permits` clause through `Class.getPermittedSubclasses`, reads the constants of an enum that has
+no such clause, and stops at the first level that is neither sealed nor an enum, reading no classpath and
+consulting no index of subtypes. Only Kotlin's enum is read that way, since javac's is sealed. The inclusive direction refuses a
 declaration when that walk stops early. The exclusive direction keeps what the walk did reach, which excludes
 at least as much as naming the declared type alone used to. What the widened set then removes from a read is
 decided by the `CloudEventTypeGetter` rather than by the walk. Where the walk found nothing concrete, so that

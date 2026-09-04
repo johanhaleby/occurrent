@@ -76,12 +76,14 @@ class DcbCriteriaBuilder<E : Any> private constructor(
      * [EventTypeExpansion]. A sealed type expands to the concrete types it permits, all the way down, an enum expands
      * to the classes of its constants, and a type whose concrete types cannot all be found is refused rather than
      * turned into a criterion that would miss some of them. The walk starts at the declared type, follows a `permits`
-     * clause through `Class.getPermittedSubclasses`, expands an enum through its constants, and stops at the first
-     * level that is neither sealed nor an enum. It reads no classpath and consults no index of subtypes, so a
-     * subclass declared outside a `permits` clause is beyond it.
+     * clause through `Class.getPermittedSubclasses`, reads the constants of an enum that has no such clause, and
+     * stops at the first level that is neither sealed nor an enum. It reads no classpath and consults no index of
+     * subtypes, so a subclass declared outside a `permits` clause is beyond it.
      *
-     * An enum is expanded through its constants rather than through a `permits` clause, so an `enum class` whose
-     * constants have bodies works, in Java and in Kotlin alike, and so does a sealed event interface above one.
+     * An `enum class` whose constants have bodies works, in Java and in Kotlin alike, and so does a sealed event
+     * interface above one. The two get there differently. javac seals such an enum and lists each constant body in
+     * its `permits` clause, so the walk above finds them, while Kotlin seals nothing and its enum is read through
+     * its constants instead.
      * A constant with a body is matched under its own class, `MyEnum$A`, and a constant without one under the enum
      * class itself, so an enum with constant bodies and one without are stored under different CloudEvent types.
      * Decide whether a constant has a body before you have events in the store rather than after.

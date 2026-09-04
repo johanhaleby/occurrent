@@ -496,8 +496,8 @@ class EventTypeExpansionTest {
     }
 
     // javac seals an enum whose constants have bodies implicitly, listing each constant body as a permitted subclass
-    // (JLS 8.9), so the walk always reached these. They are here to hold that still true now that an enum is expanded
-    // through its constants rather than through the permits clause javac happens to write.
+    // (JLS 8.9), so the walk finds these through permits metadata and never reads a constant. Only Kotlin's enum,
+    // which is sealed by nothing, is read through its constants.
     enum JavaPaymentEvent {
         RESERVED {
             String label() {
