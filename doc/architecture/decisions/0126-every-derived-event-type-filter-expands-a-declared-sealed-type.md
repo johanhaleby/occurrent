@@ -305,8 +305,9 @@ request records that direction-dependent choice and its reasoning. `DcbCriteriaB
 exclusive derivation to reach.
 
 Both directions mean one walk when they say a concrete type can or cannot be found. It starts at the declared
-type, follows a `permits` clause through `Class.getPermittedSubclasses`, and stops at the first level that is
-not sealed, reading no classpath and consulting no index of subtypes. The inclusive direction refuses a
+type, follows a `permits` clause through `Class.getPermittedSubclasses`, expands an enum through its constants,
+and stops at the first level that is neither sealed nor an enum, reading no classpath and consulting no index of
+subtypes. An enum is read through its constants because only javac seals that construct. The inclusive direction refuses a
 declaration when that walk stops early. The exclusive direction keeps what the walk did reach, which excludes
 at least as much as naming the declared type alone used to. What the widened set then removes from a read is
 decided by the `CloudEventTypeGetter` rather than by the walk. Where the walk found nothing concrete, so that

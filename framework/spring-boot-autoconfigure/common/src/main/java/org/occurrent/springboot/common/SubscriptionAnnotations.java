@@ -468,7 +468,8 @@ public final class SubscriptionAnnotations {
     }
 
     /**
-     * The concrete event types {@code specifiedEventType} covers, which is the type itself unless it is sealed. Leaves
+     * The concrete event types {@code specifiedEventType} covers, which is the type itself unless it is sealed or an
+     * enum. Leaves
      * the declared type out, because a caller checks these against the handler's own parameter type, and a declared
      * supertype is not assignable to a narrower parameter its concrete types are. {@link #typesToSubscribeOn} is what
      * the filter is built from.

@@ -73,11 +73,12 @@ class DcbCriteriaBuilder<E : Any> private constructor(
      * A criterion matching events whose CloudEvent type is any of the CloudEvent types [type] expands into.
      *
      * [type] is expanded the way every other type-filter derivation in the library expands a declared type, through
-     * [EventTypeExpansion]. A sealed type expands to the concrete types it permits, all the way down, and a type
-     * whose concrete types cannot all be found is refused rather than turned into a criterion that would miss some
-     * of them. The finding is the sealed-permits walk, which starts at the declared type, follows a `permits` clause
-     * through `Class.getPermittedSubclasses`, and stops at the first level that is not sealed. It reads no classpath
-     * and consults no index of subtypes, so a subclass declared outside a `permits` clause is beyond it.
+     * [EventTypeExpansion]. A sealed type expands to the concrete types it permits, all the way down, an enum expands
+     * to the classes of its constants, and a type whose concrete types cannot all be found is refused rather than
+     * turned into a criterion that would miss some of them. The walk starts at the declared type, follows a `permits`
+     * clause through `Class.getPermittedSubclasses`, expands an enum through its constants, and stops at the first
+     * level that is neither sealed nor an enum. It reads no classpath and consults no index of subtypes, so a
+     * subclass declared outside a `permits` clause is beyond it.
      *
      * An enum is expanded through its constants rather than through a `permits` clause, so an `enum class` whose
      * constants have bodies works, in Java and in Kotlin alike, and so does a sealed event interface above one.

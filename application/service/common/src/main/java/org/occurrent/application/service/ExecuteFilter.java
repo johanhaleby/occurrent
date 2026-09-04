@@ -62,9 +62,10 @@ public interface ExecuteFilter<E> {
      * <p>
      * {@code eventType} is expanded the way every other type-filter derivation in the library expands a declared
      * type, through {@link EventTypeExpansion}. A sealed type expands to the concrete types it permits, all the way
-     * down, and a type whose concrete types cannot all be found is refused rather than turned into a filter that
-     * would miss some of them. The finding is done by the sealed-permits walk described on {@link #excludeTypes},
-     * so both directions mean the same walk when they say a type can or cannot be found.
+     * down, an enum expands to the classes of its constants, and a type whose concrete types cannot all be found is
+     * refused rather than turned into a filter that would miss some of them. The finding is done by the walk
+     * described on {@link #excludeTypes}, so both directions mean the same walk when they say a type can or cannot
+     * be found.
      */
     static <E> ExecuteFilter<E> type(Class<? extends E> eventType) {
         Objects.requireNonNull(eventType, "eventType cannot be null");
@@ -93,20 +94,19 @@ public interface ExecuteFilter<E> {
      * {@link #includeTypes} do, and on purpose. Excluding a supertype has to exclude everything under it, or the
      * exclusion silently lets the excluded family of events through.
      * <p>
-     * <strong>The walk doing the finding is the sealed-permits walk.</strong> It starts at the declared type,
-     * follows a {@code permits} clause through {@link Class#getPermittedSubclasses}, and stops at the first level
-     * that is not sealed. It reads no classpath and consults no index of subtypes, so a subclass declared outside
-     * a {@code permits} clause is beyond it. For a declared type {@code T} and a {@link CloudEventTypeGetter}
+     * <strong>The walk doing the finding follows a hierarchy that closes itself.</strong> It starts at the declared
+     * type, follows a {@code permits} clause through {@link Class#getPermittedSubclasses}, expands an enum through
+     * its constants, and stops at the first level that is neither sealed nor an enum. It reads no classpath and
+     * consults no index of subtypes, so a subclass declared outside a {@code permits} clause is beyond it. For a declared type {@code T} and a {@link CloudEventTypeGetter}
      * {@code g}, the filter excludes the CloudEvent types {@code g} returns for {@code T} itself and for every
      * concrete type that walk reaches below {@code T}. Growing that set only takes events out of the read, so a
      * type the walk cannot reach means an event the caller wanted out stays in, rather than the reverse. Being
      * incomplete is harmless in that one direction, which is a smaller claim than the exclusion doing what its
      * name promises.
      * <p>
-     * {@code expandWhatCanBeFound}'s own documentation scopes itself to a caller that is not deriving a filter,
-     * since a missed type there would narrow what an inclusive filter reads. Excluding is the opposite question,
-     * where a missed type only narrows what gets excluded, so deriving an exclusive filter from it here is the
-     * direction that scope was written before this caller existed, not the one it warns against.
+     * {@code expandWhatCanBeFound} names this method as one of the two callers it is safe for. A missed type would
+     * narrow what an inclusive filter reads, which is what that method's scope warns against, while here it only
+     * narrows what gets excluded. The other safe caller derives no filter at all.
      * <p>
      * A concrete class declared directly that is itself neither final nor sealed contributes itself, the same as
      * before this method went through {@link EventTypeExpansion}, since no downward walk can find a subclass

@@ -146,10 +146,10 @@ subscription too, so read it even if the six places above are not what you use. 
 
 `ExecuteFilter.excludeTypes` mostly sits outside this refusal. A declared type it cannot fully expand is
 widened to every concrete subtype a downward walk can find instead, since excluding a supertype has to
-exclude everything under it, and widening can only exclude more. That walk is the sealed-permits walk, which
-starts at the declared type, follows a `permits` clause through `Class.getPermittedSubclasses`, and stops at
-the first level that is not sealed, so a type it cannot reach means an event you wanted out stays in, rather
-than the reverse. That widening needs no migration step by itself. It still refuses an array or a
+exclude everything under it, and widening can only exclude more. That walk starts at the declared type, follows
+a `permits` clause through `Class.getPermittedSubclasses`, expands an enum through its constants, and stops at
+the first level that is neither sealed nor an enum, so a type it cannot reach means an event you wanted out
+stays in, rather than the reverse. That widening needs no migration step by itself. It still refuses an array or a
 primitive declared type, the same two shapes `type`/`includeTypes` refuse, though for two different reasons.
 No event is ever an instance of a primitive class, so declaring one is a mistake and the concrete event types
 are what you meant. An array is refused for consistency with `type`/`includeTypes` rather than because
