@@ -73,23 +73,20 @@ class DcbCriteriaBuilder<E : Any> private constructor(
      * A criterion matching events whose CloudEvent type is any of the CloudEvent types [type] expands into.
      *
      * [type] is expanded the way every other type-filter derivation in the library expands a declared type, through
-     * [EventTypeExpansion]. A sealed type expands to the concrete types it permits, all the way down, and a type
-     * whose concrete types cannot all be found is refused rather than turned into a criterion that would miss some
-     * of them. The finding is the sealed-permits walk, which starts at the declared type, follows a `permits` clause
-     * through `Class.getPermittedSubclasses`, and stops at the first level that is not sealed. It reads no classpath
-     * and consults no index of subtypes, so a subclass declared outside a `permits` clause is beyond it.
+     * [EventTypeExpansion]. A sealed type expands to the concrete types it permits, all the way down, an enum expands
+     * to the classes of its constants, and a type whose concrete types cannot all be found is refused rather than
+     * turned into a criterion that would miss some of them. The walk starts at the declared type, follows a `permits`
+     * clause through `Class.getPermittedSubclasses`, reads the constants of an enum that has no such clause, and
+     * stops at the first level that is neither sealed nor an enum. It reads no classpath and consults no index of
+     * subtypes, so a subclass declared outside a `permits` clause is beyond it.
      *
-     * **A Kotlin `enum class` whose constants have bodies is refused, and the "make it final or sealed" way out the
-     * refusal message offers cannot be written for that construct.** Kotlin compiles such an enum as a concrete
-     * class that is neither final nor sealed, and each constant body as a separate class no `permits` clause points
-     * the walk at. The message's other two ways out both work here. Declare the constants,
-     * `types(MyEnum.A.javaClass, MyEnum.B.javaClass)`, since each body compiles to its own final class, or build
-     * the [DcbCriterion] yourself from the raw CloudEvent type string. Removing the constant bodies is a third
-     * option the message does not mention, by moving the per-constant behavior into a constructor parameter or a
-     * `when`, which makes the enum final again and lets `type(MyEnum::class.java)` work. Removing them also
-     * unblocks a sealed event interface above the enum, which an enum with constant bodies reopens and which is
-     * where the refusal usually reaches you. A Java enum with constant bodies is unaffected, since javac seals
-     * that construct implicitly (JLS 8.9).
+     * An `enum class` whose constants have bodies works, in Java and in Kotlin alike, and so does a sealed event
+     * interface above one. The two get there differently. javac seals such an enum and lists each constant body in
+     * its `permits` clause, so the walk above finds them, while Kotlin seals nothing and its enum is read through
+     * its constants instead.
+     * A constant with a body is matched under its own class, `MyEnum$A`, and a constant without one under the enum
+     * class itself, so an enum with constant bodies and one without are stored under different CloudEvent types.
+     * Decide whether a constant has a body before you have events in the store rather than after.
      */
     fun type(type: Class<out E>): DcbCriterion {
         val mapped = expandedCloudEventTypes(setOf(type))

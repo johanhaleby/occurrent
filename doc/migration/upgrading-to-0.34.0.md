@@ -146,10 +146,10 @@ subscription too, so read it even if the six places above are not what you use. 
 
 `ExecuteFilter.excludeTypes` mostly sits outside this refusal. A declared type it cannot fully expand is
 widened to every concrete subtype a downward walk can find instead, since excluding a supertype has to
-exclude everything under it, and widening can only exclude more. That walk is the sealed-permits walk, which
-starts at the declared type, follows a `permits` clause through `Class.getPermittedSubclasses`, and stops at
-the first level that is not sealed, so a type it cannot reach means an event you wanted out stays in, rather
-than the reverse. That widening needs no migration step by itself. It still refuses an array or a
+exclude everything under it, and widening can only exclude more. That walk starts at the declared type, follows
+a `permits` clause through `Class.getPermittedSubclasses`, reads the constants of an enum that has no such
+clause, and stops at the first level that is neither sealed nor an enum, so a type it cannot reach means an event you wanted out
+stays in, rather than the reverse. That widening needs no migration step by itself. It still refuses an array or a
 primitive declared type, the same two shapes `type`/`includeTypes` refuse, though for two different reasons.
 No event is ever an instance of a primitive class, so declaring one is a mistake and the concrete event types
 are what you meant. An array is refused for consistency with `type`/`includeTypes` rather than because
@@ -265,7 +265,7 @@ You are affected when a declared or registered type is one of these:
 | A sealed hierarchy reopened below the declared type | `non-sealed class Base implements OrderEvent` | `open class Base : OrderEvent` or `abstract class Base : OrderEvent` |
 | An array type | `OrderEvent[]` | `Array<OrderEvent>` |
 | A primitive class literal | `int.class` | `Int::class` |
-| A concrete class that is neither final nor sealed | `class OrderPlaced` | `open class OrderPlaced`, or an `enum class` whose constants have bodies |
+| A concrete class that is neither final nor sealed | `class OrderPlaced` | `open class OrderPlaced` |
 
 A projection, a subscription, a query, or a snapshot that declares concrete types, or a sealed type whose
 every level is sealed or final, is unaffected. Java records and Kotlin data classes are final already, so an
@@ -314,53 +314,28 @@ The reason the refusal is worth the break for everyone else is that the alternat
 explain it, and no later release makes that loss visible without the same break. Waiting only adds another
 release of loss in front of it.
 
-### A Kotlin enum with constant bodies cannot be sealed or made final
+### An enum with constant bodies is expanded into its constant classes
 
-This is the concrete-class row of the table in Kotlin form, and it gets its own section because two of that
-row's remedies are not available here. Kotlin compiles an `enum class` whose constants have bodies as a
-concrete class that is neither final nor sealed, and each constant body as a separate class no `permits` clause
-points the walk at. The declaration is refused, and the refusal message offers to make the class final or
-sealed, neither of which you can write on an enum.
+An enum closes its own hierarchy, since neither Java nor Kotlin lets anything outside the declaration extend an
+enum type, so its constants are every class an instance can have. Declaring one is accepted, and so is declaring a
+sealed event interface above one. On 0.33.0 a saga or an annotation-based subscription refused a Kotlin enum whose
+constants have bodies, because Kotlin compiles that construct without the implicit sealing javac gives it, so this
+is the one part of section 3 that accepts a declaration 0.33.0 rejected rather than the other way round.
 
 ```kotlin
-// Refused from 0.34.0. Neither final nor sealed once a constant has a body
+// Accepted. Matches PaymentEvent$Reserved and PaymentEvent$Settled
 enum class PaymentEvent : DomainEvent {
     Reserved { override fun toString() = "reserved" },
     Settled { override fun toString() = "settled" }
 }
 ```
 
-Two things do work. Declare the constants, since each body compiles to its own final class:
+Which CloudEvent type a constant is stored under is decided by the constant's own class rather than by the enum. A
+constant with a body has its own class, `PaymentEvent$Reserved`, while a constant without one is an instance of
+`PaymentEvent` itself. So adding or removing a constant body changes the type an event is stored under, and
+`ReflectionCloudEventTypeMapper` maps whichever class it is handed. Decide whether a constant has a body before you
+have events in the store rather than after.
 
-```kotlin
-ExecuteFilter.includeTypes(PaymentEvent.Reserved.javaClass, PaymentEvent.Settled.javaClass)
-dcbCriteriaBuilder.types(PaymentEvent.Reserved.javaClass, PaymentEvent.Settled.javaClass)
-```
-
-Or move the per-constant behavior into a constructor parameter or a `when`, so the enum needs no constant
-bodies and Kotlin compiles it final again, which lets you declare the enum itself:
-
-```kotlin
-// Accepted, and PaymentEvent::class.java can be declared directly
-enum class PaymentEvent(private val label: String) : DomainEvent {
-    Reserved("reserved"),
-    Settled("settled");
-
-    override fun toString() = label
-}
-```
-
-Removing the bodies also unblocks a sealed event interface above the enum. An enum with constant bodies reopens
-such an interface, so declaring the interface is refused too, and that is usually where the refusal reaches you
-rather than on the enum itself.
-
-The two shapes are stored under different CloudEvent types, so pick between them before you have events in the
-store rather than after. `PaymentEvent.Reserved.javaClass` is `PaymentEvent$Reserved` while the bodiless
-version's constants are all `PaymentEvent`, and `ReflectionCloudEventTypeMapper` maps whichever class it is
-handed.
-
-A Java enum with constant bodies is unaffected, since javac seals that construct implicitly (JLS 8.9) and the
-walk finds every constant through the `permits` clause javac writes.
 
 ### Seal the hierarchy
 

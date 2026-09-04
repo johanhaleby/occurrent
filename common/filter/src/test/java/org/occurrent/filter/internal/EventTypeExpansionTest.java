@@ -494,4 +494,117 @@ class EventTypeExpansionTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(PlainOpenEvent.class.getName());
     }
+
+    // javac seals an enum whose constants have bodies implicitly, listing each constant body as a permitted subclass
+    // (JLS 8.9), so the walk finds these through permits metadata and never reads a constant. Only Kotlin's enum,
+    // which is sealed by nothing, is read through its constants.
+    enum JavaPaymentEvent {
+        RESERVED {
+            String label() {
+                return "reserved";
+            }
+        },
+        SETTLED {
+            String label() {
+                return "settled";
+            }
+        };
+
+        abstract String label();
+    }
+
+    enum JavaShipmentEvent {
+        DISPATCHED {
+            String label() {
+                return "dispatched";
+            }
+        },
+        DELIVERED;
+
+        String label() {
+            return "delivered";
+        }
+    }
+
+    enum EmptyEvent {
+    }
+
+    // Reading an enum through Class#getEnumConstants runs its static initializer, so these two record whether that
+    // happened to a plain final enum and to a Java enum javac sealed, both of which the walk answers from metadata
+    // alone. The flags live outside the enums because touching the enum to read them would initialize it.
+    static final class Initialized {
+        static volatile boolean plain = false;
+        static volatile boolean bodied = false;
+    }
+
+    enum PlainEnumWithStaticInitializer {
+        FIRST, SECOND;
+
+        static {
+            Initialized.plain = true;
+        }
+    }
+
+    enum SealedEnumWithStaticInitializer {
+        FIRST {
+            String label() {
+                return "first";
+            }
+        };
+
+        static {
+            Initialized.bodied = true;
+        }
+
+        abstract String label();
+    }
+
+    @Test
+    void a_java_enum_with_constant_bodies_expands_into_its_constant_classes() {
+        Set<Class<?>> expanded = EventTypeExpansion.expand(Set.of(JavaPaymentEvent.class), REFUSAL);
+
+        assertThat(expanded).containsExactlyInAnyOrder(
+                JavaPaymentEvent.class, JavaPaymentEvent.RESERVED.getClass(), JavaPaymentEvent.SETTLED.getClass());
+    }
+
+    @Test
+    void a_java_enum_with_bodies_on_only_some_constants_expands_into_the_enum_and_the_bodied_constant() {
+        // DELIVERED has no body, so it is an instance of the enum class itself and that class is what it is stored
+        // under, which is why the enum class belongs in the expansion alongside DISPATCHED's own class.
+        Set<Class<?>> expanded = EventTypeExpansion.expand(Set.of(JavaShipmentEvent.class), REFUSAL);
+
+        assertThat(expanded).containsExactlyInAnyOrder(JavaShipmentEvent.class, JavaShipmentEvent.DISPATCHED.getClass());
+        assertThat(JavaShipmentEvent.DELIVERED.getClass()).isEqualTo(JavaShipmentEvent.class);
+    }
+
+    @Test
+    void an_enum_with_no_constants_expands_to_itself() {
+        // An enum with no constants is final, so it is answered the same way any other final class is.
+        Set<Class<?>> expanded = EventTypeExpansion.expand(Set.of(EmptyEvent.class), REFUSAL);
+
+        assertThat(expanded).containsExactly(EmptyEvent.class);
+    }
+
+    @Test
+    void expanding_a_plain_enum_does_not_initialize_it() {
+        // A plain enum is final, so the walk stops at it without reading its constants. Reading them would run the
+        // static initializer below, and a caller whose enum initializes anything would pay for that on every filter
+        // it builds, or fail with ExceptionInInitializerError where 0.33.0 was fine.
+        Set<Class<?>> expanded = EventTypeExpansion.expand(Set.of(PlainEnumWithStaticInitializer.class), REFUSAL);
+
+        assertThat(expanded).containsExactly(PlainEnumWithStaticInitializer.class);
+        assertThat(Initialized.plain).isFalse();
+    }
+
+    @Test
+    void expanding_a_java_enum_with_constant_bodies_does_not_initialize_it() {
+        // javac seals this enum, so the permits walk finds the constant classes from metadata and never reads a value.
+        Set<Class<?>> expanded = EventTypeExpansion.expand(Set.of(SealedEnumWithStaticInitializer.class), REFUSAL);
+        // Read before naming a constant below, since naming one initializes the enum and would set this itself.
+        boolean initializedByTheWalk = Initialized.bodied;
+
+        assertThat(initializedByTheWalk).isFalse();
+        assertThat(expanded).containsExactlyInAnyOrder(
+                SealedEnumWithStaticInitializer.class, SealedEnumWithStaticInitializer.FIRST.getClass());
+    }
 }
