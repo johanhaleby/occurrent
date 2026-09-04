@@ -208,15 +208,11 @@ public final class EventTypeExpansion {
             return true;
         }
         // An enum closes its own hierarchy the way a permits clause does, since neither Java nor Kotlin lets anything
-        // outside the declaration extend an enum type. Its constants are therefore every class an instance can have,
-        // which is what makes this exact rather than a guess, and it is read from the constants rather than from
-        // getPermittedSubclasses because only javac seals this construct. Kotlin compiles an enum whose constants have
-        // bodies as a plain class with no permits clause at all, so the walk used to stop there and refuse it.
+        // outside the declaration extend an enum type, so its constants are every class an instance can have. Read
+        // through the constants rather than getPermittedSubclasses because only javac seals this construct.
         if (type.isEnum()) {
             for (Object constant : type.getEnumConstants()) {
-                // A constant with a body has its own final class, one without is an instance of the enum class itself,
-                // and either way the constant's own class is what the event is stored under. An enum with no constants
-                // adds nothing and is refused above, since no event can ever be an instance of it.
+                // A constant with a body has its own class, one without is an instance of the enum class itself.
                 concrete.add((Class<? extends E>) constant.getClass());
             }
             return true;
