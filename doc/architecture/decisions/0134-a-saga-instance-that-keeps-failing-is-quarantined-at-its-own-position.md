@@ -305,8 +305,8 @@ either, so `catchup = NONE` comes out unquarantined without anything checking fo
 **The fact varies per event inside a single wiring, which is why it cannot be a property of the model or of the
 configuration.** `CatchupThenPushSubscriptionModel` is the case. It replays an event store and takes live events from
 a feed, and the two are independent. An event this application wrote is in the store, and an event that arrived over
-a bridge from another service, which the amendment to ADR 133 describes as the reason such a bridge exists, never
-was. The repository's own RabbitMQ example is exactly this mixture, writing its orders locally and publishing them,
+a bridge from another service is there only if something here persisted it, which the amendment to ADR 133 describes
+as exactly what a consume bridge cannot be assumed to have done. The repository's own RabbitMQ example is exactly this mixture, writing its orders locally and publishing them,
 while its readiness test injects one message whose order id was never written here. Any answer given once at
 construction, or once by a `catchup` attribute, would be wrong for some of the events that wiring delivers. Asking
 the store per event is right for both halves of it.

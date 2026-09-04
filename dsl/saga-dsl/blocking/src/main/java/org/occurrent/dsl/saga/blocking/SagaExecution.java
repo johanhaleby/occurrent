@@ -164,6 +164,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 }
                 return false;
             }
+            // A refusal that later turns into a quarantine never reaches the clearing in onCloudEvent, because the
+            // quarantine happens on this path and the instance takes no further event afterwards.
+            refusalAnnounced.remove(sagaId);
             if (!stateStore.compareAndSave(sagaId, record.envelope(), record.expectedVersion())) {
                 // Another input advanced the instance while the failing one was being retried, most likely a timer that
                 // fired successfully. The failing event now meets different state and may well succeed, so discard this

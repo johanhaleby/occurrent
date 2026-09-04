@@ -50,6 +50,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 /**
@@ -93,9 +94,10 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     /**
      * Whether the store this model replays from holds {@code event}, asked of the store rather than assumed from the
-     * fact that this model replays one. The reader and the live feed are independent: a bridge consuming another
-     * service's events delivers what this store never had, while a feed carrying this application's own writes
-     * delivers what it did, and nothing about this model's construction says which of the two it was given.
+     * fact that this model replays one. The reader and the live feed are independent, so an event may arrive over the
+     * feed and be in the store, or arrive and not be, and where it was produced does not settle which. An event
+     * another service published is in this store if something here persisted it and absent if nothing did, and
+     * nothing about this model's construction says which happened.
      * <p>
      * Reads the event's own position first, where it has one, so the ordinary case costs one lookup instead of a
      * scan. That position comes from whoever produced the event though, and a local write assigns its own, so a miss
@@ -129,7 +131,11 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
             }
             return found(identity, PositionRange.fromBeginning());
         } catch (RuntimeException e) {
-            log.warn("Could not check whether the event '{}' is still in the event store, so it is treated as gone. The caller keeps retrying it rather than dropping it.", id, e);
+            // Said once per outage rather than per attempt. A caller asks again on every redelivery, which is what
+            // notices the store coming back, so without this the same failure is logged at the retry cadence.
+            if (retentionReadFailureLogged.compareAndSet(false, true)) {
+                log.warn("Could not check whether the event '{}' is still in the event store, so it is treated as gone. The caller keeps retrying it rather than dropping it, and this is logged once until a check succeeds again.", id, e);
+            }
             return false;
         }
     }
@@ -144,7 +150,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
 
     private boolean found(Filter identity, PositionRange range) {
         try (Stream<CloudEvent> stored = reader.readInPositionOrder(identity, range)) {
-            return stored.findAny().isPresent();
+            boolean present = stored.findAny().isPresent();
+            retentionReadFailureLogged.set(false);
+            return present;
         }
     }
 
@@ -154,6 +162,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     private static final Logger log = LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
+
+    // Whether the store being unreadable has already been reported, cleared by the next read that works.
+    private final AtomicBoolean retentionReadFailureLogged = new AtomicBoolean();
 
     // Long enough that a replay noticing the shutdown at its next event always makes it, short enough that a parked
     // fold cannot hold a closing context open. Matches how SagaSubscription bounds its own poller shutdown.
