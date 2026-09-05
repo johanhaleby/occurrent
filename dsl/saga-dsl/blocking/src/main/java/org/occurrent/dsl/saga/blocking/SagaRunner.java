@@ -290,9 +290,10 @@ public final class SagaRunner<E, C> {
     }
 
     /**
-     * What {@link SagaExecution} asks before it stops retrying an event. A model holding everything it delivers is not
-     * asked at all, so the common case costs no read, and any other model is asked once per attempt that reaches the
-     * budget rather than once per event.
+     * What {@link SagaExecution} asks before it stops retrying an event, once per attempt that reaches the budget
+     * rather than once per event. Every model reaching this has promised to hold everything it delivers, so the answer
+     * should always be yes, and the MongoDB models give it without a read because their answer is a constant rather
+     * than because the question is skipped.
      */
     private Predicate<CloudEvent> retentionCheckFor(String subscriptionId, SagaRunnerConfig config) {
         if (config.quarantineAfter() == null) {

@@ -81,9 +81,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // contention on one instance points at a hot correlation id or an under-sized maxCasAttempts.
     private final int warnThreshold;
     private final AtomicBoolean dedupUnavailableWarningLogged = new AtomicBoolean();
-    // Answers whether the failing event can still be obtained from wherever the subscription reads. Asked at the moment
-    // of quarantine rather than at startup, since a model that replays one store while taking live events from another
-    // holds some of what it delivers and not the rest.
+    // Answers whether acknowledging the failing event would destroy the last copy of it. Only a model that has already
+    // promised to hold everything it delivers gets this far, so this is a check on that promise rather than the gate,
+    // made on the one event about to be acknowledged.
     private final Predicate<CloudEvent> stillObtainable;
     // The input each instance was last told about a refused quarantine for. A refused instance keeps being re-offered
     // the same event for as long as the source retries, so without this the refusal is logged at that cadence forever.

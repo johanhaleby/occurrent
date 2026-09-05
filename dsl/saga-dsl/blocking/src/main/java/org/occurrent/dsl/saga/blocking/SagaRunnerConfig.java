@@ -40,10 +40,11 @@ import static java.util.Objects.requireNonNull;
  * @param redeliveryDetection  what to do with an event the runner cannot recognise a redelivery of
  * @param quarantineAfter      how long one event may keep failing for one instance before that instance is quarantined
  *                             on that event and the subscription is allowed past it, or {@code null} to keep
- *                             rethrowing forever, which is what every version up to 0.33.0 did. A runner whose
- *                             subscription model cannot say whether it still holds a delivered event ignores this
- *                             and keeps rethrowing, and one that can is asked per event, so an instance stopped on an
- *                             event the model cannot confirm keeps blocking rather than losing it
+ *                             rethrowing forever, which is what every version up to 0.33.0 did. A runner ignores this
+ *                             and keeps rethrowing unless its subscription model guarantees that it holds every event
+ *                             it delivers, since a quarantined instance skips everything addressed to it afterwards
+ *                             and skipping acknowledges. Being able to answer for one event is not enough on its own,
+ *                             though the event an instance stops on is checked as well before it is acknowledged
  */
 public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, int maxCasAttempts,
                                RedeliveryDetection redeliveryDetection, @Nullable Duration quarantineAfter) {

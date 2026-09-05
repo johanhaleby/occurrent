@@ -325,12 +325,17 @@ So the model looks. `PositionOrderedReader` already gives a filtered, position-o
 by event id, narrowed to the event's own position where there is one. It runs when an instance has already been
 failing for the whole budget, never per delivered event, and a model that holds everything is not asked at all.
 
-**Checking beats declaring because a declaration here cannot be checked by the person making it.** The fact is that
-every event the live source delivers is also durably in the store the model replays from, and is there by the time
-the handler returns. That last clause is the one a user would get silently wrong, since a wiring that publishes
-before its local append commits satisfies the loose reading and still loses the event. A wrong declaration costs
-events with no test failing. A check has no wrong answer to give, and it is correct for a user who configured the
-wrong thing.
+**A declaration is what gates this, and which declaration matters more than whether there is one.** The gate is
+`retainsEveryEvent`, a claim a model makes about itself and can actually know, since a model reading the event
+store's own change stream knows that acknowledging removes nothing. What was rejected is a different claim, one the
+wiring would have made about a deployment, saying that every event the live source delivers is also durably in
+the store the model replays from and is there by the time the handler returns. That last clause is what a user would get
+silently wrong, since a wiring that publishes before its local append commits satisfies the loose reading and still
+loses the event, and a wrong claim of that kind costs events with no test failing.
+
+The per-event check sits on top of the declaration rather than replacing it. It catches a model whose promise is
+wrong, on the one event it is about to acknowledge, and it cannot do more than that, because the later events a
+quarantined instance skips are never offered to it. So it checks a promise rather than standing in for one.
 
 The failure directions are deliberate. An event with no id, and a read that throws, both answer no, so an
 unanswerable question costs the event nothing and the instance keeps blocking. A reader with no position needs no

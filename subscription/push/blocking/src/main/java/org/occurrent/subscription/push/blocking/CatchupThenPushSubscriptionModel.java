@@ -120,7 +120,7 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
         // event from another source stand in for the one that arrived over the feed, which is the reading that loses it.
         Filter identity = Filter.cloudEvent(id, source);
         try {
-            // Read inside the guard, because an external producer can put anything in the extension and an unreadable
+            // Read inside the try, because an external producer can put anything in the extension and an unreadable
             // one is only a lost optimization. Letting it throw would refuse an event the identity lookup would find.
             long position = readablePosition(event);
             // The position the event arrives with belongs to whoever produced it, and a local write assigns its own, so

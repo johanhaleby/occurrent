@@ -723,9 +723,10 @@ public class OccurrentProperties {
          * <p>
          * Set it to zero to keep the pre-0.34.0 behaviour, where the event is retried forever and every other instance
          * of that saga waits behind it. A negative value is rejected at startup rather than read as zero. Quarantine is switched off on its own,
-         * with a warning at startup, on a subscription model that cannot say whether it still holds an event it
-         * delivered. A model that can say is asked about the event an instance stopped on, and an instance is left
-         * blocking rather than quarantined where that answer cannot be confirmed.
+         * with a warning at startup, unless the subscription model guarantees that it holds every event it delivers,
+         * because a quarantined instance skips everything addressed to it afterwards and skipping acknowledges. A
+         * model that can answer for one event but cannot make that guarantee gets no quarantine either. The event an
+         * instance stops on is checked as well, so a guarantee made wrongly is caught before that event is dropped.
          */
         private Duration quarantineAfter = Duration.ofMinutes(5);
 
