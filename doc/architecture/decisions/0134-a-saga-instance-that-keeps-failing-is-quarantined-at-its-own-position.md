@@ -309,7 +309,8 @@ a bridge from another service is there only if something here persisted it, whic
 as exactly what a consume bridge cannot be assumed to have done. The repository's own RabbitMQ example is exactly this mixture, writing its orders locally and publishing them,
 while its readiness test injects one message whose order id was never written here. Any answer given once at
 construction, or once by a `catchup` attribute, would be wrong for some of the events that wiring delivers. Asking
-the store per event is right for both halves of it.
+the store per event is the only way to be right about both halves of it, which is why the capability answers per
+event. It is not why quarantine is allowed, and the next paragraph is about that difference.
 
 **Answering per event is still not enough to quarantine on, and this is what decides where the gate sits.** A
 quarantined instance is inert, so every later input addressed to it is skipped, and skipping returns normally, which
@@ -520,9 +521,9 @@ budget's default was never among them, it is decided at five minutes in Decision
    retrying itself would hold the subscription thread for the whole budget, which is a shorter version of the block
    this decision removes. A transport that never re-offers the input therefore cannot reach the budget and keeps
    today's behaviour, which Decision point 3 states rather than implies.
-3. **A source that retains nothing.** The behaviour stands, meaning the quarantine is refused and the instance
-   keeps blocking. The framing does not. This ships as a narrowing of the isolation rule rather than as its end
-   state, and [#918](https://github.com/johanhaleby/occurrent/issues/918) on milestone 0.35.0 is the recorded path to
-   closing it. It reaches an event rather than a saga, so a push saga catching up from an event store is quarantined
-   for the events that store holds and refused for the ones that only ever arrived over the feed. A saga on a feed that can
-   answer for nothing, meaning `catchup = NONE`, is refused for all of them. Decision point 7.
+3. **A source that cannot promise to hold everything it delivers.** The behaviour stands, meaning the quarantine is
+   refused and the instance keeps blocking. The framing does not. This ships as a narrowing of the isolation rule
+   rather than as its end state, and [#918](https://github.com/johanhaleby/occurrent/issues/918) on milestone 0.35.0
+   is the recorded path to closing it. It reaches every push saga rather than only `catchup = NONE`, because being
+   able to answer for the event an instance stopped on is not enough when the instance goes on to skip everything
+   addressed to it afterwards. Decision point 7.
