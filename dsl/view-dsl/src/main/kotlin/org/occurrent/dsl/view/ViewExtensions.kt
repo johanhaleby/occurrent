@@ -22,12 +22,25 @@ import org.occurrent.cloudevents.EventMetadata
 fun <S, E : Any> view(initialState: S, updateState: (S, E) -> S): View<S, E> = View.create(initialState, updateState)
 
 /**
+ * Builds a [View] whose fold begins from no state. The block and the returned `View` see `S?` rather than `S`,
+ * since the fold starts from `null` until `updateState` replaces it. See [view] for the fold.
+ */
+fun <S, E : Any> view(updateState: (S?, E) -> S?): View<S?, E> = view(null, updateState)
+
+/**
  * Builds a metadata-aware [View]: the fold sees the event's [EventMetadata] (stream id and version, global position,
  * DCB tags, CloudEvent extensions) as well as the event. Metadata is only available on the CloudEvent-fed paths; the
  * query/replay `evolve` overloads fold with [EventMetadata.empty].
  */
 fun <S, E : Any> view(initialState: S, updateState: (S, EventMetadata, E) -> S): View<S, E> =
     View.create(initialState, View.Fold { state, metadata, event -> updateState(state, metadata, event) })
+
+/**
+ * Builds a metadata-aware [View] whose fold begins from no state. The block and the returned `View` see `S?`
+ * rather than `S`, since the fold starts from `null` until `updateState` replaces it. See [view] for what
+ * metadata-aware means.
+ */
+fun <S, E : Any> view(updateState: (S?, EventMetadata, E) -> S?): View<S?, E> = view(null, updateState)
 
 // =========================
 // Single event (convenience)

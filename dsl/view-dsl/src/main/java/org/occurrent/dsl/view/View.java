@@ -165,6 +165,14 @@ public interface View<S extends @Nullable Object, E> {
     }
 
     /**
+     * Creates a {@code View} whose fold begins from no state. The state stays {@code null} until {@code evolve}
+     * replaces it. See {@link #create(Object, BiFunction)} for the fold.
+     */
+    static <S extends @Nullable Object, E> View<S, E> create(@NonNull BiFunction<S, E, S> evolve) {
+        return create(null, evolve);
+    }
+
+    /**
      * Creates a metadata-aware view from a three-argument {@link Fold}. Its {@link #evolve(Object, EventMetadata, Object)}
      * applies the fold with the event's metadata, and its metadata-less {@link #evolve(Object, Object)} applies the fold
      * with {@link EventMetadata#empty()}, so the same fold drives both the CloudEvent-fed paths (with real metadata) and
@@ -187,5 +195,13 @@ public interface View<S extends @Nullable Object, E> {
                 return fold.evolve(state, metadata, event);
             }
         };
+    }
+
+    /**
+     * Creates a metadata-aware {@code View} (see {@link #create(Object, Fold)}) whose fold begins from no state.
+     * The state stays {@code null} until {@code fold} replaces it.
+     */
+    static <S extends @Nullable Object, E> View<S, E> create(@NonNull Fold<S, E> fold) {
+        return create(null, fold);
     }
 }
