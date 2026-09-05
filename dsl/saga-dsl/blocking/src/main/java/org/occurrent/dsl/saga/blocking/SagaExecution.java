@@ -36,6 +36,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -78,9 +81,19 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // contention on one instance points at a hot correlation id or an under-sized maxCasAttempts.
     private final int warnThreshold;
     private final AtomicBoolean dedupUnavailableWarningLogged = new AtomicBoolean();
+    // Answers whether acknowledging the failing event would destroy the last copy of it. Only a model that has already
+    // promised to hold everything it delivers gets this far, so this is a check on that promise rather than the gate,
+    // made on the one event about to be acknowledged.
+    private final Predicate<CloudEvent> stillObtainable;
+    // The input each instance was last told about a refused quarantine for. A refused instance keeps being re-offered
+    // the same event for as long as the source retries, so without this the refusal is logged at that cadence forever.
+    // Keyed by saga id and cleared as soon as the instance processes anything, so a recovery is announced again if it
+    // stops a second time.
+    private final Map<String, String> refusalAnnounced = new ConcurrentHashMap<>();
 
     SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
-                  CloudEventConverter<E> converter, SagaRunnerConfig config) {
+                  CloudEventConverter<E> converter, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable) {
+        this.stillObtainable = stillObtainable;
         this.subscriptionId = subscriptionId;
         this.saga = saga;
         this.stateStore = stateStore;
@@ -114,8 +127,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         }
         try {
             process(sagaId, input, meta, null);
+            refusalAnnounced.remove(sagaId);
         } catch (RuntimeException e) {
-            if (!quarantine(sagaId, meta, e, quarantineAfter)) {
+            if (!quarantine(sagaId, cloudEvent, meta, e, quarantineAfter)) {
                 throw e;
             }
         }
@@ -129,7 +143,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
      * Only the event path calls this. A failing timeout is already isolated per instance by the poller and blocks
      * nothing, and a timeout carries no redelivery key of its own, so there would be nothing to quarantine it on.
      */
-    private boolean quarantine(String sagaId, EventMeta meta, RuntimeException failure, Duration quarantineAfter) {
+    private boolean quarantine(String sagaId, CloudEvent cloudEvent, EventMeta meta, RuntimeException failure, Duration quarantineAfter) {
         try {
             Instant now = Instant.now();
             SagaEnvelope<S> current = stateStore.find(sagaId).orElse(null);
@@ -137,6 +151,22 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             if (record == null) {
                 return false;
             }
+            if (record.quarantined() && !stillObtainable.test(cloudEvent)) {
+                boolean firstTimeForThisInput = !meta.redeliveryKey().equals(refusalAnnounced.put(sagaId, meta.redeliveryKey()));
+                // Checked before the write, not after, because quarantining returns normally and that acknowledges the
+                // event to whatever fed it. An unconfirmed answer is treated as a no, so the instance keeps blocking
+                // and the exception propagates as it did before 0.34.0. Nothing is saved, which leaves the failure
+                // record the earlier attempts wrote and lets the next redelivery ask again. Retention is rechecked
+                // every time so a store coming back is noticed, while the warning is said once per input.
+                if (firstTimeForThisInput) {
+                    log.warn("Saga '{}' instance '{}' has kept failing on the event '{}' for {} and is not quarantined, because the subscription could not confirm that the event is still obtainable from what it reads. Either it is gone, or the check could not be completed, and quarantining acknowledges the event, which might drop the only copy of it. This instance keeps blocking the saga's other instances instead. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+                            subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
+                }
+                return false;
+            }
+            // A refusal that later turns into a quarantine never reaches the clearing in onCloudEvent, because the
+            // quarantine happens on this path and the instance takes no further event afterwards.
+            refusalAnnounced.remove(sagaId);
             if (!stateStore.compareAndSave(sagaId, record.envelope(), record.expectedVersion())) {
                 // Another input advanced the instance while the failing one was being retried, most likely a timer that
                 // fired successfully. The failing event now meets different state and may well succeed, so discard this

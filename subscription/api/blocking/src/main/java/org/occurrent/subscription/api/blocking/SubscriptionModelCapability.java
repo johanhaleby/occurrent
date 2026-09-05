@@ -20,8 +20,8 @@ import java.util.Optional;
 
 /**
  * Marker supertype for every blocking subscription model capability. {@link Subscribable}, {@link CancellableSubscriptions},
- * {@link Pushable}, {@link RepositionableSubscriptions}, {@link ReplayAwareSubscriptions}, {@link IntrospectableSubscriptions}
- * and {@link SubscriptionModelWrapper} all extend it, so a whole {@link SubscriptionModel} is one transitively, without
+ * {@link Pushable}, {@link RepositionableSubscriptions}, {@link ReplayAwareSubscriptions}, {@link IntrospectableSubscriptions},
+ * {@link HistoryRetainingSubscriptions} and {@link SubscriptionModelWrapper} all extend it, so a whole {@link SubscriptionModel} is one transitively, without
  * declaring it directly.
  * <p>
  * It exists so a method that accepts "whatever partial or complete subscription model a caller happens to hold" has a
@@ -35,6 +35,7 @@ import java.util.Optional;
  * @see RepositionableSubscriptions#findIn(SubscriptionModelCapability)
  * @see ReplayAwareSubscriptions#findIn(SubscriptionModelCapability)
  * @see IntrospectableSubscriptions#findIn(SubscriptionModelCapability)
+ * @see HistoryRetainingSubscriptions#findIn(SubscriptionModelCapability)
  */
 public interface SubscriptionModelCapability {
 

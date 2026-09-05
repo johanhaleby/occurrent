@@ -19,6 +19,7 @@ package org.occurrent.subscription.push.blocking;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
@@ -26,6 +27,7 @@ import org.occurrent.subscription.*;
 import org.occurrent.subscription.DurationToTimeoutConverter.Timeout;
 import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.CheckpointWriteVersionSource;
+import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
 import org.occurrent.subscription.api.blocking.RegisteringSubscribable;
 import org.occurrent.subscription.api.blocking.ReplayAwareSubscriptions;
@@ -38,11 +40,13 @@ import org.occurrent.subscription.internal.ReplayFilters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.URI;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -86,7 +90,71 @@ import java.util.stream.Stream;
  * delegated per-subscription to {@link BlockingHandover}, shared with {@code CatchupProjectionFeed}.
  */
 @NullMarked
-public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptions, ReplayAwareSubscriptions {
+public class CatchupThenPushSubscriptionModel implements SubscriptionModel, IntrospectableSubscriptions, ReplayAwareSubscriptions, HistoryRetainingSubscriptions {
+
+    /**
+     * Whether the store this model replays from holds {@code event}, asked of the store rather than assumed from the
+     * fact that this model replays one. The reader and the live feed are independent, so an event may arrive over the
+     * feed and be in the store, or arrive and not be, and where it was produced does not settle which. An event
+     * another service published is in this store if something here persisted it and absent if nothing did, and
+     * nothing about this model's construction says which happened.
+     * <p>
+     * Reads the event's own position first, where it has one, so the ordinary case costs one lookup instead of a
+     * scan. That position comes from whoever produced the event though, and a local write assigns its own, so a miss
+     * there is not an answer and the identity is looked for across the store before giving up. The caller is expected
+     * to ask this rarely.
+     * <p>
+     * Fails closed. An event missing either half of its identity, and a read that throws, both answer {@code false},
+     * because a caller uses this to decide whether it may stop retrying an event and a question that cannot be
+     * answered has to cost the event nothing. A reader with no position needs no branch here, since the constructor
+     * already refuses one.
+     */
+    @Override
+    public boolean retains(CloudEvent event) {
+        String id = event.getId();
+        URI source = event.getSource();
+        if (id == null || source == null) {
+            return false;
+        }
+        // Matched on source as well as id, since a CloudEvent is identified by the pair. An id alone would let a local
+        // event from another source stand in for the one that arrived over the feed, which is the reading that loses it.
+        Filter identity = Filter.cloudEvent(id, source);
+        try {
+            // Read inside the try, because an external producer can put anything in the extension and an unreadable
+            // one is only a lost optimization. Letting it throw would refuse an event the identity lookup would find.
+            long position = readablePosition(event);
+            // The position the event arrives with belongs to whoever produced it, and a local write assigns its own, so
+            // the two disagree for an event that reached the feed from elsewhere and was stored here as well. Reading
+            // the one position first keeps the common case off a scan, and finding nothing there proves nothing.
+            boolean present = (position > 0 && found(identity, PositionRange.between(position - 1, position)))
+                    || found(identity, PositionRange.fromBeginning());
+            // Cleared here rather than inside the read, so a narrow read that succeeds and finds nothing does not
+            // report the store healthy while the wider read behind it is still failing.
+            retentionReadFailureLogged.set(false);
+            return present;
+        } catch (RuntimeException e) {
+            // Said once per outage rather than per attempt. A caller asks again on every redelivery, which is what
+            // notices the store coming back, so without this the same failure is logged at the retry cadence.
+            if (retentionReadFailureLogged.compareAndSet(false, true)) {
+                log.warn("Could not check whether the event '{}' is still in the event store, so it is treated as gone. The caller keeps retrying it rather than dropping it, and this is logged once until a check succeeds again.", id, e);
+            }
+            return false;
+        }
+    }
+
+    private static long readablePosition(CloudEvent event) {
+        try {
+            return OccurrentCloudEventExtension.getPosition(event);
+        } catch (RuntimeException e) {
+            return 0;
+        }
+    }
+
+    private boolean found(Filter identity, PositionRange range) {
+        try (Stream<CloudEvent> stored = reader.readInPositionOrder(identity, range)) {
+            return stored.findAny().isPresent();
+        }
+    }
 
     // Named so subscribe(..) can build the action before taking the monitor and register it inside, rather than
     // spelling a multi-line lambda out in the middle of a synchronized block.
@@ -94,6 +162,9 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
     }
 
     private static final Logger log = LoggerFactory.getLogger(CatchupThenPushSubscriptionModel.class);
+
+    // Whether the store being unreadable has already been reported, cleared by the next read that works.
+    private final AtomicBoolean retentionReadFailureLogged = new AtomicBoolean();
 
     // Long enough that a replay noticing the shutdown at its next event always makes it, short enough that a parked
     // fold cannot hold a closing context open. Matches how SagaSubscription bounds its own poller shutdown.

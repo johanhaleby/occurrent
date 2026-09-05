@@ -651,13 +651,19 @@ once you have decided not to recover it.
 
 There are two limits to know before you rely on it.
 
-**Quarantine is available only on a subscription model that can be resumed at a chosen position,** which is
-`NativeMongoSubscriptionModel` and `SpringMongoSubscriptionModel`, including either of them behind
-`DurableSubscriptionModel`, `CompetingConsumerSubscriptionModel` or `CatchupSubscriptionModel`. The wrapper alone is
-not enough. Put a `CatchupSubscriptionModel` around a model that cannot be repositioned and the runner still switches
-the budget off, because a catch-up model hands an explicit resume down to the model it wraps and throws when that
-model cannot take one. On any other model the runner switches the budget off at startup and logs why, so the saga
-keeps the 0.33.0 behaviour of blocking.
+**Quarantine is available only where the subscription model can say that the failing event is still obtainable,**
+which it declares by implementing `HistoryRetainingSubscriptions`. `NativeMongoSubscriptionModel` and
+`SpringMongoSubscriptionModel` hold everything they deliver and say so, including either of them behind
+`DurableSubscriptionModel`, `CompetingConsumerSubscriptionModel` or `CatchupSubscriptionModel`, since a wrapper that
+declares nothing itself is answered by the model it wraps. On a model that declares nothing at all, a bare
+`PushSubscriptionModel` being the one you are most likely to meet, the runner switches the budget off at startup and
+logs why, so the saga keeps the 0.33.0 behaviour of blocking.
+
+A model that cannot promise to hold everything gets no quarantine either, even where it can answer for the event an
+instance actually stopped on. `CatchupThenPushSubscriptionModel` is that case, since it replays an event store and
+takes live events from a feed that may deliver events nothing here ever wrote. The reason is what a quarantine does
+afterwards, which is that the instance goes inert and skips everything addressed to it, and skipping acknowledges.
+Protecting the failing event alone would leave the ones behind it unprotected.
 
 That is deliberate rather than an omission. Quarantining means returning normally, which acknowledges the event to
 whatever fed it, and on a push feed behind a broker bridge that is what stages the offset and moves past the record.

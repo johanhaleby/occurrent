@@ -39,6 +39,7 @@ import org.occurrent.subscription.SubscriptionNotRunningException;
 import org.occurrent.subscription.UnknownSubscriptionException;
 import org.occurrent.subscription.api.blocking.CheckpointAwareSubscriptionModel;
 import org.occurrent.subscription.api.blocking.IntrospectableSubscriptions;
+import org.occurrent.subscription.api.blocking.HistoryRetainingSubscriptions;
 import org.occurrent.subscription.api.blocking.RepositionableSubscriptions;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.mongodb.MongoOperationTimeCheckpoint;
@@ -87,7 +88,24 @@ import static org.occurrent.subscription.mongodb.spring.blocking.SpringMongoSubs
  * from where it's left off on application restart/crash etc.
  */
 @NullMarked
-public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, SmartLifecycle {
+public class SpringMongoSubscriptionModel implements CheckpointAwareSubscriptionModel, IntrospectableSubscriptions, RepositionableSubscriptions, HistoryRetainingSubscriptions, SmartLifecycle {
+
+    /**
+     * Acknowledging costs nothing here. This model reads the event store's own change stream, so returning normally
+     * advances a checkpoint and removes no event, and the store keeps its events on its own terms. An event erased
+     * through {@code EventStoreOperations} is gone by that erasure rather than by the acknowledgement, so answering
+     * {@code false} for it would only strand an instance on an event nobody can supply.
+     */
+    @Override
+    public boolean retains(CloudEvent event) {
+        return true;
+    }
+
+    @Override
+    public boolean retainsEveryEvent() {
+        return true;
+    }
+
     private static final Logger log = LoggerFactory.getLogger(SpringMongoSubscriptionModel.class);
 
     private final String eventCollection;
