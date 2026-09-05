@@ -133,15 +133,20 @@ class SagaQuarantineWarningTest {
      * whether this particular feed will ever produce a refusal, so the message says what the answer depends on rather
      * than diagnosing a source it cannot see.
      */
+    /**
+     * Answering for one event is not enough to quarantine on, because a quarantined instance skips everything
+     * addressed to it afterwards and skipping acknowledges. A model holding only some of what it delivers could have
+     * one of those later events as its only copy, so it keeps the blocking behaviour and is told why.
+     */
     @Test
-    void says_that_quarantine_depends_on_the_event_when_the_model_holds_only_some_of_them() {
+    void switches_quarantine_off_when_the_model_cannot_guarantee_it_holds_everything() {
         run(new RetainsSomeEvents());
 
         assertAll(
                 () -> assertThat(warnings()).hasSize(1),
                 () -> assertThat(warning()).contains("cannot guarantee it holds every event it delivers"),
-                () -> assertThat(warning()).contains("depends on the event it stopped on"),
-                () -> assertThat(warning()).contains("that refusal is logged when it happens")
+                () -> assertThat(warning()).contains("quarantine is switched off"),
+                () -> assertThat(warning()).contains("skips everything addressed to it afterwards")
         );
     }
 

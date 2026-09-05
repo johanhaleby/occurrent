@@ -311,6 +311,16 @@ while its readiness test injects one message whose order id was never written he
 construction, or once by a `catchup` attribute, would be wrong for some of the events that wiring delivers. Asking
 the store per event is right for both halves of it.
 
+**Answering per event is still not enough to quarantine on, and this is what decides where the gate sits.** A
+quarantined instance is inert, so every later input addressed to it is skipped, and skipping returns normally, which
+acknowledges. Gating on the failing event alone would protect that one and none of the ones behind it, and on a
+model holding only some of what it delivers one of those later events may be the only copy there is. Quarantine
+therefore needs `retainsEveryEvent`, a promise about the whole model, and the per-event `retains` is asked on top of
+it as a check on a promise made wrongly rather than as the gate itself. Every push saga is therefore unquarantined,
+whatever `catchup` is set to. Closing it for a model holding only some of what it delivers needs somewhere to put
+the events a quarantined instance skips, which is the holding area on
+[#918](https://github.com/johanhaleby/occurrent/issues/918).
+
 So the model looks. `PositionOrderedReader` already gives a filtered, position-ordered read, so the check is a lookup
 by event id, narrowed to the event's own position where there is one. It runs when an instance has already been
 failing for the whole budget, never per delivered event, and a model that holds everything is not asked at all.

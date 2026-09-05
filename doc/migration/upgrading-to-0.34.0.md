@@ -659,10 +659,11 @@ declares nothing itself is answered by the model it wraps. On a model that decla
 `PushSubscriptionModel` being the one you are most likely to meet, the runner switches the budget off at startup and
 logs why, so the saga keeps the 0.33.0 behaviour of blocking.
 
-A model can also answer per event, which `CatchupThenPushSubscriptionModel` does by looking in the event store it
-replays from. An instance stopped on an event that store holds is quarantined normally. One stopped on an event that
-only ever arrived over the feed keeps blocking, and the refusal is logged against that event, because acknowledging
-it might drop the only copy there is.
+A model that cannot promise to hold everything gets no quarantine either, even where it can answer for the event an
+instance actually stopped on. `CatchupThenPushSubscriptionModel` is that case, since it replays an event store and
+takes live events from a feed that may deliver events nothing here ever wrote. The reason is what a quarantine does
+afterwards, which is that the instance goes inert and skips everything addressed to it, and skipping acknowledges.
+Protecting the failing event alone would leave the ones behind it unprotected.
 
 That is deliberate rather than an omission. Quarantining means returning normally, which acknowledges the event to
 whatever fed it, and on a push feed behind a broker bridge that is what stages the offset and moves past the record.

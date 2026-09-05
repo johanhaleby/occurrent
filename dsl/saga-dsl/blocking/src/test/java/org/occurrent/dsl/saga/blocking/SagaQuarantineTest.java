@@ -282,7 +282,7 @@ class SagaQuarantineTest {
         }
 
         @Test
-        void are_isolated_from_it_on_a_model_that_retains_what_it_delivered_without_being_repositionable() {
+        void are_isolated_from_it_on_a_model_that_guarantees_it_holds_everything_without_being_repositionable() {
             ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
             SagaSubscription subscription = run(new RetainsWithoutRepositioning(feed), CONFIG);
             feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
@@ -297,15 +297,15 @@ class SagaQuarantineTest {
         }
 
         /**
-         * The model can answer, and for this event the answer is no. Quarantining would acknowledge an event nothing
-         * can hand back, so the instance keeps blocking instead, which is what a saga fed another application's events
-         * gets. Distinct from the feed that declares nothing, since here quarantine was available and was refused on
-         * the event.
+         * A model whose guarantee is wrong is caught on the event it is about to acknowledge. Quarantine was enabled
+         * on the guarantee, the check disagreed for this event, and the instance keeps blocking rather than having
+         * that event acknowledged away. Distinct from the feed that declares nothing, since here quarantine was
+         * available and was refused on the event.
          */
         @Test
         void blocks_them_exactly_as_before_when_the_event_it_stopped_on_cannot_be_obtained_again() throws Exception {
             ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
-            SagaSubscription subscription = run(new RetainsNothingItDelivered(feed), CONFIG);
+            SagaSubscription subscription = run(new GuaranteesMoreThanItHolds(feed), CONFIG);
             feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
             feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
             feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
@@ -332,7 +332,7 @@ class SagaQuarantineTest {
             executionLog.addAppender(appender);
             try {
                 ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
-                SagaSubscription subscription = run(new RetainsNothingItDelivered(feed), CONFIG);
+                SagaSubscription subscription = run(new GuaranteesMoreThanItHolds(feed), CONFIG);
                 feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
                 feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
 
@@ -476,11 +476,11 @@ class SagaQuarantineTest {
     }
 
     /**
-     * Answers for the event rather than for itself, which is what a model replaying one store while taking live events
-     * from another does. Everything it is asked about here is delivered the same way, so an instance that is refused a
-     * quarantine is refused on the event alone.
+     * Claims to hold everything and then answers no for the event it is asked about, which is a model whose guarantee
+     * is wrong. The runner only enables quarantine on the guarantee, so this is the one way the per-event check is
+     * still reached, and it is why that check is made rather than trusted.
      */
-    private record RetainsNothingItDelivered(ReplayableSubscriptionModel delegate)
+    private record GuaranteesMoreThanItHolds(ReplayableSubscriptionModel delegate)
             implements Subscribable, HistoryRetainingSubscriptions {
 
         @Override
@@ -491,6 +491,11 @@ class SagaQuarantineTest {
         @Override
         public boolean retains(CloudEvent event) {
             return false;
+        }
+
+        @Override
+        public boolean retainsEveryEvent() {
+            return true;
         }
     }
 

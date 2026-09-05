@@ -264,10 +264,12 @@ public final class SagaRunner<E, C> {
      * of quarantine. Between an instance that blocks and an event that cannot be asked for again, this keeps the event,
      * and it says so at startup rather than leaving it to be discovered during the incident.
      * <p>
-     * A model that can answer says at startup whether it guarantees holding everything. One that does is left alone.
-     * One that does not is named here, which is a statement about the guarantee rather than about the feed: such a
-     * model may hold every event it is ever given, and it may not, and a saga on it may get a quarantine for some
-     * events and not for others. The difference otherwise first shows up in the middle of an incident.
+     * Answering for one event is not enough, and the reason is what a quarantine does afterwards. A quarantined
+     * instance is inert, so every later input addressed to it is skipped, and skipping returns normally, which
+     * acknowledges. Checking the event an instance stopped on would therefore protect that one event and none of the
+     * ones behind it, and on a model holding only some of what it delivers one of those may be a copy nothing else
+     * has. So quarantine needs a model that guarantees it holds everything, and one that cannot promise that keeps
+     * the blocking behaviour and is told why at startup.
      */
     private SagaRunnerConfig quarantineOnlyIfTheEventCanBeAskedForAgain(String subscriptionId, SagaRunnerConfig config) {
         if (config.quarantineAfter() == null) {
@@ -280,8 +282,9 @@ public final class SagaRunner<E, C> {
             return config.withQuarantineAfter(null);
         }
         if (!retention.get().retainsEveryEvent()) {
-            log.warn("Saga subscription '{}' runs on a subscription model that cannot guarantee it holds every event it delivers ({}), so whether an instance can be quarantined depends on the event it stopped on rather than on the saga. An event this model can still obtain is quarantined normally. One it cannot, which is what an event that reached the feed without being written here looks like, leaves the instance blocking the saga's other instances, and that refusal is logged when it happens.",
+            log.warn("Saga subscription '{}' runs on a subscription model that cannot guarantee it holds every event it delivers ({}), so quarantine is switched off for this saga and an event that keeps failing for one instance blocks every other instance of it, which is the behaviour before 0.34.0. Quarantining the event an instance stopped on would be safe whenever this model still holds that one, but a quarantined instance skips everything addressed to it afterwards, and skipping acknowledges. On a model that holds only some of what it delivers, one of those later events may be a copy nothing else has. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                     subscriptionId, subscriptionModel.getClass().getName());
+            return config.withQuarantineAfter(null);
         }
         return config;
     }
@@ -295,8 +298,10 @@ public final class SagaRunner<E, C> {
         if (config.quarantineAfter() == null) {
             return event -> false;
         }
-        HistoryRetainingSubscriptions retention = HistoryRetainingSubscriptions.findIn(subscriptionModel).orElseThrow();
-        return retention.retainsEveryEvent() ? event -> true : retention::retains;
+        // Only a model guaranteeing it holds everything gets this far, so the per-event answer is a formality it
+        // should always pass. Asked anyway, because a model that guarantees wrongly is better caught on the event it
+        // is about to acknowledge than not at all.
+        return HistoryRetainingSubscriptions.findIn(subscriptionModel).orElseThrow()::retains;
     }
 
     /**
