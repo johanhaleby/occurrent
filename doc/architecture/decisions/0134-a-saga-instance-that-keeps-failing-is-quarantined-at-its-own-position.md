@@ -296,9 +296,10 @@ configured with `catchup = NONE` under ADR 96 there is no local history holding 
 immediately. Nothing later can replay what was never retained.
 
 **The question asked is retention, it is asked of the store rather than of whoever wired it, and the capability that
-asks it is `HistoryRetainingSubscriptions`.** A model implementing it answers, for one event, whether that event is
-still obtainable from what the model reads. The two MongoDB models answer yes to everything, since they read the
-event store's own change stream. `CatchupSubscriptionModel` does not implement it, because it is a
+asks it is `HistoryRetainingSubscriptions`.** A model implementing it answers, for one event, whether acknowledging
+that event would destroy the last copy of it. That is a question about what the acknowledgement costs rather than
+about whether the source still has the event at that instant, and the two differ. The MongoDB models answer yes even
+for an event an operator has erased, because acknowledging advances a checkpoint and removes nothing. `CatchupSubscriptionModel` does not implement it, because it is a
 `SubscriptionModelWrapper` and the lookup reaches whatever it wraps. `PushSubscriptionModel` does not implement it
 either, so `catchup = NONE` comes out unquarantined without anything checking for that attribute.
 

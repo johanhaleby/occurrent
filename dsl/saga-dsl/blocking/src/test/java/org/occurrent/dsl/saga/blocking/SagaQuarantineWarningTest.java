@@ -200,8 +200,8 @@ class SagaQuarantineWarningTest {
         }
     }
 
-    // Can answer, and for some events the answer is no, which is what earns the startup line about it depending on
-    // the event.
+    // Can answer for an event and cannot promise to hold everything, which is what earns the startup line. Its
+    // per-event answer is never asked, because the missing promise switches quarantine off before that.
     private static final class RetainsSomeEvents extends RetainsNothing implements HistoryRetainingSubscriptions {
         @Override
         public boolean retains(CloudEvent event) {

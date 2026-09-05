@@ -75,9 +75,10 @@ class HistoryRetainingSubscriptionsTest {
     }
 
     /**
-     * The answer a caller has to read as the event being gone once it returns. Stated as its own test because empty is
-     * the whole of the negative contract. There is no method to answer no with, so a model that keeps nothing says so
-     * by not implementing the capability.
+     * What a caller has to treat as the event being gone once it returns. Stated as its own test because empty and a
+     * {@code false} from {@link HistoryRetainingSubscriptions#retains(io.cloudevents.CloudEvent)} are different
+     * answers. Empty means the model cannot be asked at all, so nothing it delivers can be quarantined, while
+     * {@code false} is an answer about one event from a model that can be asked.
      */
     @Test
     void is_empty_for_a_model_that_declares_nothing() {
