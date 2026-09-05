@@ -189,7 +189,8 @@ ADR 109's `RedeliveryDetection`, so nothing new is needed there.
 assigns no position, one built with `withoutStreamPosition()` or an upgrade where stream position stays disabled on an
 existing collection, still gives every event a stream id and a stream version. Gating on a position would leave
 quarantine inert for such a store while the startup gate reported quarantine as available, because whether a
-subscription model can be repositioned is a question about the model and not about what its events hold. The recorded
+subscription model holds what it delivered is a question about the model and not about which extensions its events
+arrive with. The recorded
 position is therefore nullable, and it is a convenience beside the key rather than the thing that identifies the event.
 
 ### 4. An instance that has never started needs start detection to stop keying on document existence
@@ -289,7 +290,8 @@ unwrapping to the delegate to reposition would go around the wrapper's own lock 
 settle whether release is restricted to the node holding the lease or whether it coordinates across nodes, and that
 is named here as open work rather than assumed to fall out.
 
-**A source that retains nothing does not get quarantine at all, and refusing only the release would have been wrong.**
+**A source that cannot promise to hold everything it delivers does not get quarantine at all, and refusing only the
+release would have been wrong.**
 The first draft refused the release and allowed the quarantine, which loses the event at the moment of quarantine
 rather than at the release. Returning normally acknowledges the input to the source, and for a push-fed saga
 configured with `catchup = NONE` under ADR 96 there is no local history holding it, so on a queue it can be gone
@@ -364,8 +366,8 @@ justified told push operators to move to a catch-up model over MongoDB, which is
 running. [#952](https://github.com/johanhaleby/occurrent/issues/952) is where the gate becomes the retention question
 this section states. Repositioning stays the question release asks, at the point release repositions.
 
-**For a source that genuinely retains nothing the two halves of the isolation rule cannot both hold, and this
-decision keeps the no-loss half.** AGENTS.md states the rule as both at once, no design may lose events and no consumer may be blocked
+**For a source that cannot promise to hold everything it delivers the two halves of the isolation rule cannot both
+hold, and this decision keeps the no-loss half.** AGENTS.md states the rule as both at once, no design may lose events and no consumer may be blocked
 by another being faulty. Here quarantining would break the first and refusing to quarantine breaks the second, so
 there is no answer that keeps both, and between them the loss is the one that cannot be undone afterwards.
 
@@ -377,12 +379,16 @@ more acceptable. [#918](https://github.com/johanhaleby/occurrent/issues/918), mi
 path. It holds the two candidate closings, holding the event for this case or refusing the topology the way ADR 90
 refused a shared acknowledgement, and choosing between them is its work rather than this decision's.
 
-**Until it closes, the limitation is stated at startup rather than discovered during an incident.** What is knowable
-at startup is not the verdict but what it will depend on, so that is what is said. A model that cannot establish
-retention at all says so and gets no quarantine. A model that can, without guaranteeing it holds everything, says
-that quarantine depends on the event an instance stops on. A model that holds everything it delivers says nothing,
-because there is nothing to warn about. The refusal itself is logged against the event when it happens, which is the
-one part that cannot be known before it does.
+**Until it closes, the limitation is stated at startup rather than discovered during an incident.** Whether a saga
+gets quarantine at all is settled at startup, so that is where it is said. A model that cannot establish retention
+gets none and is told so. A model that can answer for an event but cannot guarantee it holds everything gets none
+either, and is told that separately, because the two differ in what an operator can do about them. The first was
+never able to answer the question at all, and the second answers it and still cannot promise enough. A model
+that guarantees it holds everything is warned about nothing, because it has quarantine.
+
+What is left for later is narrow. A model that promised everything and then answers no for the event an instance
+stopped on has that instance left blocking, and the refusal is logged against that event. It is the only thing this
+decides after startup, and it exists to catch a promise made wrongly rather than to make quarantine conditional.
 
 The replay boundary is inclusive of the recorded position, and this needs saying because the existing vocabulary
 points the other way. `GlobalCheckpoint.of(p)` means resume after `p`, so restarting from the position of the event
