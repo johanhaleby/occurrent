@@ -523,4 +523,28 @@ class ViewTest {
         }
 
     }
+
+    @Nested
+    inner class NoArgDsl {
+
+        @Test
+        fun `view with no argument starts from null like initialState null`() {
+            // A witness with no ? still receives a nullable state, since the no-argument overload forces S?.
+            val view = view<NameState, DomainEvent> { s, e ->
+                when (e) {
+                    is NameDefined -> NameState(e.userId(), e.name)
+                    is NameWasChanged -> s?.copy(name = e.name)
+                }
+            }
+
+            assertThat(view.initialState()).isNull()
+        }
+
+        @Test
+        fun `metadata-aware view with no argument starts from null like initialState null`() {
+            val view = view<Long, DomainEvent> { s, metadata, _ -> metadata.position ?: s }
+
+            assertThat(view.initialState()).isNull()
+        }
+    }
 }

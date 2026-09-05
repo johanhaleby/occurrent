@@ -97,6 +97,7 @@
   * The fix is the same on both. `DropRedundantYamlProperty` and `MigrateSubscriptionEnabledInYaml` are small imperative recipes, one no-arg subclass per property pair or per boolean, that re-check the specific `Yaml.Document` before rewriting it. The shipped recipe ids are unchanged, and the `.properties` half was never affected, since a `.properties` file has no multi-document concept for the bug to exploit.
 * **`Projection.builder()`, `Projection.singletonBuilder()`, `Saga.builder()` and `SnapshotView.builder()` gain a no-argument overload**, the shape `FlowSaga.builder()` already had. Call it instead of passing `null` when a fold starts from no state, the common case since most folds build their first state in the handler for the first event. Resolves [#956](https://github.com/johanhaleby/occurrent/issues/956).
   * Kotlin's `projection { }`, `singletonProjection { }`, `saga { }` and `snapshotView { }` gain the same no-argument form, matching the flow DSL's `saga { }`.
+  * `View.create(BiFunction)` and `View.create(Fold)` gain the same no-argument form in Java, and Kotlin's `view { }` overloads gain it too. Kotlin's forces the block and the returned `View` to a nullable state (`S?`), so a handler that assumes a non-null state fails to compile instead of throwing on the first event. Java has no way to express that distinction, so it stays as unchecked as `builder(null)` always was.
 
 #### Breaking changes
 
