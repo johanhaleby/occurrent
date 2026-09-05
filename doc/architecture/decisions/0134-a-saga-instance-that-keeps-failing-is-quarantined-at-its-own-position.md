@@ -323,8 +323,10 @@ the events a quarantined instance skips, which is the holding area on
 [#918](https://github.com/johanhaleby/occurrent/issues/918).
 
 So the model looks. `PositionOrderedReader` already gives a filtered, position-ordered read, so the check is a lookup
-by event id, narrowed to the event's own position where there is one. It runs when an instance has already been
-failing for the whole budget, never per delivered event, and a model that holds everything is not asked at all.
+by the event's source and id together, which is what identifies a CloudEvent, narrowed to the event's own position
+where there is one. It runs when an instance has already been failing for the whole budget, never per delivered
+event. Every model that promised to hold everything is still asked, and the MongoDB models answer without a read
+because their answer is a constant rather than because the question is skipped.
 
 **A declaration is what gates this, and which declaration matters more than whether there is one.** The gate is
 `retainsEveryEvent`, a claim a model makes about itself and can actually know, since a model reading the event

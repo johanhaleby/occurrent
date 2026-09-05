@@ -128,12 +128,6 @@ class SagaQuarantineWarningTest {
     }
 
     /**
-     * A model that does not guarantee holding everything is worth a line before the incident, since that saga may be
-     * quarantined for some events and not for others. The verdict per event is not knowable at startup, and neither is
-     * whether this particular feed will ever produce a refusal, so the message says what the answer depends on rather
-     * than diagnosing a source it cannot see.
-     */
-    /**
      * Answering for one event is not enough to quarantine on, because a quarantined instance skips everything
      * addressed to it afterwards and skipping acknowledges. A model holding only some of what it delivers could have
      * one of those later events as its only copy, so it keeps the blocking behaviour and is told why.
