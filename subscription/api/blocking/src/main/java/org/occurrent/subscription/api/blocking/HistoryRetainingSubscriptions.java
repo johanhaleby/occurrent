@@ -22,18 +22,23 @@ import org.jspecify.annotations.NullMarked;
 import java.util.Optional;
 
 /**
- * A subscription model that can say whether an event it delivered is still obtainable, which is what a caller has to
- * know before it hands that event back unprocessed.
+ * A subscription model that can say whether acknowledging an event it delivered would destroy the last copy of it,
+ * which is what a caller has to know before it hands that event back unprocessed.
+ * <p>
+ * That is a question about what the acknowledgement costs rather than about what the source happens to hold at this
+ * instant, and the two differ. A model reading a store that keeps its own events answers yes whatever later becomes
+ * of one, because acknowledging is not what would remove it. Implement it against the cost, not against presence,
+ * and read {@link #retains(CloudEvent)} before deciding what your model should answer.
  * <p>
  * The saga executor is the caller this exists for. Quarantining an instance returns normally, which acknowledges the
- * event to whatever fed it, so on a source that no longer holds it the one copy the saga could ever be given is gone
- * the moment it is quarantined.
+ * event to whatever fed it, so where that acknowledgement is the thing that drops it, the one copy the saga could
+ * ever be given is gone the moment it is quarantined.
  * <p>
  * Asked per event rather than once per model, because for some models the answer genuinely differs between two
- * events. A model that replays a store on the way up and takes live events from somewhere else holds whichever of
- * them the store was written with, and it cannot know that its live source writes there at all. Answering from the
- * store beats asking whoever wired it, since a promise about a broker and an event store on someone else's machine
- * is a promise nobody can check and the failure is silent.
+ * events. A model that replays a store on the way up and takes live events from somewhere else keeps whichever of
+ * them something wrote there, and it cannot know that its live source writes there at all. Answering from the store
+ * beats asking whoever wired it, since a promise about a broker and an event store on someone else's machine is a
+ * promise nobody can check and the failure is silent.
  * <p>
  * A model that cannot answer the question at all does not implement this, and absence therefore means unable to say
  * rather than a no. The two are different and a caller treats them differently. Nothing found means the question
