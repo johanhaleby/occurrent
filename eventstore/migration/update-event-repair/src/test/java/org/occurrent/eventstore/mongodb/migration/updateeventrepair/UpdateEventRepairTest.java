@@ -407,6 +407,32 @@ class UpdateEventRepairTest {
     }
 
     @Test
+    void a_hand_set_position_that_is_not_positive_is_reported_rather_than_included_in_the_range() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        // A typo in step 5's hand fix, written as a number rather than the damaged string the tool would otherwise
+        // still treat as string-typed damage. The tag array is still there to rebuild, so this event matches the
+        // filter through it, not through its position.
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 0L)));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE),
+                () -> assertThat(result.minRepairedPosition())
+                        .as("a position no store ever assigned must not be reported as part of the repaired range")
+                        .isNull(),
+                () -> assertThat(result.maxRepairedPosition()).isNull(),
+                () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .as("the tag array does not depend on the position, so a forged position must not cost the event its tags too")
+                        .containsExactly("name:1")
+        );
+    }
+
+    @Test
     void an_event_whose_position_string_is_not_a_number_still_gets_its_tag_array_back() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());

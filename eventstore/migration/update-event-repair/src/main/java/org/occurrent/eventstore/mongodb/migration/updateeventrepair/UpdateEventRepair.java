@@ -329,29 +329,7 @@ public final class UpdateEventRepair {
             Long position;
             try {
                 long parsedPosition = Long.parseLong(positionAsString);
-                if (parsedPosition > positionCeiling && positionCeiling > 0) {
-                    // Above the counter is as unassignable as at or below zero, and just as invisible, because a
-                    // read clamps its upper bound to this same counter. It is re-read here rather than trusted from the
-                    // start of the run, so a store that wrote while the repair walked cannot have an event wrongly
-                    // called forged. A counter of zero means there is no counter document to compare against.
-                    long ceilingNow = positionCeiling();
-                    if (ceilingNow > 0 && parsedPosition > ceilingNow) {
-                        unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ABOVE_COUNTER,
-                                positionAsString + ", and the store's position counter is " + ceilingNow));
-                        position = null;
-                    } else {
-                        position = parsedPosition;
-                    }
-                } else if (parsedPosition > 0) {
-                    position = parsedPosition;
-                } else {
-                    // A store's positions start above zero, and getPosition returns zero for an event that has none,
-                    // so zero and anything below it are values no store ever assigned. Writing one back as an int64
-                    // would count as a repair and leave the event exactly as invisible, because every position query
-                    // reads position greater than zero. Only a forged position gets here, so report it.
-                    unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE, positionAsString));
-                    position = null;
-                }
+                position = validatedPosition(parsedPosition, positionCeiling, eventId, unrecoverable);
             } catch (NumberFormatException e) {
                 // The tag array does not depend on the position, so rebuild it anyway, the way a dropped position
                 // does below. Only the position itself is beyond saving here.
@@ -369,12 +347,11 @@ public final class UpdateEventRepair {
             // worth rebuilding, and the position is reported rather than invented.
             unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_LOST, "no position field"));
         } else if (storedPosition instanceof Number number) {
-            // This event only matched the filter through its tag array, so its position was never damaged. A repair
-            // that follows a hand-set POSITION_ALREADY_TAKEN fix (the runbook's step 5) lands here: the position is
-            // already correct, and this run only rebuilds the tag array, but a consumer could still have checkpointed
-            // past this position before either fix landed. The range has to carry it even though this call never
-            // wrote it.
-            readablePosition = number.longValue();
+            // This event only matched the filter through its tag array, so its position was never damaged by the
+            // old write-back. A repair that follows a hand-set POSITION_ALREADY_TAKEN fix (the runbook's step 5)
+            // lands here with a position an operator typed by hand, and a slip there is exactly as unassignable as
+            // a forged string position would have been, so it gets the same validation and the same findings.
+            readablePosition = validatedPosition(number.longValue(), positionCeiling, eventId, unrecoverable);
         }
 
         if (encodedTags != null && !event.containsKey(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD)) {
@@ -418,6 +395,37 @@ public final class UpdateEventRepair {
             repairedPosition.add(readablePosition);
         }
         return wrote;
+    }
+
+    /**
+     * A position is assignable when it is positive and at or below the store's position counter, whether it came
+     * from parsing a damaged string or was read as a number from a document whose position was never damaged. Above
+     * the counter is as unassignable as at or below zero, and just as invisible, because a read clamps its upper
+     * bound to this same counter. The counter is re-read here rather than trusted from the start of the run, so a
+     * store that wrote while the repair walked cannot have an event wrongly called forged. A counter of zero means
+     * there is no counter document to compare against.
+     *
+     * @return the position, or {@code null} if it was reported as unrecoverable instead.
+     */
+    private @Nullable Long validatedPosition(long candidate, long positionCeiling, Object eventId, List<UnrecoverableEvent> unrecoverable) {
+        if (candidate > positionCeiling && positionCeiling > 0) {
+            long ceilingNow = positionCeiling();
+            if (ceilingNow > 0 && candidate > ceilingNow) {
+                unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ABOVE_COUNTER,
+                        candidate + ", and the store's position counter is " + ceilingNow));
+                return null;
+            }
+            return candidate;
+        } else if (candidate > 0) {
+            return candidate;
+        } else {
+            // A store's positions start above zero, and getPosition returns zero for an event that has none, so
+            // zero and anything below it are values no store ever assigned. Writing one back as an int64 would
+            // count as a repair and leave the event exactly as invisible, because every position query reads
+            // position greater than zero. Only a forged or mistyped position gets here, so report it.
+            unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE, String.valueOf(candidate)));
+            return null;
+        }
     }
 
     /**
