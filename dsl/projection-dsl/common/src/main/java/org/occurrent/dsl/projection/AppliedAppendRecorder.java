@@ -32,7 +32,8 @@ import org.occurrent.subscription.CatchupListener;
  * {@link #pollForClear()} covers the one thing those two signals leave open. The clear a catch-up start owes runs
  * against a store that can be momentarily unavailable, and the catch-up it belongs to can end without ever
  * delivering anything the wrapper could retry it on, since a replay filtered out server-side delivers nothing. The
- * Spring Boot registrars call it on a schedule until the clear succeeds.
+ * Spring Boot registrars call it on a schedule until the clear succeeds, on a thread of their own, because it
+ * blocks.
  */
 @NullMarked
 public interface AppliedAppendRecorder extends CatchupListener {
@@ -61,6 +62,9 @@ public interface AppliedAppendRecorder extends CatchupListener {
      * nothing if none is owed. Never marks a new clear itself, so calling this on a projection that has not caught up
      * is a no-op rather than a spurious clear. The default no-op is for a caller (a test double, typically) that
      * never needs the retry.
+     * <p>
+     * This blocks, on the wrapper's own lock and on {@link AppliedAppendStore#clear(String)}. It never calls
+     * {@link AppliedAppendStore#recordApplied}, since it writes back nothing that was waiting for the clear.
      */
     default void retryPendingClear() {
     }
@@ -70,6 +74,12 @@ public interface AppliedAppendRecorder extends CatchupListener {
      * calls on a schedule, and what keeps a clear moving for a projection that has gone quiet: without it, a clear
      * that failed while a catch-up ran would only be retried by the next delivery, and a projection that receives
      * none would never record again. The default no-op, returning {@code false}, is for a caller that never polls.
+     * <p>
+     * This blocks. It waits for the wrapper's own lock, which a delivery that is recording holds across its own
+     * store call, and then calls {@link AppliedAppendStore#clear(String)} for a clear that is owed and
+     * {@link AppliedAppendStore#recordApplied} once for every append that was waiting on that clear. So schedule it
+     * on a thread reserved for blocking work. On the reactor stack that means {@code Schedulers.boundedElastic()} or
+     * another such thread, and never an event loop.
      */
     default boolean pollForClear() {
         return false;

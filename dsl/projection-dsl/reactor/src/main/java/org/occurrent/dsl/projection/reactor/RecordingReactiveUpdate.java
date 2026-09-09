@@ -55,6 +55,11 @@ import static java.util.Objects.requireNonNull;
  * touch {@code store}, retrying a clear the replay may have left owed, hopped to {@link Schedulers#boundedElastic()}
  * after the delegate's own completion, since it is the one lifecycle {@code Mono} this class's driving engine
  * actually awaits.
+ * <p>
+ * The two {@link AppliedAppendRecorder} hooks are the exception, and no hop is done for them here. Both
+ * {@link #retryPendingClear()} and {@link #pollForClear()} are plain blocking calls that run on whichever thread
+ * invokes them, because whoever schedules them chooses that thread and this class cannot. Schedule them on
+ * {@link Schedulers#boundedElastic()} or another thread reserved for blocking work.
  */
 @NullMarked
 public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAware, AppliedAppendRecorder {
