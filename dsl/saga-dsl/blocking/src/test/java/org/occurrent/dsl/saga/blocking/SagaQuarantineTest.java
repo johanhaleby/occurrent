@@ -48,6 +48,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -422,6 +425,186 @@ class SagaQuarantineTest {
             // armed-and-overdue timer staying silent is the quarantine and not a stalled poller.
             await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(dispatched).contains(new CancelOrder(TICKING)));
             assertThat(dispatched).doesNotContain(new CancelOrder(POISON));
+        }
+    }
+
+    @Nested
+    class WhenItsStateCanNoLongerBeDecoded {
+
+        private final RefusesToDecodeOneInstance store = new RefusesToDecodeOneInstance();
+
+        @BeforeEach
+        void loadTheStoreThatCannotDecode() {
+            // The saga itself handles everything here. What fails is loading the instance, which is the one failure that
+            // used to leave no failure record behind, so the budget never ran out and the instance blocked forever.
+            reactionFails = false;
+            stateStore = store;
+        }
+
+        @Test
+        void the_instance_is_quarantined_and_the_other_instances_keep_going() {
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            await().atMost(Duration.ofSeconds(10)).until(() -> subscription.instances().find(POISON).isPresent());
+
+            store.cannotDecodeTheStateOf(POISON);
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("2", POISON)));
+            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("3", HEALTHY)));
+            model.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
+                    () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY))
+            ));
+        }
+
+        @Test
+        void the_failure_record_names_the_event_the_instance_stopped_on_and_what_loading_it_threw() {
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            await().atMost(Duration.ofSeconds(10)).until(() -> subscription.instances().find(POISON).isPresent());
+
+            store.cannotDecodeTheStateOf(POISON);
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("2", POISON)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+                SagaFailure failure = subscription.instances().find(POISON).orElseThrow().failure();
+                assertAll(
+                        () -> assertThat(failure).isNotNull(),
+                        () -> assertThat(failure.input()).isEqualTo(POISON + "@2"),
+                        () -> assertThat(failure.failureMessage()).contains("can no longer be decoded")
+                );
+            });
+        }
+
+        @Test
+        void the_state_the_instance_stopped_on_is_still_there_afterwards() {
+            // It is what somebody repairs the converter for, so the write that suspends the instance must not be what
+            // destroys it. The envelope that write carries holds no state at all, having been read without one.
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            await().atMost(Duration.ofSeconds(10)).until(() -> subscription.instances().find(POISON).isPresent());
+
+            store.cannotDecodeTheStateOf(POISON);
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("2", POISON)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(store.theStoredStateOf(POISON)).isEqualTo(new AwaitingPayment(POISON))
+            ));
+        }
+
+        @Test
+        void a_later_event_for_the_quarantined_instance_does_not_block_the_channel_either() {
+            // Loading it keeps failing after the quarantine, and an instance that is already suspended has to be skipped
+            // on that failure rather than retried on it, or every event behind it stays where it is for good.
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            await().atMost(Duration.ofSeconds(10)).until(() -> subscription.instances().find(POISON).isPresent());
+            store.cannotDecodeTheStateOf(POISON);
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("2", POISON)));
+            await().atMost(Duration.ofSeconds(10)).until(() ->
+                    subscription.instances().find(POISON).orElseThrow().status() == SagaStatus.QUARANTINED);
+
+            model.push(cloudEvent(POISON, 3, new PaymentReserved("3", POISON)));
+            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("4", HEALTHY)));
+            model.push(cloudEvent(HEALTHY, 2, new PaymentReserved("5", HEALTHY)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)));
+        }
+
+        @Test
+        void a_later_event_for_a_completed_instance_does_not_block_the_channel_either() {
+            // A completed instance skips every event addressed to it too, and it is the one most likely to still be
+            // around with a state nobody can decode, because completed instances are kept rather than deleted.
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            model.push(cloudEvent(POISON, 2, new PaymentReserved("2", POISON)));
+            await().atMost(Duration.ofSeconds(10)).until(() ->
+                    subscription.instances().find(POISON).orElseThrow().status() == SagaStatus.COMPLETED);
+
+            store.cannotDecodeTheStateOf(POISON);
+            model.push(cloudEvent(POISON, 3, new PaymentReserved("3", POISON)));
+            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("4", HEALTHY)));
+            model.push(cloudEvent(HEALTHY, 2, new PaymentReserved("5", HEALTHY)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(subscription.instances().find(HEALTHY).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.COMPLETED)
+            ));
+        }
+    }
+
+    /**
+     * An in-memory store that refuses to hand over one instance with its state, which is what a store whose converter no
+     * longer understands what it wrote does. {@code findWithoutState} answers, because answering it decodes no state at
+     * all, and {@code compareAndSaveWithoutState} keeps the stored state instead of taking it from the envelope. Those
+     * are the two things {@link org.occurrent.dsl.saga.SagaStateStore} asks a store to override together, and the
+     * MongoDB store does them with a projection and a {@code findAndModify}.
+     */
+    private static final class RefusesToDecodeOneInstance implements SagaStateStore<OrderState>, SagaStateStoreQueries<OrderState> {
+
+        private final SagaStateStore<OrderState> delegate = SagaStateStore.inMemory();
+        private final Set<String> undecodable = ConcurrentHashMap.newKeySet();
+
+        void cannotDecodeTheStateOf(String sagaId) {
+            undecodable.add(sagaId);
+        }
+
+        @Nullable OrderState theStoredStateOf(String sagaId) {
+            return delegate.find(sagaId).map(SagaEnvelope::state).orElse(null);
+        }
+
+        @Override
+        public Optional<SagaEnvelope<OrderState>> find(String sagaId) {
+            Optional<SagaEnvelope<OrderState>> found = delegate.find(sagaId);
+            if (found.isPresent() && undecodable.contains(sagaId)) {
+                throw new IllegalStateException("the state of '" + sagaId + "' can no longer be decoded");
+            }
+            return found;
+        }
+
+        @Override
+        public Optional<SagaEnvelope<OrderState>> findWithoutState(String sagaId) {
+            return delegate.find(sagaId).map(envelope -> withState(envelope, null));
+        }
+
+        @Override
+        public boolean compareAndSave(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
+            return delegate.compareAndSave(sagaId, envelope, expectedVersion);
+        }
+
+        @Override
+        public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<OrderState> envelope, long expectedVersion) {
+            return delegate.compareAndSave(sagaId, withState(envelope, theStoredStateOf(sagaId)), expectedVersion);
+        }
+
+        @Override
+        public List<SagaEnvelope<OrderState>> findWithDueTimers(Instant now, int limit) {
+            return delegate.findWithDueTimers(now, limit);
+        }
+
+        @Override
+        public List<SagaEnvelope<OrderState>> findByStatus(SagaStatus status, Instant updatedBefore, int limit) {
+            return ((SagaStateStoreQueries<OrderState>) delegate).findByStatus(status, updatedBefore, limit);
+        }
+
+        @Override
+        public void delete(String sagaId) {
+            delegate.delete(sagaId);
+        }
+
+        private static SagaEnvelope<OrderState> withState(SagaEnvelope<OrderState> envelope, @Nullable OrderState state) {
+            return new SagaEnvelope<>(envelope.sagaId(), state, envelope.status(), envelope.version(), envelope.timers(),
+                    envelope.streamWatermarks(), envelope.positionWatermark(), envelope.createdAt(), envelope.updatedAt(),
+                    envelope.completedAt(), envelope.currentStep(), envelope.started(), envelope.failure());
         }
     }
 

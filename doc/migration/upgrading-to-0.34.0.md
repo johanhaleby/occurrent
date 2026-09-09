@@ -715,6 +715,17 @@ Persist both components and read them back to support quarantine, and read a mis
 every instance written before 0.34.0 had started. A record pattern has no such fallback and has to name the two new
 components.
 
+**`SagaStateStore` gains two `default` methods, `findWithoutState` and `compareAndSaveWithoutState`, and your store
+compiles without them.** They both inherit to `find` and `compareAndSave`, so a store that ignores them behaves in
+0.34.0 exactly as it did in 0.33.0. Override them if you want a quarantine to work on an instance whose state can no
+longer be decoded, which a renamed event class or a changed converter produces. The executor decides and records a
+quarantine through these two rather than through `find`, because loading such an instance throws, and an instance that
+throws on every load records nothing, never reaches its budget, and goes on blocking every other instance of the saga.
+`findWithoutState` answers with an envelope whose `state` is `null` and every other member populated, the way
+`findByStatus` already does, and `compareAndSaveWithoutState` saves under the same compare-and-set rule while leaving
+the stored state where it is. Override both or neither, because the executor saves what it read, and a store that
+answers the read with no state and then writes the envelope whole erases the state it was careful not to decode.
+
 ```java
 // 0.33.0
 case SagaEnvelope(String sagaId, var state, var status, long version, var timers,

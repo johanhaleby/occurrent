@@ -50,10 +50,18 @@ public final class SagaInstances {
         return new SagaInstances(stateStore);
     }
 
-    /** The instance with {@code sagaId}, or empty when the saga has never seen that correlation id. */
+    /**
+     * The instance with {@code sagaId}, or empty when the saga has never seen that correlation id.
+     * <p>
+     * Read through {@link SagaStateStore#findWithoutState(String)}, because nothing {@link SagaInstance} answers comes
+     * from the saga's state. So observing one instance by id costs no more than enumerating them, and, like
+     * enumerating them, it still answers for an instance whose state no longer decodes, which is exactly the instance
+     * somebody tends to be looking for. A store that can only read an instance whole still reads the state here, and
+     * still fails on such an instance.
+     */
     public Optional<SagaInstance> find(String sagaId) {
         requireNonNull(sagaId, "sagaId cannot be null");
-        return stateStore.find(sagaId).map(SagaInstances::asInstance);
+        return stateStore.findWithoutState(sagaId).map(SagaInstances::asInstance);
     }
 
     /**

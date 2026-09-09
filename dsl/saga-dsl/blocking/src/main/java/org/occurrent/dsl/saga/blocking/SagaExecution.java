@@ -55,6 +55,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED} on that event and this class returns normally, so the
  * subscription acknowledges the event and the saga's other instances stop waiting behind it.
  * <p>
+ * The quarantine decision reads and writes the instance without its application state, through
+ * {@link SagaStateStore#findWithoutState} and {@link SagaStateStore#compareAndSaveWithoutState}. An instance whose state
+ * no longer decodes is one of the instances most in need of quarantining, so deciding on a read that throws on it would
+ * leave it blocking the saga forever. A store that only reads an instance whole keeps that behaviour, because nothing
+ * here can read an instance it can only hand over whole.
+ * <p>
  * Dispatch amplification: commands are dispatched before the save, and a lost compare-and-set retries the whole step, so a
  * single input can re-dispatch its entire command list up to {@code maxCasAttempts} times (see {@link SagaRunnerConfig}).
  * A command receiver must therefore be idempotent <em>and</em> tolerate that multiplicity, which is stronger than plain
@@ -146,12 +152,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     private boolean quarantine(String sagaId, CloudEvent cloudEvent, EventMeta meta, RuntimeException failure, Duration quarantineAfter) {
         try {
             Instant now = Instant.now();
-            SagaEnvelope<S> current = stateStore.find(sagaId).orElse(null);
+            // Read without the state, because nothing on this path applies it and an instance whose state no longer
+            // decodes is the one that most needs to reach its budget. Loading it whole threw, the catch below swallowed
+            // that, and no failure record was ever written.
+            SagaEnvelope<S> current = stateStore.findWithoutState(sagaId).orElse(null);
             FailureRecord<S> record = SagaExecutionSupport.onFailure(saga, sagaId, current, meta, failure, now, quarantineAfter);
             if (record == null) {
                 return false;
             }
-            if (record.quarantined() && !stillObtainable.test(cloudEvent)) {
+            if (record.quarantined() && !confirmedStillObtainable(cloudEvent, failure)) {
                 boolean firstTimeForThisInput = !meta.redeliveryKey().equals(refusalAnnounced.put(sagaId, meta.redeliveryKey()));
                 // Checked before the write, not after, because quarantining returns normally and that acknowledges the
                 // event to whatever fed it. An unconfirmed answer is treated as a no, so the instance keeps blocking
@@ -167,7 +176,9 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             // A refusal that later turns into a quarantine never reaches the clearing in onCloudEvent, because the
             // quarantine happens on this path and the instance takes no further event afterwards.
             refusalAnnounced.remove(sagaId);
-            if (!stateStore.compareAndSave(sagaId, record.envelope(), record.expectedVersion())) {
+            // Written without the state for the same reason it was read without it. The envelope carries whatever the
+            // read gave, so saving it whole would erase the state somebody needs once the converter is repaired.
+            if (!stateStore.compareAndSaveWithoutState(sagaId, record.envelope(), record.expectedVersion())) {
                 // Another input advanced the instance while the failing one was being retried, most likely a timer that
                 // fired successfully. The failing event now meets different state and may well succeed, so discard this
                 // write rather than retry one whose premise has gone. Only a first failure loses its budget that way.
@@ -183,13 +194,28 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
             return true;
         } catch (RuntimeException storeFailure) {
-            // The store itself is what is failing, so the first failure write fails too. Rethrowing the original is
-            // today's behaviour, and it is the right one, because a saga whose store is unreachable cannot make progress anyway.
+            // What reaches here is the store being unreachable, or a store that can only read an instance whole
+            // failing to decode one. Rethrowing the original is today's behaviour and it is the right one for both,
+            // because a saga that cannot read its own instance cannot make progress on it either way. The retention
+            // check no longer reaches here, because a check that cannot answer is a refused quarantine with a warning
+            // rather than a silent one.
             if (storeFailure != failure) {
                 // Java refuses to suppress an exception under itself, and a store that rethrows the very object that
                 // reached us here would otherwise replace the real failure with IllegalArgumentException.
                 failure.addSuppressed(storeFailure);
             }
+            return false;
+        }
+    }
+
+    // A retention check that throws has not said yes, and the design treats an answer it did not get as a no. Answered
+    // here rather than left to the catch above, so a check that could not run gets the same warning a no gets instead
+    // of disappearing into the silent return every store failure produces.
+    private boolean confirmedStillObtainable(CloudEvent cloudEvent, RuntimeException failure) {
+        try {
+            return stillObtainable.test(cloudEvent);
+        } catch (RuntimeException checkFailure) {
+            failure.addSuppressed(checkFailure);
             return false;
         }
     }
@@ -230,7 +256,15 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         : error)
                 .execute((RetryInfo attempt) -> {
                     Instant now = Instant.now();
-                    SagaEnvelope<S> current = stateStore.find(sagaId).orElse(null);
+                    SagaEnvelope<S> current;
+                    try {
+                        current = stateStore.find(sagaId).orElse(null);
+                    } catch (RuntimeException loadFailure) {
+                        if (takesNoFurtherInput(sagaId, loadFailure)) {
+                            return null;
+                        }
+                        throw loadFailure;
+                    }
                     if (requireTimerName != null && !hasDueTimer(current, requireTimerName, now)) {
                         return null; // stale/superseded/rescheduled timer, or the instance completed: nothing to fire.
                     }
@@ -253,6 +287,22 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     // Lost compare-and-set: retry the whole body. Processed outcomes always carry an envelope.
                     throw new CasConflict();
                 });
+    }
+
+    // Whether the instance is already past taking input, asked only when loading it failed. A completed instance and a
+    // quarantined one skip every input addressed to them, so a state that no longer decodes must not be what decides
+    // whether the subscription may move past one of them. Asked through findWithoutState, so a store that can only read
+    // an instance whole says no and the load failure propagates as it did before.
+    private boolean takesNoFurtherInput(String sagaId, RuntimeException loadFailure) {
+        try {
+            SagaEnvelope<S> withoutState = stateStore.findWithoutState(sagaId).orElse(null);
+            return withoutState != null && (withoutState.isCompleted() || withoutState.isQuarantined());
+        } catch (RuntimeException secondFailure) {
+            if (secondFailure != loadFailure) {
+                loadFailure.addSuppressed(secondFailure);
+            }
+            return false;
+        }
     }
 
     // Internal signal that a compare-and-set save was lost, so casRetry retries the transition. Never escapes process:

@@ -251,6 +251,39 @@ member with no exemption. The quarantine fields are stored as top-level document
 enumeration projections. An instance whose state cannot be decoded is exactly the instance an operator is looking
 for, so a quarantined instance must be enumerable without reading its state.
 
+**The by-id reads need that property too, and scoping it to the two enumeration queries was too narrow.** The
+instance has to be reachable without its state as well as enumerable without it, because the executor decides the
+quarantine from a by-id read, and an instance whose state no longer decodes is the instance that most needs the
+decision made. Deciding it from a read that throws on such an instance left it failing with nothing recorded, so it
+never reached the budget and went on blocking every other instance of the saga, which is the one outcome this decision
+exists to remove.
+
+`SagaStateStore` therefore gains `findWithoutState` and `compareAndSaveWithoutState`, both `default` and delegating to
+`find` and `compareAndSave`. They are `default` rather than abstract because `SagaStateStore` shipped in 0.33.0 and the
+compatibility breaks this release takes are the ones Consequences lists, which do not include a new abstract method. A
+store written against 0.33.0 inherits them and behaves exactly as it did, which means it also keeps the blocking
+behaviour for an instance it cannot decode, and nothing the executor does can change that for a store that only reads
+an instance whole. `SpringMongoSagaStateStore` overrides both, the read as the projection the enumeration queries
+already use and the write as a `findAndModify` that does not touch the stored state, so the state the instance stopped
+on is still there for whoever repairs the converter. The two are overridden together, because the executor saves what
+it read, and a store that answers the read with no state and then writes the envelope whole would erase the state it
+was careful not to decode.
+
+No new return type and no new component on `SagaEnvelope`. `findByStatus` already answers with an envelope whose
+`state` is `null` for exactly this case, so the by-id read follows that convention rather than adding a second
+return type for the same question, and a new component would change a canonical constructor this release already
+breaks once.
+
+The same read answers something the first draft of this section did not reach. A completed instance and a quarantined
+one both skip every input addressed to them, and the skip sat behind the decode, so an event for either one became a
+load failure that propagated and stopped the whole channel. The executor now asks `findWithoutState` whether the
+instance is past taking input whenever loading it fails, and skips on a yes. Completed is the commoner half of that,
+since the recommended retention is a TTL rather than a delete, so completed instances stay around to be addressed.
+
+`SagaInstances.find(sagaId)` reads the same way, because nothing `SagaInstance` answers comes from the state.
+Observing one instance by id now costs what enumerating them costs, and it answers for the instance somebody is most
+likely looking for.
+
 ### 7. Release clears the record and restarts the subscription at the recorded position, and 0.34.0 does not ship it
 
 Release is two things and both are needed. Clear the record alone and the instance handles new events against state
