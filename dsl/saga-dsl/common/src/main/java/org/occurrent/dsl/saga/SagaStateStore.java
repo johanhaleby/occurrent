@@ -29,9 +29,14 @@ import java.util.Optional;
  * store is also queried for instances with a due timer, since timers live in the envelope rather than an external
  * scheduler.
  * <p>
- * This is the minimal contract the executor needs. Observing instances is an optional capability layered on top: a store
- * that also implements {@link SagaStateStoreQueries} can be enumerated, which is what a progress view or a
- * stuck-instance sweep needs. A store that does not is still perfectly usable for running sagas.
+ * This is the minimal contract the executor needs. Two of its six methods are {@code default}, and both are about
+ * reading and writing an instance without its application state, which is how the executor quarantines an instance
+ * whose state no longer decodes. A store inherits them and works, and a store that overrides them also stops such an
+ * instance from blocking the saga's other instances.
+ * <p>
+ * Observing instances is an optional capability layered on top. A store that also implements
+ * {@link SagaStateStoreQueries} can be enumerated, which is what a progress view or a stuck-instance sweep needs. A
+ * store that does not is still perfectly usable for running sagas.
  *
  * @param <S> the user state type
  */
@@ -41,11 +46,59 @@ public interface SagaStateStore<S extends @Nullable Object> {
     Optional<SagaEnvelope<S>> find(String sagaId);
 
     /**
+     * The stored envelope for {@code sagaId} without its application state, or empty if none exists yet. This is what
+     * the executor reads when it has to decide whether a failing input has used up its quarantine budget, a decision
+     * that needs the status, the failure record and the dedup watermarks and never needs the state.
+     * <p>
+     * A store that can answer this without decoding the state must do so, because the instance a quarantine exists to
+     * suspend is very often the instance whose state no longer decodes. A renamed event class, a converter change, or
+     * state written by a version of the application nobody runs any more all leave an instance that throws on
+     * {@link #find(String)} while the rest of its document reads perfectly well. Such an instance used to keep failing
+     * without ever recording that it was failing, so it never reached its budget and went on blocking every other
+     * instance of the saga.
+     * <p>
+     * A caller therefore must not read {@link SagaEnvelope#state()} off the result. A store that answers without
+     * decoding leaves it {@code null} even for a healthy instance, exactly as a
+     * {@link SagaStateStoreQueries#findByStatus} result does, while the default below hands back whatever {@code find}
+     * gave, so which of the two you get is the store's business and not something to branch on. Every other member is
+     * populated either way. Use {@link #find(String)} when the state itself is wanted.
+     * <p>
+     * The default reads the whole instance through {@link #find(String)}, so a store written against 0.33.0 keeps
+     * compiling and keeps behaving as it did, which means it also keeps the blocking behaviour for an instance it
+     * cannot decode. The executor cannot read an instance without its state on a store that only reads it whole.
+     * <p>
+     * A store that overrides this must override {@link #compareAndSaveWithoutState(String, SagaEnvelope, long)} too.
+     * The executor saves what it read, so a store that hands back a {@code null} state here and then writes the
+     * envelope whole would erase the state it was careful not to decode.
+     */
+    default Optional<SagaEnvelope<S>> findWithoutState(String sagaId) {
+        return find(sagaId);
+    }
+
+    /**
      * Save {@code envelope} only if the currently stored version equals {@code expectedVersion} (use {@code 0} to insert a
      * new instance). Returns {@code false} on a version conflict, so the caller can reload and retry. Returns {@code true}
      * on success.
      */
     boolean compareAndSave(String sagaId, SagaEnvelope<S> envelope, long expectedVersion);
+
+    /**
+     * Save {@code envelope} under the same compare-and-set rule as
+     * {@link #compareAndSave(String, SagaEnvelope, long)}, leaving the stored application state where it is rather
+     * than taking it from {@code envelope}. The executor records a failure and a quarantine through this, so neither
+     * half of that decision decodes the state, and the state the instance stopped on is still there afterwards for
+     * whoever repairs the converter.
+     * <p>
+     * An insert, meaning an {@code expectedVersion} of {@code 0}, writes the whole envelope including its state,
+     * because there is no stored state to leave alone. That case is an instance whose very first input failed.
+     * <p>
+     * The default writes the envelope whole through {@code compareAndSave}, which is right for any store whose
+     * {@link #findWithoutState(String)} hands the state back anyway, the default included. See that method for why the
+     * two are overridden together.
+     */
+    default boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
+        return compareAndSave(sagaId, envelope, expectedVersion);
+    }
 
     /**
      * {@link SagaStatus#ACTIVE} instances that have at least one timer due at or before {@code now}, at most

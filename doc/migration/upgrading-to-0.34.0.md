@@ -636,11 +636,15 @@ A saga has one subscription, and every instance of that saga is fed by it. Up to
 redelivered it and tried again, without limit. One correlation id that could never make progress therefore stopped
 every other correlation id behind it, for as long as nobody noticed.
 
-From 0.34.0 the executor times the failing rather than counting the attempts. The first failure of an event records
-the instant it started failing and rethrows, exactly as before. Once that event has kept failing for the same
-instance for at least `SagaRunnerConfig.quarantineAfter`, five minutes by default, the instance moves to the new
-`SagaStatus.QUARANTINED` and the executor stops rethrowing, so the subscription acknowledges the event and delivers
-the rest to everybody else.
+From 0.34.0 the executor times the failing rather than counting the attempts. The instance's first failure records the
+instant it started failing and rethrows, exactly as before. Once that instance has kept failing for at least
+`SagaRunnerConfig.quarantineAfter`, five minutes by default, it moves to the new `SagaStatus.QUARANTINED` and the
+executor stops rethrowing, so the subscription acknowledges the event and delivers the rest to everybody else.
+
+The clock belongs to the instance rather than to one event. An instance where two events both fail keeps the earlier
+instant and renames the record to whichever event failed last, so `SagaFailure.firstFailedAt()` is the start of that
+instance's current run of failing and is not always the first time `SagaFailure.input()` failed. Reading it as an
+event-specific clock would under-report how long the instance has been stuck.
 
 A quarantined instance receives no further events and fires no timers, and its redelivery watermarks stop moving, so
 nothing it skipped is recorded as handled. What it stopped on stays on the record instead of being lost.
@@ -703,8 +707,8 @@ stuck.addAll(instances.findByStatus(SagaStatus.QUARANTINED, Instant.now(), 100))
 
 **`SagaInstance` gains a `failure()` method,** which breaks anyone implementing that interface outside this
 repository. It tells you what a quarantined instance stopped on, which is the failing event's redelivery key with its
-position beside it when the store assigns one, the exception's class name and message, and when the failing started,
-and it answers `null` for an instance that is failing on nothing. `SagaEnvelope` implements it from its new `failure` component, so a store that carries that
+position beside it when the store assigns one, the exception's class name and message, and when the instance started
+failing, and it answers `null` for an instance that is failing on nothing. `SagaEnvelope` implements it from its new `failure` component, so a store that carries that
 component answers it for free.
 
 **`SagaEnvelope` gains two record components, `started` and `failure`,** which changes its canonical constructor and
@@ -714,6 +718,20 @@ so an existing call site compiles unchanged, but a store built that way can neve
 Persist both components and read them back to support quarantine, and read a missing `started` field as `true`, since
 every instance written before 0.34.0 had started. A record pattern has no such fallback and has to name the two new
 components.
+
+**`SagaStateStore` gains two `default` methods, `findWithoutState` and `compareAndSaveWithoutState`, and your store
+compiles without them.** They both inherit to `find` and `compareAndSave`, so a store that ignores them behaves in
+0.34.0 exactly as it did in 0.33.0. Override them if you want a quarantine to work on an instance whose state can no
+longer be decoded, which a renamed event class or a changed converter produces. The executor decides and records a
+quarantine through these two rather than through `find`, because loading such an instance throws, and an instance that
+throws on every load records nothing, never reaches its budget, and goes on blocking every other instance of the saga.
+In a store that overrides them, `findWithoutState` answers with an envelope whose `state` is `null` and every other
+member populated, the way `findByStatus` already does, and `compareAndSaveWithoutState` saves under the same
+compare-and-set rule while leaving the stored state where it is. That is the contract for an override and not what you
+inherit. The defaults do the opposite, since `findWithoutState` delegates to `find` and hands the state back, and
+`compareAndSaveWithoutState` delegates to `compareAndSave` and writes it. So override both or neither, because the
+executor saves what it read, and a store that answers the read with no state and then writes the envelope whole erases
+the state it was careful not to decode.
 
 ```java
 // 0.33.0

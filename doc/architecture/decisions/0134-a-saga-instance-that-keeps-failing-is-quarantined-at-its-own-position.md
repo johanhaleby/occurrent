@@ -181,6 +181,30 @@ clears the record when it succeeds. What the narrower rule removes is an unrelat
 that never succeeds. So a lost compare-and-set on the failure write starts the budget over only for the first failure
 of an input, which has no record to keep, and a later one keeps the record the winning write left in place.
 
+**The failing side needs the same rule, and the paragraph above is where its absence showed.** A record survives an
+input it does not name, so a successful input cannot put the clock back. A *failing* input could, because the first
+implementation replaced the record whenever the failing input differed from the recorded one and wrote the current time
+into the replacement as its `firstFailedAt`. An instance where two inputs both fail, events at positions 7 and 8
+arriving 7, 8, 7, 8, then had every delivery reset `firstFailedAt` and never reached the budget, and a push feed with
+concurrency and a re-offered batch both produce that arrival order. So the elapsed time runs from when the instance
+started failing rather than from when the input now failing started. A different input failing rewrites which input the
+record names and keeps `firstFailedAt` where it was. The budget belongs to the instance, which is what quarantine
+suspends, and the record names whichever input the instance stopped on when the budget ran out.
+
+**A lost compare-and-set on the first failure write can repeat indefinitely, and the narrowing two paragraphs above
+does not cover that.** It says only a first failure loses its budget that way, because a later one keeps the record the
+winning write left in place. That holds only where a later failure exists, meaning where some first write succeeded. A
+saga that re-arms a timer on a shorter period than the subscription re-offers the failing event has every failure
+write lose to the timer's, so no record is ever written, every failure is a first failure, and the budget never starts.
+The MongoDB backoff saturates at two seconds, so a timer re-armed once a second is enough to reach it. The behaviour is
+left as it is in 0.34.0 rather than changed quietly, and
+[#977](https://github.com/johanhaleby/occurrent/issues/977) on milestone 0.35.0 is the recorded path to closing it,
+the same arrangement [#918](https://github.com/johanhaleby/occurrent/issues/918) is for the non-replayable source.
+AGENTS.md gives the isolation rule no severity ladder, so a paragraph naming this gap is not an end state on its own.
+The two questions that issue has to settle are whether to retry the failure write against the reloaded version, the
+way `process` already retries a lost save, and whether a record written against a version the instance has since left
+is still the right thing to write.
+
 The identity of "the same input" is the redelivery key `EventMeta` already computes, the stream id with its version,
 or the global position. An input the saga cannot recognise a redelivery of is already refused or warned about by
 ADR 109's `RedeliveryDetection`, so nothing new is needed there.
@@ -250,6 +274,39 @@ member with no exemption. The quarantine fields are stored as top-level document
 `SpringMongoSagaStateStore`, next to the existing `currentStep` and `nextTimerFiresAt`, and they are added to both
 enumeration projections. An instance whose state cannot be decoded is exactly the instance an operator is looking
 for, so a quarantined instance must be enumerable without reading its state.
+
+**The by-id reads need that property too, and scoping it to the two enumeration queries was too narrow.** The
+instance has to be reachable without its state as well as enumerable without it, because the executor decides the
+quarantine from a by-id read, and an instance whose state no longer decodes is the instance that most needs the
+decision made. Deciding it from a read that throws on such an instance left it failing with nothing recorded, so it
+never reached the budget and went on blocking every other instance of the saga, which is the one outcome this decision
+exists to remove.
+
+`SagaStateStore` therefore gains `findWithoutState` and `compareAndSaveWithoutState`, both `default` and delegating to
+`find` and `compareAndSave`. They are `default` rather than abstract because `SagaStateStore` shipped in 0.33.0 and the
+compatibility breaks this release takes are the ones Consequences lists, which do not include a new abstract method. A
+store written against 0.33.0 inherits them and behaves exactly as it did, which means it also keeps the blocking
+behaviour for an instance it cannot decode, and nothing the executor does can change that for a store that only reads
+an instance whole. `SpringMongoSagaStateStore` overrides both, the read as the projection the enumeration queries
+already use and the write as a `findAndModify` that does not touch the stored state, so the state the instance stopped
+on is still there for whoever repairs the converter. The two are overridden together, because the executor saves what
+it read, and a store that answers the read with no state and then writes the envelope whole would erase the state it
+was careful not to decode.
+
+No new return type and no new component on `SagaEnvelope`. `findByStatus` already answers with an envelope whose
+`state` is `null` for exactly this case, so the by-id read follows that convention rather than adding a second
+return type for the same question, and a new component would change a canonical constructor this release already
+breaks once.
+
+The same read answers something the first draft of this section did not reach. A completed instance and a quarantined
+one both skip every input addressed to them, and the skip sat behind the decode, so an event for either one became a
+load failure that propagated and stopped the whole channel. The executor now asks `findWithoutState` whether the
+instance is past taking input whenever loading it fails, and skips on a yes. Completed is the commoner half of that,
+since the recommended retention is a TTL rather than a delete, so completed instances stay around to be addressed.
+
+`SagaInstances.find(sagaId)` reads the same way, because nothing `SagaInstance` answers comes from the state.
+Observing one instance by id now costs what enumerating them costs, and it answers for the instance somebody is most
+likely looking for.
 
 ### 7. Release clears the record and restarts the subscription at the recorded position, and 0.34.0 does not ship it
 

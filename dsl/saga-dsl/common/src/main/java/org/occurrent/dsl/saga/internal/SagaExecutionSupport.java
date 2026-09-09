@@ -200,8 +200,11 @@ public final class SagaExecutionSupport {
 
     /**
      * What to write when an input has failed. {@link #envelope()} holds the failure record to save with
-     * {@code compareAndSave(..., expectedVersion())}, and {@link #quarantined()} says whether the budget has now
-     * elapsed, meaning the executor stops rethrowing and lets the subscription move past the input.
+     * {@code compareAndSaveWithoutState(..., expectedVersion())}, and {@link #quarantined()} says whether the budget has
+     * now elapsed, meaning the executor stops rethrowing and lets the subscription move past the input.
+     * <p>
+     * Without the state, and not {@code compareAndSave}, because the envelope this carries came from a read that did not
+     * decode the state, so saving it whole would erase the state of the instance this record is about.
      */
     public record FailureRecord<S extends @Nullable Object>(SagaEnvelope<S> envelope, long expectedVersion, boolean quarantined) {
     }
@@ -210,10 +213,19 @@ public final class SagaExecutionSupport {
      * Decide what a failed input costs the instance, or {@code null} when it costs it nothing and the exception should
      * simply propagate the way it always has.
      * <p>
-     * The first failure of an input records when it started failing. Every later failure of the same input compares the
-     * elapsed time against {@code quarantineAfter} and writes nothing while it is under it, so the cost is one store
-     * write per failing input rather than one per retry. Past the budget the instance is quarantined on the failing
-     * input.
+     * The first failure on an instance records when it started failing. A later failure of the input the record already
+     * names compares the elapsed time against {@code quarantineAfter} and writes nothing while it is under it, so a
+     * retry loop hammering one input costs one store write rather than one per attempt. A failure of a different input
+     * does write, because the record has to name the input the instance is failing on now, so an instance where two
+     * inputs fail in turn writes once per delivery. That is what it cost before this rule too. Past the budget the
+     * instance is quarantined on the input that was failing when the budget ran out.
+     * <p>
+     * The elapsed time runs from when the instance started failing, not from when the input now failing started. A
+     * different input failing rewrites the record to name that input and keeps {@code firstFailedAt} where it was, so
+     * an instance where two inputs fail in turn still reaches its budget. Letting each one write the current time into
+     * the record put the clock back to zero on every delivery, and such an instance never quarantined and never stopped
+     * blocking the saga's other instances. This is the mirror of the rule below, where a successful input
+     * clears the record only when it is the input the record names, and it is there for the same reason.
      * <p>
      * "The same input" is {@link EventMeta#redeliveryKey()}, not the global position, so an event from a store that
      * assigns no position is recorded and quarantined like any other. An input carrying no key at all is refused here,
@@ -263,17 +275,26 @@ public final class SagaExecutionSupport {
             return null;
         }
         SagaFailure existing = current == null ? null : current.failure();
-        if (existing == null || !existing.input().equals(input)) {
+        if (existing == null) {
             SagaFailure record = new SagaFailure(input, meta.position(), now, failure.getClass().getName(), shortened(failure.getMessage()));
             return failureRecord(saga, sagaId, current, record, SagaStatus.ACTIVE, now, false);
         }
-        if (Duration.between(existing.firstFailedAt(), now).compareTo(quarantineAfter) < 0) {
+        // Measured from when this instance started failing, whichever input it started on. An instance where two inputs
+        // fail in turn, say events at positions 7 and 8 arriving 7, 8, 7, 8, used to have each one write a record
+        // holding the current time, so firstFailedAt went back to now on every delivery and the elapsed time never
+        // passed the budget. The instance kept blocking the saga's other instances, which is the outcome quarantine
+        // exists to remove.
+        boolean budgetUsedUp = Duration.between(existing.firstFailedAt(), now).compareTo(quarantineAfter) >= 0;
+        if (!budgetUsedUp && existing.input().equals(input)) {
+            // The same input failing again inside the budget, so there is nothing new to record. A different input
+            // failing does get written, because the record has to name the input the instance is failing on now.
             return null;
         }
-        // Keep the instant the failing started, refresh what it is failing with, because an input that fails one way and then
-        // another is still the same input failing, and the later exception is the more useful one to read.
+        // Keep the instant the failing started, refresh the input and what it is failing with, because an input that
+        // fails one way and then another is still the same instance failing, and the later exception is the more useful
+        // one to read.
         SagaFailure record = new SagaFailure(input, meta.position(), existing.firstFailedAt(), failure.getClass().getName(), shortened(failure.getMessage()));
-        return failureRecord(saga, sagaId, current, record, SagaStatus.QUARANTINED, now, true);
+        return failureRecord(saga, sagaId, current, record, budgetUsedUp ? SagaStatus.QUARANTINED : SagaStatus.ACTIVE, now, budgetUsedUp);
     }
 
     // Only the input the record names clears it. Letting any successful input clear it lets a saga that re-arms a timer
@@ -341,7 +362,12 @@ public final class SagaExecutionSupport {
         return null;
     }
 
-    private static <S extends @Nullable Object> boolean isRedelivery(SagaEnvelope<S> current, EventMeta meta) {
+    /**
+     * Whether {@code current} has already handled the input {@code meta} describes, which is what its watermarks record.
+     * Public because the executor needs the same answer on a path where it could not load the instance, and two copies of
+     * this rule would be free to disagree about which instance is past which input.
+     */
+    public static <S extends @Nullable Object> boolean isRedelivery(SagaEnvelope<S> current, EventMeta meta) {
         if (meta.streamId() != null && meta.streamVersion() != null) {
             Long watermark = current.streamWatermarks().get(meta.streamId());
             return watermark != null && meta.streamVersion() <= watermark;

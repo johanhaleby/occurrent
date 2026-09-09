@@ -23,10 +23,12 @@ import java.util.List;
 
 /**
  * Additional querying capabilities that may be supported by a {@link SagaStateStore} implementation, for observing
- * instances rather than running them. The executor never calls anything here: it needs only
- * {@link SagaStateStore#find(String)}, {@link SagaStateStore#compareAndSave(String, SagaEnvelope, long)} and
- * {@link SagaStateStore#findWithDueTimers(Instant, int)}, so a store can run sagas perfectly well without implementing
- * this.
+ * instances rather than running them. The executor never calls anything here. What it needs is
+ * {@link SagaStateStore#find(String)}, {@link SagaStateStore#compareAndSave(String, SagaEnvelope, long)},
+ * {@link SagaStateStore#findWithDueTimers(Instant, int)}, and the two state-free members
+ * {@link SagaStateStore#findWithoutState(String)} and
+ * {@link SagaStateStore#compareAndSaveWithoutState(String, SagaEnvelope, long)}, which default to the first two. So a
+ * store can run sagas perfectly well without implementing this.
  * <p>
  * It is a separate capability because enumeration asks something genuinely new of a store: an <em>ordering</em>.
  * {@code findWithDueTimers} may return its instances in any order at all, while {@link #findByStatus} must return them
@@ -69,8 +71,10 @@ public interface SagaStateStoreQueries<S extends @Nullable Object> {
      * <p>
      * A useful consequence: because observation reads no state, an instance whose state can no longer be decoded (a
      * received event whose class was renamed away, say) is still reported with its lifecycle intact, rather than making
-     * the whole enumeration throw at the exact moment someone is looking into what went wrong. {@code find(sagaId)} does
-     * still fail loudly on such an instance, which is correct. The executor loads one in order to fold and save it.
+     * the whole enumeration throw at the exact moment someone is looking into what went wrong.
+     * {@link SagaStateStore#find(String)} does still fail loudly on such an instance, which is correct, because its
+     * caller asked for the state. {@link SagaStateStore#findWithoutState(String)} is the by-id read with this method's
+     * property, and it is how the executor quarantines an instance it cannot load.
      *
      * @throws IllegalArgumentException if {@code limit} is not positive
      */

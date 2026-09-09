@@ -42,6 +42,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -64,6 +65,11 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
  * <p>
  * {@link #compareAndSave} is atomic: a new instance is inserted (a duplicate {@code _id} loses), and an update replaces
  * the document only when its stored {@code version} still equals the expected one, via a single {@code findAndReplace}.
+ * <p>
+ * {@link #findWithoutState} and {@link #compareAndSaveWithoutState} are both overridden here, because the quarantine
+ * fields are top-level fields. Reading them is a projection that excludes the state, and writing them is a
+ * {@code findAndModify} that does not touch it, so an instance whose state no longer decodes can still be quarantined
+ * and still has that state afterwards.
  *
  * @param <S> the user state type
  */
@@ -95,6 +101,16 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String FAILURE_FIRST_FAILED_AT = "failureFirstFailedAt";
     private static final String FAILURE_TYPE = "failureType";
     private static final String FAILURE_MESSAGE = "failureMessage";
+
+    // Every field this store writes apart from the _id, the state, and currentStep, which is what
+    // compareAndSaveWithoutState sets and unsets so that a save leaves the stored state alone without leaving any other
+    // field behind either. currentStep is left out because it is denormalized out of the state, so writing it from an
+    // envelope whose state is being ignored would move the step away from the state it describes, and a later projected
+    // read would report a step the stored state was never in.
+    private static final List<String> EVERY_FIELD_EXCEPT_THE_STATE = List.of(STATUS, VERSION, TIMERS,
+            NEXT_TIMER_FIRES_AT, STREAM_WATERMARKS, POSITION_WATERMARK, CREATED_AT, UPDATED_AT,
+            COMPLETED_AT, STARTED, FAILURE_INPUT, FAILURE_POSITION, FAILURE_FIRST_FAILED_AT, FAILURE_TYPE,
+            FAILURE_MESSAGE);
 
     // Field names inside a persisted FlowState document.
     private static final String FLOW_CURRENT_STEP = "currentStep";
@@ -230,6 +246,47 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     @Override
+    public Optional<SagaEnvelope<S>> findWithoutState(String sagaId) {
+        Objects.requireNonNull(sagaId, "sagaId cannot be null");
+        Query query = Query.query(where(ID).is(sagaId));
+        projectEverySagaInstanceMember(query);
+        // The watermarks on top of that, which SagaInstance does not expose and the quarantine decision does need. It
+        // compares the failing input against them to recognise an input the instance has already handled, and the
+        // record it writes carries them over untouched, so projecting them away would quarantine the instance and
+        // drop them at the same time.
+        query.fields().include(STREAM_WATERMARKS).include(POSITION_WATERMARK);
+        return Optional.ofNullable(mongoOperations.findOne(query, Document.class, collectionName)).map(this::toEnvelope);
+    }
+
+    @Override
+    public boolean compareAndSaveWithoutState(String sagaId, SagaEnvelope<S> envelope, long expectedVersion) {
+        Objects.requireNonNull(sagaId, "sagaId cannot be null");
+        Objects.requireNonNull(envelope, "envelope cannot be null");
+        if (expectedVersion == 0) {
+            // There is no document yet, so there is no stored state to leave alone and the whole envelope is written.
+            return compareAndSave(sagaId, envelope, expectedVersion);
+        }
+        // Built without the state, rather than built whole and then having the state left out of the update. Serializing
+        // it converts every retained event of a flow saga and trips the retained-size warning, and this write stores none
+        // of it, so a caller handing over a full envelope would pay for a serialization the update discards and could
+        // fail on the very converter this method exists to work around.
+        Document document = toDocumentWithoutTheState(sagaId, envelope);
+        Update update = new Update();
+        for (String field : EVERY_FIELD_EXCEPT_THE_STATE) {
+            if (document.containsKey(field)) {
+                update.set(field, document.get(field));
+            } else {
+                // Unset rather than left alone, so a field the new envelope does not carry goes away instead of keeping
+                // whatever the previous write left there. An instance failing on an event from a store that assigns no
+                // global position replaces a record that had one, and that record's failurePosition has to go with it.
+                update.unset(field);
+            }
+        }
+        Query query = Query.query(where(ID).is(sagaId).and(VERSION).is(expectedVersion));
+        return mongoOperations.findAndModify(query, update, Document.class, collectionName) != null;
+    }
+
+    @Override
     public List<SagaEnvelope<S>> findWithDueTimers(Instant now, int limit) {
         Objects.requireNonNull(now, "now cannot be null");
         Query query = Query.query(where(STATUS).is(SagaStatus.ACTIVE.name()).and(NEXT_TIMER_FIRES_AT).lte(now.toEpochMilli()))
@@ -282,13 +339,18 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     private Document toDocument(String sagaId, SagaEnvelope<S> envelope) {
-        Document document = new Document(ID, sagaId)
-                .append(STATUS, envelope.status().name())
-                .append(VERSION, envelope.version());
+        Document document = toDocumentWithoutTheState(sagaId, envelope);
         S state = envelope.state();
         if (state != null) {
             document.append(STATE, toStateValue(sagaId, state));
         }
+        return document;
+    }
+
+    private Document toDocumentWithoutTheState(String sagaId, SagaEnvelope<S> envelope) {
+        Document document = new Document(ID, sagaId)
+                .append(STATUS, envelope.status().name())
+                .append(VERSION, envelope.version());
         List<Document> timers = new ArrayList<>();
         for (TimerEntry timer : envelope.timers()) {
             timers.add(new Document(TIMER_NAME, timer.name()).append(TIMER_FIRES_AT, timer.firesAtEpochMilli()));
