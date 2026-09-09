@@ -41,8 +41,12 @@ one to alert on. It names two durations, how long the instance had been failing 
 
 The third line is a `WARN` for the case where the budget elapsed and the instance was not quarantined, because the
 subscription could not confirm it still holds the failing event. That instance goes on blocking the saga's other
-instances, so it never reaches step 1 and this line is the only thing that says so. It is logged once per instance
-rather than on every redelivery, so an alert that only samples recent logs can miss it.
+instances, so it never reaches step 1 and this line is the only thing that says so.
+
+That third line is not logged on every redelivery. The runner holds the instance's id in memory and logs it once per
+run of refusals, so it says nothing on the redeliveries that follow. It says it again after any event that instance
+handles successfully, and again after a restart, since that memory does not survive one. An alert on it should
+therefore neither expect one line per redelivery nor treat a second line as a second instance.
 
 The elapsed duration is how long the instance has been failing, which can be longer than the named event has. The
 clock belongs to the instance rather than to one event, so an instance where two events both fail keeps the instant it
@@ -94,13 +98,19 @@ SagaFailure failure = instance.failure();
 // failure.input()          the failing event's redelivery key, a stream id with its stream version,
 //                          or the global position when the event has no stream metadata
 // failure.position()       that global position beside it when the store assigns one, otherwise null
-// failure.firstFailedAt()  when this instance started failing
+// failure.firstFailedAt()  when this instance started failing, strictly when its first failure record
+//                          was written, which is later than the first failure itself if that write
+//                          lost a compare-and-set
 // failure.failureType()    the class name of the exception the saga or its dispatcher threw
 // failure.failureMessage() that exception's message, or null when it had none
 ```
 
 Read `firstFailedAt()` as the start of the instance's current run of failing, and not as the first time
 `failure.input()` itself failed. Reading it the other way under-reports how long the instance has been stuck.
+
+It is a floor rather than an exact incident start. The value is when the first failure record was written, which is
+the same moment unless that write lost its compare-and-set, so the instance may have been failing for longer than the
+difference between `firstFailedAt()` and now.
 
 The record holds the exception's class name and message, and not its stack trace. Take the stack trace from the log
 lines under "How you find out" above, which are the only place it exists.
@@ -175,9 +185,11 @@ watermarks along with its status, so if the event source can still redeliver an 
 a delete that races that redelivery lets the event recreate the instance and run the process a second time. A
 subscription replay, a reset checkpoint, and a redelivery after a crash are all ways that happens.
 
-So delete an instance only once its source can no longer redeliver any of its events. Until then, the instance sitting
-in `QUARANTINED` costs you nothing beyond a row, since it already skips every event addressed to it and the saga's
-other instances are not waiting behind it.
+So delete an instance only once its source can no longer redeliver any of its events. Leaving it in `QUARANTINED`
+until then is safe, because the saga's other instances are not waiting behind it, which is the guarantee that matters
+here. It is not free, though. Every later event addressed to that instance is still delivered and still reads the
+instance from the state store before the runner skips it, so a correlation id that keeps receiving events keeps
+paying a lookup for each one.
 
 The business process the instance was running is a separate question, and Occurrent has no answer for it. An order
 half way through fulfilment when its instance stopped is still half way through it after you delete the row. Finish or
@@ -208,9 +220,12 @@ Lower it when you would rather find out sooner and are willing to quarantine an 
 only briefly unavailable. Raise it when your dispatcher talks to something that is routinely down for longer than five
 minutes, so an instance is not quarantined for an outage that would have resolved.
 
-Setting it to zero, or to `null` in `SagaRunnerConfig`, turns quarantine off and restores the 0.33.0 behaviour where
-the event is retried forever and every other instance of that saga waits behind it. That is a way to keep an
-already-quarantined instance from happening again, and not a way to bring back one you already have.
+Turning quarantine off restores the 0.33.0 behaviour, where the event is retried forever and every other instance of
+that saga waits behind it. How you say that differs by path. Set the property to zero, and pass `null` for
+`SagaRunnerConfig.quarantineAfter`. `Duration.ZERO` is refused there with an `IllegalArgumentException`, deliberately,
+so that one literal does not mean opposite things on the two paths.
+
+Either way this stops the next instance being quarantined. It does not bring back one you already have.
 
 Whether an instance should be quarantined at all is a question about your saga rather than about the budget. An
 `evolve` that throws on an event it does not recognise, rather than ignoring it, quarantines an instance for something
