@@ -127,5 +127,23 @@ a genuine reason should watch the store's warning rather than assume `stepWindow
 document size, and a caller who wants that bound back should narrow the selector to the flow's own
 declared types instead.
 
+A widened selector is not the only way to reach this gap. `startType` is deliberately left out of
+`stepDeclaredEventTypes` (it is unioned only into `eventTypes()`, for the subscription selector), so
+a repeat of the start type after an instance has already started is `isDeclared`-false for exactly the
+same reason a foreign-typed event is, and it grows a step's retained tail the same way, on a flow
+whose selector was never widened at all. `SagaExecutionSupport.startEventOrNull` returns `null` once
+`hasStarted`, so that repeat event falls through to `evolve` as an ordinary correlated event rather
+than starting a second instance. This ADR's consequences section originally scoped the uncapped case
+to a widened selector only, which is incomplete.
+
+Two ways to close this were weighed, though the fix itself is left to a follow-up. Counting the start
+type as declared once an instance has started reuses the eviction mechanism `isDeclared` already runs,
+one added clause and no new field, and it leaves the isolation rule this ADR's decision section already
+protects untouched, since only the start type's own accounting changes. A total ceiling on the step's
+retained tail regardless of type was considered instead and rejected for the same reason the decision
+section above rejects it for the widened-selector case. It would evict a foreign-typed event too, the
+event this ADR's isolation rule promises is never discarded on arrival. Counting the start type as
+declared is the smaller change and the one that does not reopen that promise.
+
 This ADR supersedes the "deferred to 0.34" routing recorded on both #773 and #764 with a decided
 answer now, landing in the same change that fixes the eviction defect.

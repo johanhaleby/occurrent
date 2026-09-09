@@ -36,7 +36,10 @@ public interface DomainEventSink<E> {
 
     /**
      * Publish a domain event that has never been through the event store, so it carries no stream identity. A
-     * consumer that reads the resulting message sees an {@link EventMetadata#empty() empty EventMetadata}.
+     * consumer that reads the resulting message sees an {@link EventMetadata} with no {@code streamid},
+     * {@code streamversion}, {@code position} or {@code appendid}, since a never-stored event has none of those,
+     * but with every other extension the converter set, since {@link EventMetadata}'s own contract is to carry
+     * whatever extension the event actually has, not only Occurrent's own four.
      */
     void publish(E domainEvent);
 

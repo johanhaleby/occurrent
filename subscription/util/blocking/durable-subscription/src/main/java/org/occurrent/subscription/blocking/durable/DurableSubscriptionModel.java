@@ -22,10 +22,14 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
 import java.util.Objects;
@@ -68,6 +72,8 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  */
 @NullMarked
 public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
+
+    private static final Logger log = LoggerFactory.getLogger(DurableSubscriptionModel.class);
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final CheckpointStorage storage;
@@ -264,7 +270,71 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                             "starts from that checkpoint and is never refused this way. Subscribing with a " +
                                             "StartAt of your own records no position and makes no such promise.");
         }
-        return storage.save(subscriptionId, globalCheckpoint, writeConditionFor(subscriptionId));
+        return saveFirstPosition(subscriptionId, globalCheckpoint);
+    }
+
+    // Pinned with ifAbsent(), the same protocol ManualStartSubscriptionModel and ReactorDurableSubscriptionModel
+    // use, rather than the read-then-write this replaced, which could overwrite a first checkpoint another node
+    // wrote in between. A storage able to compare the two settles a lost race by position instead, through
+    // resolveFirstCheckpointRace. One that cannot falls back to reading the stored position back and checking it
+    // is the one this node itself computed.
+    private Checkpoint saveFirstPosition(String subscriptionId, Checkpoint globalCheckpoint) {
+        if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
+            // Nothing here can make a storage that writes unconditionally do otherwise, so this is the write
+            // before this method existed and two nodes recording a first position at the same moment keep the
+            // race. Logged rather than refused, because refusing would take out a storage that has worked until
+            // now over a capability it never claimed.
+            log.warn("Checkpoint storage {} does not evaluate write conditions for subscription {}, so the first " +
+                     "position recorded for it is written unconditionally. Two nodes recording a first position " +
+                     "for this subscription at the same moment can then lose the events between the two positions. " +
+                     "Answer true from evaluatesWriteConditionsFor(String) on a storage that does evaluate " +
+                     "ifAbsent(), or use one of the storages Occurrent ships, to close that.",
+                    storage.getClass().getName(), subscriptionId);
+            return storage.save(subscriptionId, globalCheckpoint);
+        }
+        try {
+            return storage.save(subscriptionId, globalCheckpoint, CheckpointWriteCondition.ifAbsent());
+        } catch (CheckpointWriteConditionNotFulfilledException e) {
+            return storage.resolveFirstCheckpointRace(subscriptionId, globalCheckpoint)
+                          .orElseGet(() -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, globalCheckpoint));
+        }
+    }
+
+    // Never lets StartPositionAlreadyPinnedException escape, though a storage failure still can. This runs inside
+    // the StartAt.dynamic supplier below, which a wrapped model can evaluate under its own retry loop, the exact
+    // case recordFirstPositionOrRefuse's own placement outside that supplier exists to avoid.
+    // StartPositionAlreadyPinnedException here means another node's write already settled the position,
+    // so its own positionStored is adopted instead of refusing. The rare case where the confirm-read behind that
+    // exception itself found nothing or failed falls back to globalCheckpoint instead, the position this node
+    // itself computed and would have started from had the race gone the other way. That risks a duplicate
+    // delivery against whatever the other node's write actually holds, never a loss, unlike falling through to
+    // the caller's model-default fallback a few lines below, which would skip everything between here and now.
+    private Checkpoint saveFirstPositionOrAdoptWhatWon(String subscriptionId, Checkpoint globalCheckpoint) {
+        try {
+            return saveFirstPosition(subscriptionId, globalCheckpoint);
+        } catch (StartPositionAlreadyPinnedException e) {
+            return e.positionStored.orElse(globalCheckpoint);
+        }
+    }
+
+    // Something was stored between the read above and this write, so it was written where this model cannot order
+    // it against the position it read. Reading it back answers the only question that settles it, whether it
+    // holds that same position. Anything else is refused rather than started from a position this node never
+    // read, which would skip whatever lies between the two.
+    private Checkpoint refuseUnlessTheStoredPositionIsTheOneRead(String subscriptionId, Checkpoint positionRead) {
+        @Nullable Checkpoint stored;
+        try {
+            stored = storage.read(subscriptionId);
+        } catch (RuntimeException e) {
+            throw StartPositionAlreadyPinnedException.readingTheStoredPositionBackFailed(subscriptionId, positionRead, e);
+        }
+        if (stored == null) {
+            throw StartPositionAlreadyPinnedException.readingTheStoredPositionBackFoundNothing(subscriptionId, positionRead);
+        }
+        if (positionRead.asString().equals(stored.asString())) {
+            return stored;
+        }
+        throw new StartPositionAlreadyPinnedException(subscriptionId, positionRead, stored);
     }
 
     @Nullable
@@ -285,7 +355,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 if (checkpoint == null) {
                     Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
                     if (globalCheckpoint != null) {
-                        checkpoint = storage.save(subscriptionId, globalCheckpoint, writeConditionFor(subscriptionId));
+                        checkpoint = saveFirstPositionOrAdoptWhatWon(subscriptionId, globalCheckpoint);
                     }
                 }
 

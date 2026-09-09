@@ -24,10 +24,12 @@ import org.occurrent.broker.api.blocking.DomainEventForwarder;
 import org.occurrent.broker.api.blocking.DomainEventSink;
 import org.occurrent.broker.rabbitmq.blocking.RabbitMqCloudEventSink;
 import org.occurrent.cloudevents.EventMetadata;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.Map;
+import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 
@@ -49,6 +51,18 @@ import static java.util.Objects.requireNonNull;
  * {@link #publish(EventMetadata, Object)} for one whose metadata came from elsewhere.
  */
 public final class RabbitMqDomainEventSink<E> implements DomainEventSink<E> {
+
+    // The stream-identity extensions no converter can legitimately produce for an event that has never been
+    // through the event store, since a stream version, a position and an append id are properties of a stored
+    // event. Everything else a converter sets is the application's own, a tenant id or a correlation id for
+    // example, and publishing it is what EventMetadata's own javadoc promises. It carries "the stream id and
+    // version and any other CloudEvent extension carried on the event."
+    private static final Set<String> STORAGE_OWNED_EXTENSION_NAMES = Set.of(
+            OccurrentCloudEventExtension.STREAM_ID,
+            OccurrentCloudEventExtension.STREAM_VERSION,
+            OccurrentCloudEventExtension.POSITION,
+            OccurrentCloudEventExtension.APPEND_ID
+    );
 
     private final CloudEventSink cloudEventSink;
     private final CloudEventConverter<E> converter;
@@ -72,23 +86,33 @@ public final class RabbitMqDomainEventSink<E> implements DomainEventSink<E> {
     /**
      * {@inheritDoc}
      * <p>
-     * Any extension {@code converter} sets on the converted event is stripped, not just the stream-identity ones,
-     * so a consumer genuinely sees {@link EventMetadata#empty()} as documented above, regardless of what
-     * {@code converter} happens to carry.
+     * {@code converter}'s own stream-identity extensions, {@code streamid}, {@code streamversion}, {@code position}
+     * and {@code appendid}, are stripped, since none of them is a property a never-stored event can have. Any other
+     * extension {@code converter} set is published as is, since {@link EventMetadata}'s own contract is to carry
+     * "the stream id and version and any other CloudEvent extension carried on the event", not only Occurrent's own
+     * four.
      */
     @Override
     public void publish(E domainEvent) {
         requireNonNull(domainEvent, "domainEvent cannot be null");
-        cloudEventSink.publish(copyCoreAttributes(converter.toCloudEvent(domainEvent)).build());
+        CloudEvent convertedEvent = converter.toCloudEvent(domainEvent);
+        CloudEventBuilder builder = copyCoreAttributes(convertedEvent);
+        for (String extensionName : convertedEvent.getExtensionNames()) {
+            if (!STORAGE_OWNED_EXTENSION_NAMES.contains(extensionName)) {
+                stampExtension(builder, extensionName, convertedEvent.getExtension(extensionName));
+            }
+        }
+        cloudEventSink.publish(builder.build());
     }
 
     /**
-     * Converts {@code domainEvent} and stamps every extension {@code metadata} carries onto the resulting
-     * {@link CloudEvent} before publishing it, so a consumer can rebuild an {@link EventMetadata} that matches what
-     * {@code metadata} held here. Where {@code converter} already set an extension of its own, {@code metadata}
-     * wins, since the caller reading it off a stored event is the one with the store's own answer, including a
-     * {@code null} value in {@code metadata}, which drops that extension entirely rather than leaving the
-     * converter's own value in place.
+     * Converts {@code domainEvent} and stamps {@code metadata} onto the resulting {@link CloudEvent} before
+     * publishing it, so a consumer can rebuild an {@link EventMetadata} that matches what {@code metadata} held
+     * here. {@code converter}'s own stream-identity extensions are stripped the same way {@link #publish(Object)}
+     * strips them, and every other extension {@code converter} set survives unless {@code metadata} names the same
+     * key, in which case {@code metadata} wins, since the caller reading it off a stored event is the one with the
+     * store's own answer. A {@code null} value in {@code metadata} drops that extension entirely rather than
+     * publishing it.
      */
     @Override
     public void publish(EventMetadata metadata, E domainEvent) {
@@ -99,7 +123,7 @@ public final class RabbitMqDomainEventSink<E> implements DomainEventSink<E> {
         for (String extensionName : convertedEvent.getExtensionNames()) {
             // metadata decides this extension's fate below, whether that is overriding it or dropping it, so it is
             // left out of this copy rather than set here and possibly overwritten a few lines down.
-            if (!metadata.getData().containsKey(extensionName)) {
+            if (!STORAGE_OWNED_EXTENSION_NAMES.contains(extensionName) && !metadata.getData().containsKey(extensionName)) {
                 stampExtension(builder, extensionName, convertedEvent.getExtension(extensionName));
             }
         }

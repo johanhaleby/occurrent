@@ -22,6 +22,7 @@ import org.occurrent.condition.Condition;
 import org.occurrent.eventstore.api.StreamReadFilter;
 import org.occurrent.filter.internal.EventTypeExpansion;
 
+import java.lang.reflect.Modifier;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -118,8 +119,11 @@ public interface ExecuteFilter<E> {
      * different. It contributes its own declared name and nothing else, and how much that excludes is decided by
      * {@code g} rather than by the walk.</strong> Under a getter that maps each type to its own class name, which
      * is what {@code ReflectionCloudEventTypeMapper} does in both its qualified and its simple form, no stored
-     * event is written under the declared type's own name, so the filter excludes zero real events while looking like a
-     * working exclusion.
+     * event is written under the declared type's own name, so the filter would exclude zero real events while
+     * looking like a working exclusion. This method refuses that case rather than building a filter that does
+     * nothing, but only when the declared type {@code first} or one of {@code more} names is itself the
+     * non-sealed interface or abstract class the hierarchy reopens at. A sealed root that permits a non-sealed
+     * abstract class further down still builds without complaint,
      * {@code excludeTypes(SensitiveEvent.class)} on a sealed {@code SensitiveEvent} that permits a non-sealed
      * abstract class, with nothing concrete found above that level, silently keeps every event of that family in
      * the read. Under a getter of your own that maps a whole hierarchy onto one CloudEvent type string, the same
@@ -135,8 +139,28 @@ public interface ExecuteFilter<E> {
     @SafeVarargs
     static <E> ExecuteFilter<E> excludeTypes(Class<? extends E> first, Class<? extends E>... more) {
         Set<Class<? extends E>> declaredTypes = declaredTypes(first, more);
-        return cloudEventTypeGetter -> StreamReadFilter.type(Condition.not(Condition.in(resolveCloudEventTypes(
-                EventTypeExpansion.expandWhatCanBeFound(declaredTypes, ExecuteFilter::cannotExcludeArrayOrPrimitive), cloudEventTypeGetter))));
+        return cloudEventTypeGetter -> {
+            Set<Class<? extends E>> expanded = EventTypeExpansion.expandWhatCanBeFound(declaredTypes, ExecuteFilter::cannotExcludeArrayOrPrimitive);
+            for (Class<? extends E> declared : declaredTypes) {
+                if (excludesOnlyItsOwnUnstoredName(declared, expanded)) {
+                    throw cannotDiscoverFamilyToExclude(declared);
+                }
+            }
+            return StreamReadFilter.type(Condition.not(Condition.in(resolveCloudEventTypes(expanded, cloudEventTypeGetter))));
+        };
+    }
+
+    // True for a declared type that is an interface or a non-sealed abstract class and whose hierarchy the walk in
+    // EventTypeExpansion could not descend into, since expanded then holds only declared's own name for it. That is
+    // exactly the case excludeTypes's own javadoc calls out. Under every CloudEventTypeMapper this library ships, no
+    // event is ever stored under that name, so the exclusion removes nothing. A sealed declared type is exempt even
+    // when it is itself abstract or an interface, since expanded then holds whatever the walk found among its
+    // permitted subclasses instead of just itself.
+    private static <E> boolean excludesOnlyItsOwnUnstoredName(Class<? extends E> declared, Set<Class<? extends E>> expanded) {
+        if (declared.isSealed() || (!declared.isInterface() && !Modifier.isAbstract(declared.getModifiers()))) {
+            return false;
+        }
+        return expanded.stream().filter(declared::isAssignableFrom).allMatch(declared::equals);
     }
 
     @SafeVarargs
@@ -186,5 +210,15 @@ public interface ExecuteFilter<E> {
         }
         return new IllegalArgumentException(eventType.getTypeName()
                 + " cannot be excluded by type, since no event is ever an instance of a primitive type. Exclude the concrete event types instead.");
+    }
+
+    private static IllegalArgumentException cannotDiscoverFamilyToExclude(Class<?> eventType) {
+        return new IllegalArgumentException(eventType.getTypeName()
+                + " cannot be excluded by type, since it is an interface or a non-sealed abstract class and nothing "
+                + "concrete was found beneath it, so the exclusion would name only " + eventType.getTypeName()
+                + " itself. Under every CloudEventTypeMapper this library ships, no event is ever stored under that "
+                + "name, so the exclusion would silently remove nothing. Seal the hierarchy, exclude the concrete "
+                + "types directly, or build the StreamReadFilter yourself with ExecuteFilter.from(..) if a "
+                + "CloudEventTypeMapper of your own does store events under this exact name.");
     }
 }

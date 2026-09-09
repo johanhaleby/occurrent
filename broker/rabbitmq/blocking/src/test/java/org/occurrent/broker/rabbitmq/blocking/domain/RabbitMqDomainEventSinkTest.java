@@ -57,7 +57,7 @@ class RabbitMqDomainEventSinkTest extends RabbitMqTestSupport {
     }
 
     @Test
-    void publish_without_metadata_strips_every_extension_the_converter_set_so_the_consumer_sees_empty_metadata() throws Exception {
+    void publish_without_metadata_strips_only_the_stream_identity_extensions_and_publishes_the_rest() throws Exception {
         String queue = adminChannel.queueDeclare().getQueue();
         adminChannel.queueBind(queue, exchange, TestOrderPlaced.class.getName());
 
@@ -69,7 +69,50 @@ class RabbitMqDomainEventSinkTest extends RabbitMqTestSupport {
 
             GetResponse response = adminChannel.basicGet(queue, true);
             assertThat(response).isNotNull();
+            assertThat(response.getProps().getHeaders())
+                    .as("streamid is a property of a stored event, which this one never was")
+                    .doesNotContainKey("cloudEvents_streamid");
+            assertThat(response.getProps().getHeaders().get("cloudEvents_tenantid"))
+                    .as("an application-set extension the converter produced is not the sink's to withhold")
+                    .hasToString("tenant-from-converter");
+        }
+    }
+
+    @Test
+    void publish_with_empty_metadata_behaves_the_same_as_publish_without_metadata() throws Exception {
+        String queue = adminChannel.queueDeclare().getQueue();
+        adminChannel.queueBind(queue, exchange, TestOrderPlaced.class.getName());
+
+        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+        try (RabbitMqCloudEventSink cloudEventSink = RabbitMqCloudEventSink.builder(connection(), resolver).build()) {
+            RabbitMqDomainEventSink<TestOrderPlaced> domainEventSink = RabbitMqDomainEventSink.using(cloudEventSink, converter);
+
+            domainEventSink.publish(EventMetadata.empty(), new TestOrderPlaced("order-5"));
+
+            GetResponse response = adminChannel.basicGet(queue, true);
+            assertThat(response).isNotNull();
             assertThat(response.getProps().getHeaders()).doesNotContainKey("cloudEvents_streamid");
+            assertThat(response.getProps().getHeaders().get("cloudEvents_tenantid")).hasToString("tenant-from-converter");
+        }
+    }
+
+    @Test
+    void publish_with_metadata_naming_a_key_the_converter_also_set_uses_the_metadata_value() throws Exception {
+        String queue = adminChannel.queueDeclare().getQueue();
+        adminChannel.queueBind(queue, exchange, TestOrderPlaced.class.getName());
+
+        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+        try (RabbitMqCloudEventSink cloudEventSink = RabbitMqCloudEventSink.builder(connection(), resolver).build()) {
+            RabbitMqDomainEventSink<TestOrderPlaced> domainEventSink = RabbitMqDomainEventSink.using(cloudEventSink, converter);
+            EventMetadata metadata = new EventMetadata(Map.of("tenantid", "tenant-from-metadata"));
+
+            domainEventSink.publish(metadata, new TestOrderPlaced("order-6"));
+
+            GetResponse response = adminChannel.basicGet(queue, true);
+            assertThat(response).isNotNull();
+            assertThat(response.getProps().getHeaders().get("cloudEvents_tenantid"))
+                    .as("the caller reading metadata off a stored event has the store's own answer")
+                    .hasToString("tenant-from-metadata");
         }
     }
 
@@ -126,6 +169,7 @@ class RabbitMqDomainEventSinkTest extends RabbitMqTestSupport {
                     .withDataContentType("text/plain")
                     .withData(domainEvent.orderId().getBytes(StandardCharsets.UTF_8))
                     .withExtension("streamid", "stream-from-converter")
+                    .withExtension("tenantid", "tenant-from-converter")
                     .build();
         }
 

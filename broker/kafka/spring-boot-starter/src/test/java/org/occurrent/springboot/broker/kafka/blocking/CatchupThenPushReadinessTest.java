@@ -43,36 +43,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CatchupThenPushReadinessTest {
 
     @Test
-    void answers_true_for_a_subscription_id_no_wrapper_bean_claims() {
-        GenericApplicationContext context = new GenericApplicationContext();
-        context.refresh();
-
-        boolean ready = CatchupThenPushReadiness.isReady(context, "proj");
-
-        assertThat(ready).isTrue();
-    }
-
-    @Test
-    void defers_to_the_wrapper_bean_that_owns_the_subscription_id() throws Exception {
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
-        CatchupThenPushSubscriptionModel wrapper = new CatchupThenPushSubscriptionModel(new InMemoryEventStore(), liveFeed, null);
-        wrapper.subscribe("proj", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
-        }).waitUntilStarted(Duration.ofSeconds(5));
-
-        GenericApplicationContext context = new GenericApplicationContext();
-        context.refresh();
-        context.getBeanFactory().registerSingleton("catchupThenPushSubscriptionModel-proj", wrapper);
-
-        assertThat(CatchupThenPushReadiness.isReady(context, "proj"))
-                .as("the wrapper's own replay reached live with nothing to catch up on")
-                .isTrue();
-        assertThat(CatchupThenPushReadiness.isReady(context, "some-other-id"))
-                .as("this wrapper does not own this id, so it defers to the zero-config default")
-                .isTrue();
-    }
-
-    @Test
-    void answers_false_while_the_owning_wrapper_is_still_replaying() throws Exception {
+    void answers_ready_when_no_registry_bean_is_published_even_though_an_unrelated_wrapper_bean_shares_the_subscription_id() throws Exception {
+        // No occurrentCatchupThenPushSubscriptionModelsByLiveFeed bean at all, the shape a hand-built wrapper with
+        // no framework registrar produces. An unrelated CatchupThenPushSubscriptionModel, wrapping a different
+        // PushSubscriptionModel entirely, happens to share this subscription id and is still replaying.
         CountDownLatch replayEntered = new CountDownLatch(1);
         CountDownLatch releaseReplay = new CountDownLatch(1);
         InMemoryEventStore store = new InMemoryEventStore();
@@ -81,9 +55,8 @@ class CatchupThenPushReadinessTest {
                 .withSource(URI.create("urn:occurrent:test"))
                 .withType("Historical")
                 .build()));
-        PushSubscriptionModel liveFeed = new PushSubscriptionModel();
-        CatchupThenPushSubscriptionModel wrapper = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
-        wrapper.subscribe("proj", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
+        CatchupThenPushSubscriptionModel unrelatedWrapper = new CatchupThenPushSubscriptionModel(store, new PushSubscriptionModel(), null);
+        unrelatedWrapper.subscribe("proj", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
             replayEntered.countDown();
             awaitLatch(releaseReplay);
         });
@@ -91,10 +64,15 @@ class CatchupThenPushReadinessTest {
 
         GenericApplicationContext context = new GenericApplicationContext();
         context.refresh();
-        context.getBeanFactory().registerSingleton("catchupThenPushSubscriptionModel-proj", wrapper);
+        context.getBeanFactory().registerSingleton("unrelatedWrapper", unrelatedWrapper);
 
         try {
-            assertThat(CatchupThenPushReadiness.isReady(context, "proj")).isFalse();
+            Predicate<String> readinessSource = CatchupThenPushReadiness.memoized(context, new PushSubscriptionModel());
+
+            assertThat(readinessSource.test("proj"))
+                    .as("this bridge's own liveFeed is not unrelatedWrapper's, so its still-replaying answer must " +
+                            "not pause a bridge that has nothing to do with it")
+                    .isTrue();
         } finally {
             releaseReplay.countDown();
         }
@@ -104,9 +82,10 @@ class CatchupThenPushReadinessTest {
     void a_poll_before_the_wrapper_is_published_is_re_resolved_on_a_later_poll_once_it_is() throws Exception {
         // A second, unrelated wrapper sharing the same subscription id, healthy, registered directly as a bean:
         // ADR 102 permits two independent CatchupThenPushSubscriptionModel instances to subscribe under the same
-        // id, and this one stands in for the id-scan fallback's own ambiguity, ready immediately since it has
-        // nothing to catch up on. If a "no identity match yet" poll were ever memoized as this bean's own answer,
-        // ready would stay wrongly cached even once the real wrapper's own entry lands in the registry.
+        // id, and this one stands in for a wrapper the id-only lookup this class refuses to do could otherwise
+        // have confused for liveFeed's own, ready immediately since it has nothing to catch up on. If a "no
+        // identity match yet" poll were ever memoized as this bean's own answer, ready would stay wrongly cached
+        // even once the real wrapper's own entry lands in the registry.
         CatchupThenPushSubscriptionModel otherWrapper = new CatchupThenPushSubscriptionModel(new InMemoryEventStore(), new PushSubscriptionModel(), null);
         otherWrapper.subscribe("proj", null, StartAt.subscriptionModelDefault(), cloudEvent -> {
         }).waitUntilStarted(Duration.ofSeconds(5));
@@ -145,8 +124,8 @@ class CatchupThenPushReadinessTest {
         Predicate<String> readinessSource = CatchupThenPushReadiness.memoized(context, liveFeed);
 
         assertThat(readinessSource.test("proj"))
-                .as("liveFeed is not in the registry yet: the registry bean's own presence is authoritative, so "
-                        + "this must not fall through to otherWrapper's own answer via the id-scan, memoizing a "
+                .as("liveFeed has no entry in the registry yet, so this answers ready rather than guessing at "
+                        + "otherWrapper's own answer by subscription id, and must not memoize that guess as a "
                         + "wrong wrapper forever")
                 .isTrue();
 

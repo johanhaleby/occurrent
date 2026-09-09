@@ -106,8 +106,11 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
     /**
      * The starter wiring itself, not just {@code CatchupThenPushReadiness} in isolation: a bridge built through
      * {@link KafkaCloudEventBridgeFactory#forGroup} with no manual {@code readinessSource(...)} call must still
-     * defer to a {@code "catchupThenPushSubscriptionModel-" + id} bean present in the context, the convention
-     * {@code CatchupThenPushSubscriptionModelPublisher} in the framework's autoconfigure module owns.
+     * defer to the exact {@link PushSubscriptionModel} it was built with, correlated by identity through the
+     * {@code occurrentCatchupThenPushSubscriptionModelsByLiveFeed} bean a framework
+     * {@code @Projection(source = PUSH)} or {@code @Saga(source = PUSH)} registration publishes. Registered here as
+     * a plain map, standing in for that publisher, since this module has no compile-time dependency on the
+     * framework autoconfigure module that does the real publishing.
      * <p>
      * Checked against how many {@code DEFERRED} outcomes this bridge reports while the wrapper is parked, held at
      * zero the whole time, rather than against whether the handler ever ran: {@code RoutingOutcome.DEFERRED} alone
@@ -117,7 +120,7 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
      * what only the former produces.
      */
     @Test
-    void the_factory_built_bridge_defers_to_a_catchup_then_push_bean_present_in_the_context_with_no_manual_readiness_source() throws Exception {
+    void the_factory_built_bridge_defers_to_a_catchup_then_push_wrapper_the_identity_registry_names_for_its_own_liveFeed() throws Exception {
         String topic = "test-topic-" + UUID.randomUUID();
         CountDownLatch replayEntered = new CountDownLatch(1);
         CountDownLatch releaseReplay = new CountDownLatch(1);
@@ -151,7 +154,8 @@ class KafkaBrokerAutoConfigurationIntegrationTest {
                             .build()));
                     CatchupThenPushSubscriptionModel wrapper = new CatchupThenPushSubscriptionModel(store, liveFeed, null);
                     ((org.springframework.context.support.GenericApplicationContext) context.getSourceApplicationContext())
-                            .getBeanFactory().registerSingleton("catchupThenPushSubscriptionModel-test-subscription", wrapper);
+                            .getBeanFactory().registerSingleton("occurrentCatchupThenPushSubscriptionModelsByLiveFeed",
+                                    java.util.Map.of(liveFeed, wrapper));
                     wrapper.subscribe("test-subscription", null, StartAt.subscriptionModelDefault(), ce -> {
                         if (ce.getId().equals("historical")) {
                             replayEntered.countDown();
