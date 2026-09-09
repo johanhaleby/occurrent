@@ -22,7 +22,9 @@ import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 import org.occurrent.subscription.Checkpoint;
 import org.occurrent.subscription.CheckpointWriteCondition;
+import org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException;
 import org.occurrent.subscription.StartAt;
+import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.*;
@@ -264,7 +266,41 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                                             "starts from that checkpoint and is never refused this way. Subscribing with a " +
                                             "StartAt of your own records no position and makes no such promise.");
         }
-        return storage.save(subscriptionId, globalCheckpoint, writeConditionFor(subscriptionId));
+        return saveFirstPosition(subscriptionId, globalCheckpoint);
+    }
+
+    // Pinned with ifAbsent(), the same protocol ManualStartSubscriptionModel and ReactorDurableSubscriptionModel
+    // use, rather than the read-then-write this replaced, which could overwrite a first checkpoint another node
+    // wrote in between. A storage able to compare the two settles a lost race by position instead, through
+    // resolveFirstCheckpointRace. One that cannot falls back to reading the stored position back and checking it
+    // is the one this node itself computed.
+    private Checkpoint saveFirstPosition(String subscriptionId, Checkpoint globalCheckpoint) {
+        try {
+            return storage.save(subscriptionId, globalCheckpoint, CheckpointWriteCondition.ifAbsent());
+        } catch (CheckpointWriteConditionNotFulfilledException e) {
+            return storage.resolveFirstCheckpointRace(subscriptionId, globalCheckpoint)
+                          .orElseGet(() -> refuseUnlessTheStoredPositionIsTheOneRead(subscriptionId, globalCheckpoint));
+        }
+    }
+
+    // Something was stored between the read above and this write, so it was written where this model cannot order
+    // it against the position it read. Reading it back answers the only question that settles it, whether it
+    // holds that same position. Anything else is refused rather than started from a position this node never
+    // read, which would skip whatever lies between the two.
+    private Checkpoint refuseUnlessTheStoredPositionIsTheOneRead(String subscriptionId, Checkpoint positionRead) {
+        @Nullable Checkpoint stored;
+        try {
+            stored = storage.read(subscriptionId);
+        } catch (RuntimeException e) {
+            throw StartPositionAlreadyPinnedException.readingTheStoredPositionBackFailed(subscriptionId, positionRead, e);
+        }
+        if (stored == null) {
+            throw StartPositionAlreadyPinnedException.readingTheStoredPositionBackFoundNothing(subscriptionId, positionRead);
+        }
+        if (positionRead.asString().equals(stored.asString())) {
+            return stored;
+        }
+        throw new StartPositionAlreadyPinnedException(subscriptionId, positionRead, stored);
     }
 
     @Nullable
@@ -285,7 +321,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 if (checkpoint == null) {
                     Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
                     if (globalCheckpoint != null) {
-                        checkpoint = storage.save(subscriptionId, globalCheckpoint, writeConditionFor(subscriptionId));
+                        checkpoint = saveFirstPosition(subscriptionId, globalCheckpoint);
                     }
                 }
 
