@@ -28,6 +28,7 @@ import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.beans.factory.SmartFactoryBean;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -115,6 +116,17 @@ class SubscriptionAnnotationGuardTest {
     @Test
     void final_handler_method_on_an_unproxied_bean_registers_normally() {
         runner.withUserConfiguration(FinalHandlerNoProxyConfiguration.class).run(context -> assertThat(context).hasNotFailed());
+    }
+
+    // containsSingleton(beanName) is true once a FactoryBean itself exists, whether or not its product does, and
+    // getBean(beanName) would create that product. isEagerInit() == false (SmartFactoryBean's default) keeps Spring
+    // itself from creating it during startup, so the scan must not create it either just to read its class.
+    @Test
+    void a_factory_beans_product_is_not_forced_by_the_scan() {
+        runner.withUserConfiguration(FactoryBeanConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean("&lazyProductFactory", NeverEagerFactoryBean.class).productCreated()).isFalse();
+        });
     }
 
     @Configuration(proxyBeanMethods = false)
@@ -286,6 +298,33 @@ class SubscriptionAnnotationGuardTest {
     static class FinalHandlerNoProxySubscriber {
         @Subscription(id = "final-handler-no-proxy-guard")
         final void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class FactoryBeanConfiguration {
+        @Bean
+        NeverEagerFactoryBean lazyProductFactory() {
+            return new NeverEagerFactoryBean();
+        }
+    }
+
+    static class NeverEagerFactoryBean implements SmartFactoryBean<Object> {
+        private boolean productCreated;
+
+        @Override
+        public Object getObject() {
+            productCreated = true;
+            return new Object();
+        }
+
+        @Override
+        public Class<?> getObjectType() {
+            return Object.class;
+        }
+
+        boolean productCreated() {
+            return productCreated;
         }
     }
 

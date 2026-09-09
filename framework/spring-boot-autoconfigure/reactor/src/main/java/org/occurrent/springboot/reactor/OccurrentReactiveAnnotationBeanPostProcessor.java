@@ -174,9 +174,15 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // only its interfaces, so an already-created bean's annotation went undetected rather than reaching the
     // resolveHandlerInvocation guard that exists to catch exactly this. AopUtils.getTargetClass unwraps either
     // proxy kind given the real instance, so an already-created bean is resolved through it instead.
+    //
+    // containsSingleton(beanName) is also true once a FactoryBean itself is created, whether or not its product
+    // has been. getBean(beanName) dereferences that factory, so calling it here for every such name would create a
+    // product nothing has asked for yet, whatever the factory's own object creation does. isFactoryBean(beanName)
+    // keeps a FactoryBean-backed name on the metadata-only path instead, at the cost of missing a product that
+    // happens to already be a JDK proxy, a narrower case than the one this method exists to fix.
     private Class<?> resolveScanType(String beanName) {
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
-        if (beanFactory.containsSingleton(beanName)) {
+        if (beanFactory.containsSingleton(beanName) && !beanFactory.isFactoryBean(beanName)) {
             return AopUtils.getTargetClass(applicationContext.getBean(beanName));
         }
         Class<?> type = applicationContext.getType(beanName);
