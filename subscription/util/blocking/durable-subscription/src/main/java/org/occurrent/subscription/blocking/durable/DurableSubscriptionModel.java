@@ -303,15 +303,16 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // Never throws. This runs inside the StartAt.dynamic supplier below, which a wrapped model can evaluate under
     // its own retry loop, the exact case recordFirstPositionOrRefuse's own placement outside that supplier exists
     // to avoid. StartPositionAlreadyPinnedException here means another node's write already settled the position,
-    // so its own positionStored is adopted instead of refusing, the same value a fresh storage.read() answers the
-    // next time this supplier runs. The rare case where that confirm-read itself found nothing or failed answers
-    // null, exactly what an unanswerable position source already does a few lines below this call, for a later
-    // retry to resolve instead of throwing from here.
-    private @Nullable Checkpoint saveFirstPositionOrAdoptWhatWon(String subscriptionId, Checkpoint globalCheckpoint) {
+    // so its own positionStored is adopted instead of refusing. The rare case where the confirm-read behind that
+    // exception itself found nothing or failed falls back to globalCheckpoint instead, the position this node
+    // itself computed and would have started from had the race gone the other way. That risks a duplicate
+    // delivery against whatever the other node's write actually holds, never a loss, unlike falling through to
+    // the caller's model-default fallback a few lines below, which would skip everything between here and now.
+    private Checkpoint saveFirstPositionOrAdoptWhatWon(String subscriptionId, Checkpoint globalCheckpoint) {
         try {
             return saveFirstPosition(subscriptionId, globalCheckpoint);
         } catch (StartPositionAlreadyPinnedException e) {
-            return e.positionStored.orElse(null);
+            return e.positionStored.orElse(globalCheckpoint);
         }
     }
 

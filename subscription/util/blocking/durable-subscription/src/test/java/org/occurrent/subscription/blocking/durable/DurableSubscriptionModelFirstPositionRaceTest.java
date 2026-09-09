@@ -103,6 +103,30 @@ class DurableSubscriptionModelFirstPositionRaceTest {
                 .isEqualTo("landed-during-registration");
     }
 
+    @Test
+    void when_the_confirm_read_itself_finds_nothing_the_dynamic_supplier_falls_back_to_the_computed_checkpoint_never_to_the_model_default() {
+        // A storage that always refuses ifAbsent() and always reads back empty, standing in for the doubly rare
+        // case where the confirm-read behind a lost race finds nothing (the racing checkpoint deleted between the
+        // failed write and the read that would have named it). globalCheckpoint is the position this node itself
+        // computed and would have started from had the race gone the other way, so falling back to it risks a
+        // duplicate delivery against whatever the other node's write actually holds, never a loss, unlike falling
+        // through to the caller's model-default fallback, which would skip everything between here and now.
+        AlwaysConflictingCheckpointStorage storage = new AlwaysConflictingCheckpointStorage();
+        InMemoryFeed feed = new InMemoryFeed();
+        feed.answersCurrentPosition = true;
+        feed.answersNullOnFirstCallOnly = true;
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(
+                feed, storage, new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true));
+
+        assertThatCode(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        })).doesNotThrowAnyException();
+
+        assertThat(feed.lastResolvedStartAt)
+                .as("the computed checkpoint, not the model-default StartAt this feed answers 'now' for")
+                .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
+                        checkpoint -> assertThat(checkpoint.checkpoint.asString()).isEqualTo("this-nodes-own-position"));
+    }
+
     private static CloudEvent cloudEvent(String id) {
         return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("test.event").build();
     }
@@ -163,6 +187,44 @@ class DurableSubscriptionModelFirstPositionRaceTest {
     }
 
     /**
+     * Always refuses {@code ifAbsent()} and always reads back empty, standing in for a storage where the racing
+     * checkpoint behind a lost write is gone again by the time the confirm-read looks for it.
+     */
+    private static final class AlwaysConflictingCheckpointStorage implements CheckpointStorage {
+        @Override
+        public @Nullable Checkpoint read(String subscriptionId) {
+            return null;
+        }
+
+        @Override
+        public Checkpoint save(String subscriptionId, Checkpoint checkpoint, org.occurrent.subscription.CheckpointWriteCondition condition) {
+            if (condition instanceof org.occurrent.subscription.CheckpointWriteCondition.IfAbsent) {
+                throw new org.occurrent.subscription.CheckpointWriteConditionNotFulfilledException(subscriptionId, java.util.OptionalLong.empty(), condition);
+            }
+            return checkpoint;
+        }
+
+        @Override
+        public boolean evaluatesWriteConditions() {
+            return true;
+        }
+
+        @Override
+        public java.util.OptionalLong writeVersion(String subscriptionId) {
+            return java.util.OptionalLong.empty();
+        }
+
+        @Override
+        public void delete(String subscriptionId) {
+        }
+
+        @Override
+        public boolean exists(String subscriptionId) {
+            return false;
+        }
+    }
+
+    /**
      * A feed with change-stream mechanics reduced to what this test needs: the model default means the end of what
      * has been published so far, and a subscription is registered but never delivered to.
      */
@@ -174,11 +236,12 @@ class DurableSubscriptionModelFirstPositionRaceTest {
         // supplier's own retry-path branch is what asks again.
         boolean answersNullOnFirstCallOnly = false;
         private int globalCheckpointCalls = 0;
+        @Nullable StartAt lastResolvedStartAt;
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
             if (startAt.isDynamic()) {
-                startAt.get(new SubscriptionModelContext(InMemoryFeed.class));
+                lastResolvedStartAt = startAt.get(new SubscriptionModelContext(InMemoryFeed.class));
             }
             subscriptions.put(subscriptionId, true);
             return dummySubscription(subscriptionId);
