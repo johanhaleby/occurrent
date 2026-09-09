@@ -70,6 +70,25 @@ class RabbitMqDomainEventSinkTest extends RabbitMqTestSupport {
             GetResponse response = adminChannel.basicGet(queue, true);
             assertThat(response).isNotNull();
             assertThat(response.getProps().getHeaders()).doesNotContainKey("cloudEvents_streamid");
+            assertThat(response.getProps().getHeaders()).doesNotContainKey("cloudEvents_tenantid");
+        }
+    }
+
+    @Test
+    void publish_with_empty_metadata_strips_a_converter_set_extension_no_name_in_metadata_names_the_same_way_publish_without_metadata_does() throws Exception {
+        String queue = adminChannel.queueDeclare().getQueue();
+        adminChannel.queueBind(queue, exchange, TestOrderPlaced.class.getName());
+
+        RabbitMqTopicExchangeDestinationResolver resolver = new RabbitMqTopicExchangeDestinationResolver(exchange, ReflectionCloudEventTypeMapper.qualified());
+        try (RabbitMqCloudEventSink cloudEventSink = RabbitMqCloudEventSink.builder(connection(), resolver).build()) {
+            RabbitMqDomainEventSink<TestOrderPlaced> domainEventSink = RabbitMqDomainEventSink.using(cloudEventSink, converter);
+
+            domainEventSink.publish(EventMetadata.empty(), new TestOrderPlaced("order-5"));
+
+            GetResponse response = adminChannel.basicGet(queue, true);
+            assertThat(response).isNotNull();
+            assertThat(response.getProps().getHeaders()).doesNotContainKey("cloudEvents_streamid");
+            assertThat(response.getProps().getHeaders()).doesNotContainKey("cloudEvents_tenantid");
         }
     }
 
@@ -126,6 +145,7 @@ class RabbitMqDomainEventSinkTest extends RabbitMqTestSupport {
                     .withDataContentType("text/plain")
                     .withData(domainEvent.orderId().getBytes(StandardCharsets.UTF_8))
                     .withExtension("streamid", "stream-from-converter")
+                    .withExtension("tenantid", "tenant-from-converter")
                     .build();
         }
 

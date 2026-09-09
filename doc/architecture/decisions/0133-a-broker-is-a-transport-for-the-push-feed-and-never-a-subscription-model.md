@@ -335,13 +335,17 @@ otherwise. `publish(EventMetadata, E)` converts the domain event and then stamps
 resulting CloudEvent before handing it to the `CloudEventSink`, which is a second place extensions are written and is
 called out here so no implementer has to guess. Everything `EventMetadata` holds is stamped, not only the four named
 above, since `EventMetadata.from` reads every extension off the event and dropping the rest would mean the metadata
-does not survive the round trip. Where the converter already set an extension the supplied metadata wins, because the
-caller reading it off a stored event is the one with the store's answer.
+does not survive the round trip. Any extension the converter set on its own is stripped first, so `metadata` is the
+only source of extensions on the published message and a consumer's `EventMetadata.from` always matches what the
+caller passed here, never a mix of that and whatever the converter happened to add.
 
-`publish(E)` writes whatever the `CloudEventConverter` produced. For an event that has never been through the event
-store that is no stream identity at all, because a stream version and a position are properties of a stored event and
-Occurrent cannot derive them. A consumer of such a message sees an empty `EventMetadata`, and a projection keyed by
-metadata refuses it at delivery.
+`publish(E)` strips every extension the `CloudEventConverter` set, the same way `publish(EventMetadata, E)` now does
+for anything `metadata` does not name, keeping only the core CloudEvent attributes and the data the converter
+produced. For an event that has never been through the event store that is no stream identity at all, because a
+stream version and a position are properties of a stored event and Occurrent cannot derive them, but it is also true
+of a converter-set extension the store never touched, since neither overload of `publish` is a place for a converter
+to smuggle an extension past the caller. A consumer of such a message sees an empty `EventMetadata`, and a projection
+keyed by metadata refuses it at delivery.
 
 ### 5. A binding derived from a filter narrows what arrives, and never decides what is handled
 

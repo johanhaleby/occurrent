@@ -67,6 +67,21 @@ class KafkaDomainEventSinkTest extends KafkaTestSupport {
 
             ConsumerRecord<String, byte[]> record = consumeOneRecord(topic);
             assertThat(record.headers().lastHeader("ce_streamid")).isNull();
+            assertThat(record.headers().lastHeader("ce_tenantid")).isNull();
+        }
+    }
+
+    @Test
+    void publish_with_empty_metadata_strips_a_converter_set_extension_no_name_in_metadata_names_the_same_way_publish_without_metadata_does() {
+        Map<String, Object> producerConfig = Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers());
+        try (KafkaCloudEventSink cloudEventSink = KafkaCloudEventSink.builder(producerConfig, new FixedDestinationResolver(KafkaDestination.of(topic))).build()) {
+            KafkaDomainEventSink<TestOrderPlaced> domainEventSink = KafkaDomainEventSink.using(cloudEventSink, converter);
+
+            domainEventSink.publish(EventMetadata.empty(), new TestOrderPlaced("order-5"));
+
+            ConsumerRecord<String, byte[]> record = consumeOneRecord(topic);
+            assertThat(record.headers().lastHeader("ce_streamid")).isNull();
+            assertThat(record.headers().lastHeader("ce_tenantid")).isNull();
         }
     }
 
@@ -115,6 +130,7 @@ class KafkaDomainEventSinkTest extends KafkaTestSupport {
                     .withDataContentType("text/plain")
                     .withData(domainEvent.orderId().getBytes(StandardCharsets.UTF_8))
                     .withExtension("streamid", "stream-from-converter")
+                    .withExtension("tenantid", "tenant-from-converter")
                     .build();
         }
 
