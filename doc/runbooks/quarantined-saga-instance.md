@@ -101,11 +101,16 @@ lines under "How you find out" above, which are the only place it exists.
 `SagaInstance.currentStep()` tells you which step a flow saga's instance was on. `updatedAt()` is when the quarantine
 was written.
 
-Reading the instance by id works on any store, including one whose `findByStatus` refused you in step 1:
+Reading one instance by id works on any store, including one whose `findByStatus` refused you in step 1, since
+enumeration is the optional capability and a by-id lookup is not.
 
 ```java
 Optional<SagaInstance> one = instances.find("order-4711");
 ```
+
+It reads through `SagaStateStore.findWithoutState`, so on a store that overrides that member it answers for an
+instance whose state no longer decodes as well. On a store that does not override it, that member inherits to `find`,
+which decodes, so this throws for such an instance and `findByStatus` in step 1 is the read that still answers.
 
 ### 3. [you] Read the state, if you need it and it still decodes
 
@@ -125,9 +130,13 @@ Optional<SagaEnvelope<OrderFulfilment>> envelope = stateStore.find("order-4711")
 
 Two members make the state-free reads work, `SagaStateStore.findWithoutState` and
 `SagaStateStore.compareAndSaveWithoutState`. Both are `default` methods that inherit to `find` and `compareAndSave`,
-so a store written against 0.33.0 keeps working without them. `SpringMongoSagaStateStore` overrides both. A store of
-your own that overrides neither cannot report an instance whose state does not decode, and cannot quarantine one
-either, because the executor's own read throws for the same reason yours does. Overriding them is
+so a store written against 0.33.0 keeps working without them. `SpringMongoSagaStateStore` overrides both.
+`SagaStateStore.inMemory()` does not and does not need to, since it holds each envelope as an object rather than a
+document, so nothing there can fail to decode.
+
+A store of your own that overrides neither cannot quarantine an instance whose state does not decode, because the
+executor's own read throws for the same reason yours does, so that instance goes on blocking the saga's other
+instances the way it did in 0.33.0. The contract for an override is in
 [section 8 of the upgrade guide](../migration/upgrading-to-0.34.0.md#the-five-breaks).
 
 ### 4. [you] Fix the cause, or decide there is nothing to fix
