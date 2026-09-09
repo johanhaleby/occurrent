@@ -132,6 +132,21 @@ class ExecuteFilterTest {
         }
 
         @Test
+        void exclude_types_refuses_a_directly_declared_non_sealed_interface_that_finds_nothing_concrete() {
+            // Given: unlike ReopenedEvent above, UndiscoverableEvent is not sealed, so it is not exempt from the
+            // check this refusal is for. Left to widen the way ReopenedEvent does, the filter would exclude only
+            // UndiscoverableEvent's own CloudEvent type, which no stored event is ever written under a
+            // ReflectionCloudEventTypeMapper-style getter, so the exclusion would silently remove nothing while
+            // looking like a working one.
+            ExecuteFilter<UndiscoverableEvent> executeFilter = ExecuteFilter.excludeTypes(UndiscoverableEvent.class);
+
+            // When / Then
+            assertThatThrownBy(() -> executeFilter.resolve(nameGetter()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining(UndiscoverableEvent.class.getTypeName());
+        }
+
+        @Test
         void exclude_types_still_refuses_an_array_declared_type_and_names_the_only_way_out() {
             // Given: widening never reaches an array, refused for consistency with type/includeTypes rather than
             // because excluding one would be impossible. That makes "exclude the concrete event types instead" the
@@ -264,6 +279,10 @@ class ExecuteFilterTest {
     }
 
     sealed interface ReopenedEvent permits ReopenedBase {
+    }
+
+    // Not sealed, unlike ReopenedEvent, so the walk has no permitted subclass to descend into at all.
+    interface UndiscoverableEvent {
     }
 
     // Sealed above, plain abstract here, so nothing below this class can be found.
