@@ -79,5 +79,9 @@ public record UpdateEventRepairResult(long eventsRepaired, long unrecoverableEve
 
     public UpdateEventRepairResult {
         unrecoverableEvents = List.copyOf(unrecoverableEvents);
+        if ((minRepairedPosition == null) != (maxRepairedPosition == null)) {
+            throw new IllegalArgumentException(
+                    "minRepairedPosition and maxRepairedPosition must both be null or both be set, got " + minRepairedPosition + " and " + maxRepairedPosition);
+        }
     }
 }

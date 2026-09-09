@@ -284,6 +284,15 @@ class UpdateEventRepairTest {
     }
 
     @Test
+    void a_repaired_range_with_only_one_end_set_is_refused() {
+        assertThatThrownBy(() -> new UpdateEventRepairResult(1, 0, 0, List.of(), 5L, null))
+                .as("minRepairedPosition without maxRepairedPosition must be refused, not silently accepted as a half range")
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new UpdateEventRepairResult(1, 0, 0, List.of(), null, 5L))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void report_counts_the_damage_without_changing_anything() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
