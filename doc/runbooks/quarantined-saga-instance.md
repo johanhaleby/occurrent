@@ -38,15 +38,22 @@ has to exhaust, not how long it has been failing so far.
 
 That line does not repeat for every redelivery. The runner only logs it when it writes a failure record, and the same
 input failing again inside the budget records nothing new, so the redeliveries after the first are silent. A different
-input failing does write a record and does log again. So one line followed by silence is an instance still failing on
-the same event, not one that recovered, and the `ERROR` at the end of the budget is the next thing you hear.
+input failing does write a record and does log again.
+
+So silence after that first line tells you nothing on its own. The instance may still be failing on the same event, or
+a later delivery may have succeeded and cleared the record, which the runner does without logging anything. Read the
+instance's status with step 1 rather than reading the quiet either way.
 
 When the budget elapses, the same logger logs an `ERROR` saying the instance is now `QUARANTINED`. That line is the
 one to alert on. It names two durations, how long the instance had been failing and then the budget, in that order.
 
 The third line is a `WARN` for the case where the budget elapsed and the instance was not quarantined, because the
 subscription could not confirm it still holds the failing event. That instance goes on blocking the saga's other
-instances, so it never reaches step 1 and this line is the only thing that says so.
+instances, and while that lasts it does not appear in step 1, so this line is the only thing that says so.
+
+That refusal is not final. The runner asks the subscription again on every redelivery, so a check that failed because
+a store was briefly unreachable can succeed later and quarantine the same instance then. Keep looking for it in step 1
+rather than treating this warning as the end of the story.
 
 That third line is not logged on every redelivery. The runner holds the instance's id in memory and logs it once per
 run of refusals, so it says nothing on the redeliveries that follow. It says it again after any event that instance
@@ -182,11 +189,28 @@ finished some other way, which is what you need before step 5.
 
 ### 5. [you] Delete the instance, once you have decided not to recover it
 
+`SagaStateStore.delete(sagaId)` is the call, and whether you have anything to call it on depends on how the store was
+wired.
+
+If your application defines its own `SagaStateStore` bean, which is also the case when a `@Saga` names one through
+`store` or `storeName`, inject that bean and call it:
+
 ```java
 stateStore.delete("order-4711");
 ```
 
-Read `SagaStateStore.delete`'s own javadoc before you run this. Deleting an instance discards its redelivery
+If you let the Spring Boot starter default the store, there is nothing to inject. It builds a
+`SpringMongoSagaStateStore` over `saga-<sagaId>` inside the provider and never publishes it as a bean, so
+`SagaInstances` is the only handle you were given and it is deliberately read-only. Delete the document instead:
+
+```javascript
+db.getCollection("saga-order-fulfilment").deleteOne({ _id: "order-4711" })
+```
+
+That removes exactly what `delete` removes, since the instance is one document keyed by its saga id. Everything below
+applies to both routes.
+
+Read `SagaStateStore.delete`'s own javadoc before you run either. Deleting an instance discards its redelivery
 watermarks along with its status, so if the event source can still redeliver an event this instance already consumed,
 a delete that races that redelivery lets the event recreate the instance and run the process a second time. A
 subscription replay, a reset checkpoint, and a redelivery after a crash are all ways that happens.
