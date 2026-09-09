@@ -121,8 +121,9 @@ which decodes, so this throws for such an instance and `findByStatus` in step 1 
 
 ### 3. [you] Read the state, if you need it and it still decodes
 
-Nothing on `SagaInstance` comes from the saga's own state, so steps 1 and 2 never decode it. That is deliberate, and it
-is what makes them work on the instance you are most likely to be looking at.
+Nothing `SagaInstance` answers comes from the saga's own state, which is why step 1 works on the instance you are most
+likely to be looking at. `findByStatus` reads no state on any store, since that is what the `SagaStateStoreQueries`
+contract requires of it. Step 2's by-id read is state-free only on a store that overrides `findWithoutState`, as above.
 
 An instance whose state can no longer be decoded, after an event class was renamed or a converter changed, is
 quarantined like any other. Its state is still stored, untouched, so repairing the converter and reading it again is
