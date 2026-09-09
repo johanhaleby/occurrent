@@ -83,5 +83,9 @@ public record UpdateEventRepairResult(long eventsRepaired, long unrecoverableEve
             throw new IllegalArgumentException(
                     "minRepairedPosition and maxRepairedPosition must both be null or both be set, got " + minRepairedPosition + " and " + maxRepairedPosition);
         }
+        if (minRepairedPosition != null && minRepairedPosition > maxRepairedPosition) {
+            throw new IllegalArgumentException(
+                    "minRepairedPosition must not be above maxRepairedPosition, got " + minRepairedPosition + " and " + maxRepairedPosition);
+        }
     }
 }

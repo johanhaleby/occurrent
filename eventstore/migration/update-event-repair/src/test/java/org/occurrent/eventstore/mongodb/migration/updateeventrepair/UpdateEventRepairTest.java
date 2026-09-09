@@ -293,6 +293,13 @@ class UpdateEventRepairTest {
     }
 
     @Test
+    void a_repaired_range_with_the_bounds_inverted_is_refused() {
+        assertThatThrownBy(() -> new UpdateEventRepairResult(1, 0, 0, List.of(), 6L, 5L))
+                .as("minRepairedPosition above maxRepairedPosition must be refused rather than reported as a valid range")
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void report_counts_the_damage_without_changing_anything() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
