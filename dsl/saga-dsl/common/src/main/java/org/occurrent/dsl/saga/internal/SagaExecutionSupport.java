@@ -357,7 +357,12 @@ public final class SagaExecutionSupport {
         return null;
     }
 
-    private static <S extends @Nullable Object> boolean isRedelivery(SagaEnvelope<S> current, EventMeta meta) {
+    /**
+     * Whether {@code current} has already handled the input {@code meta} describes, which is what its watermarks record.
+     * Public because the executor needs the same answer on a path where it could not load the instance, and two copies of
+     * this rule would be free to disagree about which instance is past which input.
+     */
+    public static <S extends @Nullable Object> boolean isRedelivery(SagaEnvelope<S> current, EventMeta meta) {
         if (meta.streamId() != null && meta.streamVersion() != null) {
             Long watermark = current.streamWatermarks().get(meta.streamId());
             return watermark != null && meta.streamVersion() <= watermark;

@@ -579,6 +579,32 @@ class SagaQuarantineTest {
         }
 
         @Test
+        void a_redelivery_of_an_event_it_has_already_handled_does_not_block_the_channel_either() {
+            // The instance is active and has not reached its budget, so neither the completed nor the quarantined answer
+            // applies, and yet its watermarks already cover this event. Loading it is what failed, so without the
+            // watermark answer the skip that was always going to happen turns into a permanent block on a replay.
+            ReplayableSubscriptionModel model = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(model, CONFIG);
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            await().atMost(Duration.ofSeconds(10)).until(() -> subscription.instances().find(POISON).isPresent());
+
+            store.cannotDecodeTheStateOf(POISON);
+            // The same stream id and version the instance has already folded, which is what a subscription replay after a
+            // restart delivers, on a fresh global position.
+            model.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            model.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            model.push(cloudEvent(HEALTHY, 2, new PaymentReserved("3", HEALTHY)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY)),
+                    // Still active, so the channel moved on without the instance being quarantined for an event it had
+                    // already handled.
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().failure()).isNull()
+            ));
+        }
+
+        @Test
         void a_later_event_for_a_completed_instance_does_not_block_the_channel_either() {
             // A completed instance skips every event addressed to it too, and it is the one most likely to still be
             // around with a state nobody can decode, because completed instances are kept rather than deleted.
@@ -722,6 +748,25 @@ class SagaQuarantineTest {
      * is wrong. The runner only enables quarantine on the guarantee, so this is the one way the per-event check is
      * still reached, and it is why that check is made rather than trusted.
      */
+    private record GuaranteesMoreThanItHolds(ReplayableSubscriptionModel delegate)
+            implements Subscribable, HistoryRetainingSubscriptions {
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public boolean retains(CloudEvent event) {
+            return false;
+        }
+
+        @Override
+        public boolean retainsEveryEvent() {
+            return true;
+        }
+    }
+
     /**
      * Guarantees it holds everything and then throws when asked about an event, which is a model whose retention read is
      * broken rather than one whose answer is no. It throws for the first {@code throwForTheFirst} questions and answers
@@ -749,25 +794,6 @@ class SagaQuarantineTest {
                 throw new IllegalStateException("the retention read is broken");
             }
             return true;
-        }
-
-        @Override
-        public boolean retainsEveryEvent() {
-            return true;
-        }
-    }
-
-    private record GuaranteesMoreThanItHolds(ReplayableSubscriptionModel delegate)
-            implements Subscribable, HistoryRetainingSubscriptions {
-
-        @Override
-        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
-            return delegate.subscribe(subscriptionId, filter, startAt, action);
-        }
-
-        @Override
-        public boolean retains(CloudEvent event) {
-            return false;
         }
 
         @Override

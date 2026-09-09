@@ -215,7 +215,11 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
         try {
             return stillObtainable.test(cloudEvent);
         } catch (RuntimeException checkFailure) {
-            failure.addSuppressed(checkFailure);
+            if (checkFailure != failure) {
+                // Guarded like the catch above, because a check that rethrows the very object that reached us here would
+                // otherwise have addSuppressed throw IllegalArgumentException and skip the refusal warning below.
+                failure.addSuppressed(checkFailure);
+            }
             return false;
         }
     }
@@ -260,7 +264,7 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                     try {
                         current = stateStore.find(sagaId).orElse(null);
                     } catch (RuntimeException loadFailure) {
-                        if (takesNoFurtherInput(sagaId, loadFailure)) {
+                        if (wouldHaveSkippedThisInput(sagaId, meta, loadFailure)) {
                             return null;
                         }
                         throw loadFailure;
@@ -289,14 +293,21 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 });
     }
 
-    // Whether the instance is already past taking input, asked only when loading it failed. A completed instance and a
-    // quarantined one skip every input addressed to them, so a state that no longer decodes must not be what decides
-    // whether the subscription may move past one of them. Asked through findWithoutState, so a store that can only read
-    // an instance whole says no and the load failure propagates as it did before.
-    private boolean takesNoFurtherInput(String sagaId, RuntimeException loadFailure) {
+    // Whether this input would have been skipped even with the state loaded, asked only when loading it failed. A
+    // completed instance and a quarantined one skip every input addressed to them, and any instance skips an input its
+    // watermarks say it has already handled, so a state that no longer decodes must not be what decides whether the
+    // subscription may move past one of those. The redelivery answer reuses SagaExecutionSupport's own rule rather than
+    // restating it, and a timer carries EventMeta.NONE, which that rule answers no for.
+    // Asked through findWithoutState, so a store that can only read an instance whole says no and the load failure
+    // propagates as it did before.
+    private boolean wouldHaveSkippedThisInput(String sagaId, EventMeta meta, RuntimeException loadFailure) {
         try {
             SagaEnvelope<S> withoutState = stateStore.findWithoutState(sagaId).orElse(null);
-            return withoutState != null && (withoutState.isCompleted() || withoutState.isQuarantined());
+            if (withoutState == null) {
+                return false;
+            }
+            return withoutState.isCompleted() || withoutState.isQuarantined()
+                   || SagaExecutionSupport.isRedelivery(withoutState, meta);
         } catch (RuntimeException secondFailure) {
             if (secondFailure != loadFailure) {
                 loadFailure.addSuppressed(secondFailure);
