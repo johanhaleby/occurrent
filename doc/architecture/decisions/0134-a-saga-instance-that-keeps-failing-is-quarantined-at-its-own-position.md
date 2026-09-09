@@ -197,10 +197,13 @@ winning write left in place. That holds only where a later failure exists, meani
 saga that re-arms a timer on a shorter period than the subscription re-offers the failing event has every failure
 write lose to the timer's, so no record is ever written, every failure is a first failure, and the budget never starts.
 The MongoDB backoff saturates at two seconds, so a timer re-armed once a second is enough to reach it. The behaviour is
-left as it is in 0.34.0 rather than changed quietly, and this paragraph is the record of the gap rather than an
-argument that there is not one. Closing it means retrying the failure write against the reloaded version, the way
-`process` already retries a lost save, and settling whether a record written against a version the instance has since
-left is still the right thing to write.
+left as it is in 0.34.0 rather than changed quietly, and
+[#977](https://github.com/johanhaleby/occurrent/issues/977) on milestone 0.35.0 is the recorded path to closing it,
+the same arrangement [#918](https://github.com/johanhaleby/occurrent/issues/918) is for the non-replayable source.
+AGENTS.md gives the isolation rule no severity ladder, so a paragraph naming this gap is not an end state on its own.
+The two questions that issue has to settle are whether to retry the failure write against the reloaded version, the
+way `process` already retries a lost save, and whether a record written against a version the instance has since left
+is still the right thing to write.
 
 The identity of "the same input" is the redelivery key `EventMeta` already computes, the stream id with its version,
 or the global position. An input the saga cannot recognise a redelivery of is already refused or warned about by
