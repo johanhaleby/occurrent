@@ -41,11 +41,15 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * All I/O this class performs ({@link AppliedAppendStore#clear(String)} and {@link AppliedAppendStore#recordApplied(String, org.occurrent.eventstore.api.AppendId)})
  * runs on whichever thread the caller invokes it from. It performs no scheduling or thread-hopping of its own, so the
- * reactor wrapper is responsible for calling {@link #recordIfReady(EventMetadata)}, {@link #retryPendingClear()} and
- * {@link #pollForClear()} only after hopping to a blocking-safe scheduler. {@link #catchupStarted(Object)} and
- * {@link #historyRead(Object)} are deliberately I/O-free, so a reactive lifecycle signal that is never awaited can
- * call them inline without blocking. {@link #cannotPossiblyRecord(EventMetadata)} is I/O-free too, and is what a
- * reactive caller asks before deciding whether the hop is needed at all.
+ * reactor wrapper hops to a blocking-safe scheduler before {@link #recordIfReady(EventMetadata)}, and before the
+ * {@link #retryPendingClear()} its own replay completion makes. Its two {@code AppliedAppendRecorder} hooks do not
+ * hop, so a {@link #retryPendingClear()} or {@link #pollForClear()} that arrives through one of those runs on
+ * whichever thread called it, and choosing a blocking-safe one is whoever schedules them.
+ * <p>
+ * {@link #catchupStarted(Object)} and {@link #historyRead(Object)} are deliberately I/O-free, so a reactive
+ * lifecycle signal that is never awaited can call them inline without blocking.
+ * {@link #cannotPossiblyRecord(EventMetadata)} is I/O-free too, and is what a reactive caller asks before deciding
+ * whether the hop is needed at all.
  */
 @NullMarked
 public final class AppliedAppendRecording {
