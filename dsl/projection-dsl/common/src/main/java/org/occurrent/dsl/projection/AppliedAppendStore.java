@@ -47,11 +47,13 @@ import static java.util.Objects.requireNonNull;
  * A projection records an append after the first event of that append it handles and that has an append id, not
  * after every event the append wrote. So an append whose events reach this projection across several deliveries can
  * have {@link #hasApplied(String, AppendId)} and {@link #waitUntilApplied(String, AppendId, Duration)} both answer
- * {@code true} while some of those deliveries are still unapplied. How long the rest then take has three sizes. In
- * the ordinary case it is however long the same node needs to work through the append's remaining events. If that
- * node dies part way, another node takes over when the lease expires, 20 seconds by default. While the subscription
- * is paused or stopped, it does not end at all until someone starts it again. ADR 132 decision 10 says why
- * recording on the append's last event instead cannot work, since Occurrent pushes subscription filters
+ * {@code true} while some of those deliveries are still unapplied. In the ordinary case the rest follow in however
+ * long the same node needs to work through the append's remaining events. What happens instead when that node stops
+ * part way depends on the subscription model this store's caller runs, which is nothing this interface can promise.
+ * A competing-consumer deployment hands the subscription to another node when the lease expires, 20 seconds by
+ * default, and a single-node one has no successor, so the rest wait until that node runs again. While the
+ * subscription is paused or stopped, nothing applies them either way until someone starts it again. ADR 132 decision
+ * 10 says why recording on the append's last event instead cannot work, since Occurrent pushes subscription filters
  * server-side, so a projection that does not handle that last event never sees it and the wait would never finish.
  */
 @NullMarked
