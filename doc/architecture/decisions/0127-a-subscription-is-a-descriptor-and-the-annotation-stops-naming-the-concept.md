@@ -257,6 +257,22 @@ invoked to get the descriptor and its collaborators have to be wired before it i
 
 The deprecated annotations stay in `postProcessBeforeInitialization`, since nothing about them changed.
 
+> **Amended on 2026-09-09, for #965.** That premise held until a review found the reason it could not last:
+> `postProcessBeforeInitialization` runs while the handler bean is still being created, so a lookup by name there
+> either deadlocks or falls back to the raw bean, and `startAt = BEGINNING` with `startupMode = WAIT_UNTIL_STARTED`
+> replays its whole history synchronously in that window, unadvised, before the same subscription's later deliveries
+> start running through the proxy. `@Subscription`, `@StreamSubscription`, `@DcbSubscription` and
+> `@SynchronousSubscription` now register from `afterSingletonsInstantiated` too, the same move this decision already
+> made for the new descriptor annotation and for the same reason, so this section's placement question is settled for
+> both. The paragraph below still describes a real, separate hazard on the descriptor annotation's own `invokeFactory`
+> path, untouched by #965.
+>
+> The JDK-interface-proxy case is no longer inherited silently for these four: a handler method the bean's Spring
+> proxy cannot invoke, an interface proxy missing the method or a CGLIB proxy unable to override a final method, now
+> fails fast at startup instead of running unadvised. The `@SynchronousSubscription` behaviour change this section
+> already anticipates, a write during startup not reaching a handler whose collaborators are not yet wired, is what
+> #965 makes true today rather than only once this epic ships.
+
 **Moving there inherits how the existing descriptor annotations invoke a factory, including one hazard they already
 have.** `OccurrentBlockingAnnotationBeanPostProcessor` resolves the bean from the context and `invokeFactory` calls the
 declared method on whatever comes back. When that bean is proxied, a CGLIB proxy works and runs any class-level advice
@@ -270,6 +286,11 @@ This also closes something the current code calls out as a wart. Its comment not
 registers per bean before the checkpoint fencing check runs, so one can write a checkpoint before that check happens,
 and marks it pre-existing. A descriptor annotation registered in the later phase is behind the check like every other
 descriptor, so the gap closes for the new annotations as a consequence of moving them rather than as separate work.
+
+> **Amended on 2026-09-09, for #965.** #965 moves `@Subscription`, `@StreamSubscription`, `@DcbSubscription` and
+> `@SynchronousSubscription` into the later phase too, but registers them ahead of the fencing check there on
+> purpose, matching where they already ran relative to it. Closing this gap for these four stays open work, not
+> something #965 does as a side effect of the reorder.
 
 The one thing to watch out for is `@SynchronousSubscription`, which delivers on the writer's thread. Moving its
 registration later means a write executed during startup, between the two phases, is not delivered to it where today it

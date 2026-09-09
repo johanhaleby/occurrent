@@ -44,6 +44,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
 import org.springframework.context.annotation.Import;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import tools.jackson.databind.ObjectMapper;
@@ -57,13 +58,15 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * Proves that a {@link Transactional} {@link DcbSubscription} handler with {@code startAt = BEGINNING} and
- * {@code startupMode = WAIT_UNTIL_STARTED} does not hang Spring Boot startup. That combination replays its history
- * synchronously inside the {@code BeanPostProcessor}, on the same thread Spring is using to create the handler bean,
- * so a handler lookup that unconditionally asked the {@code ApplicationContext} for that bean by name deadlocked
- * against its own creation. The context reaching {@link SpringBootTest} at all is the assertion.
+ * {@code startupMode = WAIT_UNTIL_STARTED} does not hang Spring Boot startup, and that every event the replay
+ * delivers runs inside a transaction, not only the ones delivered after startup finishes. That combination replays
+ * its history synchronously while the handler bean is still being resolved, so a handler lookup that unconditionally
+ * asked the {@code ApplicationContext} for that bean by name deadlocked against its own creation, and a lookup that
+ * fell back to the raw bean instead delivered part of the replay with no transaction at all.
  */
 @DisplayName("DcbSubscription WAIT_UNTIL_STARTED replay with a Transactional handler")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -86,8 +89,10 @@ class DcbSubscriptionWaitUntilStartedTransactionalStartupMongoTest {
     private RecordingDashboard recordingDashboard;
 
     @Test
-    void the_context_starts_and_the_replayed_history_is_delivered() {
-        assertThat(recordingDashboard.received()).extracting(TestEvent::name).containsExactly("historic-1", "historic-2");
+    void the_context_starts_and_every_replayed_delivery_runs_inside_a_transaction() {
+        assertThat(recordingDashboard.received())
+                .extracting(Delivery::eventName, Delivery::transactionActive)
+                .containsExactly(tuple("historic-1", true), tuple("historic-2", true));
     }
 
     @TestConfiguration(proxyBeanMethods = false)
@@ -150,17 +155,20 @@ class DcbSubscriptionWaitUntilStartedTransactionalStartupMongoTest {
     }
 
     static class RecordingDashboard {
-        private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+        private final CopyOnWriteArrayList<Delivery> received = new CopyOnWriteArrayList<>();
 
         @Transactional
         @DcbSubscription(id = "wait-until-started-transactional-startup-dashboard", eventTypes = TestEvent.class, startAt = StartPosition.BEGINNING, startupMode = StartupMode.WAIT_UNTIL_STARTED)
         void onEvent(TestEvent event) {
-            received.add(event);
+            received.add(new Delivery(event.name(), TransactionSynchronizationManager.isActualTransactionActive()));
         }
 
-        List<TestEvent> received() {
+        List<Delivery> received() {
             return received;
         }
+    }
+
+    record Delivery(String eventName, boolean transactionActive) {
     }
 
     record TestEvent(String eventId, Date timestamp, String name) {

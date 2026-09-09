@@ -51,10 +51,9 @@ class DcbSubscriptionMalformedTagAnnotationTest {
                 .withUserConfiguration(ConverterConfiguration.class, MalformedTagSubscriberConfiguration.class)
                 .run(context -> {
                     assertThat(context).hasFailed();
-                    // The bean-creation failure wraps the post-processor's IllegalArgumentException, which names the
-                    // subscription id and the offending tag; its own cause is the raw Tag.parse rejection.
+                    // afterSingletonsInstantiated throws this directly, with no bean-creation wrapper around it,
+                    // naming the subscription id and the offending tag; its own cause is the raw Tag.parse rejection.
                     assertThat(context.getStartupFailure())
-                            .cause()
                             .isInstanceOf(IllegalArgumentException.class)
                             .hasMessageContaining(SUBSCRIPTION_ID)
                             .hasMessageContaining("blank");

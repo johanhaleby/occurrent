@@ -36,6 +36,7 @@ import org.springframework.util.ClassUtils;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -80,16 +81,17 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         this.snapshotRegistrar = new SnapshotAnnotationRegistrar(applicationContext, registeredIds, startPositionSupport);
     }
 
-    @Override
-    public Object postProcessBeforeInitialization(Object bean, @NonNull String beanName) throws BeansException {
-        return subscriptionRegistrar.postProcessBeforeInitialization(bean, beanName);
-    }
+    // Still a BeanPostProcessor only so the static @Bean factory method below registers it ahead of ordinary beans;
+    // postProcessBeforeInitialization and postProcessAfterInitialization do no work and use the interface's defaults.
 
-    // @Projection and @Snapshot factory methods are registered after all singletons are instantiated, not in
-    // postProcessBeforeInitialization: the factory has to be invoked to obtain the descriptor, and its collaborators
-    // (the store, the subscription model) must already be wired. First collect every subscription id so a projection
-    // or snapshot cannot reuse one, then register each projection, catch up domain-push feeds, then register each
-    // snapshot.
+    // @Projection and @Snapshot factory methods, and @Subscription, @StreamSubscription, @DcbSubscription and
+    // @SynchronousSubscription handler methods, register after all singletons are instantiated: the factory has to
+    // be invoked to obtain the descriptor, and its collaborators (the store, the subscription model) must already be
+    // wired. Every handler resolves its invocation through applicationContext.getBean(beanName), which by this point
+    // always returns the fully proxied singleton, so advice such as @Transactional applies to every delivery,
+    // including a WAIT_UNTIL_STARTED history replay, not just the ones after startup. First collect every
+    // subscription id so a projection or snapshot cannot reuse one, then register the subscriptions, then each
+    // projection, catch up domain-push feeds, then register each snapshot.
     @Override
     public void afterSingletonsInstantiated() {
         // A presence check, not a resolution: getBeanProvider(...).getIfAvailable() throws NoUniqueBeanDefinitionException
@@ -100,11 +102,17 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // the right tool; which one is meant is resolved later, per annotation, by the actual registrars.
         // SynchronousSubscriptionModel is itself a Subscribable (it extends RegisteringSubscribable), so it is
         // already covered by the check below and needs no check of its own.
-        if (applicationContext.getBeanNamesForType(Subscribable.class).length == 0) {
-            return;
-        }
+        //
+        // A misconfigured @Subscription method (more than one subscription annotation, a @DcbSubscription with no
+        // event parameter) has to fail fast whether or not a Subscribable bean exists at all, so subscription
+        // scanning and registration run unconditionally below, ahead of this check. Only @Projection and @Snapshot,
+        // which cannot register anything without a Subscribable-backed DSL bean, are behind it.
+        boolean subscribableExists = applicationContext.getBeanNamesForType(Subscribable.class).length > 0;
         List<Object[]> projectionMethods = new ArrayList<>();
         List<Object[]> snapshotMethods = new ArrayList<>();
+        // Iteration order of getBeanDefinitionNames() is deterministic, so a LinkedHashSet keeps registration order
+        // reproducible across runs.
+        Set<String> subscriptionBeanNames = new LinkedHashSet<>();
         for (String beanName : applicationContext.getBeanDefinitionNames()) {
             Class<?> type;
             try {
@@ -116,7 +124,10 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                 continue;
             }
             for (Method method : ClassUtils.getUserClass(type).getDeclaredMethods()) {
-                collectSubscriptionId(method);
+                collectSubscriptionId(beanName, method, subscriptionBeanNames);
+                if (!subscribableExists) {
+                    continue;
+                }
                 org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
                 if (projection != null) {
                     projectionMethods.add(new Object[]{beanName, method, projection});
@@ -126,6 +137,15 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                     snapshotMethods.add(new Object[]{beanName, method, snapshot});
                 }
             }
+        }
+        for (String beanName : subscriptionBeanNames) {
+            // getType(beanName), not bean.getClass(): a JDK dynamic proxy's class implements only interfaces, so
+            // scanning it for annotated methods would miss any declared on the concrete class.
+            Class<?> userClass = ClassUtils.getUserClass(applicationContext.getType(beanName));
+            subscriptionRegistrar.registerSubscriptions(applicationContext.getBean(beanName), userClass);
+        }
+        if (!subscribableExists) {
+            return;
         }
         for (Object[] pm : projectionMethods) {
             projectionRegistrar.processProjectionAnnotation(applicationContext.getBean((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
@@ -147,14 +167,28 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
     }
 
-    private void collectSubscriptionId(Method method) {
+    // A bean carrying any of the four annotations goes into subscriptionBeanNames so registerSubscriptions runs for
+    // it exactly once, above.
+    private void collectSubscriptionId(String beanName, Method method, Set<String> subscriptionBeanNames) {
         StreamSubscription s = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
-        if (s != null) registeredIds.add(s.id());
+        if (s != null) {
+            registeredIds.add(s.id());
+            subscriptionBeanNames.add(beanName);
+        }
         Subscription a = AnnotationUtils.findAnnotation(method, Subscription.class);
-        if (a != null) registeredIds.add(a.id());
+        if (a != null) {
+            registeredIds.add(a.id());
+            subscriptionBeanNames.add(beanName);
+        }
         DcbSubscription d = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
-        if (d != null) registeredIds.add(d.id());
+        if (d != null) {
+            registeredIds.add(d.id());
+            subscriptionBeanNames.add(beanName);
+        }
         SynchronousSubscription sy = AnnotationUtils.findAnnotation(method, SynchronousSubscription.class);
-        if (sy != null) registeredIds.add(sy.id());
+        if (sy != null) {
+            registeredIds.add(sy.id());
+            subscriptionBeanNames.add(beanName);
+        }
     }
 }

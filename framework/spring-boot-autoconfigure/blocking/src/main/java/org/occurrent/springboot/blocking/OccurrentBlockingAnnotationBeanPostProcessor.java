@@ -37,6 +37,7 @@ import org.springframework.util.ClassUtils;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -72,21 +73,22 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         this.sagaRegistrar = new SagaAnnotationRegistrar(applicationContext, startPositionSupport, registeredIds);
     }
 
-    @Override
-    public Object postProcessBeforeInitialization(Object bean, @NonNull String beanName) throws BeansException {
-        subscriptionRegistrar.registerSubscriptions(bean, beanName);
-        return bean;
-    }
+    // Still a BeanPostProcessor only so the static @Bean factory method below registers it ahead of ordinary beans;
+    // postProcessBeforeInitialization and postProcessAfterInitialization do no work and use the interface's defaults.
 
-    // @Projection factory methods are registered after all singletons are instantiated, not in
-    // postProcessBeforeInitialization: the factory has to be invoked to obtain the descriptor, and its collaborators
-    // (the store, the subscription model) must already be wired. First collect every subscription id so a projection
-    // cannot reuse one and so the fencing check below can be asked about each one, then register each projection.
+    // @Projection factory methods, and @Subscription, @StreamSubscription, @DcbSubscription and
+    // @SynchronousSubscription handler methods, register after all singletons are instantiated: the factory has to
+    // be invoked to obtain the descriptor, and its collaborators (the store, the subscription model) must already be
+    // wired. Every handler resolves its invocation through applicationContext.getBean(beanName), which by this point
+    // always returns the fully proxied singleton, so advice such as @Transactional applies to every delivery,
+    // including a WAIT_UNTIL_STARTED history replay, not just the ones after startup. First collect every
+    // subscription id so a projection cannot reuse one and so the fencing check below can be asked about each one,
+    // then register the subscriptions, then the projections.
     //
-    // A @Subscription, @StreamSubscription, @DcbSubscription or @SynchronousSubscription method still registers per
-    // bean in postProcessBeforeInitialization, ahead of this check, so one can already write a checkpoint before
-    // this runs. Pre-existing, not introduced by this reorder. CheckpointStorageCannotFenceSubscriptionException's
-    // javadoc covers it.
+    // @Subscription, @StreamSubscription, @DcbSubscription and @SynchronousSubscription methods register before the
+    // fencing check below runs, so one can already write a checkpoint before the check inspects idsToCheck.
+    // Pre-existing, not introduced by this reorder. CheckpointStorageCannotFenceSubscriptionException's javadoc
+    // covers it.
     @Override
     public void afterSingletonsInstantiated() {
         // Reflects over method signatures only, no store access or checkpoint write, so running it before any
@@ -100,6 +102,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // though it stays in registeredIds for duplicate detection.
         // CheckpointStorageCannotFenceSubscriptionException's javadoc says exactly which ids that is.
         Set<String> idsToCheck = new HashSet<>();
+        // Iteration order of getBeanDefinitionNames() is deterministic, so a LinkedHashSet keeps registration order
+        // reproducible across runs.
+        Set<String> subscriptionBeanNames = new LinkedHashSet<>();
         for (String beanName : applicationContext.getBeanDefinitionNames()) {
             Class<?> type;
             try {
@@ -111,7 +116,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 continue;
             }
             for (Method method : ClassUtils.getUserClass(type).getDeclaredMethods()) {
-                collectSubscriptionId(method, idsToCheck);
+                collectSubscriptionId(beanName, method, idsToCheck, subscriptionBeanNames);
                 org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
                 if (projection != null) {
                     projectionMethods.add(new Object[]{beanName, method, projection});
@@ -136,6 +141,12 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 }
             }
         }
+        for (String beanName : subscriptionBeanNames) {
+            // getType(beanName), not bean.getClass(): a JDK dynamic proxy's class implements only interfaces, so
+            // scanning it for annotated methods would miss any declared on the concrete class.
+            Class<?> userClass = ClassUtils.getUserClass(applicationContext.getType(beanName));
+            subscriptionRegistrar.registerSubscriptions(applicationContext.getBean(beanName), userClass);
+        }
         CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
         for (Object[] pm : projectionMethods) {
             projectionRegistrar.processProjectionAnnotation(applicationContext.getBean((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
@@ -152,25 +163,32 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
 
     // Every id here goes into registeredIds, the shared duplicate-id registry. Only the three that reach
     // CheckpointStorage also go into idsToCheck. @SynchronousSubscription writes no checkpoint at all, so its id is
-    // registered for duplicate detection only, never asked about by the fencing check.
-    private void collectSubscriptionId(Method method, Set<String> idsToCheck) {
+    // registered for duplicate detection only, never asked about by the fencing check. A bean carrying any of the
+    // four annotations goes into subscriptionBeanNames so registerSubscriptions runs for it exactly once, below.
+    private void collectSubscriptionId(String beanName, Method method, Set<String> idsToCheck, Set<String> subscriptionBeanNames) {
         StreamSubscription s = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
         if (s != null) {
             registeredIds.add(s.id());
             idsToCheck.add(s.id());
+            subscriptionBeanNames.add(beanName);
         }
         Subscription a = AnnotationUtils.findAnnotation(method, Subscription.class);
         if (a != null) {
             registeredIds.add(a.id());
             idsToCheck.add(a.id());
+            subscriptionBeanNames.add(beanName);
         }
         DcbSubscription d = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
         if (d != null) {
             registeredIds.add(d.id());
             idsToCheck.add(d.id());
+            subscriptionBeanNames.add(beanName);
         }
         SynchronousSubscription sy = AnnotationUtils.findAnnotation(method, SynchronousSubscription.class);
-        if (sy != null) registeredIds.add(sy.id());
+        if (sy != null) {
+            registeredIds.add(sy.id());
+            subscriptionBeanNames.add(beanName);
+        }
     }
 
     // True unless source = PUSH and catchup = NONE, the one combination @Projection and @Saga share where the bare

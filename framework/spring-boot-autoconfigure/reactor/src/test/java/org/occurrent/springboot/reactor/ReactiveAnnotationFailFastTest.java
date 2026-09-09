@@ -70,7 +70,6 @@ class ReactiveAnnotationFailFastTest {
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
-                            .cause()
                             .isInstanceOf(IllegalArgumentException.class)
                             .hasMessageContaining("more than one of @Subscription, @StreamSubscription, @DcbSubscription and @SynchronousSubscription");
                 });
@@ -84,7 +83,6 @@ class ReactiveAnnotationFailFastTest {
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
-                            .cause()
                             .isInstanceOf(IllegalArgumentException.class)
                             .hasMessageContaining("must declare an event parameter");
                 });
@@ -98,7 +96,6 @@ class ReactiveAnnotationFailFastTest {
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
-                            .cause()
                             .isInstanceOf(IllegalArgumentException.class)
                             .hasMessageContaining("cannot honor a specific historical start time");
                 });
@@ -114,7 +111,6 @@ class ReactiveAnnotationFailFastTest {
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
-                            .cause()
                             .isInstanceOf(IllegalArgumentException.class)
                             .hasMessageContaining("does not support reactive stream history replay");
                 });
