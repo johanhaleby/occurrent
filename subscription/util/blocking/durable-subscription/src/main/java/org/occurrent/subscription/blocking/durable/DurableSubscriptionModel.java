@@ -300,9 +300,10 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
     }
 
-    // Never throws. This runs inside the StartAt.dynamic supplier below, which a wrapped model can evaluate under
-    // its own retry loop, the exact case recordFirstPositionOrRefuse's own placement outside that supplier exists
-    // to avoid. StartPositionAlreadyPinnedException here means another node's write already settled the position,
+    // Never lets StartPositionAlreadyPinnedException escape, though a storage failure still can. This runs inside
+    // the StartAt.dynamic supplier below, which a wrapped model can evaluate under its own retry loop, the exact
+    // case recordFirstPositionOrRefuse's own placement outside that supplier exists to avoid.
+    // StartPositionAlreadyPinnedException here means another node's write already settled the position,
     // so its own positionStored is adopted instead of refusing. The rare case where the confirm-read behind that
     // exception itself found nothing or failed falls back to globalCheckpoint instead, the position this node
     // itself computed and would have started from had the race gone the other way. That risks a duplicate
