@@ -39,10 +39,10 @@ import static java.util.Objects.requireNonNull;
  *                             of times that input's commands can be re-dispatched
  * @param redeliveryDetection  what to do with an event the runner cannot recognise a redelivery of
  * @param quarantineAfter      how long one instance may keep failing before it is quarantined on whichever event it is
- *                             failing on then. Measured across the instance rather than per event, so a second failing
- *                             event inherits the elapsed time rather than restarting it
- *                             on that event and the subscription is allowed past it, or {@code null} to keep
- *                             rethrowing forever, which is what every version up to 0.33.0 did. A runner ignores this
+ *                             failing on when the budget runs out, so that the subscription is allowed past that event,
+ *                             or {@code null} to keep rethrowing forever, which is what every version up to 0.33.0 did.
+ *                             The clock belongs to the instance rather than to one event, so a second event that starts
+ *                             failing inherits the elapsed time instead of restarting the budget. A runner ignores this
  *                             and keeps rethrowing unless its subscription model guarantees that it holds every event
  *                             it delivers, since a quarantined instance skips everything addressed to it afterwards
  *                             and skipping acknowledges. Being able to answer for one event is not enough on its own,
