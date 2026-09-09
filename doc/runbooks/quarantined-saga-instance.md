@@ -33,8 +33,13 @@ Three log lines from `org.occurrent.dsl.saga.blocking.SagaExecution`, all naming
 instance's saga id, and all logging the exception with its stack trace. There is no metric and no health indicator for
 any of this in 0.34.0.
 
-While the instance is still inside its budget, every failure logs a `WARN` saying the instance failed on an event and
-is being retried. The duration in that line is the budget it has to exhaust, not how long it has been failing so far.
+The first `WARN` says the instance failed on an event and is being retried. The duration in that line is the budget it
+has to exhaust, not how long it has been failing so far.
+
+That line does not repeat for every redelivery. The runner only logs it when it writes a failure record, and the same
+input failing again inside the budget records nothing new, so the redeliveries after the first are silent. A different
+input failing does write a record and does log again. So one line followed by silence is an instance still failing on
+the same event, not one that recovered, and the `ERROR` at the end of the budget is the next thing you hear.
 
 When the budget elapses, the same logger logs an `ERROR` saying the instance is now `QUARANTINED`. That line is the
 one to alert on. It names two durations, how long the instance had been failing and then the budget, in that order.
@@ -79,13 +84,14 @@ instances than that needs a higher number rather than a second call.
 MongoDB is:
 
 ```javascript
-db.getCollection("saga-order-fulfilment").find({ status: "QUARANTINED" }).sort({ updatedAt: 1 })
+db.getCollection("saga-order-fulfilment").find({ status: "QUARANTINED" }).sort({ updatedAt: 1 }).limit(100)
 ```
 
 `saga-<sagaId>` is the collection the Spring Boot starter uses when you never named one. If you built the
-`SpringMongoSagaStateStore` yourself, use the name you passed it. Either way the query is served by an index the store
-creates for itself on `status` and `updatedAt`, so it is cheap on a large collection. `updatedAt` is stored as epoch
-milliseconds rather than a date.
+`SpringMongoSagaStateStore` yourself, use the name you passed it. Keep the limit, and raise it when you have to. An
+index the store creates for itself on `status` and `updatedAt` serves the match and the sort, so this never scans the
+collection, but without a bound it still reads and returns every quarantined instance, which during an incident is
+exactly when there are most of them. `updatedAt` is stored as epoch milliseconds rather than a date.
 
 ### 2. [you] Read what the instance stopped on
 

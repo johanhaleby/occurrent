@@ -44,7 +44,7 @@ import static java.util.Objects.requireNonNull;
  * reactor wrapper hops to a blocking-safe scheduler before {@link #recordIfReady(EventMetadata)}, and before the
  * {@link #retryPendingClear()} its own replay completion makes. Its two {@code AppliedAppendRecorder} hooks do not
  * hop, so a {@link #retryPendingClear()} or {@link #pollForClear()} that arrives through one of those runs on
- * whichever thread called it, and choosing a blocking-safe one is whoever schedules them.
+ * whichever thread called it, and choosing a blocking-safe one is up to whoever schedules them.
  * <p>
  * {@link #catchupStarted(Object)} and {@link #historyRead(Object)} are deliberately I/O-free, so a reactive
  * lifecycle signal that is never awaited can call them inline without blocking.
