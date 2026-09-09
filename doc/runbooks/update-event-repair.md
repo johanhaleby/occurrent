@@ -219,9 +219,10 @@ an email, charging a card, calling another system, since rewinding it reruns tha
 the restart point, not only the repaired one. Reconcile that consumer instead of replaying it.
 
 Read the events in the repaired range directly, for example
-`db.events.find({ position: { $gte: <minRepairedPosition>, $lte: <maxRepairedPosition> } })`, and feed only the ones
-the consumer actually missed into its logic once, by hand or with a targeted script, leaving its checkpoint where it
-is.
+`db.events.find({ position: { $gte: NumberLong(<minRepairedPosition>), $lte: NumberLong(<maxRepairedPosition>) } })`,
+and feed only the ones the consumer actually missed into its logic once, by hand or with a targeted script, leaving
+its checkpoint where it is. `NumberLong` matters once a store's position passes 2^53, since mongosh reads a bare
+number as a JavaScript double and a comparison against a `position` that large silently rounds.
 
 ## The damage this cannot find
 

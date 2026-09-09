@@ -68,6 +68,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -732,7 +733,7 @@ class UpdateEventRepairTest {
     }
 
     @Test
-    void a_resumed_run_still_reports_the_repaired_range_the_interrupted_run_found() {
+    void a_resumed_run_still_reports_the_repaired_range_the_interrupted_run_found() throws InterruptedException {
         // Repairing one event per batch and stopping after the first checkpoints that event's position behind the
         // checkpoint, where a resumed run never looks again.
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
@@ -745,9 +746,22 @@ class UpdateEventRepairTest {
         UpdateEventRepair oneBatchOnly = new UpdateEventRepair(database, EVENT_COLLECTION,
                 UpdateEventRepairOptions.defaults().withBatchSize(1).withThrottleMillis(60_000));
         Thread runner = new Thread(oneBatchOnly::run);
+        AtomicReference<Throwable> runnerFailure = new AtomicReference<>();
+        runner.setUncaughtExceptionHandler((thread, failure) -> runnerFailure.set(failure));
         runner.start();
         waitUntilCheckpointExists();
         runner.interrupt();
+        runner.join(30_000);
+
+        assertAll(
+                () -> assertThat(runner.isAlive())
+                        .as("the interrupted run must have stopped before the resumed run starts, otherwise the two can race over the same checkpoint")
+                        .isFalse(),
+                () -> assertThat(runnerFailure.get())
+                        .as("interrupting the run must fail it with the documented exception rather than let it continue or die some other way")
+                        .isInstanceOf(RuntimeException.class)
+                        .hasMessageContaining("interrupted while throttling")
+        );
 
         UpdateEventRepairResult resumed = newRepair().run();
 
