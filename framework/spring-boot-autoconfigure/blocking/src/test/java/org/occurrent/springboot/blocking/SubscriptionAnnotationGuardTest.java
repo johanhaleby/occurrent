@@ -25,14 +25,18 @@ import org.occurrent.annotation.DcbSubscription;
 import org.occurrent.annotation.StreamSubscription;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.subscription.blocking.Subscriptions;
+import org.occurrent.springboot.common.OccurrentProperties;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.NestedExceptionUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 /**
  * Characterizes the eager, per-bean validation the blocking annotation post-processor performs from
@@ -70,7 +74,9 @@ class SubscriptionAnnotationGuardTest {
 
     // A JDK dynamic proxy implementing only Marker can never carry the handler method declared on the concrete
     // class, the same mismatch StreamSubscriptionAnnotationJdkInterfaceProxyMongoTest used to paper over by falling
-    // back to the raw bean (issue #836). That fallback is gone, so this now fails fast instead.
+    // back to the raw bean (issue #836). That fallback is gone, so this now fails fast instead. The bean is created
+    // eagerly (no @Lazy), matching how a real interface-proxied singleton exists by the time this scans: the scan
+    // itself has to see the annotation through the already-created proxy, not just resolveHandlerInvocation later.
     @Test
     void handler_method_not_reachable_through_a_JDK_interface_proxy_fails_fast() {
         runner.withUserConfiguration(JdkInterfaceProxyConfiguration.class).run(context -> {
@@ -102,6 +108,13 @@ class SubscriptionAnnotationGuardTest {
                     .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
                     .hasMessageContaining("is final");
         });
+    }
+
+    // A final method on a bean nothing proxies has no proxy to lose advice through, so the CGLIB-only reason the
+    // check above exists does not apply here, and registration succeeds exactly as it would for a non-final method.
+    @Test
+    void final_handler_method_on_an_unproxied_bean_registers_normally() {
+        runner.withUserConfiguration(FinalHandlerNoProxyConfiguration.class).run(context -> assertThat(context).hasNotFailed());
     }
 
     @Configuration(proxyBeanMethods = false)
@@ -244,6 +257,34 @@ class SubscriptionAnnotationGuardTest {
 
     static class FinalHandlerSubscriber {
         @Subscription(id = "final-handler-cglib-guard")
+        final void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class FinalHandlerNoProxyConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        // Registration reaches this bean once resolveHandlerInvocation lets the final method through, so a mock is
+        // enough to let the whole path complete without a real subscription model.
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        FinalHandlerNoProxySubscriber finalHandlerNoProxySubscriber() {
+            return new FinalHandlerNoProxySubscriber();
+        }
+    }
+
+    static class FinalHandlerNoProxySubscriber {
+        @Subscription(id = "final-handler-no-proxy-guard")
         final void on(TestEvent event) {
         }
     }

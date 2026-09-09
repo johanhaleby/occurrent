@@ -21,16 +21,21 @@ import org.aopalliance.intercept.MethodInterceptor;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.occurrent.annotation.StartupMode;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
+import org.occurrent.dsl.subscription.reactor.Subscriptions;
+import org.occurrent.springboot.common.OccurrentProperties;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.NestedExceptionUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 /**
  * Reactive counterpart of the blocking {@code SubscriptionAnnotationGuardTest}: a handler method the bean's Spring
@@ -79,6 +84,13 @@ class SubscriptionAnnotationGuardTest {
                     .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
                     .hasMessageContaining("is final");
         });
+    }
+
+    // A final method on a bean nothing proxies has no proxy to lose advice through, so the CGLIB-only reason the
+    // check above exists does not apply here, and registration succeeds exactly as it would for a non-final method.
+    @Test
+    void final_handler_method_on_an_unproxied_bean_registers_normally() {
+        runner.withUserConfiguration(FinalHandlerNoProxyConfiguration.class).run(context -> assertThat(context).hasNotFailed());
     }
 
     @Configuration(proxyBeanMethods = false)
@@ -192,6 +204,35 @@ class SubscriptionAnnotationGuardTest {
 
     static class FinalHandlerSubscriber {
         @Subscription(id = "reactive-final-handler-cglib-guard")
+        final void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class FinalHandlerNoProxyConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        // Registration reaches this bean once resolveHandlerInvocation lets the final method through, so a mock is
+        // enough to let the whole path complete without a real subscription model. startupMode = BACKGROUND keeps
+        // the registrar from calling waitUntilStarted() on whatever this mock's unstubbed subscribe(...) returns.
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        FinalHandlerNoProxySubscriber finalHandlerNoProxySubscriber() {
+            return new FinalHandlerNoProxySubscriber();
+        }
+    }
+
+    static class FinalHandlerNoProxySubscriber {
+        @Subscription(id = "reactive-final-handler-no-proxy-guard", startupMode = StartupMode.BACKGROUND)
         final void on(TestEvent event) {
         }
     }
