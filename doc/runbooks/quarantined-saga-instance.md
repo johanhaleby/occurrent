@@ -29,19 +29,24 @@ is what that costs.
 
 ## How you find out
 
-Two log lines from `org.occurrent.dsl.saga.blocking.SagaExecution`, both naming the saga's subscription id and the
-instance's saga id, and both logging the exception with its stack trace.
+Three log lines from `org.occurrent.dsl.saga.blocking.SagaExecution`, all naming the saga's subscription id and the
+instance's saga id, and all logging the exception with its stack trace. There is no metric and no health indicator for
+any of this in 0.34.0.
 
 While the instance is still inside its budget, every failure logs a `WARN` saying the instance failed on an event and
-is being retried, and naming the budget it has to exhaust before it is quarantined.
+is being retried. The duration in that line is the budget it has to exhaust, not how long it has been failing so far.
 
-When the budget elapses, the same logger logs an `ERROR` saying the instance is now `QUARANTINED`, how long it had
-been failing, and which event it stopped on. That line is the one to alert on. There is no metric and no health
-indicator for this in 0.34.0.
+When the budget elapses, the same logger logs an `ERROR` saying the instance is now `QUARANTINED`. That line is the
+one to alert on. It names two durations, how long the instance had been failing and then the budget, in that order.
 
-The duration in both lines is how long the instance has been failing, which can be longer than the named event has.
-The clock belongs to the instance rather than to one event, so an instance where two events both fail keeps the
-instant it started failing and renames the record to whichever event failed last.
+The third line is a `WARN` for the case where the budget elapsed and the instance was not quarantined, because the
+subscription could not confirm it still holds the failing event. That instance goes on blocking the saga's other
+instances, so it never reaches step 1 and this line is the only thing that says so. It is logged once per instance
+rather than on every redelivery, so an alert that only samples recent logs can miss it.
+
+The elapsed duration is how long the instance has been failing, which can be longer than the named event has. The
+clock belongs to the instance rather than to one event, so an instance where two events both fail keeps the instant it
+started failing and renames the record to whichever event failed last.
 
 ## The sequence
 
@@ -141,7 +146,8 @@ instances the way it did in 0.33.0. The contract for an override is in
 
 ### 4. [you] Fix the cause, or decide there is nothing to fix
 
-There are three causes, and which one you have decides step 5.
+Whatever the cause, fixing it does not release the instance, so this step is about what you learn rather than about
+getting the instance moving. Three common ones, and what each one tells you.
 
 **The saga's own code is wrong.** Deploy the fix. The instance stays quarantined, because nothing rereads it, so it
 still needs step 5 afterwards.
@@ -152,7 +158,7 @@ with `SagaStateStore.find`. If it decodes now, you know what the instance held. 
 **A downstream service was refusing the command.** The instance stopped on an event it would handle correctly today.
 It is still quarantined, and 0.34.0 has nothing that replays it.
 
-In all three the instance stays where it is. What you have gained is knowing whether the process it was running
+In every case the instance stays where it is. What you have gained is knowing whether the process it was running
 finished some other way, which is what you need before step 5.
 
 ### 5. [you] Delete the instance, once you have decided not to recover it
