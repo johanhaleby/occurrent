@@ -30,6 +30,7 @@ import org.springframework.data.mongodb.core.query.Update;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
@@ -42,11 +43,20 @@ import static org.springframework.data.mongodb.core.query.Query.query;
 
 /**
  * The {@link AppliedAppendStore} the reactive Mongo starter auto-configures when the application declares none. A
- * projection records into it directly for now, through {@link AppliedAppendStore#recordApplied(String, AppendId)}.
- * A future {@code @Projection(recordAppliedAppends = true)} opt-in that records automatically, from a callback
- * already running on {@code boundedElastic}, is not part of this release. {@link AppliedAppendStore} is a
- * blocking-shaped interface on both stacks regardless, so this store bridges to the underlying reactive Mongo calls
- * with {@code block()}, the same direction that future callback would bridge in.
+ * projection records into it directly through {@link AppliedAppendStore#recordApplied(String, AppendId)}, or through
+ * the {@code @Projection(recordAppliedAppends = true)} opt-in, which records from a callback already hopped to
+ * {@code boundedElastic}. {@link AppliedAppendStore} is a blocking-shaped interface on both stacks regardless, so
+ * this store bridges to the underlying reactive Mongo calls with {@code block()}, the same direction that callback
+ * bridges in.
+ * <p>
+ * {@code block()} throws {@link IllegalStateException} on a thread Reactor has marked non-blocking, a Netty event
+ * loop above all. {@link #waitUntilApplied(String, AppendId, Duration, Backoff)} checks
+ * {@link Schedulers#isInNonBlockingThread()} before its first read and throws immediately rather than looping, since
+ * a caller on such a thread cannot be answered here at all. See the javadoc on that method for why this store checks
+ * the thread itself instead of asking its own caller to hop, which is how every other blocking-store-from-reactive
+ * hazard in this codebase is handled. {@link #hasApplied(String, AppendId)}, {@link #recordApplied(String, AppendId)}
+ * and {@link #clear(String)} carry the same hazard and rely on the same exception propagating uncaught, since none
+ * of them catch what {@code block()} throws.
  * <p>
  * One document per (projection id, append id) pair, indexed by a unique compound index on both fields. Calling
  * {@link #recordApplied(String, AppendId)} twice for the same pair upserts the same document rather than inserting
@@ -180,10 +190,10 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * Ensures the compound unique index and the TTL index exist, once, the first time this store is actually asked
      * to do anything. Composed entirely as {@code Mono} operations rather than a nested {@code block()}, as an
      * earlier version of this method had. {@code retryWhen}'s delayed resubscription runs on
-     * {@code Schedulers.parallel()}, whose worker threads this project's dependencies do not instrument to reject a
-     * blocking call, so a nested {@code block()} there does not throw, but it does hold one of that shared pool's
-     * few threads for the length of the Mongo call on every retry, which is worth avoiding regardless of whether it
-     * throws. Wrapped in {@link Mono#defer(java.util.function.Supplier)} so a retry re-checks
+     * {@code Schedulers.parallel()}, which {@link Schedulers#isInNonBlockingThread()} marks non-blocking the same
+     * way it marks a Netty event loop, so a nested {@code block()} there throws {@link IllegalStateException} once
+     * the retried call actually needs to wait on Mongo, breaking the very retry meant to recover the index setup.
+     * Wrapped in {@link Mono#defer(java.util.function.Supplier)} so a retry re-checks
      * {@link #indexesEnsured} and rebuilds this {@code Mono} fresh, the same reason
      * {@link #recordApplied(String, AppendId)}'s own upsert is deferred. A race between two threads both finding
      * {@link #indexesEnsured} false is at worst wasted work and at best exactly the {@code IndexOptionsConflict}
@@ -274,7 +284,8 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * "not applied yet", and its own deadline check, not the read's failure, is what ends it. This also covers a
      * fresh store's index setup, since
      * {@link #existsWithIndexesEnsured} runs it in the same chain as the read, retried and limited to the same
-     * deadline.
+     * deadline. {@code block()} throwing here means the store itself failed, never that the thread was wrong.
+     * {@link #waitUntilApplied(String, AppendId, Duration, Backoff)} already refused before its first call here.
      */
     private boolean readOnceBoundedBy(String projectionId, AppendId appendId, long deadlineNanos, AtomicBoolean anyReadStarted) {
         long remainingNanos = deadlineNanos - System.nanoTime();
@@ -330,6 +341,18 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * socket timeout is what does, the same as a plain {@link #hasApplied(String, AppendId)} call. Configure one on
      * the client, for example through {@code spring.mongodb.uri}, if that read has to end while a connection it has
      * accepted stops responding.
+     * <p>
+     * Refuses up front, before the first read, when {@link Schedulers#isInNonBlockingThread()} says the calling
+     * thread is one, rather than the {@code catch (RuntimeException)} below it, which is only for a store failure.
+     * See {@link AppliedAppendStore} for that distinction. Every other place in this codebase that hands a
+     * blocking-shaped call to reactive code hops to {@code boundedElastic} at the call site instead of asking the
+     * callee to notice. {@link org.occurrent.dsl.projection.reactor.RecordingReactiveUpdate} is exactly that for
+     * this same store. That idiom does not reach here. This method is the public, application-facing half of
+     * {@link AppliedAppendStore}, called from whatever thread the application chose, not from library code able to
+     * hop before calling it. So the choice this store's own caller elsewhere in the library made, hop rather than
+     * detect, is not available to the application, and detecting is what is left. Without it, a caller that
+     * mistakenly waits from an event loop gets {@code false} for an append that is there, only after blocking that
+     * loop for the full {@code timeout}, which is worse than telling it immediately that this call cannot run here.
      */
     @Override
     public boolean waitUntilApplied(String projectionId, AppendId appendId, Duration timeout, Backoff backoff) {
@@ -338,6 +361,9 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
         requireNonNull(timeout, "timeout cannot be null");
         requireNonNull(backoff, "backoff cannot be null");
         AppliedAppendStore.rejectBusyLoopBackoff(backoff);
+        if (Schedulers.isInNonBlockingThread()) {
+            throw new IllegalStateException("waitUntilApplied() was called from '" + Thread.currentThread().getName() + "', a thread Reactor has marked non-blocking. This store blocks on MongoDB internally and cannot poll from an event loop, call it from a thread reserved for blocking work, for example Schedulers.boundedElastic().");
+        }
         long deadlineNanos = System.nanoTime() + timeout.toNanos();
         long intervalNanos = switch (backoff) {
             case Backoff.Fixed fixed -> Duration.ofMillis(fixed.millis).toNanos();

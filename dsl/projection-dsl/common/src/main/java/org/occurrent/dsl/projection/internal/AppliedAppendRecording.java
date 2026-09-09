@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
@@ -56,8 +57,10 @@ public final class AppliedAppendRecording {
     // or clear runs first: without one lock spanning both halves, a live delivery that read "ready" just before a
     // poll-driven clear could still write its append back in immediately after that clear finished, reinstating a
     // record the clear was supposed to remove. Reentrant, so a method already holding it can still call another
-    // that also declares it, on the same thread.
-    private final Object clearLock = new Object();
+    // that also declares it, on the same thread. A ReentrantLock rather than a monitor so cannotPossiblyRecord can
+    // tryLock from any thread, including one it must never block, instead of risking a wait for a lock this same
+    // class holds across a store call.
+    private final ReentrantLock clearLock = new ReentrantLock();
     private volatile boolean pendingClear = false;
     // Tracks whether the current run of clear failures has already logged once at ERROR, so a clear stuck failing
     // for a while logs loudly exactly once and DEBUG on every retry after that, per ADR 132 decision 7.
@@ -96,6 +99,58 @@ public final class AppliedAppendRecording {
     }
 
     /**
+     * Answers whether {@link #recordIfReady(EventMetadata)} is certain to make no {@link AppliedAppendStore} call
+     * for {@code metadata} right now, so a caller that would otherwise hop to a blocking-safe thread only to call
+     * it can skip that hop instead. Runs the exact same decision {@link #recordIfReady(EventMetadata)} makes, under
+     * the same {@code clearLock}, so its answer is that decision rather than a guess at it built from unsynchronized
+     * reads of {@link #catchup}, {@link #pendingClear} and {@link #lastRecorded} a catch-up could interleave with,
+     * skipping an append whose store record that catch-up had already made stale.
+     * <p>
+     * {@link #catchupStarted(Object)} and {@link #historyRead(Object)} still never take {@code clearLock}, on
+     * purpose, so a catch-up can be announced while this method holds the lock and is partway through deciding,
+     * before {@link #reactToAnyNewCatchupAndReturnWhatItSaw()} or anything else here ever sees it. Every path that
+     * would otherwise answer {@code true} re-reads {@link #catchup} once more immediately before returning and
+     * compares it by identity to what {@link #reactToAnyNewCatchupAndReturnWhatItSaw()} saw, so a catch-up landing
+     * mid-decision is caught rather than silently believed. Answering {@code false} instead costs nothing beyond a
+     * hop {@link #recordIfReady(EventMetadata)} would also have made a decision on, never a lost record.
+     * <p>
+     * Safe to call from any thread, including one that must never block, because it only ever
+     * {@link ReentrantLock#tryLock()}s {@code clearLock} rather than waiting for it, answering {@code false} at
+     * once when the lock is already held. Any of {@link #recordIfReady(EventMetadata)}, {@link #retryPendingClear()},
+     * {@link #pollForClear()} or a concurrent call to this method itself can be the one holding it, for as long as
+     * that call's own locked section takes, whether or not it happens to be in the middle of a real
+     * {@link AppliedAppendStore#clear(String)} or {@link AppliedAppendStore#recordApplied(String, AppendId)} call
+     * right then. Waiting for it here would block whatever thread called this method for exactly as long, so it
+     * answers {@code false} instead.
+     */
+    public boolean cannotPossiblyRecord(EventMetadata metadata) {
+        requireNonNull(metadata, "metadata cannot be null");
+        if (!clearLock.tryLock()) {
+            return false;
+        }
+        try {
+            Catchup seen = reactToAnyNewCatchupAndReturnWhatItSaw();
+            boolean wouldSkip;
+            if (seen != null && seen.readingHistory()) {
+                wouldSkip = !pendingClear;
+            } else if (pendingClear || !awaitingClear.isEmpty()) {
+                wouldSkip = false;
+            } else {
+                AppendId appendId;
+                try {
+                    appendId = AppendId.from(metadata).orElse(null);
+                } catch (IllegalArgumentException e) {
+                    appendId = null;
+                }
+                wouldSkip = appendId == null || appendId.equals(lastRecorded);
+            }
+            return wouldSkip && catchup.get() == seen;
+        } finally {
+            clearLock.unlock();
+        }
+    }
+
+    /**
      * Records {@code metadata}'s append id if the projection is ready to record right now, atomically with a
      * concurrent clear, so a write already about to happen when a clear runs can never land after it and reinstate
      * what the clear just removed. Not recording is never an error.
@@ -116,7 +171,8 @@ public final class AppliedAppendRecording {
      */
     public void recordIfReady(EventMetadata metadata) {
         requireNonNull(metadata, "metadata cannot be null");
-        synchronized (clearLock) {
+        clearLock.lock();
+        try {
             if (reactToAnyNewCatchup()) {
                 // The clear this catch-up owes, and nothing else. A history of N events clears once rather than
                 // running N deleteMany calls, because a clear that succeeds is no longer owed.
@@ -134,6 +190,8 @@ public final class AppliedAppendRecording {
                 return;
             }
             doRecord(metadata);
+        } finally {
+            clearLock.unlock();
         }
     }
 
@@ -163,9 +221,17 @@ public final class AppliedAppendRecording {
      * Assumes clearLock is already held by the caller.
      */
     private boolean reactToAnyNewCatchup() {
+        Catchup current = reactToAnyNewCatchupAndReturnWhatItSaw();
+        return current != null && current.readingHistory();
+    }
+
+    // Same as reactToAnyNewCatchup(), returning the Catchup it read rather than only whether its history is
+    // still being read, so a caller can later confirm nothing this class does without the lock, catchupStarted or
+    // historyRead, moved catchup on since. Assumes clearLock is already held by the caller.
+    private @Nullable Catchup reactToAnyNewCatchupAndReturnWhatItSaw() {
         Catchup current = catchup.get();
         if (current == null) {
-            return false;
+            return null;
         }
         if (current.episode() != reactedTo) {
             reactedTo = current.episode();
@@ -173,7 +239,7 @@ public final class AppliedAppendRecording {
             // What a previous catch-up was holding describes a read model this one is rebuilding.
             dropAwaitingClear();
         }
-        return current.readingHistory();
+        return current;
     }
 
     // Assumes clearLock is already held by the caller.
@@ -269,11 +335,14 @@ public final class AppliedAppendRecording {
      * behind. {@link #recordIfReady(EventMetadata)} and {@link #pollForClear()} both know, and write them.
      */
     public void retryPendingClear() {
-        synchronized (clearLock) {
+        clearLock.lock();
+        try {
             reactToAnyNewCatchup();
             if (pendingClear) {
                 attemptClear();
             }
+        } finally {
+            clearLock.unlock();
         }
     }
 
@@ -286,7 +355,8 @@ public final class AppliedAppendRecording {
      * record again.
      */
     public boolean pollForClear() {
-        synchronized (clearLock) {
+        clearLock.lock();
+        try {
             reactToAnyNewCatchup();
             if (pendingClear) {
                 attemptClear();
@@ -295,6 +365,8 @@ public final class AppliedAppendRecording {
             // previous one held and a delivery during the history read buffers nothing.
             flushAwaitingClear();
             return pendingClear;
+        } finally {
+            clearLock.unlock();
         }
     }
 
