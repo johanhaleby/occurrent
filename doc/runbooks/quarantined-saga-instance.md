@@ -12,9 +12,10 @@ already have one.
 
 ## Why an instance stops
 
-A saga has one subscription and every instance of that saga is fed by it. When an instance's `evolve`, its `react`, or
-its command dispatcher throws, the executor rethrows, the subscription redelivers the event, and the instance tries
-again. Up to 0.33.0 that went on without limit, so one correlation id that could never make progress stopped every
+A saga has one subscription and every instance of that saga is fed by it. When handling an event for one instance
+throws, the executor rethrows, the subscription redelivers the event, and the instance tries again. Usually that is
+the instance's `evolve`, its `react`, or its command dispatcher, and it can also be the read that loads the instance,
+which is how an instance whose state no longer decodes ends up here. Up to 0.33.0 that went on without limit, so one correlation id that could never make progress stopped every
 other correlation id behind it.
 
 From 0.34.0 the executor times how long the instance has been failing. Once that reaches
@@ -124,7 +125,10 @@ SagaFailure failure = instance.failure();
 // failure.firstFailedAt()  when this instance started failing, strictly when its first failure record
 //                          was written, which is later than the first failure itself if that write
 //                          lost a compare-and-set
-// failure.failureType()    the class name of the exception the saga or its dispatcher threw
+// failure.failureType()    the class name of the exception that stopped the processing. Usually one the
+//                          saga or its command dispatcher threw, and it can also be a store or
+//                          converter failure, since the runner catches the whole path including the
+//                          read that decodes the state
 // failure.failureMessage() that exception's message, or null when it had none. Cut to the first
 //                          1000 characters with "... (truncated)" appended when it was longer,
 //                          so the log lines are where a long message survives whole
@@ -187,11 +191,13 @@ instances the way it did in 0.33.0. The contract for an override is in
 Whatever the cause, fixing it does not release the instance, so this step is about what you learn rather than about
 getting the instance moving. Three common ones, and what each one tells you.
 
-**The saga's own code is wrong.** Deploy the fix. The instance stays quarantined, because nothing rereads it, so it
-still needs step 5 afterwards.
+**The saga's own code is wrong.** Deploy the fix. The instance stays quarantined anyway. `QUARANTINED` is absorbing,
+so the input it stopped on is never handed to the saga again no matter how many later events reach the runner, and
+step 5 is still what ends it.
 
-**The state cannot be decoded.** Repair the converter or restore the event class, deploy, and read the instance again
-with `SagaStateStore.find`. If it decodes now, you know what the instance held. It is still quarantined.
+**The state cannot be decoded.** That shows up as a store or converter class in `failureType()` rather than
+anything of your saga's. Repair the converter or restore the event class, deploy, and read the instance again with
+`SagaStateStore.find`. If it decodes now, you know what the instance held. It is still quarantined.
 
 **A downstream service was refusing the command.** The instance stopped on an event it would handle correctly today.
 It is still quarantined, and 0.34.0 has nothing that replays it.
@@ -250,8 +256,9 @@ Or against MongoDB:
 db.getCollection("saga-order-fulfilment").countDocuments({ _id: "order-4711" })
 ```
 
-The `ERROR` line does not repeat for a deleted instance, since nothing rereads a quarantine. A new `ERROR` naming the
-same id means the instance was recreated by a redelivery and quarantined again, which is the race in step 5.
+No `ERROR` follows for a deleted instance, because there is no longer an instance or a failure record for the runner
+to find. A new `ERROR` naming the same id means a redelivery recreated the instance and it was quarantined again,
+which is the race in step 5.
 
 ## Preventing the next one
 

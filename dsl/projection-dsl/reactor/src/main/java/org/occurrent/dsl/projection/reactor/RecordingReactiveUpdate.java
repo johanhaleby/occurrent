@@ -56,10 +56,13 @@ import static java.util.Objects.requireNonNull;
  * after the delegate's own completion, since it is the one lifecycle {@code Mono} this class's driving engine
  * actually awaits.
  * <p>
- * The two {@link AppliedAppendRecorder} hooks are the exception, and no hop is done for them here. Both
- * {@link #retryPendingClear()} and {@link #pollForClear()} are plain blocking calls that run on whichever thread
- * invokes them, because whoever schedules them chooses that thread and this class cannot. Schedule them on
- * {@link Schedulers#boundedElastic()} or another thread reserved for blocking work.
+ * Three callbacks are the exception, and no hop is done for any of them here, because each returns {@code void} or
+ * {@code boolean} rather than a {@code Mono} this class could hop inside. {@link #retryPendingClear()} and
+ * {@link #pollForClear()} are the {@link AppliedAppendRecorder} hooks a poller drives, and
+ * {@link #alreadyDeliveredByReplay(CloudEvent)} is the one a subscription model calls with the event its replay
+ * already delivered. All three touch {@code store} and all three run on whichever thread invokes them, so that
+ * thread has to be {@link Schedulers#boundedElastic()} or another reserved for blocking work. Occurrent's own
+ * catch-up model already calls the third from one, and a composition of your own owns that choice for all three.
  */
 @NullMarked
 public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAware, AppliedAppendRecorder {
