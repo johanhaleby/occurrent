@@ -117,6 +117,20 @@ class SubscriptionAnnotationGuardTest {
         });
     }
 
+    // A JDK interface proxy forwards reflectively using the interface's Method, so Java's own virtual dispatch
+    // resolves it against whatever the proxy wraps, a nested CGLIB proxy included, and that inner layer's advice is
+    // what silently goes missing. isCglibProxy(bean) alone only sees the outer JDK layer, so this needs the guard to
+    // walk the whole chain instead.
+    @Test
+    void final_handler_method_behind_a_nested_cglib_proxy_fails_fast() {
+        runner.withUserConfiguration(NestedFinalHandlerProxyConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
+                    .hasMessageContaining("is final");
+        });
+    }
+
     // Method.invoke ignores its target for a static method, so it always dispatches on the declaring class alone,
     // proxied or not. Unlike the final-on-CGLIB check, this guard applies whether or not the bean is proxied at all.
     @Test
@@ -321,6 +335,55 @@ class SubscriptionAnnotationGuardTest {
     static class FinalHandlerSubscriber {
         @Subscription(id = "final-handler-cglib-guard")
         final void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class NestedFinalHandlerProxyConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        NestedFinalHandlerSubscriber nestedFinalHandlerSubscriber() {
+            return new NestedFinalHandlerSubscriber();
+        }
+
+        // Wraps the raw bean in an inner CGLIB proxy first, then an outer JDK interface proxy around that, the
+        // shape that lets a JDK proxy forward reflectively into a nested CGLIB proxy's inherited final method.
+        @Bean
+        static BeanPostProcessor nestedProxyPostProcessor() {
+            return new BeanPostProcessor() {
+                @Override
+                public Object postProcessAfterInitialization(Object bean, String beanName) {
+                    if (!(bean instanceof NestedFinalHandlerMarker)) {
+                        return bean;
+                    }
+                    ProxyFactory innerCglibProxy = new ProxyFactory();
+                    innerCglibProxy.setTarget(bean);
+                    innerCglibProxy.setProxyTargetClass(true);
+                    innerCglibProxy.addAdvice((MethodInterceptor) invocation -> invocation.proceed());
+                    Object cglibProxy = innerCglibProxy.getProxy();
+
+                    ProxyFactory outerJdkProxy = new ProxyFactory();
+                    outerJdkProxy.setTarget(cglibProxy);
+                    outerJdkProxy.setInterfaces(NestedFinalHandlerMarker.class);
+                    outerJdkProxy.setProxyTargetClass(false);
+                    outerJdkProxy.addAdvice((MethodInterceptor) invocation -> invocation.proceed());
+                    return outerJdkProxy.getProxy();
+                }
+            };
+        }
+    }
+
+    interface NestedFinalHandlerMarker {
+        void on(TestEvent event);
+    }
+
+    static class NestedFinalHandlerSubscriber implements NestedFinalHandlerMarker {
+        @Subscription(id = "nested-final-handler-guard")
+        public final void on(TestEvent event) {
         }
     }
 

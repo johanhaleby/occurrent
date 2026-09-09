@@ -29,6 +29,7 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
 import org.springframework.aop.framework.AopProxyUtils;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.util.ReflectionUtils;
@@ -350,6 +351,30 @@ public final class SubscriptionAnnotations {
             current = next;
         }
         return current;
+    }
+
+    /**
+     * Walks the same nested-proxy chain {@link #ultimateTarget} unwraps, checking every layer for a CGLIB proxy
+     * instead of returning the innermost target. A JDK interface proxy forwards a call reflectively using the
+     * interface's {@link Method}, so Java's own virtual dispatch resolves it against whatever the wrapped target
+     * actually is, a nested CGLIB proxy included. Checking only {@code bean} itself misses exactly that case, since
+     * an outer JDK proxy is never itself a CGLIB proxy.
+     *
+     * @param bean the (possibly proxied, possibly nested-proxied) bean to check
+     * @return {@code true} if {@code bean} or any proxy layer it unwraps to is CGLIB-backed
+     */
+    public static boolean anyProxyLayerIsCglib(Object bean) {
+        Object current = bean;
+        while (true) {
+            if (AopUtils.isCglibProxy(current)) {
+                return true;
+            }
+            Object next = AopProxyUtils.getSingletonTarget(current);
+            if (next == null) {
+                return false;
+            }
+            current = next;
+        }
     }
 
     /**
