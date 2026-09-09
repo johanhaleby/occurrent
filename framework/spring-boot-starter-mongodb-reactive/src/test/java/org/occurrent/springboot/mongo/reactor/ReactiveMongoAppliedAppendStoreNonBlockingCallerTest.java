@@ -70,9 +70,10 @@ class ReactiveMongoAppliedAppendStoreNonBlockingCallerTest {
     private static CallOutcome waitFromANonBlockingThread(AppliedAppendStore store, Duration timeout) throws InterruptedException {
         AtomicReference<Boolean> applied = new AtomicReference<>();
         AtomicReference<Throwable> thrown = new AtomicReference<>();
+        AtomicReference<Instant> start = new AtomicReference<>();
         CountDownLatch done = new CountDownLatch(1);
-        Instant start = Instant.now();
         Schedulers.parallel().schedule(() -> {
+            start.set(Instant.now());
             try {
                 applied.set(store.waitUntilApplied("orders", AppendId.mint(), timeout));
             } catch (Throwable t) {
@@ -82,7 +83,9 @@ class ReactiveMongoAppliedAppendStoreNonBlockingCallerTest {
             }
         });
         assertThat(done.await(9, TimeUnit.SECONDS)).as("the scheduled call finished within the test's own timeout").isTrue();
-        Duration elapsed = Duration.between(start, Instant.now());
+        // Started once the call itself is running, so scheduler dispatch under a loaded test JVM is never counted
+        // as this call's own latency.
+        Duration elapsed = Duration.between(start.get(), Instant.now());
         return new CallOutcome(Boolean.TRUE.equals(applied.get()), thrown.get(), elapsed);
     }
 
