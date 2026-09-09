@@ -887,12 +887,14 @@ A `@Subscription`, `@StreamSubscription`, `@DcbSubscription` or `@SynchronousSub
 proxy cannot invoke now fails Spring Boot startup with `SubscriptionHandlerNotInvocableException`. Before this release
 it ran on the raw bean instead, with no advice applied, silently skipping `@Transactional` or any other aspect on
 every delivery, which is the bug #837 and #965 report. A method declared only on the concrete class while the bean
-is a JDK interface proxy, a private method a CGLIB proxy cannot override, a final method a CGLIB proxy cannot
-override either, and a static method, whose invocation never goes through any proxy at all, every one hits the new
-check, but only once the bean actually ends up behind such a proxy. An unproxied bean has no proxy to lose advice
-through in the first place, so a private or final handler there is unaffected and still registers normally.
-Make the method non-private, expose it on an interface the proxy implements, drop `final` or `static`, or set
-`spring.aop.proxy-target-class=true` so a CGLIB proxy is used instead of a JDK interface proxy.
+is a JDK interface proxy, a private method a CGLIB proxy cannot override, and a final method a CGLIB proxy cannot
+override either, all hit the new check, but only once the bean actually ends up behind such a proxy. An unproxied
+bean has no proxy to lose advice through in the first place, so a private or final handler there is unaffected and
+still registers normally. A static method hits the same check unconditionally, proxied or not. `Method.invoke`
+dispatches a static method on its declaring class alone, regardless of the target object passed to it, so invoking
+one never goes through a proxy at all, whether or not the bean has one. Make the method non-private, expose it on an interface the
+proxy implements, drop `final` or `static`, or set `spring.aop.proxy-target-class=true` so a CGLIB proxy is used
+instead of a JDK interface proxy.
 
 Registration for all four annotations also moves to the phase `@Projection`, `@Snapshot` and `@Saga` already use,
 once every singleton in the application is instantiated. Before this release each handler registered during its own
