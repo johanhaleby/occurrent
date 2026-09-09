@@ -40,6 +40,13 @@ import java.lang.annotation.*;
  * {@code startAtGlobalPosition}, {@code resumeBehavior}, {@code startupMode}) - only an {@link #id()} and the event
  * types to match.
  * </p>
+ * <p>
+ * Registration happens once every singleton in the application is instantiated, so a handler does not receive an
+ * event written during singleton construction, {@code @PostConstruct} included, even though delivery is otherwise
+ * synchronous. A write from a later startup phase, an {@code ApplicationRunner} for example, or from a bean created
+ * after registration such as one marked {@code @Lazy}, is delivered normally, since registration itself precedes
+ * both.
+ * </p>
  *
  * <h4>There is no free lunch</h4>
  * <p>

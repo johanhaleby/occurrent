@@ -29,6 +29,7 @@ import org.occurrent.eventstore.api.dcb.Tag;
 import org.occurrent.filter.Filter;
 import org.occurrent.filter.internal.EventTypeExpansion;
 import org.springframework.aop.framework.AopProxyUtils;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.util.ReflectionUtils;
@@ -333,18 +334,47 @@ public final class SubscriptionAnnotations {
         }
     }
 
-    // Unwraps through any number of nested AOP proxies to the innermost fixed target (AopProxyUtils.getSingletonTarget
-    // stops at one layer, hence the loop). Returns bean itself when it is not a proxy, or when a proxy's TargetSource
-    // is not a fixed singleton (a prototype- or pool-backed source is left proxied rather than risking a
-    // side-effecting getTarget() call, or invoking a different target instance than the one the descriptor id was
-    // registered against).
-    private static Object ultimateTarget(Object bean) {
+    /**
+     * Unwraps through any number of nested AOP proxies to the innermost fixed target
+     * ({@link AopProxyUtils#getSingletonTarget} stops at one layer, hence the loop). Returns {@code bean} itself
+     * when it is not a proxy, or when a proxy's {@code TargetSource} is not a fixed singleton, a prototype- or
+     * pool-backed source is left proxied rather than risking a side-effecting {@code getTarget()} call, or
+     * unwrapping to a different target instance than the one a caller registered a descriptor or handler against.
+     *
+     * @param bean the (possibly proxied, possibly nested-proxied) bean to unwrap
+     * @return the innermost fixed target, or {@code bean} itself when there is none to unwrap to
+     */
+    public static Object ultimateTarget(Object bean) {
         Object current = bean;
         Object next;
         while ((next = AopProxyUtils.getSingletonTarget(current)) != null) {
             current = next;
         }
         return current;
+    }
+
+    /**
+     * Walks the same nested-proxy chain {@link #ultimateTarget} unwraps, checking every layer for a CGLIB proxy
+     * instead of returning the innermost target. A JDK interface proxy forwards a call reflectively using the
+     * interface's {@link Method}, so Java's own virtual dispatch resolves it against whatever the wrapped target
+     * actually is, a nested CGLIB proxy included. Checking only {@code bean} itself misses exactly that case, since
+     * an outer JDK proxy is never itself a CGLIB proxy.
+     *
+     * @param bean the (possibly proxied, possibly nested-proxied) bean to check
+     * @return {@code true} if {@code bean} or any proxy layer it unwraps to is CGLIB-backed
+     */
+    public static boolean anyProxyLayerIsCglib(Object bean) {
+        Object current = bean;
+        while (true) {
+            if (AopUtils.isCglibProxy(current)) {
+                return true;
+            }
+            Object next = AopProxyUtils.getSingletonTarget(current);
+            if (next == null) {
+                return false;
+            }
+            current = next;
+        }
     }
 
     /**

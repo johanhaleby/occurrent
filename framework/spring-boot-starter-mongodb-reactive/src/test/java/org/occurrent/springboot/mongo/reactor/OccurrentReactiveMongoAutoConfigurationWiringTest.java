@@ -49,6 +49,7 @@ import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.NestedExceptionUtils;
 import org.springframework.data.mongodb.ReactiveMongoDatabaseFactory;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.SimpleReactiveMongoDatabaseFactory;
@@ -354,8 +355,9 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
                 .withPropertyValues("occurrent.event-store.stream.position=false")
                 .withUserConfiguration(BeginningOfTimeStreamSubscriptionConfiguration.class).run(context -> {
                     assertThat(context).hasFailed();
-                    assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
-                    assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("does not support reactive stream history replay");
+                    assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("does not support reactive stream history replay");
                 });
     }
 
@@ -367,8 +369,9 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
         contextRunner()
                 .withUserConfiguration(SpecificTimeStreamSubscriptionConfiguration.class).run(context -> {
                     assertThat(context).hasFailed();
-                    assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
-                    assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("cannot honor a specific historical start time");
+                    assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("cannot honor a specific historical start time");
                 });
     }
 
@@ -378,8 +381,9 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
         // reason: a wall-clock time has no position to map to.
         contextRunner().withUserConfiguration(EpochMillisStreamSubscriptionConfiguration.class).run(context -> {
             assertThat(context).hasFailed();
-            assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
-            assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("cannot honor a specific historical start time");
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("cannot honor a specific historical start time");
         });
     }
 
@@ -393,8 +397,9 @@ class OccurrentReactiveMongoAutoConfigurationWiringTest {
                 .withPropertyValues("occurrent.event-store.capabilities=dcb")
                 .withUserConfiguration(BeginningOfTimeStreamSubscriptionConfiguration.class).run(context -> {
                     assertThat(context).hasFailed();
-                    assertThat(context.getStartupFailure()).hasRootCauseInstanceOf(IllegalArgumentException.class);
-                    assertThat(context.getStartupFailure()).rootCause().hasMessageContaining("does not support reactive stream history replay");
+                    assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("does not support reactive stream history replay");
                 });
     }
 

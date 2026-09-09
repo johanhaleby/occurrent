@@ -57,6 +57,13 @@ import java.lang.annotation.*;
  * from history. As with {@link StreamSubscription}, the replay happens the first time the subscription starts, and on
  * later restarts it resumes from the last received event, unless {@link #resumeBehavior()} says otherwise.
  * </p>
+ * <p>
+ * Registration happens once every singleton in the application is instantiated, so a subscription starting at
+ * {@link StartPosition#NOW} does not see an event written during singleton construction, {@code @PostConstruct}
+ * included. A write from a later startup phase, an {@code ApplicationRunner} for example, or from a bean created
+ * after registration such as one marked {@code @Lazy}, is delivered normally, since registration itself precedes
+ * both.
+ * </p>
  *
  * <h4>Metadata</h4>
  * <p>

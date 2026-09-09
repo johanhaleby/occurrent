@@ -28,14 +28,17 @@ import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ClassUtils;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -80,16 +83,17 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         this.snapshotRegistrar = new SnapshotAnnotationRegistrar(applicationContext, registeredIds, startPositionSupport);
     }
 
-    @Override
-    public Object postProcessBeforeInitialization(Object bean, @NonNull String beanName) throws BeansException {
-        return subscriptionRegistrar.postProcessBeforeInitialization(bean, beanName);
-    }
+    // Still a BeanPostProcessor only so the static @Bean factory method below registers it ahead of ordinary beans;
+    // postProcessBeforeInitialization and postProcessAfterInitialization do no work and use the interface's defaults.
 
-    // @Projection and @Snapshot factory methods are registered after all singletons are instantiated, not in
-    // postProcessBeforeInitialization: the factory has to be invoked to obtain the descriptor, and its collaborators
-    // (the store, the subscription model) must already be wired. First collect every subscription id so a projection
-    // or snapshot cannot reuse one, then register each projection, catch up domain-push feeds, then register each
-    // snapshot.
+    // @Projection and @Snapshot factory methods, and @Subscription, @StreamSubscription, @DcbSubscription and
+    // @SynchronousSubscription handler methods, register after all singletons are instantiated: the factory has to
+    // be invoked to obtain the descriptor, and its collaborators (the store, the subscription model) must already be
+    // wired. Every handler resolves its invocation through applicationContext.getBean(beanName), which by this point
+    // always returns the fully proxied singleton, so advice such as @Transactional applies to every delivery,
+    // including a WAIT_UNTIL_STARTED history replay, not just the ones after startup. First collect every
+    // subscription id so a projection or snapshot cannot reuse one, then register the subscriptions, then each
+    // projection, catch up domain-push feeds, then register each snapshot.
     @Override
     public void afterSingletonsInstantiated() {
         // A presence check, not a resolution: getBeanProvider(...).getIfAvailable() throws NoUniqueBeanDefinitionException
@@ -100,23 +104,32 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // the right tool; which one is meant is resolved later, per annotation, by the actual registrars.
         // SynchronousSubscriptionModel is itself a Subscribable (it extends RegisteringSubscribable), so it is
         // already covered by the check below and needs no check of its own.
-        if (applicationContext.getBeanNamesForType(Subscribable.class).length == 0) {
-            return;
-        }
+        //
+        // A misconfigured @Subscription method (more than one subscription annotation, a @DcbSubscription with no
+        // event parameter) has to fail fast whether or not a Subscribable bean exists at all, so subscription
+        // scanning and registration run unconditionally below, ahead of this check. Only @Projection and @Snapshot,
+        // which cannot register anything without a Subscribable-backed DSL bean, are behind it.
+        boolean subscribableExists = applicationContext.getBeanNamesForType(Subscribable.class).length > 0;
         List<Object[]> projectionMethods = new ArrayList<>();
         List<Object[]> snapshotMethods = new ArrayList<>();
+        // Iteration order of getBeanDefinitionNames() is deterministic, so a LinkedHashSet keeps registration order
+        // reproducible across runs.
+        Set<String> subscriptionBeanNames = new LinkedHashSet<>();
         for (String beanName : applicationContext.getBeanDefinitionNames()) {
             Class<?> type;
             try {
-                type = applicationContext.getType(beanName);
+                type = resolveScanType(beanName);
             } catch (RuntimeException e) {
                 continue;
             }
             if (type == null) {
                 continue;
             }
-            for (Method method : ClassUtils.getUserClass(type).getDeclaredMethods()) {
-                collectSubscriptionId(method);
+            for (Method method : type.getDeclaredMethods()) {
+                collectSubscriptionId(beanName, method, subscriptionBeanNames);
+                if (!subscribableExists) {
+                    continue;
+                }
                 org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
                 if (projection != null) {
                     projectionMethods.add(new Object[]{beanName, method, projection});
@@ -126,6 +139,12 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
                     snapshotMethods.add(new Object[]{beanName, method, snapshot});
                 }
             }
+        }
+        for (String beanName : subscriptionBeanNames) {
+            subscriptionRegistrar.registerSubscriptions(applicationContext.getBean(beanName), resolveScanType(beanName));
+        }
+        if (!subscribableExists) {
+            return;
         }
         for (Object[] pm : projectionMethods) {
             projectionRegistrar.processProjectionAnnotation(applicationContext.getBean((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]);
@@ -147,14 +166,63 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
     }
 
-    private void collectSubscriptionId(Method method) {
+    // getType(beanName) predicts the type from the bean definition without forcing creation, which is what lets a
+    // @Lazy bean stay uncreated until a registrar actually needs it, but once a bean is already a singleton, getType
+    // returns that instance's own class, a JDK dynamic proxy included, and ClassUtils.getUserClass only strips
+    // CGLIB's naming convention, not a JDK proxy. Scanning that class finds nothing, since a JDK proxy implements
+    // only its interfaces, so an already-created bean's annotation went undetected rather than reaching the
+    // resolveHandlerInvocation guard that exists to catch exactly this. SubscriptionAnnotations.ultimateTarget
+    // unwraps either proxy kind, through any number of nested layers, given the real instance, so an already-created
+    // bean is resolved through it instead, the same unwrap invokeDescriptorFactory already uses for a descriptor
+    // bean's own factory method. ultimateTarget only unwraps an Advised proxy though, and Spring's own CGLIB
+    // enhancement of a proxyBeanMethods = true @Configuration class is not one, so a subscription-annotated bean
+    // that happens to be such a class still needs ClassUtils.getUserClass afterward to strip that generated
+    // subclass, the same normalization the getType(beanName) branch below already applies.
+    //
+    // containsSingleton(beanName) is also true once a FactoryBean itself is created, whether or not its product
+    // has been. getBean(beanName) dereferences that factory, so calling it here for every such name would create a
+    // product nothing has asked for yet, whatever the factory's own object creation does. isFactoryBean(beanName)
+    // keeps a FactoryBean-backed name on the metadata-only path instead, at the cost of missing a product that
+    // happens to already be a JDK proxy, a narrower case than the one this method exists to fix.
+    //
+    // A bean neither branch has created yet, an uncreated @Lazy bean or an uncreated FactoryBean product, stays on
+    // the metadata-only getType(beanName) branch below by construction, since forcing it here to read its real class
+    // would defeat the laziness the FactoryBean case above is already written to preserve. getType's prediction can
+    // fall short of the bean's eventual concrete class, a @Bean factory method declared to return an interface being
+    // the common shape, and an annotation the concrete class alone carries then goes undetected, with no rescan once
+    // the bean is later created, since afterSingletonsInstantiated runs this whole scan exactly once. #981 tracks a
+    // fix that keeps this scan lazy while also closing that gap.
+    private Class<?> resolveScanType(String beanName) {
+        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
+        if (beanFactory.containsSingleton(beanName) && !beanFactory.isFactoryBean(beanName)) {
+            return ClassUtils.getUserClass(SubscriptionAnnotations.ultimateTarget(applicationContext.getBean(beanName)).getClass());
+        }
+        Class<?> type = applicationContext.getType(beanName);
+        return type == null ? null : ClassUtils.getUserClass(type);
+    }
+
+    // A bean carrying any of the four annotations goes into subscriptionBeanNames so registerSubscriptions runs for
+    // it exactly once, above.
+    private void collectSubscriptionId(String beanName, Method method, Set<String> subscriptionBeanNames) {
         StreamSubscription s = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
-        if (s != null) registeredIds.add(s.id());
+        if (s != null) {
+            registeredIds.add(s.id());
+            subscriptionBeanNames.add(beanName);
+        }
         Subscription a = AnnotationUtils.findAnnotation(method, Subscription.class);
-        if (a != null) registeredIds.add(a.id());
+        if (a != null) {
+            registeredIds.add(a.id());
+            subscriptionBeanNames.add(beanName);
+        }
         DcbSubscription d = AnnotationUtils.findAnnotation(method, DcbSubscription.class);
-        if (d != null) registeredIds.add(d.id());
+        if (d != null) {
+            registeredIds.add(d.id());
+            subscriptionBeanNames.add(beanName);
+        }
         SynchronousSubscription sy = AnnotationUtils.findAnnotation(method, SynchronousSubscription.class);
-        if (sy != null) registeredIds.add(sy.id());
+        if (sy != null) {
+            registeredIds.add(sy.id());
+            subscriptionBeanNames.add(beanName);
+        }
     }
 }

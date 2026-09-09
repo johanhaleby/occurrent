@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package org.occurrent.springboot.blocking;
+package org.occurrent.springboot.reactor;
 
 import io.cloudevents.CloudEvent;
 import kotlin.jvm.functions.Function2;
@@ -22,11 +22,10 @@ import org.aopalliance.intercept.MethodInterceptor;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
-import org.occurrent.annotation.DcbSubscription;
-import org.occurrent.annotation.StreamSubscription;
+import org.occurrent.annotation.StartupMode;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.dsl.subscription.blocking.Subscriptions;
+import org.occurrent.dsl.subscription.reactor.Subscriptions;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.springframework.aop.framework.ProxyFactory;
@@ -40,50 +39,26 @@ import org.springframework.core.NestedExceptionUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
 /**
- * Characterizes the eager, per-bean validation the blocking annotation post-processor performs from
- * {@code afterSingletonsInstantiated}, before any subscription model or store is consulted, so it reproduces without
- * a running store (no Docker): a method carrying more than one subscription annotation is rejected, a
- * {@code @DcbSubscription} without an event parameter is rejected, and a handler method the bean's Spring proxy
- * cannot invoke is rejected rather than silently run unadvised on the raw bean. All four must fail fast at context
- * startup with the exact user-facing message.
+ * Reactive counterpart of the blocking {@code SubscriptionAnnotationGuardTest}: a handler method the bean's Spring
+ * proxy cannot invoke is rejected from {@code afterSingletonsInstantiated} rather than silently run unadvised on the
+ * raw bean, reproduced without a running store (no Docker). Subscription scanning and registration run
+ * unconditionally there, ahead of the coordinator's own {@code Subscribable}-presence check, so no such bean is
+ * needed here for a subscription to reach {@code resolveHandlerInvocation}.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SubscriptionAnnotationGuardTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new);
-
-    @Test
-    void method_annotated_with_more_than_one_subscription_annotation_fails_fast() {
-        runner.withUserConfiguration(MultipleAnnotationsConfiguration.class).run(context -> {
-            assertThat(context).hasFailed();
-            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("annotated with more than one of @Subscription, @StreamSubscription, @DcbSubscription and @SynchronousSubscription, use only one.");
-        });
-    }
-
-    @Test
-    void dcb_subscription_without_an_event_parameter_fails_fast() {
-        runner.withUserConfiguration(DcbNoEventParameterConfiguration.class).run(context -> {
-            assertThat(context).hasFailed();
-            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("A @DcbSubscription method must declare an event parameter, but");
-        });
-    }
+            .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new);
 
     // A JDK dynamic proxy implementing only Marker can never carry the handler method declared on the concrete
-    // class, the same mismatch StreamSubscriptionAnnotationJdkInterfaceProxyMongoTest used to paper over by falling
-    // back to the raw bean (issue #836). That fallback is gone, so this now fails fast instead. The bean is created
-    // eagerly (no @Lazy), matching how a real interface-proxied singleton exists by the time this scans: the scan
-    // itself has to see the annotation through the already-created proxy, not just resolveHandlerInvocation later.
+    // class, the same mismatch ReactiveStreamSubscriptionAnnotationJdkInterfaceProxyMongoTest used to paper over by
+    // falling back to the raw bean (issue #836). That fallback is gone, so this now fails fast instead.
     @Test
     void handler_method_not_reachable_through_a_JDK_interface_proxy_fails_fast() {
         runner.withUserConfiguration(JdkInterfaceProxyConfiguration.class).run(context -> {
@@ -171,7 +146,7 @@ class SubscriptionAnnotationGuardTest {
         runner.withUserConfiguration(ConfigurationEnhancedHandlerConfiguration.class).run(context -> {
             assertThat(context).hasNotFailed();
             verify(context.getBean(Subscriptions.class))
-                    .subscribe(eq("configuration-enhanced-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+                    .subscribe(eq("reactive-configuration-enhanced-handler"), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
         });
     }
 
@@ -189,37 +164,8 @@ class SubscriptionAnnotationGuardTest {
             return mock(Subscriptions.class);
         }
 
-        @Subscription(id = "configuration-enhanced-handler")
+        @Subscription(id = "reactive-configuration-enhanced-handler", startupMode = StartupMode.BACKGROUND)
         void on(TestEvent event) {
-        }
-    }
-
-    @Configuration(proxyBeanMethods = false)
-    static class MultipleAnnotationsConfiguration {
-        @Bean
-        MultiplyAnnotatedSubscriber multiplyAnnotatedSubscriber() {
-            return new MultiplyAnnotatedSubscriber();
-        }
-    }
-
-    static class MultiplyAnnotatedSubscriber {
-        @Subscription(id = "a")
-        @StreamSubscription(id = "b")
-        void on(TestEvent event) {
-        }
-    }
-
-    @Configuration(proxyBeanMethods = false)
-    static class DcbNoEventParameterConfiguration {
-        @Bean
-        DcbNoEventParameterSubscriber dcbNoEventParameterSubscriber() {
-            return new DcbNoEventParameterSubscriber();
-        }
-    }
-
-    static class DcbNoEventParameterSubscriber {
-        @DcbSubscription(id = "dcb-no-event", eventTypes = TestEvent.class)
-        void on() {
         }
     }
 
@@ -261,7 +207,7 @@ class SubscriptionAnnotationGuardTest {
     }
 
     static class MarkerSubscriber implements Marker {
-        @Subscription(id = "jdk-interface-proxy-guard")
+        @Subscription(id = "reactive-jdk-interface-proxy-guard")
         void on(TestEvent event) {
         }
     }
@@ -297,7 +243,7 @@ class SubscriptionAnnotationGuardTest {
     }
 
     static class PrivateHandlerSubscriber {
-        @Subscription(id = "private-handler-cglib-guard")
+        @Subscription(id = "reactive-private-handler-cglib-guard")
         private void on(TestEvent event) {
         }
     }
@@ -333,7 +279,7 @@ class SubscriptionAnnotationGuardTest {
     }
 
     static class FinalHandlerSubscriber {
-        @Subscription(id = "final-handler-cglib-guard")
+        @Subscription(id = "reactive-final-handler-cglib-guard")
         final void on(TestEvent event) {
         }
     }
@@ -382,7 +328,7 @@ class SubscriptionAnnotationGuardTest {
     }
 
     static class NestedFinalHandlerSubscriber implements NestedFinalHandlerMarker {
-        @Subscription(id = "nested-final-handler-guard")
+        @Subscription(id = "reactive-nested-final-handler-guard")
         public final void on(TestEvent event) {
         }
     }
@@ -401,7 +347,7 @@ class SubscriptionAnnotationGuardTest {
     }
 
     static class StaticHandlerSubscriber {
-        @Subscription(id = "static-handler-guard")
+        @Subscription(id = "reactive-static-handler-guard")
         static void on(TestEvent event) {
         }
     }
@@ -415,7 +361,8 @@ class SubscriptionAnnotationGuardTest {
         }
 
         // Registration reaches this bean once resolveHandlerInvocation lets the final method through, so a mock is
-        // enough to let the whole path complete without a real subscription model.
+        // enough to let the whole path complete without a real subscription model. startupMode = BACKGROUND keeps
+        // the registrar from calling waitUntilStarted() on whatever this mock's unstubbed subscribe(...) returns.
         @Bean
         @SuppressWarnings("unchecked")
         Subscriptions<TestEvent> subscriptions() {
@@ -429,7 +376,7 @@ class SubscriptionAnnotationGuardTest {
     }
 
     static class FinalHandlerNoProxySubscriber {
-        @Subscription(id = "final-handler-no-proxy-guard")
+        @Subscription(id = "reactive-final-handler-no-proxy-guard", startupMode = StartupMode.BACKGROUND)
         final void on(TestEvent event) {
         }
     }

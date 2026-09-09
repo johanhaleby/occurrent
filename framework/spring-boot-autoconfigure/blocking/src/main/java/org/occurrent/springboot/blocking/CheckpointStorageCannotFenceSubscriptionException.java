@@ -43,9 +43,8 @@ import java.util.List;
  * <p>
  * A subscription id built or read only at runtime is outside what this check can enumerate at all. So is one an
  * annotation declares whose registration writes a checkpoint before this check runs, which {@code @Subscription},
- * {@code @StreamSubscription} and {@code @DcbSubscription} can, since they register per bean as each bean
- * initializes, ahead of the point every singleton is known to exist. Pre-existing, not something this exception's
- * own check changes.
+ * {@code @StreamSubscription} and {@code @DcbSubscription} can, since they register before this check runs within
+ * the same lifecycle callback. Pre-existing, not something this exception's own check changes.
  */
 public final class CheckpointStorageCannotFenceSubscriptionException extends IllegalStateException {
 

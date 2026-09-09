@@ -44,6 +44,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.DependsOn;
 import org.springframework.context.annotation.Import;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.reactive.TransactionSynchronizationManager;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 import reactor.core.publisher.Mono;
@@ -58,12 +59,13 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * The reactive counterpart of {@code DcbSubscriptionWaitUntilStartedTransactionalStartupMongoTest}: proves that a
  * {@link Transactional} {@link DcbSubscription} handler with {@code startAt = BEGINNING} and
- * {@code startupMode = WAIT_UNTIL_STARTED} does not hang Spring Boot startup on the reactive stack either. The
- * context reaching {@link SpringBootTest} at all is the assertion.
+ * {@code startupMode = WAIT_UNTIL_STARTED} does not hang Spring Boot startup on the reactive stack either, and that
+ * every event the replay delivers runs inside a transaction, not only the ones delivered after startup finishes.
  */
 @DisplayName("Reactive DcbSubscription WAIT_UNTIL_STARTED replay with a Transactional handler")
 @DisplayNameGeneration(ReplaceUnderscores.class)
@@ -86,8 +88,10 @@ class ReactiveDcbSubscriptionWaitUntilStartedTransactionalStartupMongoTest {
     private RecordingDashboard recordingDashboard;
 
     @Test
-    void the_context_starts_and_the_replayed_history_is_delivered() {
-        assertThat(recordingDashboard.received()).extracting(TestEvent::name).containsExactly("historic-1", "historic-2");
+    void the_context_starts_and_every_replayed_delivery_runs_inside_a_transaction() {
+        assertThat(recordingDashboard.received())
+                .extracting(Delivery::eventName, Delivery::transactionActive)
+                .containsExactly(tuple("historic-1", true), tuple("historic-2", true));
     }
 
     @TestConfiguration(proxyBeanMethods = false)
@@ -150,18 +154,22 @@ class ReactiveDcbSubscriptionWaitUntilStartedTransactionalStartupMongoTest {
     }
 
     static class RecordingDashboard {
-        private final CopyOnWriteArrayList<TestEvent> received = new CopyOnWriteArrayList<>();
+        private final CopyOnWriteArrayList<Delivery> received = new CopyOnWriteArrayList<>();
 
         @Transactional
         @DcbSubscription(id = "reactive-wait-until-started-transactional-startup-dashboard", eventTypes = TestEvent.class, startAt = StartPosition.BEGINNING, startupMode = StartupMode.WAIT_UNTIL_STARTED)
         Mono<Void> onEvent(TestEvent event) {
-            received.add(event);
-            return Mono.empty();
+            return TransactionSynchronizationManager.forCurrentTransaction()
+                    .doOnNext(manager -> received.add(new Delivery(event.name(), manager.isActualTransactionActive())))
+                    .then();
         }
 
-        List<TestEvent> received() {
+        List<Delivery> received() {
             return received;
         }
+    }
+
+    record Delivery(String eventName, boolean transactionActive) {
     }
 
     record TestEvent(String eventId, Date timestamp, String name) {
