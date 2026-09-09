@@ -42,9 +42,12 @@ public interface CloudEventSink {
      * Publish several {@link CloudEvent}s. The default publishes one at a time, and an implementation that can
      * publish several more efficiently overrides this.
      * <p>
-     * Publishing one at a time means waiting for the broker to acknowledge each event before starting the next, so
-     * a call that throws part way has already published the events before the one it threw on. That is what makes
-     * this an at-least-once building block rather than something to make faster. A caller that retries the whole
+     * The default waits for each {@link #publish(CloudEvent)} to return before starting the next, so a call that
+     * throws part way has already made that call for every event before the one it threw on. Whether those reached
+     * the broker is the single-event method's business, and this interface does not require it to wait for an
+     * acknowledgement, so a custom sink that returns once the event is enqueued gives this loop nothing stronger to
+     * build on. A shipped implementation does wait, which is what makes the pair an at-least-once building block
+     * rather than something to make faster. A caller that retries the whole
      * {@code Iterable} republishes those, which is a duplicate and never a loss. An override that batches has to
      * hold the same property, so it cannot report success until the broker has taken every event it was given.
      * <p>

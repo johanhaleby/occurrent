@@ -225,8 +225,11 @@ If you let the Spring Boot starter default the store, there is nothing to inject
 db.getCollection("saga-order-fulfilment").deleteOne({ _id: "order-4711" })
 ```
 
-That removes exactly what `delete` removes, since the instance is one document keyed by its saga id. Everything below
-applies to both routes.
+That removes the same document, since the instance is one document keyed by its saga id. It skips one piece of
+bookkeeping the Java call also does, which is dropping the saga id from the store's in-memory latch for the
+retained-event warning a flow saga gets when it crosses the size threshold. The consequence is that if this saga id
+comes back and crosses that threshold again, the warning stays suppressed until the entry is evicted or the
+application restarts. Everything below applies to both routes.
 
 Read `SagaStateStore.delete`'s own javadoc before you run either. Deleting an instance discards its redelivery
 watermarks along with its status, so if the event source can still redeliver an event this instance already consumed,
