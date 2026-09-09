@@ -40,11 +40,13 @@ import static java.util.Objects.requireNonNull;
  * reports skipping the event, {@link CoalescingMaterializedUpdate} when its id mapper resolves to no key, since such
  * an event never changed the read model this recording claims to describe.
  * <p>
- * {@link AppliedAppendStore} is a blocking-shaped interface, so both the readiness check and the record itself hop to
- * {@link Schedulers#boundedElastic()} together in one subscription, the same precedent
- * {@code RecordingReactiveUpdate} used for the withdrawn position-based design (commit {@code 0f3980c20^}). The
- * delegate this class wraps is caller-supplied and nothing guarantees it completes off a non-blocking thread, so a
- * delegate finishing on a Reactor Netty event loop would otherwise make the blocking store call throw.
+ * {@link AppliedAppendStore} is a blocking-shaped interface, so recording an applied event hops to
+ * {@link Schedulers#boundedElastic()}, the same precedent {@code RecordingReactiveUpdate} used for the withdrawn
+ * position-based design (commit {@code 0f3980c20^}). The delegate this class wraps is caller-supplied and nothing
+ * guarantees it completes off a non-blocking thread, so a delegate finishing on a Reactor Netty event loop would
+ * otherwise make the blocking store call throw. {@link AppliedAppendRecording#cannotPossiblyRecord(EventMetadata)}
+ * runs inline, on whatever thread that is, before the hop, since it never touches {@code store} and answers
+ * {@code false} rather than waiting whenever it cannot decide safely from there.
  * <p>
  * Implements {@link ReactiveReplayAware} and forwards every lifecycle call to the delegate when it is one too.
  * {@link #replayStarted()} and {@link #replayAbandoned()} are plain bookkeeping, void signals the driving engine

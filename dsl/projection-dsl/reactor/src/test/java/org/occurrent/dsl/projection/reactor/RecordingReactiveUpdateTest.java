@@ -106,6 +106,28 @@ class RecordingReactiveUpdateTest {
         assertThat(storeCalls).containsExactly("recordApplied");
     }
 
+    // cannotPossiblyRecord being right about a repeat is the assertion above. This one is about the hop itself: a
+    // test that only checked the final store state would still pass with cannotPossiblyRecord deleted, since
+    // recordIfReady reaches that same state either way, just after paying for boundedElastic every time.
+    @Test
+    void a_repeated_appendid_completes_on_the_calling_thread_instead_of_hopping_to_boundedElastic() {
+        List<String> completionThreads = new ArrayList<>();
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+        AppendId appendId = AppendId.mint();
+        RecordingReactiveUpdate<String> recording = new RecordingReactiveUpdate<>(noopDelegate(), PROJECTION_ID, store);
+
+        StepVerifier.create(recording.apply(metadataWithAppendId(appendId), "event1")
+                        .doOnSuccess(ignored -> completionThreads.add(Thread.currentThread().getName())))
+                .verifyComplete();
+        StepVerifier.create(recording.apply(metadataWithAppendId(appendId), "event2")
+                        .doOnSuccess(ignored -> completionThreads.add(Thread.currentThread().getName())))
+                .verifyComplete();
+
+        assertThat(completionThreads).hasSize(2);
+        assertThat(completionThreads.get(0)).as("the first delivery records, so it hops to record it").startsWith("boundedElastic");
+        assertThat(completionThreads.get(1)).as("the second delivery is already recorded, so it never hops").isEqualTo(Thread.currentThread().getName());
+    }
+
     @Test
     void a_catch_up_clears_and_recording_resumes_once_its_history_has_been_read() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();

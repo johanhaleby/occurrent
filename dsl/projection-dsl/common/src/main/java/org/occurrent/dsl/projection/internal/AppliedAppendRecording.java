@@ -116,10 +116,12 @@ public final class AppliedAppendRecording {
      * <p>
      * Safe to call from any thread, including one that must never block, because it only ever
      * {@link ReentrantLock#tryLock()}s {@code clearLock} rather than waiting for it, answering {@code false} at
-     * once when the lock is already held. That only happens while a real {@link AppliedAppendStore#clear(String)}
-     * or {@link AppliedAppendStore#recordApplied(String, AppendId)} call is in flight for this recorder, for as
-     * long as that call takes, and waiting for it here would block whatever thread called this method for exactly
-     * as long.
+     * once when the lock is already held. Any of {@link #recordIfReady(EventMetadata)}, {@link #retryPendingClear()},
+     * {@link #pollForClear()} or a concurrent call to this method itself can be the one holding it, for as long as
+     * that call's own locked section takes, whether or not it happens to be in the middle of a real
+     * {@link AppliedAppendStore#clear(String)} or {@link AppliedAppendStore#recordApplied(String, AppendId)} call
+     * right then. Waiting for it here would block whatever thread called this method for exactly as long, so it
+     * answers {@code false} instead.
      */
     public boolean cannotPossiblyRecord(EventMetadata metadata) {
         requireNonNull(metadata, "metadata cannot be null");
