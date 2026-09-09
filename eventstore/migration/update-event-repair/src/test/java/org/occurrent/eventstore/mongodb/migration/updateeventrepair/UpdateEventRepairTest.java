@@ -198,13 +198,19 @@ class UpdateEventRepairTest {
 
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
 
-        newRepair().run();
+        UpdateEventRepairResult result = newRepair().run();
 
         Document repaired = storedDocument("a");
         assertAll(
                 () -> assertThat(repaired.get(OccurrentCloudEventExtension.POSITION))
                         .as("the repaired position must be the original value, as a BSON int64")
                         .isInstanceOf(Long.class)
+                        .isEqualTo(positionBeforeDamage),
+                () -> assertThat(result.minRepairedPosition())
+                        .as("the only repaired position must bound both ends of the range")
+                        .isEqualTo(positionBeforeDamage),
+                () -> assertThat(result.maxRepairedPosition())
+                        .as("the only repaired position must bound both ends of the range")
                         .isEqualTo(positionBeforeDamage),
                 () -> assertThat(repaired.get(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD))
                         .as("the repaired tag array must be what the store writes for the same tags")
@@ -252,6 +258,28 @@ class UpdateEventRepairTest {
                 () -> assertThat(storedDocument("a"))
                         .as("a second run must leave the document exactly as the first run left it")
                         .isEqualTo(afterFirstRun)
+        );
+    }
+
+    @Test
+    void the_repaired_range_spans_every_position_this_call_restored_but_not_an_event_left_undamaged() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        eventStore.append(List.of(taggedEvent("c", "Defined", "name:3")));
+        Object positionOfA = storedDocument("a").get(OccurrentCloudEventExtension.POSITION);
+        Object positionOfC = storedDocument("c").get(OccurrentCloudEventExtension.POSITION);
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        damageTheWayUpdateEventUsedTo("c", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.minRepairedPosition())
+                        .as("the lower of the two repaired positions must be the floor, even though an undamaged event sits below it")
+                        .isEqualTo(positionOfA),
+                () -> assertThat(result.maxRepairedPosition())
+                        .as("the higher of the two repaired positions must be the ceiling, with b's untouched position between them")
+                        .isEqualTo(positionOfC)
         );
     }
 
@@ -343,7 +371,11 @@ class UpdateEventRepairTest {
                         .containsExactly("name:1"),
                 () -> assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
                         .as("a position that cannot be read must be left exactly as it was found")
-                        .isEqualTo("not-a-number")
+                        .isEqualTo("not-a-number"),
+                () -> assertThat(result.minRepairedPosition())
+                        .as("the tag array was repaired but the position was not, so the range must stay empty")
+                        .isNull(),
+                () -> assertThat(result.maxRepairedPosition()).isNull()
         );
     }
 

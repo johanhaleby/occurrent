@@ -187,6 +187,10 @@ public final class UpdateEventRepair {
         }
         long repaired = 0;
         List<UnrecoverableEvent> unrecoverable = new ArrayList<>();
+        // Bounds of the positions this call actually restored, tracked as the walk goes rather than reread from the
+        // store afterwards, since nothing in the store remembers which positions a repair touched.
+        @Nullable Long minRepairedPosition = null;
+        @Nullable Long maxRepairedPosition = null;
         // Read once up front. A damaged event predates this run, since no version from 0.34.0 on can create one, so
         // its position cannot exceed the counter as it stands now.
         long positionCeiling = positionCeiling();
@@ -208,9 +212,14 @@ public final class UpdateEventRepair {
             long repairedInBatch = 0;
             for (Document event : batch) {
                 List<UnrecoverableEvent> found = new ArrayList<>(1);
-                if (repairEvent(event, found, positionCeiling)) {
+                List<Long> repairedPosition = new ArrayList<>(1);
+                if (repairEvent(event, found, repairedPosition, positionCeiling)) {
                     repaired++;
                     repairedInBatch++;
+                }
+                for (long position : repairedPosition) {
+                    minRepairedPosition = minRepairedPosition == null ? position : Math.min(minRepairedPosition, position);
+                    maxRepairedPosition = maxRepairedPosition == null ? position : Math.max(maxRepairedPosition, position);
                 }
                 if (!found.isEmpty()) {
                     // One document can produce more than one finding. A dcbtags value that is not a string and a
@@ -247,9 +256,9 @@ public final class UpdateEventRepair {
         long lostPosition = withRetry(() -> eventCollection.countDocuments(lostPositionFilter()));
 
         deleteCheckpoint();
-        log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone, {} are left without a position.",
-                eventStoreCollectionName, repaired, unrecoverableCount, lostPosition);
-        return new UpdateEventRepairResult(repaired, unrecoverableCount, lostPosition, unrecoverable);
+        log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone, {} are left without a position. Repaired positions ranged from {} to {}.",
+                eventStoreCollectionName, repaired, unrecoverableCount, lostPosition, minRepairedPosition, maxRepairedPosition);
+        return new UpdateEventRepairResult(repaired, unrecoverableCount, lostPosition, unrecoverable, minRepairedPosition, maxRepairedPosition);
     }
 
     /**
@@ -281,10 +290,13 @@ public final class UpdateEventRepair {
      * unreadable position leaves the tag array repairable, and an unreadable tag encoding leaves the position
      * repairable. Only a rejected write keeps both exactly as they were found.
      *
+     * @param repairedPosition filled with the restored {@code position}, but only once the update is confirmed to
+     *                         have reached the event. Left empty when this event's position was not part of the
+     *                         update, or when the update was rejected and nothing was written.
      * @return whether this call's update reached the event. A write the server applied and then failed to acknowledge
      * counts, since the retry that follows it repairs nothing only because the first attempt already did.
      */
-    private boolean repairEvent(Document event, List<UnrecoverableEvent> unrecoverable, long positionCeiling) {
+    private boolean repairEvent(Document event, List<UnrecoverableEvent> unrecoverable, List<Long> repairedPosition, long positionCeiling) {
         Object eventId = event.get(ID);
         Object storedPosition = event.get(POSITION);
         Object rawTags = event.get(DcbCloudEvents.TAGS);
@@ -304,6 +316,7 @@ public final class UpdateEventRepair {
             encodedTags = null;
         }
         List<Bson> updates = new ArrayList<>(2);
+        @Nullable Long restoredPosition = null;
 
         if (storedPosition instanceof String positionAsString) {
             Long position;
@@ -342,6 +355,7 @@ public final class UpdateEventRepair {
                 Document positionHolder = new Document();
                 PositionDocumentMapper.addPosition(positionHolder, position);
                 updates.add(Updates.set(POSITION, positionHolder.get(POSITION)));
+                restoredPosition = position;
             }
         } else if (storedPosition == null && encodedTags != null) {
             // A DCB append always writes a position, so a DCB event without one lost it. The tag array below is still
@@ -373,7 +387,7 @@ public final class UpdateEventRepair {
         // the server therefore always modifies the document, and modified zero can only mean the lost acknowledgement
         // of a write that did land. Counting that as unrepaired would understate the run against the event's own log
         // line, which is written whatever the count says.
-        return withRetry(() -> {
+        boolean wrote = withRetry(() -> {
             try {
                 return eventCollection.updateOne(eq(ID, eventId), Updates.combine(updates)).getMatchedCount() > 0;
             } catch (MongoWriteException e) {
@@ -386,6 +400,10 @@ public final class UpdateEventRepair {
                 return false;
             }
         });
+        if (wrote && restoredPosition != null) {
+            repairedPosition.add(restoredPosition);
+        }
+        return wrote;
     }
 
     /**

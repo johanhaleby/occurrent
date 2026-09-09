@@ -18,6 +18,7 @@
 package org.occurrent.eventstore.mongodb.migration.updateeventrepair;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 
@@ -60,10 +61,21 @@ import java.util.List;
  *                                {@code unrecoverableEventCount} covers the earlier part too, since that count is
  *                                carried in the checkpoint. Every finding is logged at WARN when it is found, so
  *                                neither a truncated list nor a resume means a lost report.
+ * @param minRepairedPosition     The lowest {@code position} this call restored, or {@code null} if it restored
+ *                                none. A consumer whose checkpoint sits below this value cannot have read past a
+ *                                repaired event, since it has not reached one yet. One that sits at or above it might
+ *                                have, and that is the operator's cue to check it, rather than going back to the
+ *                                store to work out the range by hand. Scoped to THIS call the way
+ *                                {@code eventsRepaired} is, so a resumed run only reports the range it restored
+ *                                itself.
+ * @param maxRepairedPosition     The highest {@code position} this call restored, or {@code null} on the same
+ *                                condition as {@code minRepairedPosition}. Together the two bound the repaired range
+ *                                without naming every event in it.
  */
 @NullMarked
 public record UpdateEventRepairResult(long eventsRepaired, long unrecoverableEventCount, long eventsWithLostPosition,
-                                      List<UnrecoverableEvent> unrecoverableEvents) {
+                                      List<UnrecoverableEvent> unrecoverableEvents, @Nullable Long minRepairedPosition,
+                                      @Nullable Long maxRepairedPosition) {
 
     public UpdateEventRepairResult {
         unrecoverableEvents = List.copyOf(unrecoverableEvents);
