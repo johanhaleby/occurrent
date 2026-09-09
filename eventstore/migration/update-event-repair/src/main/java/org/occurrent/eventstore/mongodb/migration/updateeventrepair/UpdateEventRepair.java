@@ -187,10 +187,12 @@ public final class UpdateEventRepair {
         }
         long repaired = 0;
         List<UnrecoverableEvent> unrecoverable = new ArrayList<>();
-        // Bounds of the positions this call actually restored, tracked as the walk goes rather than reread from the
-        // store afterwards, since nothing in the store remembers which positions a repair touched.
-        @Nullable Long minRepairedPosition = null;
-        @Nullable Long maxRepairedPosition = null;
+        // Bounds of every readable position this call and, once resumed, every earlier segment of this same run
+        // repaired, carried across a resume the same way unrecoverableCount is and for the same reason. Without
+        // that, a run killed after repairing positions in an earlier segment would return a range naming only the
+        // segment the resumed call walked itself, hiding the earlier one from step 7.
+        @Nullable Long minRepairedPosition = checkpoint == null ? null : numberOrNull(checkpoint.get(UpdateEventRepairCheckpoint.FIELD_MIN_REPAIRED_POSITION));
+        @Nullable Long maxRepairedPosition = checkpoint == null ? null : numberOrNull(checkpoint.get(UpdateEventRepairCheckpoint.FIELD_MAX_REPAIRED_POSITION));
         // Read once up front. A damaged event predates this run, since no version from 0.34.0 on can create one, so
         // its position cannot exceed the counter as it stands now.
         long positionCeiling = positionCeiling();
@@ -240,7 +242,7 @@ public final class UpdateEventRepair {
             // Advance past the whole batch, including events nothing could be done about. They keep matching the
             // damaged-event filter, so without this the next batch would return them again and the run would not end.
             lastProcessedId = batch.getLast().get(ID);
-            checkpoint(lastProcessedId, batch.size(), unrecoverableCount);
+            checkpoint(lastProcessedId, batch.size(), unrecoverableCount, minRepairedPosition, maxRepairedPosition);
             log.info("Repaired {} of {} events in this batch of collection '{}', {} repaired so far.",
                     repairedInBatch, batch.size(), eventStoreCollectionName, repaired);
 
@@ -439,16 +441,22 @@ public final class UpdateEventRepair {
         return value instanceof Number number ? number.longValue() : 0;
     }
 
+    private static @Nullable Long numberOrNull(@Nullable Object value) {
+        return value instanceof Number number ? number.longValue() : null;
+    }
+
     private static Bson afterFilter(@Nullable Object lastProcessedId) {
         return lastProcessedId == null ? new Document() : gt(ID, lastProcessedId);
     }
 
-    private void checkpoint(Object lastProcessedId, int batchSize, long unrecoverableCount) {
+    private void checkpoint(Object lastProcessedId, int batchSize, long unrecoverableCount, @Nullable Long minRepairedPosition, @Nullable Long maxRepairedPosition) {
         withRetry(() -> checkpointCollection.findOneAndUpdate(
                 eq(ID, UpdateEventRepairCheckpoint.CHECKPOINT_DOCUMENT_ID),
                 Updates.combine(
                         Updates.set(UpdateEventRepairCheckpoint.FIELD_LAST_PROCESSED_ID, lastProcessedId),
                         Updates.set(UpdateEventRepairCheckpoint.FIELD_UNRECOVERABLE_COUNT, unrecoverableCount),
+                        Updates.set(UpdateEventRepairCheckpoint.FIELD_MIN_REPAIRED_POSITION, minRepairedPosition),
+                        Updates.set(UpdateEventRepairCheckpoint.FIELD_MAX_REPAIRED_POSITION, maxRepairedPosition),
                         Updates.inc(UpdateEventRepairCheckpoint.FIELD_PROCESSED_COUNT, batchSize)
                 ),
                 new FindOneAndUpdateOptions().upsert(true)

@@ -731,6 +731,35 @@ class UpdateEventRepairTest {
                 .isEqualTo(1);
     }
 
+    @Test
+    void a_resumed_run_still_reports_the_repaired_range_the_interrupted_run_found() {
+        // Repairing one event per batch and stopping after the first checkpoints that event's position behind the
+        // checkpoint, where a resumed run never looks again.
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        long positionOfB = ((Number) requireNonNull(storedDocument("b").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        damageTheWayUpdateEventUsedTo("b", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+
+        UpdateEventRepair oneBatchOnly = new UpdateEventRepair(database, EVENT_COLLECTION,
+                UpdateEventRepairOptions.defaults().withBatchSize(1).withThrottleMillis(60_000));
+        Thread runner = new Thread(oneBatchOnly::run);
+        runner.start();
+        waitUntilCheckpointExists();
+        runner.interrupt();
+
+        UpdateEventRepairResult resumed = newRepair().run();
+
+        assertAll(
+                () -> assertThat(resumed.minRepairedPosition())
+                        .as("a resumed run must carry the range the interrupted run already found, otherwise it hides the earlier segment's positions from step 7")
+                        .isEqualTo(Math.min(positionOfA, positionOfB)),
+                () -> assertThat(resumed.maxRepairedPosition())
+                        .isEqualTo(Math.max(positionOfA, positionOfB))
+        );
+    }
+
     private void waitUntilCheckpointExists() {
         for (int attempt = 0; attempt < 200; attempt++) {
             if (database.getCollection(EVENT_COLLECTION + "_update_event_repair_checkpoint").countDocuments() > 0) {

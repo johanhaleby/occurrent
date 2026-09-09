@@ -69,8 +69,9 @@ import java.util.List;
  *                                sits below this value cannot have read past a repaired event, since it has not
  *                                reached one yet. One that sits at or above it might have, and that is the operator's
  *                                cue to check it, rather than going back to the store to work out the range by hand.
- *                                Scoped to THIS call the way {@code eventsRepaired} is, so a resumed run only reports
- *                                the range it repaired itself.
+ *                                Carried across a resume the way {@code unrecoverableEventCount} is, so a run that
+ *                                resumed an interrupted one still bounds the positions the earlier segment repaired,
+ *                                not only the ones it walked itself.
  * @param maxRepairedPosition     The highest position among the same events as {@code minRepairedPosition}, or
  *                                {@code null} on the same condition. Together the two bound the repaired range
  *                                without naming every event in it.
