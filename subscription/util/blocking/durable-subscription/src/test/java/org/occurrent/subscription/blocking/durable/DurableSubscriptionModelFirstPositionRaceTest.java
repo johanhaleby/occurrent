@@ -32,7 +32,6 @@ import org.occurrent.subscription.api.blocking.CheckpointStorage;
 import org.occurrent.subscription.api.blocking.Subscription;
 import org.occurrent.subscription.inmemory.InMemoryCheckpointStorage;
 
-import java.net.URI;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -124,10 +123,6 @@ class DurableSubscriptionModelFirstPositionRaceTest {
                 .as("the computed checkpoint, not the model-default StartAt this feed answers 'now' for")
                 .isInstanceOfSatisfying(StartAt.StartAtCheckpoint.class,
                         checkpoint -> assertThat(checkpoint.checkpoint.asString()).isEqualTo("this-nodes-own-position"));
-    }
-
-    private static CloudEvent cloudEvent(String id) {
-        return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("test.event").build();
     }
 
     /**
