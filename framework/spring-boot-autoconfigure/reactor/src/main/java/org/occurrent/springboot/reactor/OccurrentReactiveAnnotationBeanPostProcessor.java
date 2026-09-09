@@ -184,6 +184,14 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // product nothing has asked for yet, whatever the factory's own object creation does. isFactoryBean(beanName)
     // keeps a FactoryBean-backed name on the metadata-only path instead, at the cost of missing a product that
     // happens to already be a JDK proxy, a narrower case than the one this method exists to fix.
+    //
+    // A bean neither branch has created yet, an uncreated @Lazy bean or an uncreated FactoryBean product, stays on
+    // the metadata-only getType(beanName) branch below by construction, since forcing it here to read its real class
+    // would defeat the laziness the FactoryBean case above is already written to preserve. getType's prediction can
+    // fall short of the bean's eventual concrete class, a @Bean factory method declared to return an interface being
+    // the common shape, and an annotation the concrete class alone carries then goes undetected, with no rescan once
+    // the bean is later created, since afterSingletonsInstantiated runs this whole scan exactly once. #981 tracks a
+    // fix that keeps this scan lazy while also closing that gap.
     private Class<?> resolveScanType(String beanName) {
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         if (beanFactory.containsSingleton(beanName) && !beanFactory.isFactoryBean(beanName)) {
