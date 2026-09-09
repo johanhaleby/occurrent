@@ -50,6 +50,14 @@ import java.util.stream.Stream;
  * rather than calls queued behind one global lock, so {@code deliver} must tolerate concurrent invocation and cannot
  * rely on this engine to serialize it (<a href="https://github.com/johanhaleby/occurrent/issues/588">#588</a>).
  * <p>
+ * De-dup is two caches, not one. The replay records what it delivered in one, a live delivery records what it
+ * delivered in the other, and every check reads both, so a payload is delivered once either way. What the two
+ * caches decide is what happens to the copy that is not delivered. One the replay already delivered reaches
+ * {@link Source#alreadyDeliveredByReplay(Object)}, because the replay ran inside the source's history phase and a
+ * source that writes something down per delivery has written nothing down for it yet. One an earlier live delivery
+ * already handled reaches nothing, because that delivery did all of it
+ * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
+ * <p>
  * Note the semantic contract this engine keeps: {@link #accept(Object)} buffers a live payload and returns
  * <em>before</em> it is folded while the catch-up is running, so a caller that acknowledges after {@code accept}
  * returns may acknowledge before the fold actually runs. That is safe only because {@link Source#markCaughtUp()} is
@@ -132,6 +140,31 @@ public final class BlockingHandover<T> {
          */
         default void historyDone() {
         }
+
+        /**
+         * A live payload arrived whose de-dup key the replay already delivered, so this engine did not deliver it a
+         * second time. Called once per such payload, outside this engine's monitor, on whichever thread fed the
+         * payload, the drain thread for one that buffered during the replay and the caller's own thread for one
+         * that arrived after the handover went live.
+         * <p>
+         * The payload was applied during the replay and is applied exactly once either way, so nothing here should
+         * apply it again. This hook exists for the work a source does on delivery rather than on application, which
+         * for a recording projection is writing down the append the payload came from. Without it that append is
+         * written down by neither delivery, since the replay is inside the history phase where a recorder writes
+         * nothing (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
+         * decision 6) and the live copy is never delivered
+         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
+         * <p>
+         * A payload the replay never delivered, one suppressed because an earlier live delivery already handled it,
+         * does not come here. That earlier delivery ran everything a delivery runs, so there is nothing left owing.
+         * <p>
+         * Called again for every further copy of the same payload, since a source that redelivers gets one call per
+         * redelivery. The default does nothing.
+         *
+         * @param payload The live payload that was not delivered.
+         */
+        default void alreadyDeliveredByReplay(T payload) {
+        }
     }
 
     /**
@@ -174,7 +207,13 @@ public final class BlockingHandover<T> {
 
     private final Object lock = new Object();
     private final Queue<T> buffer = new ArrayDeque<>();
+    // Two caches rather than one, because the two suppressions they cause are not the same event. A key in
+    // deliveredIds was delivered live, so suppressing its repeat is a plain no-op. A key in replayedIds was delivered
+    // by the replay, inside the history phase, so suppressing the live copy owes the source a call to
+    // Source.alreadyDeliveredByReplay(..) (ADR 137). One cache cannot tell those apart, and the replay's own volume
+    // evicting the live keys is what made the live-redelivery de-dup empty exactly when the handover went live.
     private final BoundedIdCache deliveredIds;
+    private final BoundedIdCache replayedIds;
     // Dedup keys currently being delivered outside the lock, so a second concurrent delivery of the same key waits
     // for neither: it is dropped rather than raced, and the first attempt's own success or failure is what decides
     // deliveredIds. Without this a key could be marked delivered before deliver.accept(payload) actually succeeds,
@@ -183,12 +222,17 @@ public final class BlockingHandover<T> {
     private boolean live = false;
     private boolean stopped = false;
     private @Nullable Throwable catchUpFailure = null;
+    // Held so a live payload the replay already delivered can reach the source that replayed it, since accept(..) is
+    // handed no source of its own. Written by catchUp(Source) before anything can set live, and only read on a path
+    // that requires live.
+    private @Nullable Source<T> source = null;
 
     private BlockingHandover(Consumer<T> deliver, Function<T, String> dedupId, CatchupThenLiveOptions options, String noun) {
         this.deliver = deliver;
         this.dedupId = dedupId;
         this.maxBufferedEvents = options.maxBufferedEvents();
         this.deliveredIds = new BoundedIdCache(options.dedupCacheSize());
+        this.replayedIds = new BoundedIdCache(options.dedupCacheSize());
         this.noun = noun;
     }
 
@@ -196,7 +240,8 @@ public final class BlockingHandover<T> {
      * @param deliver Folds a payload, replayed or live. Always called outside this engine's monitor (see the class
      *                javadoc), so it must tolerate concurrent invocation once the handover is live.
      * @param dedupId Extracts the replay-to-live de-dup key from a payload.
-     * @param options De-dup cache size and live-buffer cap.
+     * @param options De-dup cache size and live-buffer cap. The cache size sizes each of the two de-dup caches, one
+     *                for what the replay delivered and one for what a live delivery did (ADR 137).
      * @param noun    The caller's noun for {@link HandoverMessages#catchUpFailed(String)}, e.g.
      *                {@code "projection feed"} or {@code "subscription"}.
      */
@@ -242,6 +287,7 @@ public final class BlockingHandover<T> {
     public boolean acceptReportingDelivery(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
         String deliverKey = null;
+        Source<T> replayedBy = null;
         boolean dropped = false;
         synchronized (lock) {
             if (catchUpFailure != null) {
@@ -252,6 +298,10 @@ public final class BlockingHandover<T> {
                 if (deliveredIds.contains(key)) {
                     // An earlier attempt already delivered this key, so this call reports it delivered without
                     // redelivering.
+                } else if (replayedIds.contains(key)) {
+                    // The replay delivered this key, so the payload is applied and must not be applied again. The
+                    // source is still owed the call below, outside the lock.
+                    replayedBy = source;
                 } else if (!inFlight.add(key)) {
                     // A concurrent delivery of the same key is running right now, outside this lock, and its own
                     // success or failure is what decides deliveredIds (see the inFlight field javadoc). This call
@@ -275,6 +325,8 @@ public final class BlockingHandover<T> {
         }
         if (deliverKey != null) {
             deliverOutsideLock(payload, deliverKey);
+        } else if (replayedBy != null) {
+            replayedBy.alreadyDeliveredByReplay(payload);
         }
         return !dropped;
     }
@@ -300,6 +352,7 @@ public final class BlockingHandover<T> {
     public boolean acceptIfLive(T payload) {
         Objects.requireNonNull(payload, "payload cannot be null");
         String deliverKey = null;
+        Source<T> replayedBy = null;
         boolean landed;
         synchronized (lock) {
             if (catchUpFailure != null) {
@@ -315,6 +368,9 @@ public final class BlockingHandover<T> {
                 String key = dedupKey(payload);
                 if (deliveredIds.contains(key)) {
                     landed = true;
+                } else if (replayedIds.contains(key)) {
+                    replayedBy = source;
+                    landed = true;
                 } else if (!inFlight.add(key)) {
                     landed = false;
                 } else {
@@ -325,6 +381,8 @@ public final class BlockingHandover<T> {
         }
         if (deliverKey != null) {
             deliverOutsideLock(payload, deliverKey);
+        } else if (replayedBy != null) {
+            replayedBy.alreadyDeliveredByReplay(payload);
         }
         return landed;
     }
@@ -379,6 +437,7 @@ public final class BlockingHandover<T> {
             // A fresh catch-up revives a handover a previous one stopped, so stopping is recoverable by replaying
             // again rather than only by building a new one.
             stopped = false;
+            this.source = source;
         }
         // Tracks whether replayStarted() ran and replayCompleted() has not yet closed it out, so the catch block below
         // knows whether there is a replay lifecycle left open to abandon, rather than calling replayAbandoned() after
@@ -407,7 +466,7 @@ public final class BlockingHandover<T> {
                     String key = dedupKey(replayed);
                     deliver.accept(replayed);
                     synchronized (lock) {
-                        deliveredIds.add(key);
+                        replayedIds.add(key);
                     }
                 }
             }
@@ -471,18 +530,44 @@ public final class BlockingHandover<T> {
         source.historyDone();
         List<T> toDeliver;
         List<String> keysToDeliver;
+        List<T> alreadyReplayed;
         synchronized (lock) {
             toDeliver = new ArrayList<>(buffer.size());
             keysToDeliver = new ArrayList<>(buffer.size());
+            alreadyReplayed = new ArrayList<>();
             for (T buffered : buffer) {
-                String key = tryReserve(buffered);
-                if (key != null) {
+                String key = dedupKey(buffered);
+                if (deliveredIds.contains(key)) {
+                    continue;
+                }
+                if (replayedIds.contains(key)) {
+                    // Applied by the replay already, so delivering it again would apply it twice. Collected instead,
+                    // for the call the source is owed once this lock is released (ADR 137).
+                    alreadyReplayed.add(buffered);
+                    continue;
+                }
+                // Reserved here, before anything is delivered, but not recorded delivered here (#588): a delivery that
+                // throws must not poison a later legitimate redelivery of the same payload, so deliveredIds is only
+                // written once deliverOutsideLock knows the call actually succeeded.
+                if (inFlight.add(key)) {
                     toDeliver.add(buffered);
                     keysToDeliver.add(key);
                 }
             }
             buffer.clear();
             live = true;
+        }
+        // Ahead of the drained deliveries, so a payload the replay already applied is reported before any payload
+        // that comes after it.
+        try {
+            for (T replayedPayload : alreadyReplayed) {
+                source.alreadyDeliveredByReplay(replayedPayload);
+            }
+        } catch (RuntimeException | Error e) {
+            // Nothing has been delivered yet, so every key reserved above is still reserved and would be skipped by a
+            // later redelivery. Released for the same reason the delivery loop below releases the rest of them.
+            releaseReservations(keysToDeliver);
+            throw e;
         }
         // Outside the monitor, same as a live accept(Object) (#588). Still sequential on this thread, so catchUp's
         // markCaughtUp() call after this method returns is still ordered after every one of these deliveries, and a
@@ -521,22 +606,10 @@ public final class BlockingHandover<T> {
         return key;
     }
 
-    // Must be called holding lock. Returns the key to deliver under, or null when nothing should be delivered:
-    // the replay (or an earlier live copy) already delivered this payload, or another thread is delivering it
-    // right now. Does not itself record the payload as delivered (#588): a delivery that throws must not poison
-    // a later legitimate redelivery of the same payload, so deliveredIds is only updated once deliverOutsideLock
-    // knows whether the call actually succeeded.
-    private @Nullable String tryReserve(T payload) {
-        String key = dedupKey(payload);
-        if (deliveredIds.contains(key) || !inFlight.add(key)) {
-            return null;
-        }
-        return key;
-    }
-
     // Runs deliver outside the lock, then reports the outcome back under it: success moves the key from in-flight
     // to delivered, failure only clears the in-flight marker, so a payload whose delivery threw is not recorded and
-    // a later redelivery is free to try again.
+    // a later redelivery is free to try again. Only live deliveries reach here, so only they write deliveredIds. The
+    // replay writes replayedIds instead.
     private void deliverOutsideLock(T payload, String key) {
         boolean succeeded = false;
         try {

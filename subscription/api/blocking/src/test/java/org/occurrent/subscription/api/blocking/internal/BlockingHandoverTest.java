@@ -103,6 +103,44 @@ class BlockingHandoverTest {
         assertThat(delivered).containsExactly("1");
     }
 
+    // The replay applies an event and the live copy of it is suppressed, so on the recording paths neither delivery
+    // would write down the append it came from. The suppression tells the source instead, once per suppressed copy,
+    // and for both timings, the copy that buffered during the replay and the one that arrived after the drain.
+    @Test
+    void a_payload_the_replay_delivered_reaches_the_source_when_its_live_copy_is_suppressed() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
+        FakeSource source = source(List.of("1"), false);
+
+        handover.accept("1");
+        handover.catchUp(source);
+
+        assertThat(delivered).containsExactly("1");
+        assertThat(source.alreadyDeliveredByReplay).containsExactly("1");
+
+        handover.accept("1");
+
+        assertThat(delivered).containsExactly("1");
+        assertThat(source.alreadyDeliveredByReplay).containsExactly("1", "1");
+    }
+
+    // The negative half, and the one that would still pass with a single cache. A repeat the replay never delivered
+    // was already delivered live, and that delivery wrote down whatever it owed, so telling the source again would
+    // have it write the same thing twice for one event.
+    @Test
+    void a_payload_an_earlier_live_delivery_handled_reaches_the_source_again_for_nothing() {
+        List<String> delivered = new ArrayList<>();
+        BlockingHandover<String> handover = handover(delivered);
+        FakeSource source = source(List.of(), false);
+        handover.catchUp(source);
+
+        handover.accept("A");
+        handover.accept("A");
+
+        assertThat(delivered).containsExactly("A");
+        assertThat(source.alreadyDeliveredByReplay).isEmpty();
+    }
+
     // The test above only repeats an id the replay already delivered, so nothing covered a repeat that was only ever
     // live. That case is the common one in production, because a push sink acknowledges after the fold, so the broker
     // sends the event again whenever a fold throws. Below, A sent twice in a row is folded once. A, B, C, A folds A
@@ -683,6 +721,12 @@ class BlockingHandoverTest {
         private int replayStartedCallCount = 0;
         private int replayCompletedCallCount = 0;
         private int replayAbandonedCallCount = 0;
+        private final List<String> alreadyDeliveredByReplay = new ArrayList<>();
+
+        @Override
+        public void alreadyDeliveredByReplay(String payload) {
+            alreadyDeliveredByReplay.add(payload);
+        }
 
         private void stopAfter(int deliveries) {
             this.stopAfter = deliveries;

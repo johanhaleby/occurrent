@@ -268,6 +268,18 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                     listener.historyRead(replayDone);
                 }
             }
+
+            @Override
+            public Mono<Void> alreadyDeliveredByReplay(CloudEvent event) {
+                // fromRunnable rather than a plain call, so a listener that throws errors the payload's own
+                // acknowledgement instead of the pipeline that was about to acknowledge it.
+                return Mono.fromRunnable(() -> {
+                    CatchupListener listener = catchupListeners.get(subscriptionId);
+                    if (listener != null) {
+                        listener.alreadyDeliveredByReplay(event);
+                    }
+                });
+            }
         });
 
         // Subscribed here rather than only handed back, so a caller that never waits still gets the bookkeeping below.

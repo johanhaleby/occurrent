@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.projection.reactor;
 
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
 
@@ -94,6 +95,19 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
     @Override
     public void historyRead(Object episode) {
         recording.historyRead(episode);
+    }
+
+    // The two overloads are the same fact reaching this update from the two compositions that can produce it, and both
+    // record. A subscription model holds this as a CatchupListener and has a CloudEvent, a pull feed holds it as a
+    // ReactiveReplayAware and has whatever metadata the live copy carried (ADR 137).
+    @Override
+    public void alreadyDeliveredByReplay(CloudEvent event) {
+        recording.recordIfReady(EventMetadata.from(event));
+    }
+
+    @Override
+    public Mono<Void> alreadyDeliveredByReplay(EventMetadata metadata) {
+        return recordOnBoundedElastic(metadata);
     }
 
     @Override

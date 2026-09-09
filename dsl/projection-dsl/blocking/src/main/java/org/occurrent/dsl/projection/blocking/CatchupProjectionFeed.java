@@ -296,6 +296,14 @@ public final class CatchupProjectionFeed<E> {
                     replayAware.replayAbandoned();
                 }
             }
+
+            @Override
+            public void alreadyDeliveredByReplay(Delivered<E> delivered) {
+                if (view instanceof ReplayAware replayAware) {
+                    @Nullable EventMetadata metadata = delivered.metadata();
+                    replayAware.alreadyDeliveredByReplay(metadata == null ? EventMetadata.empty() : metadata);
+                }
+            }
         });
     }
 

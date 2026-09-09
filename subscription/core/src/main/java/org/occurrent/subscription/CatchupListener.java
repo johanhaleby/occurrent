@@ -16,6 +16,7 @@
 
 package org.occurrent.subscription;
 
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 
 /**
@@ -55,4 +56,23 @@ public interface CatchupListener {
      * @param episode The catch-up whose history has been read, as given to {@link #catchupStarted(Object)}.
      */
     void historyRead(Object episode);
+
+    /**
+     * A live copy arrived of an event this catch-up's history read already delivered, so the model did not deliver it
+     * a second time. The projection has applied the event and is meant to apply it exactly once, so this is not a
+     * delivery and nothing here should apply it again. What it is, is the only chance the projection gets to write
+     * down the append that event came from, since the history read wrote nothing down
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
+     * <p>
+     * Sent only after {@link #historyRead(Object)}, and only for an event the history read itself delivered. An event
+     * an earlier live delivery already handled is not sent here, because that delivery wrote down what it owed. Sent
+     * again for every further copy the source offers, so an implementation records rather than counts.
+     * <p>
+     * Must return promptly and must not throw, the same as the two calls above. The default does nothing, which is
+     * what a listener that records nothing per event wants.
+     *
+     * @param event The event that was not delivered a second time.
+     */
+    default void alreadyDeliveredByReplay(CloudEvent event) {
+    }
 }

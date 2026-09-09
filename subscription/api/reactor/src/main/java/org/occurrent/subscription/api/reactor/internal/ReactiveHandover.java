@@ -53,6 +53,14 @@ import java.util.function.Supplier;
  * The live-versus-replay distinction that this engine does care about is {@link Item#ack()}, decided per payload at
  * runtime, not per type.
  * <p>
+ * De-dup is two caches, not one. The replay records what it delivered in one, a live delivery records what it
+ * delivered in the other, and every check reads both, so a payload is delivered once either way. What the two
+ * caches decide is what happens to the copy that is not delivered. One the replay already delivered reaches
+ * {@link Source#alreadyDeliveredByReplay(Object)}, because the replay ran inside the source's history phase and a
+ * source that writes something down per delivery has written nothing down for it yet. One an earlier live delivery
+ * already handled reaches nothing, because that delivery did all of it
+ * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
+ * <p>
  * <strong>This engine's ordering differs from the blocking one on purpose</strong>: here, the catch-up-complete
  * {@link Mono} returned by {@link #catchUp(Source)} completes, and the marker is persisted, <em>before</em> the
  * buffered live payloads are folded, because the returned {@code Mono} completes once the marker phase is done rather
@@ -151,6 +159,32 @@ public final class ReactiveHandover<T> {
          */
         default void liveDrained() {
         }
+
+        /**
+         * A live payload arrived whose de-dup key the replay already delivered, so this engine did not deliver it a
+         * second time. Called once per such payload, from the same {@code concatMap} every live payload runs through,
+         * so it is serialized against the deliveries around it exactly as a delivery is.
+         * <p>
+         * The payload was applied during the replay and is applied exactly once either way, so nothing here should
+         * apply it again. This hook exists for the work a source does on delivery rather than on application, which
+         * for a recording projection is writing down the append the payload came from. Without it that append is
+         * written down by neither delivery, since the replay is inside the history phase where a recorder writes
+         * nothing (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0132-an-append-has-an-identity-and-read-your-writes-becomes-a-membership-question.md">ADR 132</a>,
+         * decision 6) and the live copy is never delivered
+         * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
+         * <p>
+         * A payload the replay never delivered, one suppressed because an earlier live delivery already handled it,
+         * does not come here. That earlier delivery ran everything a delivery runs, so there is nothing left owing.
+         * <p>
+         * An error signal from the returned {@link Mono} reaches the payload's own acknowledgement, the same way an
+         * error from the fold does, so the source offers the payload again rather than losing what it owed. Called
+         * again for every further copy of the same payload. The default emits nothing.
+         *
+         * @param payload The live payload that was not delivered.
+         */
+        default Mono<Void> alreadyDeliveredByReplay(T payload) {
+            return Mono.empty();
+        }
     }
 
     /**
@@ -191,7 +225,13 @@ public final class ReactiveHandover<T> {
     private final Function<T, String> dedupId;
     private final String noun;
     private final int maxBufferedEvents;
+    // Two caches rather than one, because the two suppressions they cause are not the same event. A key in
+    // deliveredIds was delivered live, so suppressing its repeat is a plain no-op. A key in replayedIds was delivered
+    // by the replay, inside the history phase, so suppressing the live copy owes the source a call to
+    // Source.alreadyDeliveredByReplay(..) (ADR 137). One cache cannot tell those apart, and the replay's own volume
+    // evicting the live keys is what made the live-redelivery de-dup empty exactly when the handover went live.
     private final BoundedIdCache deliveredIds;
+    private final BoundedIdCache replayedIds;
     private final Sinks.Many<Item> liveSink;
     // The sink's own queue, held so the drain has a boundary. Everything in it when the history read finishes is what
     // was buffered while that read ran, and counting those down is the only way to know when the drain is over: the
@@ -247,6 +287,7 @@ public final class ReactiveHandover<T> {
         this.noun = noun;
         this.maxBufferedEvents = options.maxBufferedEvents();
         this.deliveredIds = new BoundedIdCache(options.dedupCacheSize());
+        this.replayedIds = new BoundedIdCache(options.dedupCacheSize());
         // LinkedBlockingQueue(capacity), not ArrayBlockingQueue(capacity): both cap at maxBufferedEvents (up to 100k by
         // default) and reject past it the same way, but ArrayBlockingQueue pre-allocates its full backing array at
         // construction, roughly 800 KB held for the handover's whole lifetime whether or not the live feed ever
@@ -381,7 +422,7 @@ public final class ReactiveHandover<T> {
             ackSink.error(keyFailure);
             return;
         }
-        Item item = new Item(() -> deliver.apply(payload), key, ackSink);
+        Item item = new Item(() -> deliver.apply(payload), () -> alreadyDeliveredByReplay(payload), key, ackSink);
         offerToLiveSink(item, ackSink);
     }
 
@@ -682,6 +723,16 @@ public final class ReactiveHandover<T> {
                 ack.success(true);
                 return Mono.empty();
             }
+            if (replayedIds.contains(item.dedupKey())) {
+                // Applied by the replay already, so delivering it again would apply it twice. The source is told
+                // instead, and the acknowledgement waits for that call rather than running ahead of it (ADR 137).
+                return Mono.defer(item.alreadyDeliveredByReplay())
+                        .doOnSuccess(v -> ack.success(true))
+                        .onErrorResume(error -> {
+                            ack.error(error);
+                            return Mono.empty();
+                        });
+            }
             // Mono.defer so a synchronous throw from the fold becomes an onError signal onErrorResume can catch, rather
             // than aborting the whole pipeline.
             return Mono.defer(item.deliver())
@@ -695,11 +746,19 @@ public final class ReactiveHandover<T> {
                     });
         }
         // Replay payload: an error here propagates and fails the catch-up.
-        return Mono.defer(item.deliver()).doOnSuccess(v -> deliveredIds.add(item.dedupKey()));
+        return Mono.defer(item.deliver()).doOnSuccess(v -> replayedIds.add(item.dedupKey()));
     }
 
     private Item replayedItem(T replayed) {
-        return new Item(() -> deliver.apply(replayed), dedupKey(replayed), null);
+        return new Item(() -> deliver.apply(replayed), Mono::empty, dedupKey(replayed), null);
+    }
+
+    // Resolved when the suppression happens rather than when the item was made, because a payload buffered during the
+    // replay is made before catchUp has a source to hand. Every live delivery runs after drainedSource is set, so the
+    // null branch is only ever reached by a caller that never ran a catch-up at all.
+    private Mono<Void> alreadyDeliveredByReplay(T payload) {
+        Source<T> source = drainedSource.get();
+        return source == null ? Mono.empty() : source.alreadyDeliveredByReplay(payload);
     }
 
     // The blocking engine wraps its terminal failure in this message and this one used to propagate the raw cause, so
@@ -719,15 +778,17 @@ public final class ReactiveHandover<T> {
     }
 
     // A replayed payload has a null ack; a live payload carries the MonoSink whose completion (with whether it was
-    // genuinely delivered) lets the caller acknowledge. The deliver supplier is bound at creation time, so Item
-    // needs no type parameter of its own.
-    private record Item(Supplier<Mono<Void>> deliver, String dedupKey, @Nullable MonoSink<Boolean> ack, long turn) {
-        private Item(Supplier<Mono<Void>> deliver, String dedupKey, @Nullable MonoSink<Boolean> ack) {
-            this(deliver, dedupKey, ack, Long.MAX_VALUE);
+    // genuinely delivered) lets the caller acknowledge. Both suppliers are bound to the payload at creation time, so
+    // Item needs no type parameter of its own.
+    private record Item(Supplier<Mono<Void>> deliver, Supplier<Mono<Void>> alreadyDeliveredByReplay, String dedupKey,
+                       @Nullable MonoSink<Boolean> ack, long turn) {
+        private Item(Supplier<Mono<Void>> deliver, Supplier<Mono<Void>> alreadyDeliveredByReplay, String dedupKey,
+                     @Nullable MonoSink<Boolean> ack) {
+            this(deliver, alreadyDeliveredByReplay, dedupKey, ack, Long.MAX_VALUE);
         }
 
         private Item withTurn(long turn) {
-            return new Item(deliver, dedupKey, ack, turn);
+            return new Item(deliver, alreadyDeliveredByReplay, dedupKey, ack, turn);
         }
     }
 }

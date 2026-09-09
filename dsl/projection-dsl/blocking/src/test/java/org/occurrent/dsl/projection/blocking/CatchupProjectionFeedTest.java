@@ -24,10 +24,12 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ReplayAware;
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.eventstore.api.AppendId;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.eventstore.inmemory.InMemoryEventStore;
@@ -263,6 +265,33 @@ class CatchupProjectionFeedTest {
         assertThat(repo.get("counter")).isEqualTo(2);
     }
 
+    // The replay applies the overlapping event and the live copy is suppressed, which is right. What used to go
+    // missing with it was the recording. An applied append is written down on a live delivery, so a projection wired
+    // to record appends applied the event and never recorded it, and waitUntilApplied kept answering false.
+    @Test
+    void an_event_both_replayed_and_delivered_live_during_catch_up_is_recorded_as_applied() {
+        InMemoryEventStore store = new InMemoryEventStore();
+        CloudEventConverter<Counted> converter = countedConverter();
+        AppendId appendId = store.write("s", converter.toCloudEvents(List.of(new Counted("1"), new Counted("2"))))
+                .appendId().orElseThrow();
+
+        ConcurrentHashMap<String, Integer> repo = new ConcurrentHashMap<>();
+        AppliedAppendStore appliedAppends = AppliedAppendStore.inMemory();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        MaterializedView<Counted> view = Projections.recordingAppliedAppends(
+                Projections.materializedView(projection(), repository, "counter"), "counter", appliedAppends);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", view, Filter.all(), store, converter, Counted::eventId, null);
+
+        // "2" also arrives live before the catch-up completes, carrying the metadata a broker bridge reads off the
+        // message rather than the no-metadata overload the test above uses.
+        feed.accept(metadataOf(store, "2"), new Counted("2"));
+        feed.catchUp();
+
+        assertThat(repo.get("counter")).isEqualTo(2);
+        assertThat(appliedAppends.hasApplied("counter", appendId)).isTrue();
+    }
+
     @Test
     void a_live_event_not_in_the_replay_is_folded_after_the_catch_up() {
         InMemoryEventStore store = new InMemoryEventStore();
@@ -445,6 +474,17 @@ class CatchupProjectionFeedTest {
                                                              Map<String, Integer> repo, CheckpointStorage marker) {
         ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
         return CatchupProjectionFeed.create(id, projection(), repository, store, converter, Counted::eventId, marker);
+    }
+
+    // The stored CloudEvent's metadata, which is where the append id lives, so a live copy fed here carries what a
+    // broker bridge would have read off the message.
+    private static EventMetadata metadataOf(InMemoryEventStore store, String eventId) {
+        try (Stream<CloudEvent> events = store.readInPositionOrder(Filter.all(), PositionRange.fromBeginning())) {
+            return events.filter(event -> event.getId().equals(eventId))
+                    .findFirst()
+                    .map(EventMetadata::from)
+                    .orElseThrow();
+        }
     }
 
     private static Projection<Integer, Counted, String> projection() {

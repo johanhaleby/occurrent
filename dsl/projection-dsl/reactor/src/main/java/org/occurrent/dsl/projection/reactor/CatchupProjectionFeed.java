@@ -288,6 +288,14 @@ public final class CatchupProjectionFeed<E> {
                     replayAware.replayAbandoned();
                 }
             }
+
+            @Override
+            public Mono<Void> alreadyDeliveredByReplay(DeliveredEvent<E> delivered) {
+                if (fold instanceof ReactiveReplayAware replayAware) {
+                    return replayAware.alreadyDeliveredByReplay(delivered.metadata());
+                }
+                return Mono.empty();
+            }
         }).then();
     }
 
