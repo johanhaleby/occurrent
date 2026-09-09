@@ -104,3 +104,12 @@ implement both and record either way.
   abandoned replay discarded. A clear in `replayAbandoned` would trade that for a second application on a view
   that does not coalesce, so neither branch is right on its own and this ADR decides neither. Filed as
   [#974](https://github.com/johanhaleby/occurrent/issues/974).
+- How long those keys last does change, and not in one direction. `BoundedIdCache` evicts on insertion, so one cache
+  fed by live deliveries as well as by the replay aged an abandoned replay's keys out after `dedupCacheSize` live
+  events. `replayedIds` has no live writer, so nothing ages them out until another replay runs, and a `goLive` after
+  a stop runs none. For a view that coalesces, whose batch was discarded, that turns an event lost until the cache
+  aged into an event lost for good. For a view that writes through, which applied every one of those events, it
+  turns a second application into no second application, which is what the de-dup was for. Same split decides both,
+  and which one a handover gets is the question [#974](https://github.com/johanhaleby/occurrent/issues/974) has to
+  answer. Reaching either needs `stopCatchUp()` and then `goLive()` on one handover, which no composition this
+  library ships does by itself.
