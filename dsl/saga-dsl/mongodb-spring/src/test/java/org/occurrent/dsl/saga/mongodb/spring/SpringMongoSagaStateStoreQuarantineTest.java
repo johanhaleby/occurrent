@@ -23,12 +23,16 @@ import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.jspecify.annotations.Nullable;
+import org.occurrent.application.converter.jackson.JacksonCloudEventConverter;
 import org.occurrent.dsl.saga.SagaEnvelope;
 import org.occurrent.dsl.saga.SagaEnvelope.TimerEntry;
 import org.occurrent.dsl.saga.SagaFailure;
 import org.occurrent.dsl.saga.SagaInstance;
 import org.occurrent.dsl.saga.SagaStateStore;
 import org.occurrent.dsl.saga.SagaStatus;
+import org.occurrent.dsl.saga.flow.FlowState;
 import org.occurrent.testsupport.mongodb.ReplicaSetReadyMongoDBContainer;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -38,6 +42,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mongodb.MongoDBContainer;
 
+import java.net.URI;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -76,6 +81,20 @@ class SpringMongoSagaStateStoreQuarantineTest {
      * a renamed class, a changed field type or a converter the application no longer has leaves in the document.
      */
     record Payment(long amount) {
+    }
+
+    /**
+     * A {@link FlowState} that is not the flow executor's own {@code FlowStateImpl}, which is the one state this store
+     * refuses to serialize rather than mis-serializing it. That refusal is what a test can tell apart from a save that
+     * never asked the serializer at all.
+     */
+    record NotTheFlowExecutorsState(@Nullable String currentStep, List<Object> received, boolean completed)
+            implements FlowState<Object> {
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Class<FlowState<Object>> flowStateType() {
+        return (Class<FlowState<Object>>) (Class) FlowState.class;
     }
 
     private SpringMongoSagaStateStore<Payment> paymentStore(MongoOperations mongoOperations) {
@@ -240,6 +259,53 @@ class SpringMongoSagaStateStoreQuarantineTest {
                 () -> assertThat(stored.getString("status")).isEqualTo("QUARANTINED"),
                 () -> assertThat(stored.getLong("version")).isEqualTo(2L),
                 () -> assertThat(stored.get("streamWatermarks")).isEqualTo(new Document("order-1", 6L))
+        );
+    }
+
+    @Test
+    void a_save_without_the_state_does_not_serialize_the_state_it_was_handed() {
+        // The executor hands over an envelope whose state is null, so nothing here would notice the state being
+        // serialized and then dropped from the update. A caller handing over a full one would, because serializing is
+        // what converts a flow saga's retained events and what fails on a converter that can no longer write them. This
+        // state is one the store refuses outright, so the save succeeding is what shows the serializer was never asked.
+        MongoOperations mongoOperations = mongoOperations();
+        SpringMongoSagaStateStore<FlowState<Object>> flowStore = new SpringMongoSagaStateStore<>(mongoOperations,
+                COLLECTION, flowStateType(), new JacksonCloudEventConverter.Builder<Object>(new ObjectMapper(), URI.create("urn:test")).build());
+        FlowState<Object> refused = new NotTheFlowExecutorsState("awaiting-payment", List.of(), false);
+        SagaEnvelope<FlowState<Object>> envelope = new SagaEnvelope<>("order-12", refused, SagaStatus.ACTIVE, 1,
+                List.of(), Map.of("order-1", 6L), 6L, NOW.minusSeconds(600), NOW, null, null, true, failure());
+        flowStore.compareAndSave("order-12", new SagaEnvelope<>("order-12", null, SagaStatus.ACTIVE, 1, List.of(),
+                Map.of("order-1", 6L), 6L, NOW.minusSeconds(600), NOW, null, null, true, failure()), 0);
+
+        assertAll(
+                // The companion half, so the state really is one this store cannot write.
+                () -> assertThatThrownBy(() -> flowStore.compareAndSave("order-12", envelope, 1))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("FlowStateImpl"),
+                () -> assertThat(flowStore.compareAndSaveWithoutState("order-12", envelope, 1)).isTrue(),
+                () -> assertThat(requireNonNull(mongoOperations.findOne(Query.query(where("_id").is("order-12")), Document.class, COLLECTION))
+                        .getString("status")).isEqualTo("ACTIVE")
+        );
+    }
+
+    @Test
+    void a_save_without_the_state_leaves_a_current_step_the_state_it_ignored_was_never_in() {
+        // currentStep is denormalized out of the state so a projected read can answer it without decoding. Writing it
+        // from an envelope whose state is being ignored would move the step away from the state it describes, and the
+        // next state-free read would report a step the stored state was never in.
+        MongoOperations mongoOperations = mongoOperations();
+        SagaStateStore<Payment> store = paymentStore(mongoOperations);
+        store.compareAndSave("order-13", activePayment("order-13"), 0);
+        mongoOperations.updateFirst(Query.query(where("_id").is("order-13")),
+                new Update().set("currentStep", "awaiting-payment"), COLLECTION);
+
+        store.compareAndSaveWithoutState("order-13", new SagaEnvelope<>("order-13", null, SagaStatus.QUARANTINED, 2,
+                List.of(), Map.of("order-1", 6L), 6L, NOW.minusSeconds(600), NOW, null, "shipped", true, failure()), 1);
+
+        Document stored = requireNonNull(mongoOperations.findOne(Query.query(where("_id").is("order-13")), Document.class, COLLECTION));
+        assertAll(
+                () -> assertThat(stored.getString("currentStep")).isEqualTo("awaiting-payment"),
+                () -> assertThat(stored.getString("status")).isEqualTo("QUARANTINED")
         );
     }
 

@@ -102,10 +102,13 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     private static final String FAILURE_TYPE = "failureType";
     private static final String FAILURE_MESSAGE = "failureMessage";
 
-    // Every field this store writes apart from the state and the _id, which is what compareAndSaveWithoutState sets and
-    // unsets so that a save leaves the stored state alone without leaving any other field behind either.
+    // Every field this store writes apart from the _id, the state, and currentStep, which is what
+    // compareAndSaveWithoutState sets and unsets so that a save leaves the stored state alone without leaving any other
+    // field behind either. currentStep is left out because it is denormalized out of the state, so writing it from an
+    // envelope whose state is being ignored would move the step away from the state it describes, and a later projected
+    // read would report a step the stored state was never in.
     private static final List<String> EVERY_FIELD_EXCEPT_THE_STATE = List.of(STATUS, VERSION, TIMERS,
-            NEXT_TIMER_FIRES_AT, CURRENT_STEP, STREAM_WATERMARKS, POSITION_WATERMARK, CREATED_AT, UPDATED_AT,
+            NEXT_TIMER_FIRES_AT, STREAM_WATERMARKS, POSITION_WATERMARK, CREATED_AT, UPDATED_AT,
             COMPLETED_AT, STARTED, FAILURE_INPUT, FAILURE_POSITION, FAILURE_FIRST_FAILED_AT, FAILURE_TYPE,
             FAILURE_MESSAGE);
 

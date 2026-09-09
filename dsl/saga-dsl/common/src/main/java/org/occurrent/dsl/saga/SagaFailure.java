@@ -56,7 +56,10 @@ import static java.util.Objects.requireNonNull;
  * @param position       the global subscription position of the failing event, or {@code null} when the event carries
  *                       none, in which case {@code input} holds its stream id and version instead
  * @param firstFailedAt  when this instance started failing, which is when the quarantine budget started running. Not
- *                       necessarily when {@code input} first failed, see above
+ *                       necessarily when {@code input} first failed, see above. Strictly it is when the first failure
+ *                       was recorded, which is the same moment unless that write lost its compare-and-set, and
+ *                       <a href="https://github.com/johanhaleby/occurrent/issues/977">#977</a> covers the case where
+ *                       those writes keep losing
  * @param failureType    the class name of the exception the saga or its dispatcher threw
  * @param failureMessage that exception's message, or {@code null} when it had none
  */

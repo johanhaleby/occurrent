@@ -36,7 +36,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
-import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 import java.time.Instant;
@@ -91,11 +90,12 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
     // promised to hold everything it delivers gets this far, so this is a check on that promise rather than the gate,
     // made on the one event about to be acknowledged.
     private final Predicate<CloudEvent> stillObtainable;
-    // The input each instance was last told about a refused quarantine for. A refused instance keeps being re-offered
-    // the same event for as long as the source retries, so without this the refusal is logged at that cadence forever.
-    // Keyed by saga id and cleared as soon as the instance processes anything, so a recovery is announced again if it
-    // stops a second time.
-    private final Map<String, String> refusalAnnounced = new ConcurrentHashMap<>();
+    // The instances that have been told about a refused quarantine. A refused instance keeps being re-offered the event
+    // for as long as the source retries, so without this the refusal is logged at that cadence forever. Once per
+    // instance rather than once per input, because an instance where two inputs fail in turn alternates between them and
+    // keying on the input made every delivery look like the first one. Cleared as soon as the instance processes
+    // anything, so a recovery is announced again if it stops a second time.
+    private final Set<String> refusalAnnounced = ConcurrentHashMap.newKeySet();
 
     SagaExecution(String subscriptionId, Saga<E, S, C> saga, SagaStateStore<S> stateStore, CommandDispatcher<C> dispatcher,
                   CloudEventConverter<E> converter, SagaRunnerConfig config, Predicate<CloudEvent> stillObtainable) {
@@ -161,13 +161,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                 return false;
             }
             if (record.quarantined() && !confirmedStillObtainable(cloudEvent, failure)) {
-                boolean firstTimeForThisInput = !meta.redeliveryKey().equals(refusalAnnounced.put(sagaId, meta.redeliveryKey()));
+                boolean firstRefusalForThisInstance = refusalAnnounced.add(sagaId);
                 // Checked before the write, not after, because quarantining returns normally and that acknowledges the
                 // event to whatever fed it. An unconfirmed answer is treated as a no, so the instance keeps blocking
                 // and the exception propagates as it did before 0.34.0. Nothing is saved, which leaves the failure
                 // record the earlier attempts wrote and lets the next redelivery ask again. Retention is rechecked
-                // every time so a store coming back is noticed, while the warning is said once per input.
-                if (firstTimeForThisInput) {
+                // every time so a store coming back is noticed, while the warning is said once per instance.
+                if (firstRefusalForThisInstance) {
                     log.warn("Saga '{}' instance '{}' has kept failing on the event '{}' for {} and is not quarantined, because the subscription could not confirm that the event is still obtainable from what it reads. Either it is gone, or the check could not be completed, and quarantining acknowledges the event, which might drop the only copy of it. This instance keeps blocking the saga's other instances instead. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
                             subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                 }
