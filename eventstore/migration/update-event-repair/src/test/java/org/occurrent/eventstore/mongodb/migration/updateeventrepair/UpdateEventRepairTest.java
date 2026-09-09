@@ -369,6 +369,43 @@ class UpdateEventRepairTest {
     }
 
     @Test
+    void a_second_run_after_a_hand_set_position_still_bounds_the_range_with_it() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        long positionOfB = ((Number) requireNonNull(storedDocument("b").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        damageTheWayUpdateEventUsedTo("b", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(positionOfA))));
+
+        UpdateEventRepairResult first = newRepair().run();
+        assertThat(first.unrecoverableEvents())
+                .as("the first run must still collide on a's position, otherwise this test is not exercising the hand-fix step")
+                .singleElement()
+                .extracting(UnrecoverableEvent::reason)
+                .isEqualTo(UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN);
+
+        // Step 5: the operator resolves the collision by hand, giving b back its own original position rather than
+        // a's. Written as a number, the way an operator fixing this in mongosh would write it, not as the damaged
+        // string the tool would refuse to write back untouched.
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, positionOfB)));
+
+        UpdateEventRepairResult second = newRepair().run();
+
+        assertAll(
+                () -> assertThat(second.unrecoverableEvents())
+                        .as("b's position is valid now, so only its tag array is left to fix")
+                        .isEmpty(),
+                () -> assertThat(storedDocument("b").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .containsExactly("name:2"),
+                () -> assertThat(second.minRepairedPosition())
+                        .as("b's hand-set position must bound the range even though this run never wrote a position field")
+                        .isEqualTo(positionOfB),
+                () -> assertThat(second.maxRepairedPosition())
+                        .isEqualTo(positionOfB)
+        );
+    }
+
+    @Test
     void an_event_whose_position_string_is_not_a_number_still_gets_its_tag_array_back() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());

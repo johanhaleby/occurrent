@@ -293,9 +293,11 @@ public final class UpdateEventRepair {
      * unreadable position leaves the tag array repairable, and an unreadable tag encoding leaves the position
      * repairable. Only a rejected write keeps both exactly as they were found.
      *
-     * @param repairedPosition filled with the restored {@code position}, but only once the update is confirmed to
-     *                         have reached the event. Left empty when this event's position was not part of the
-     *                         update, or when the update was rejected and nothing was written.
+     * @param repairedPosition filled with this event's numeric {@code position}, but only once the update is
+     *                         confirmed to have reached the event. That position can be one this call restored, or
+     *                         one that was already correct, for instance a {@code POSITION_ALREADY_TAKEN} event
+     *                         whose position an operator set by hand before this run only had its tag array left to
+     *                         fix. Left empty when the update was rejected, or when the position stays unreadable.
      * @return whether this call's update reached the event. A write the server applied and then failed to acknowledge
      * counts, since the retry that follows it repairs nothing only because the first attempt already did.
      */
@@ -319,7 +321,7 @@ public final class UpdateEventRepair {
             encodedTags = null;
         }
         List<Bson> updates = new ArrayList<>(2);
-        @Nullable Long restoredPosition = null;
+        @Nullable Long readablePosition = null;
 
         if (storedPosition instanceof String positionAsString) {
             Long position;
@@ -358,12 +360,19 @@ public final class UpdateEventRepair {
                 Document positionHolder = new Document();
                 PositionDocumentMapper.addPosition(positionHolder, position);
                 updates.add(Updates.set(POSITION, positionHolder.get(POSITION)));
-                restoredPosition = position;
+                readablePosition = position;
             }
         } else if (storedPosition == null && encodedTags != null) {
             // A DCB append always writes a position, so a DCB event without one lost it. The tag array below is still
             // worth rebuilding, and the position is reported rather than invented.
             unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_LOST, "no position field"));
+        } else if (storedPosition instanceof Number number) {
+            // This event only matched the filter through its tag array, so its position was never damaged. A repair
+            // that follows a hand-set POSITION_ALREADY_TAKEN fix (the runbook's step 5) lands here: the position is
+            // already correct, and this run only rebuilds the tag array, but a consumer could still have checkpointed
+            // past this position before either fix landed. The range has to carry it even though this call never
+            // wrote it.
+            readablePosition = number.longValue();
         }
 
         if (encodedTags != null && !event.containsKey(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD)) {
@@ -403,8 +412,8 @@ public final class UpdateEventRepair {
                 return false;
             }
         });
-        if (wrote && restoredPosition != null) {
-            repairedPosition.add(restoredPosition);
+        if (wrote && readablePosition != null) {
+            repairedPosition.add(readablePosition);
         }
         return wrote;
     }

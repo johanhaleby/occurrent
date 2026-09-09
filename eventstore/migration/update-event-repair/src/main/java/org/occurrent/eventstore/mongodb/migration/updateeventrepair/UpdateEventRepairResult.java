@@ -61,15 +61,18 @@ import java.util.List;
  *                                {@code unrecoverableEventCount} covers the earlier part too, since that count is
  *                                carried in the checkpoint. Every finding is logged at WARN when it is found, so
  *                                neither a truncated list nor a resume means a lost report.
- * @param minRepairedPosition     The lowest {@code position} this call restored, or {@code null} if it restored
- *                                none. A consumer whose checkpoint sits below this value cannot have read past a
- *                                repaired event, since it has not reached one yet. One that sits at or above it might
- *                                have, and that is the operator's cue to check it, rather than going back to the
- *                                store to work out the range by hand. Scoped to THIS call the way
- *                                {@code eventsRepaired} is, so a resumed run only reports the range it restored
- *                                itself.
- * @param maxRepairedPosition     The highest {@code position} this call restored, or {@code null} on the same
- *                                condition as {@code minRepairedPosition}. Together the two bound the repaired range
+ * @param minRepairedPosition     The lowest numeric {@code position} of every event this call successfully repaired,
+ *                                or {@code null} if none of them had a readable position. That position can be one
+ *                                this call restored, or one that was already correct on an event this call only
+ *                                rebuilt the tag array of, for instance a {@code POSITION_ALREADY_TAKEN} event an
+ *                                operator fixed by hand before running the repair again. A consumer whose checkpoint
+ *                                sits below this value cannot have read past a repaired event, since it has not
+ *                                reached one yet. One that sits at or above it might have, and that is the operator's
+ *                                cue to check it, rather than going back to the store to work out the range by hand.
+ *                                Scoped to THIS call the way {@code eventsRepaired} is, so a resumed run only reports
+ *                                the range it repaired itself.
+ * @param maxRepairedPosition     The highest position among the same events as {@code minRepairedPosition}, or
+ *                                {@code null} on the same condition. Together the two bound the repaired range
  *                                without naming every event in it.
  */
 @NullMarked
