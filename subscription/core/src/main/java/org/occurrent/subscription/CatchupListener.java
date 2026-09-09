@@ -25,11 +25,13 @@ import org.jspecify.annotations.NullMarked;
  * decision 6).
  * <p>
  * Told rather than asked. A recorder that samples a model has to work out what happened between two of its own
- * readings, and a catch-up that started and finished in between looks like no catch-up at all. Both calls here are
- * made by the model that owns the catch-up, at the moment it acts, so there is nothing to work out.
+ * readings, and a catch-up that started and finished in between looks like no catch-up at all. Every call here is made
+ * by the model that owns the catch-up, at the moment it acts, so there is nothing to work out.
  * <p>
- * Both calls must return promptly and must not throw. They are made from the thread that registers or runs the
- * catch-up, and an implementation that blocked one would hold up the subscription itself.
+ * {@link #catchupStarted(Object)} and {@link #historyRead(Object)} must return promptly and must not throw. They are
+ * made from the thread that registers or runs the catch-up, and an implementation that blocked one would hold up the
+ * subscription itself. {@link #alreadyDeliveredByReplay(CloudEvent)} must return promptly too and says its own rule
+ * about throwing.
  */
 @NullMarked
 public interface CatchupListener {
@@ -68,8 +70,12 @@ public interface CatchupListener {
      * an earlier live delivery already handled is not sent here, because that delivery wrote down what it owed. Sent
      * again for every further copy the source offers, so an implementation records rather than counts.
      * <p>
-     * Must return promptly and must not throw, the same as the two calls above. The default does nothing, which is
-     * what a listener that records nothing per event wants.
+     * Unlike the two calls above, a failure here is meant to escape rather than be swallowed. This call is the only
+     * chance the append gets, so swallowing a failed write acknowledges an append nothing wrote down. What a thrown
+     * exception reaches is whatever the model does with a failed delivery at that moment, an event's own failed
+     * acknowledgement or the catch-up itself, and never an acknowledgement of the event. It still has to return
+     * promptly, since it runs on a thread the subscription needs back. The default does nothing, which is what a
+     * listener that records nothing per event wants.
      *
      * @param event The event that was not delivered a second time.
      */

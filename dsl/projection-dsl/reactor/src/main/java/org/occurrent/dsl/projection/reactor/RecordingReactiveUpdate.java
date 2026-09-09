@@ -100,6 +100,10 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
     // The two overloads are the same fact reaching this update from the two compositions that can produce it, and both
     // record. A subscription model holds this as a CatchupListener and has a CloudEvent, a pull feed holds it as a
     // ReactiveReplayAware and has whatever metadata the live copy carried (ADR 137).
+    //
+    // Only the pull-feed overload forwards. A delegate's replay lifecycle is driven by that feed and by nothing else,
+    // so forwarding the subscription-model overload would hand a delegate a call from a lifecycle it never sees,
+    // which is why catchupStarted and historyRead do not forward either.
     @Override
     public void alreadyDeliveredByReplay(CloudEvent event) {
         recording.recordIfReady(EventMetadata.from(event));
@@ -107,7 +111,10 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
 
     @Override
     public Mono<Void> alreadyDeliveredByReplay(EventMetadata metadata) {
-        return recordOnBoundedElastic(metadata);
+        Mono<Void> delegateCall = delegate instanceof ReactiveReplayAware replayAware
+                ? replayAware.alreadyDeliveredByReplay(metadata)
+                : Mono.empty();
+        return delegateCall.then(recordOnBoundedElastic(metadata));
     }
 
     @Override
