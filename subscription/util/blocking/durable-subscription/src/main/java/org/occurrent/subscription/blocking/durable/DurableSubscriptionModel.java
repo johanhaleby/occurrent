@@ -28,6 +28,8 @@ import org.occurrent.subscription.StartPositionAlreadyPinnedException;
 import org.occurrent.subscription.StartAt.SubscriptionModelContext;
 import org.occurrent.subscription.SubscriptionFilter;
 import org.occurrent.subscription.api.blocking.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
 import java.util.Objects;
@@ -70,6 +72,8 @@ import static org.occurrent.subscription.util.predicate.EveryN.everyEvent;
  */
 @NullMarked
 public class DurableSubscriptionModel implements CheckpointAwareSubscriptionModel, SubscriptionModelWrapper {
+
+    private static final Logger log = LoggerFactory.getLogger(DurableSubscriptionModel.class);
 
     private final CheckpointAwareSubscriptionModel subscriptionModel;
     private final CheckpointStorage storage;
@@ -275,6 +279,19 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
     // resolveFirstCheckpointRace. One that cannot falls back to reading the stored position back and checking it
     // is the one this node itself computed.
     private Checkpoint saveFirstPosition(String subscriptionId, Checkpoint globalCheckpoint) {
+        if (!storage.evaluatesWriteConditionsFor(subscriptionId)) {
+            // Nothing here can make a storage that writes unconditionally do otherwise, so this is the write
+            // before this method existed and two nodes recording a first position at the same moment keep the
+            // race. Logged rather than refused, because refusing would take out a storage that has worked until
+            // now over a capability it never claimed.
+            log.warn("Checkpoint storage {} does not evaluate write conditions for subscription {}, so the first " +
+                     "position recorded for it is written unconditionally. Two nodes recording a first position " +
+                     "for this subscription at the same moment can then lose the events between the two positions. " +
+                     "Answer true from evaluatesWriteConditionsFor(String) on a storage that does evaluate " +
+                     "ifAbsent(), or use one of the storages Occurrent ships, to close that.",
+                    storage.getClass().getName(), subscriptionId);
+            return storage.save(subscriptionId, globalCheckpoint);
+        }
         try {
             return storage.save(subscriptionId, globalCheckpoint, CheckpointWriteCondition.ifAbsent());
         } catch (CheckpointWriteConditionNotFulfilledException e) {
