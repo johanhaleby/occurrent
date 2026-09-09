@@ -50,9 +50,10 @@ import static java.util.Objects.requireNonNull;
  * {@code true} while some of those deliveries are still unapplied. In the ordinary case the rest follow in however
  * long the same node needs to work through the append's remaining events. What happens instead when that node stops
  * part way depends on the subscription model this store's caller runs, which is nothing this interface can promise.
- * A competing-consumer deployment hands the subscription to another node when the lease expires, 20 seconds by
- * default, and a single-node one has no successor, so the rest wait until that node runs again. While the
- * subscription is paused or stopped, nothing applies them either way until someone starts it again. ADR 132 decision
+ * A competing-consumer deployment lets another node take the subscription once the lease expires, 20 seconds by
+ * default, which needs a healthy node there to take it. Where there is none, whether that is a single-node
+ * deployment or every node being down, the rest wait until one runs again. While the subscription is paused or
+ * stopped, nothing applies them either way until someone starts it again. ADR 132 decision
  * 10 says why recording on the append's last event instead cannot work, since Occurrent pushes subscription filters
  * server-side, so a projection that does not handle that last event never sees it and the wait would never finish.
  */

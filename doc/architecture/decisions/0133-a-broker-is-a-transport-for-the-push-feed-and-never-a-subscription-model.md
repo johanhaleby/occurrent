@@ -1221,11 +1221,17 @@ the filter never passes through the bridge at all. Adding an accessor for it mea
 subscription API that every model has to answer, for one consumer, and a bridge is not the caller that justifies
 that.
 
-**The default is safe, and the gap is what an application opts into.** Bindings are a topology decision and the
-filter is a delivery decision, and defaulting the bindings to `catchAllDestination()` means the topology narrows
-nothing until an application asks it to, so a deployment that never supplies a binding filter cannot reach this at
-all. An application that does supply one holds a rule nothing enforces, which is that its binding filter is at least
-as inclusive as the subscription's. That is the open half.
+**The catch-all topology is what is safe, rather than the absence of a binding filter.** Bindings are a topology
+decision and the filter is a delivery decision, and the bindings default to `catchAllDestination()`, which narrows
+nothing. A deployment that keeps that default cannot reach this gap. What reaches it is any narrowing the bridge
+cannot compare against the subscription's filter, and there are three ways to ask for one. A `bindingFilter` is the
+one decision 5 describes. An explicit `bindings(...)` set is a second, and `RabbitMqTopology.destinationsToBind` and
+`KafkaTopology.topicsToSubscribe` both return that set as given, without a resolver and without looking at any filter.
+RabbitMQ's `declareTopology(false)` is a third, where a platform team owns the queue and its bindings and nothing here
+sees them at all.
+
+All three hold the same rule and none of them is checked, which is that whatever the queue or the topic subscription
+ends up matching is at least as inclusive as the subscription's filter. That is the open half.
 
 **The path to closing it is the one the domain level already took.** The same unchecked rule sat one level down,
 where a domain bridge that filtered on its own would acknowledge an event the projection's replay contract says was
