@@ -55,22 +55,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * {@link CatchupThenPushReadiness#isReady(org.springframework.context.ApplicationContext, String)} picks a wrapper
- * bean by subscription id alone, across every {@link CatchupThenPushSubscriptionModel} bean in the whole
- * application context, with no correlation to which bridge (and which underlying live feed) is actually asking.
- * ADR 102 allows two independent push models to subscribe under the same id, so that id-only lookup can let one
- * bridge's readiness answer come from a completely unrelated model's wrapper: if the first one found has a
- * permanently failed catch-up, its {@code isReadyForLiveDelivery(id)} answers {@code false} forever, and a
- * healthy sibling model's bridge built with the same lookup would inherit that answer and never consume, even
- * though its own model has nothing wrong with it.
- * {@link DefaultRabbitMqCloudEventBridgeFactory#forQueue} avoids this by asking
- * {@link CatchupThenPushReadiness#memoized(org.springframework.context.ApplicationContext, org.occurrent.subscription.push.blocking.PushSubscriptionModel)}
- * instead, which correlates by identity through the framework module's published wrapper registry.
- * <p>
- * Registers two {@code CatchupThenPushSubscriptionModel} beans that both subscribe as {@code "orders"}, the first
- * with a permanently failed catch-up, the second healthy, confirms the id-only lookup above is indeed ambiguous
- * for this setup, then builds the healthy model's bridge with no manual {@code readinessSource(...)} call (the
- * zero-config path) and asserts the healthy bridge still consumes.
+ * Two {@code CatchupThenPushSubscriptionModel} beans subscribed under the same id ("orders", ADR 102 permits
+ * exactly this), the first with a permanently failed catch-up, the second healthy, and no identity registry bean
+ * published for either. A readiness lookup that picked a wrapper by id alone across the whole context could answer
+ * for the healthy bridge with the failing wrapper's own permanent {@code false}, starving it forever even though
+ * its own model has nothing wrong with it. {@link DefaultRabbitMqCloudEventBridgeFactory#forQueue} correlates by
+ * identity instead
+ * ({@link CatchupThenPushReadiness#memoized(org.springframework.context.ApplicationContext, org.occurrent.subscription.push.blocking.PushSubscriptionModel)}),
+ * and answers ready when it finds no registry entry for a given liveFeed rather than guessing by id, so the healthy
+ * model's own bridge, built with no manual {@code readinessSource(...)} call, must still consume.
  */
 @Testcontainers
 class CatchupThenPushReadinessAmbiguousIdTest {
@@ -142,18 +135,12 @@ class CatchupThenPushReadinessAmbiguousIdTest {
                 )
                 .run(context -> {
                     GenericApplicationContext springContext = (GenericApplicationContext) context.getSourceApplicationContext();
-                    // Registered in this order deliberately: the failing wrapper first, so
-                    // ApplicationContext.getBeansOfType(...) is very likely to hand it back before the healthy one,
-                    // exactly the ambiguity CLAIM 4 describes. Bean names are irrelevant, CatchupThenPushReadiness
-                    // looks these up by type, not by the "catchupThenPushSubscriptionModel-<id>" convention.
+                    // Bean names are irrelevant and neither wrapper is published through the framework registrar,
+                    // so no occurrentCatchupThenPushSubscriptionModelsByLiveFeed bean exists in this context at
+                    // all. CatchupThenPushReadiness answers ready for both models under that condition, rather
+                    // than guessing between them by the subscription id they happen to share.
                     springContext.getBeanFactory().registerSingleton("failingWrapper", failingWrapper);
                     springContext.getBeanFactory().registerSingleton("healthyWrapper", healthyWrapper);
-
-                    // The root cause, checked directly: the shared, id-only lookup answers false for "orders" as
-                    // long as the failing wrapper is found first, regardless of which model is actually asking.
-                    assertThat(CatchupThenPushReadiness.isReady(springContext, "orders"))
-                            .as("the id-only lookup across the whole context picks up the failing wrapper's answer")
-                            .isFalse();
 
                     RabbitMqCloudEventSink sink = context.getBean(RabbitMqCloudEventSink.class);
                     RabbitMqCloudEventBridgeFactory bridgeFactory = context.getBean(RabbitMqCloudEventBridgeFactory.class);

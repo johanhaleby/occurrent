@@ -52,12 +52,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * The Kafka twin of {@code CatchupThenPushReadinessAmbiguousIdTest} on the RabbitMQ starter: two
  * {@code CatchupThenPushSubscriptionModel} beans subscribed under the same id ("orders", ADR 102 permits exactly
- * this), the first with a permanently failed catch-up, the second healthy. {@link CatchupThenPushReadiness#isReady}
- * picking a wrapper by id alone across the whole context would answer for the healthy bridge with the failing
- * wrapper's own permanent {@code false}, starving it forever even though its own model has nothing wrong with it.
- * {@link DefaultKafkaCloudEventBridgeFactory#forGroup} correlates by identity instead
- * ({@link CatchupThenPushReadiness#memoized(org.springframework.context.ApplicationContext, PushSubscriptionModel)}),
- * so the healthy model's own bridge, built with no manual {@code readinessSource(...)} call, must still consume.
+ * this), the first with a permanently failed catch-up, the second healthy, and no identity registry bean published
+ * for either. A readiness lookup that picked a wrapper by id alone across the whole context could answer for the
+ * healthy bridge with the failing wrapper's own permanent {@code false}, starving it forever even though its own
+ * model has nothing wrong with it. {@link DefaultKafkaCloudEventBridgeFactory#forGroup} correlates by identity
+ * instead ({@link CatchupThenPushReadiness#memoized(org.springframework.context.ApplicationContext, PushSubscriptionModel)}),
+ * and answers ready when it finds no registry entry for a given liveFeed rather than guessing by id, so the healthy
+ * model's own bridge, built with no manual {@code readinessSource(...)} call, must still consume.
  */
 @Testcontainers
 class CatchupThenPushReadinessAmbiguousIdTest {
@@ -108,20 +109,12 @@ class CatchupThenPushReadinessAmbiguousIdTest {
                 )
                 .run(context -> {
                     GenericApplicationContext springContext = (GenericApplicationContext) context.getSourceApplicationContext();
-                    // Registered in this order deliberately: the failing wrapper first, so
-                    // ApplicationContext.getBeansOfType(...) is very likely to hand it back before the healthy one,
-                    // exactly the ambiguity this test describes. Bean names are irrelevant, CatchupThenPushReadiness
-                    // looks these up by type for its id-based fallback, not by the
-                    // "catchupThenPushSubscriptionModel-<id>" convention, and not through the identity registry
-                    // either, since neither wrapper was published through the framework registrar.
+                    // Bean names are irrelevant and neither wrapper is published through the framework registrar,
+                    // so no occurrentCatchupThenPushSubscriptionModelsByLiveFeed bean exists in this context at
+                    // all. CatchupThenPushReadiness answers ready for both models under that condition, rather
+                    // than guessing between them by the subscription id they happen to share.
                     springContext.getBeanFactory().registerSingleton("failingWrapper", failingWrapper);
                     springContext.getBeanFactory().registerSingleton("healthyWrapper", healthyWrapper);
-
-                    // The root cause, checked directly: the ambiguous id-only lookup answers false for "orders" as
-                    // long as the failing wrapper is found first, regardless of which model is actually asking.
-                    assertThat(CatchupThenPushReadiness.isReady(springContext, "orders"))
-                            .as("the id-only lookup across the whole context picks up the failing wrapper's answer")
-                            .isFalse();
 
                     KafkaCloudEventSink sink = context.getBean(KafkaCloudEventSink.class);
                     KafkaCloudEventBridgeFactory bridgeFactory = context.getBean(KafkaCloudEventBridgeFactory.class);
