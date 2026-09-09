@@ -41,9 +41,17 @@ import static java.util.Objects.requireNonNull;
  * <p>
  * All I/O this class performs ({@link AppliedAppendStore#clear(String)} and {@link AppliedAppendStore#recordApplied(String, org.occurrent.eventstore.api.AppendId)})
  * runs on whichever thread the caller invokes it from. It performs no scheduling or thread-hopping of its own, so the
- * reactor wrapper is responsible for calling {@link #recordIfReady(EventMetadata)} and {@link #replayCompleted()}
- * only after hopping to a blocking-safe scheduler, and {@link #replayStarted()}/{@link #replayAbandoned()} are
- * deliberately I/O-free so a reactive lifecycle signal that is never awaited can call them inline without blocking.
+ * reactor wrapper hops to a blocking-safe scheduler on the two paths that return a {@code Mono} it can hop inside,
+ * which are its {@code apply} and its {@code Mono} replay completion. Three of its callbacks return {@code void} or
+ * {@code boolean} and hop nowhere, so {@link #recordIfReady(EventMetadata)} reached through
+ * {@code alreadyDeliveredByReplay(CloudEvent)}, and {@link #retryPendingClear()} and {@link #pollForClear()} reached
+ * through the {@code AppliedAppendRecorder} hooks, all run on whichever thread called them. Occurrent's own catch-up
+ * model calls the first from a blocking-safe thread already, and a composition of your own has to do the same.
+ * <p>
+ * {@link #catchupStarted(Object)} and {@link #historyRead(Object)} are deliberately I/O-free, so a reactive
+ * lifecycle signal that is never awaited can call them inline without blocking.
+ * {@link #cannotPossiblyRecord(EventMetadata)} is I/O-free too, and is what a reactive caller asks before deciding
+ * whether the hop is needed at all.
  */
 @NullMarked
 public final class AppliedAppendRecording {

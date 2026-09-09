@@ -43,6 +43,20 @@ import static java.util.Objects.requireNonNull;
  * {@link #recordApplied(String, AppendId)} itself, or through the {@code @Projection(recordAppliedAppends = true)}
  * opt-in and its recording wrapper in the blocking and reactor projection DSLs. Reading is a plain call to
  * {@link #hasApplied(String, AppendId)} or {@link #waitUntilApplied(String, AppendId, Duration)}.
+ * <p>
+ * A projection records an append after the first event of that append it applies successfully and that has an
+ * append id, not after every event the append wrote. An update that throws records nothing, and neither does one the
+ * wrapped view reports it skipped. So an append whose events reach this projection across several deliveries can
+ * have {@link #hasApplied(String, AppendId)} and {@link #waitUntilApplied(String, AppendId, Duration)} both answer
+ * {@code true} while some of those deliveries are still unapplied. In the ordinary case the rest follow in however
+ * long the same node needs to work through the append's remaining events. What happens instead when that node stops
+ * part way depends on the subscription model this store's caller runs, which is nothing this interface can promise.
+ * A competing-consumer deployment lets another node take the subscription once the lease expires, 20 seconds by
+ * default, which needs a healthy node there to take it. Where there is none, whether that is a single-node
+ * deployment or every node being down, the rest wait until one runs again. While the subscription is paused or
+ * stopped, nothing applies them either way until someone starts it again. ADR 132 decision
+ * 10 says why recording on the append's last event instead cannot work, since Occurrent pushes subscription filters
+ * server-side, so a projection that does not handle that last event never sees it and the wait would never finish.
  */
 @NullMarked
 public interface AppliedAppendStore {
@@ -129,6 +143,9 @@ public interface AppliedAppendStore {
      * An {@code appendId} the projection never handles, because none of its events match the projection's selector,
      * is never recorded, and the wait times out. That is the correct answer rather than a defect, since a
      * projection that never applies the append has no effect for the caller to read.
+     * <p>
+     * {@code true} means the projection has applied the first event of {@code appendId} that it handles, and not
+     * necessarily every event of it. See this interface's own documentation for when the rest follow.
      * <p>
      * {@code backoff} paces the polls only, not a retry policy for the store. A poll whose
      * {@link #hasApplied(String, AppendId)} throws counts as not yet applied, so a store failure keeps the wait

@@ -651,7 +651,9 @@ nothing it skipped is recorded as handled. What it stopped on stays on the recor
 
 0.34.0 stops there. Nothing in it brings an instance back out of quarantine, so read `SagaInstance.failure()` to see
 which input it stopped on and what the saga threw, and call `SagaStateStore.delete(sagaId)` to abandon the instance
-once you have decided not to recover it.
+once you have decided not to recover it. [The quarantined saga runbook](../runbooks/quarantined-saga-instance.md) has
+the whole sequence, including the log lines that announce a quarantine and what deleting an instance costs against a
+redelivery.
 
 There are two limits to know before you rely on it.
 

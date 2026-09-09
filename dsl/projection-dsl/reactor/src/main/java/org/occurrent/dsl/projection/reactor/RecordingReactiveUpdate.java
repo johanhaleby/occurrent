@@ -55,6 +55,16 @@ import static java.util.Objects.requireNonNull;
  * touch {@code store}, retrying a clear the replay may have left owed, hopped to {@link Schedulers#boundedElastic()}
  * after the delegate's own completion, since it is the one lifecycle {@code Mono} this class's driving engine
  * actually awaits.
+ * <p>
+ * Three callbacks are the exception, and no hop is done for any of them here, because each returns {@code void} or
+ * {@code boolean} rather than a {@code Mono} this class could hop inside. {@link #retryPendingClear()} and
+ * {@link #pollForClear()} are the {@link AppliedAppendRecorder} hooks a poller drives, and
+ * {@link #alreadyDeliveredByReplay(CloudEvent)} is the one a subscription model calls with the event its replay
+ * already delivered. Each of the three can touch {@code store}, and none of them always does, since the two hooks
+ * do nothing when no clear is owed and the replay callback skips an event it has no append id for. All three run on
+ * whichever thread invokes them, so that thread has to be {@link Schedulers#boundedElastic()} or another reserved
+ * for blocking work, because the caller cannot tell in advance which invocation is the one that blocks. Occurrent's own
+ * catch-up model already calls the third from one, and a composition of your own owns that choice for all three.
  */
 @NullMarked
 public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadata, E, Mono<Void>>, ReactiveReplayAware, AppliedAppendRecorder {

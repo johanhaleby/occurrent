@@ -304,7 +304,8 @@ public final class Projections {
      * The Spring Boot starter's own scheduled poll (ADR 132 decision 7) is what retries a clear that keeps failing.
      * Calling this factory directly does not install it. Call {@link AppliedAppendRecorder#pollForClear()} on the
      * returned update on a schedule, or accept that a clear a catch-up left owed only retries once another delivery
-     * reaches this projection.
+     * reaches this projection. That call blocks, on the update's own lock and on the store, so schedule it on
+     * {@code Schedulers.boundedElastic()} or another thread reserved for blocking work, and never on an event loop.
      */
     public static <E> RecordingReactiveUpdate<E> recordingAppliedAppends(BiFunction<EventMetadata, E, Mono<Void>> update, String projectionId, AppliedAppendStore store) {
         requireNonNull(update, "update cannot be null");

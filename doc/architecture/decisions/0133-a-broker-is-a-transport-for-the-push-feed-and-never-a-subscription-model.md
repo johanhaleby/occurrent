@@ -1193,3 +1193,53 @@ release call can check it. `RabbitMqCloudEventBridgeConnectionRecoveryTest` and 
 every recovery listener on the connection past the first delivery after the recovery, against a real broker. Both
 fail against the fence and pass without it, and the domain one is there so that restoring the fence in one bridge
 alone cannot leave the suite green.
+
+## Amendment (2026-09-09): the binding filter and the subscription's filter stay two declarations, because nothing hands the subscription's filter back
+
+A design review since 0.33.0 asked about the gap decision 5 already names, which is that a binding filter handed to a
+bridge and the filter its subscription registered with are two separate declarations, and nothing compares them. A
+binding narrower than the subscription's filter stops events reaching a matcher that would have accepted them, and by
+`AGENTS.md` that is a loss rather than a misconfiguration to warn about.
+
+**What the review settled is that no code changes now, and not that the gap is closed or acceptable as an end state.**
+The isolation rule has no severity ladder, so a loss that only a misconfiguration reaches is still a loss, and the
+gap stays recorded as open with the path below rather than signed off. What was deliberate is the choice not to build
+a check that cannot be built from inside a broker module today. This amendment records the alternative, because
+decision 5 states the gap and its cause without saying what the other option was or why it was not taken.
+
+**The alternative was to derive the bindings from the subscription's own filter, or to check the supplied one against
+it.** Either would close the gap by construction, since a binding derived from the subscription's filter is by
+definition as inclusive as it, and a check would refuse a narrower one at startup rather than losing events at
+runtime. Both need the same thing, which is a way to read back the `SubscriptionFilter` a subscription was registered
+with.
+
+**Nothing gives it back today, and the change to make it do so reaches further than the broker modules.**
+`RegisteringSubscribable` builds a `Predicate<CloudEvent>` in `doSubscribe` and keeps that in its `Registration`
+record, so the `SubscriptionFilter` is gone by the time anything could ask. `PushSubscriptionModel` exposes neither.
+`ProjectionAnnotationRegistrar` derives the filter for `@Projection(source = PUSH)` and calls `register` itself, so
+the filter never passes through the bridge at all. Adding an accessor for it means putting a new member on the
+subscription API that every model has to answer, for one consumer, and a bridge is not the caller that justifies
+that.
+
+**The catch-all topology is what is safe, rather than the absence of a binding filter.** Bindings are a topology
+decision and the filter is a delivery decision, and the bindings default to `catchAllDestination()`, which narrows
+nothing. A deployment that keeps that default cannot reach this gap. What reaches it is any narrowing the bridge
+cannot compare against the subscription's filter, and there are three ways to ask for one. A `bindingFilter` is the
+one decision 5 describes. An explicit `bindings(...)` set is a second, and `RabbitMqTopology.destinationsToBind` and
+`KafkaTopology.topicsToSubscribe` both return that set as given, without a resolver and without looking at any filter.
+RabbitMQ's `declareTopology(false)` is a third, where a platform team owns the queue and its bindings and nothing here
+sees them at all.
+
+All three hold the same rule and none of them is checked, which is that whatever the queue or the topic subscription
+ends up matching is at least as inclusive as the subscription's filter. That is the open half.
+
+**The path to closing it is the one the domain level already took.** The same unchecked rule sat one level down,
+where a domain bridge that filtered on its own would acknowledge an event the projection's replay contract says was
+its own. Decision 5 held the domain bridge until
+[#848](https://github.com/johanhaleby/occurrent/issues/848) removed the need for it to filter at all, and that is
+done, so `RoutingOutcome.FILTERED` reports a non-match and both domain bridges ship with `DomainEventFeed` doing the
+matching. The domain half is closed and the CloudEvent half is not, so the CloudEvent half no longer waits on that
+work and needs its own.
+
+Recording the gap is the whole of what this amendment does about it. A later ADR that adds the accessor is what would
+close it.

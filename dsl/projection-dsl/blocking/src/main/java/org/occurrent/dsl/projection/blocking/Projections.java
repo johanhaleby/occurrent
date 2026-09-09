@@ -321,7 +321,8 @@ public final class Projections {
      * The Spring Boot starter's own scheduled poll (ADR 132 decision 7) is what retries a clear that keeps failing.
      * Calling this factory directly does not install it. Call {@link AppliedAppendRecorder#pollForClear()} on the
      * returned view on a schedule, or accept that a clear a catch-up left owed only retries once another delivery
-     * reaches this projection.
+     * reaches this projection. That call blocks, on the view's own lock and on the store, so give it a thread of
+     * its own rather than one your application needs back.
      */
     public static <E> RecordingMaterializedView<E> recordingAppliedAppends(MaterializedView<E> view, String projectionId, AppliedAppendStore store) {
         requireNonNull(view, "view cannot be null");
