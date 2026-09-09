@@ -181,6 +181,27 @@ clears the record when it succeeds. What the narrower rule removes is an unrelat
 that never succeeds. So a lost compare-and-set on the failure write starts the budget over only for the first failure
 of an input, which has no record to keep, and a later one keeps the record the winning write left in place.
 
+**The failing side needs the same rule, and the paragraph above is where its absence showed.** A record survives an
+input it does not name, so a successful input cannot put the clock back. A *failing* input could, because the first
+implementation replaced the record whenever the failing input differed from the recorded one and wrote the current time
+into the replacement as its `firstFailedAt`. An instance where two inputs both fail, events at positions 7 and 8
+arriving 7, 8, 7, 8, then had every delivery reset `firstFailedAt` and never reached the budget, and a push feed with
+concurrency and a re-offered batch both produce that arrival order. So the elapsed time runs from when the instance
+started failing rather than from when the input now failing started. A different input failing rewrites which input the
+record names and keeps `firstFailedAt` where it was. The budget belongs to the instance, which is what quarantine
+suspends, and the record names whichever input the instance stopped on when the budget ran out.
+
+**A lost compare-and-set on the first failure write can repeat indefinitely, and the narrowing two paragraphs above
+does not cover that.** It says only a first failure loses its budget that way, because a later one keeps the record the
+winning write left in place. That holds only where a later failure exists, meaning where some first write succeeded. A
+saga that re-arms a timer on a shorter period than the subscription re-offers the failing event has every failure
+write lose to the timer's, so no record is ever written, every failure is a first failure, and the budget never starts.
+The MongoDB backoff saturates at two seconds, so a timer re-armed once a second is enough to reach it. The behaviour is
+left as it is in 0.34.0 rather than changed quietly, and this paragraph is the record of the gap rather than an
+argument that there is not one. Closing it means retrying the failure write against the reloaded version, the way
+`process` already retries a lost save, and settling whether a record written against a version the instance has since
+left is still the right thing to write.
+
 The identity of "the same input" is the redelivery key `EventMeta` already computes, the stream id with its version,
 or the global position. An input the saga cannot recognise a redelivery of is already refused or warned about by
 ADR 109's `RedeliveryDetection`, so nothing new is needed there.

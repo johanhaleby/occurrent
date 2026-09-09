@@ -219,16 +219,65 @@ class SagaQuarantineSupportTest {
         }
 
         @Test
-        void a_different_input_failing_starts_the_budget_over_rather_than_inheriting_the_previous_one() {
-            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofHours(1))));
+        void a_different_input_failing_names_itself_and_keeps_the_instant_the_instance_started_failing() {
+            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(2))));
 
             FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
                     saga(), "o1", failing, at(8), new IllegalStateException("boom"), NOW, BUDGET);
 
             assertAll(
                     () -> assertThat(record.quarantined()).isFalse(),
-                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW),
-                    () -> assertThat(record.envelope().failure().position()).isEqualTo(8)
+                    () -> assertThat(record.envelope().failure().position()).isEqualTo(8),
+                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(2)))
+            );
+        }
+
+        @Test
+        void a_different_input_failing_once_the_budget_has_run_out_quarantines_the_instance_on_itself() {
+            SagaEnvelope<OrderState> failing = withFailure(SagaStatus.ACTIVE, failedOn(7, NOW.minus(Duration.ofMinutes(6))));
+
+            FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(
+                    saga(), "o1", failing, at(8), new IllegalStateException("boom"), NOW, BUDGET);
+
+            assertAll(
+                    () -> assertThat(record.quarantined()).isTrue(),
+                    () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(record.envelope().failure().input()).isEqualTo("o1@8"),
+                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(NOW.minus(Duration.ofMinutes(6)))
+            );
+        }
+
+        @Test
+        void two_inputs_failing_in_turn_still_reach_the_budget() {
+            // Events at positions 7 and 8 both fail on this instance and arrive 7, 8, 7, 8, which a push feed with
+            // concurrency or a re-offered batch produces. Each delivery used to write the current time into the record as
+            // its firstFailedAt, so the elapsed time never passed the budget and the instance kept blocking the others.
+            Instant startedFailing = NOW;
+            SagaEnvelope<OrderState> instance = active(3, Map.of("o1", 6L), 6L);
+            List<Long> alternating = List.of(7L, 8L, 7L, 8L);
+            FailureRecord<OrderState> quarantining = null;
+
+            // Two minutes between deliveries, so the fourth is six minutes past the first and the five minute budget has
+            // run out by then.
+            for (int delivery = 0; delivery < alternating.size() && quarantining == null; delivery++) {
+                Instant now = startedFailing.plus(Duration.ofMinutes(2L * delivery));
+                FailureRecord<OrderState> record = SagaExecutionSupport.onFailure(saga(), "o1", instance,
+                        at(alternating.get(delivery)), new IllegalStateException("boom"), now, BUDGET);
+                if (record == null) {
+                    continue;
+                }
+                instance = record.envelope();
+                if (record.quarantined()) {
+                    quarantining = record;
+                }
+            }
+
+            FailureRecord<OrderState> record = quarantining;
+            assertAll(
+                    () -> assertThat(record).isNotNull(),
+                    () -> assertThat(record.envelope().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(record.envelope().failure().input()).isEqualTo("o1@8"),
+                    () -> assertThat(record.envelope().failure().firstFailedAt()).isEqualTo(startedFailing)
             );
         }
 
