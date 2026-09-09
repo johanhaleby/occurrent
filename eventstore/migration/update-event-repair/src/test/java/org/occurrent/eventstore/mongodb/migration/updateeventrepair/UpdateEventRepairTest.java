@@ -275,10 +275,10 @@ class UpdateEventRepairTest {
 
         assertAll(
                 () -> assertThat(result.minRepairedPosition())
-                        .as("the lower of the two repaired positions must be the floor, even though an undamaged event sits below it")
+                        .as("a's repaired position must be the floor of the range")
                         .isEqualTo(positionOfA),
                 () -> assertThat(result.maxRepairedPosition())
-                        .as("the higher of the two repaired positions must be the ceiling, with b's untouched position between them")
+                        .as("c's repaired position must be the ceiling of the range, with b's untouched position between the two and no effect on it")
                         .isEqualTo(positionOfC)
         );
     }

@@ -256,8 +256,11 @@ public final class UpdateEventRepair {
         long lostPosition = withRetry(() -> eventCollection.countDocuments(lostPositionFilter()));
 
         deleteCheckpoint();
-        log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone, {} are left without a position. Repaired positions ranged from {} to {}.",
-                eventStoreCollectionName, repaired, unrecoverableCount, lostPosition, minRepairedPosition, maxRepairedPosition);
+        String repairedRange = minRepairedPosition == null
+                ? "No position was repaired"
+                : "Repaired positions ranged from " + minRepairedPosition + " to " + maxRepairedPosition;
+        log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone, {} are left without a position. {}.",
+                eventStoreCollectionName, repaired, unrecoverableCount, lostPosition, repairedRange);
         return new UpdateEventRepairResult(repaired, unrecoverableCount, lostPosition, unrecoverable, minRepairedPosition, maxRepairedPosition);
     }
 

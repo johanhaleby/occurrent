@@ -190,10 +190,12 @@ a new kind of damage, and it applies to the same stores, one with stream positio
 legacy catch-up is unaffected, because the event's time was never touched.
 
 `result.minRepairedPosition()` and `result.maxRepairedPosition()`, the same range the finished-run log line prints,
-bound every position this run restored. A consumer whose checkpoint sits below `minRepairedPosition` has not read
-that far yet, so it will pick up every repaired event on its own the next time it resumes and needs nothing from you.
-One whose checkpoint sits at or above `minRepairedPosition` may already have skipped one, and that is the one to
-check next.
+bound every position this run restored. Both are `null` when this run restored no position at all, whether because
+it found nothing to repair or because every event it touched only had its tag array rebuilt, and `null` there means
+no consumer needs anything from you for this run. Otherwise, a consumer whose checkpoint sits below
+`minRepairedPosition` has not read that far yet, so it will pick up every repaired event on its own the next time it
+resumes and needs nothing from you. One whose checkpoint sits at or above `minRepairedPosition` may already have
+skipped one, and that is the one to check next.
 
 Read that checkpoint the way you would for any other purpose, a durable subscription's checkpoint storage collection,
 or wherever a hand-rolled consumer keeps the position it last processed, and compare it to the range above.
