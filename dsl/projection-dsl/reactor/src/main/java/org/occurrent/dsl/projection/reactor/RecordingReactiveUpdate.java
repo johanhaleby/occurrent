@@ -82,7 +82,12 @@ public final class RecordingReactiveUpdate<E> implements BiFunction<EventMetadat
         return delegate.apply(metadata, event).thenReturn(true);
     }
 
+    // Checked here, off the hop, so the overwhelming majority of deliveries to a long-lived projection, applied
+    // outside a catch-up with nothing owed to the store, never reach boundedElastic at all.
     private Mono<Void> recordOnBoundedElastic(EventMetadata metadata) {
+        if (recording.cannotPossiblyRecord(metadata)) {
+            return Mono.empty();
+        }
         return Mono.<Void>fromRunnable(() -> recording.recordIfReady(metadata)).subscribeOn(Schedulers.boundedElastic());
     }
 

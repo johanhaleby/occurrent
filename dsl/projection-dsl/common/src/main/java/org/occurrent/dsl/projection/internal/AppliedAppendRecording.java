@@ -85,6 +85,9 @@ public final class AppliedAppendRecording {
     // from here is never recorded, unlike an id evicted from a delivery dedup cache.
     private final LinkedHashSet<AppendId> awaitingClear = new LinkedHashSet<>();
     private boolean awaitingClearOverflowLogged = false;
+    // Mirrors whether awaitingClear is empty, for cannotPossiblyRecord to read without the lock awaitingClear
+    // itself needs. Written only where awaitingClear itself is, under clearLock.
+    private volatile boolean awaitingClearHasEntries = false;
 
     // Holds one append id per append, so a reconciliation of a hundred thousand events costs far fewer entries than
     // that. Chosen to be large enough that reaching it means a clear has been failing for a long time.
@@ -93,6 +96,33 @@ public final class AppliedAppendRecording {
     public AppliedAppendRecording(String projectionId, AppliedAppendStore store) {
         this.projectionId = requireNonNull(projectionId, "projectionId cannot be null");
         this.store = requireNonNull(store, "store cannot be null");
+    }
+
+    /**
+     * Answers, from three lock-free reads, whether {@link #recordIfReady(EventMetadata)} is certain to do nothing
+     * for {@code metadata} right now, so a caller that would otherwise hop to a blocking-safe thread only to call it
+     * can skip that hop instead. Only ever answers {@code true} when a catch-up has run before (so nothing here is
+     * still on the never-started default), history is not being read, no clear is owed, and nothing is buffered
+     * waiting for one, since those four together are exactly the state in which {@link #recordIfReady(EventMetadata)}
+     * touches neither the store nor {@code clearLock}. A stale read only costs a hop {@link #recordIfReady(EventMetadata)}
+     * would also have done nothing with, since every field this reads can already be different from a moment later
+     * when the real check runs under the lock. Reactive Mongo DSL's {@code RecordingReactiveUpdate} calls this
+     * before hopping to {@code boundedElastic} per delivered event, since that hop otherwise runs for every event a
+     * long-lived projection ever applies, not only the ones it records.
+     */
+    public boolean cannotPossiblyRecord(EventMetadata metadata) {
+        requireNonNull(metadata, "metadata cannot be null");
+        Catchup current = catchup.get();
+        if (current == null || current.readingHistory() || pendingClear || awaitingClearHasEntries) {
+            return false;
+        }
+        Optional<AppendId> appendId;
+        try {
+            appendId = AppendId.from(metadata);
+        } catch (IllegalArgumentException e) {
+            return true;
+        }
+        return appendId.isEmpty() || appendId.get().equals(lastRecorded);
     }
 
     /**
@@ -180,6 +210,7 @@ public final class AppliedAppendRecording {
     private void dropAwaitingClear() {
         awaitingClear.clear();
         awaitingClearOverflowLogged = false;
+        awaitingClearHasEntries = false;
     }
 
     // Assumes clearLock is already held by the caller. Only reached when a clear is owed and the history is not
@@ -205,6 +236,7 @@ public final class AppliedAppendRecording {
             oldest.remove();
         }
         awaitingClear.add(appendId);
+        awaitingClearHasEntries = true;
     }
 
     private void doRecord(EventMetadata metadata) {

@@ -135,6 +135,16 @@ public interface AppliedAppendStore {
      * polling toward its deadline rather than ending it, the same absorb-and-poll behavior the Mongo stores
      * establish with their own {@code RetryStrategy}.
      * <p>
+     * That absorb-and-poll behavior is for a store failure, an outage {@link #hasApplied(String, AppendId)} cannot
+     * see past. It is not for {@link #hasApplied(String, AppendId)} being unable to run on the calling thread at
+     * all, which no answer this loop could sleep towards would fix, since the same thread asks again on every poll.
+     * An implementation whose read needs a particular thread, the reactive Mongo store's {@code block()} above a
+     * Netty event loop being the one in this codebase, checks for that and reports it cannot be answered here,
+     * before this loop would otherwise absorb it as a false negative and sleep the calling thread to a deadline
+     * regardless. Overriding {@link #waitUntilApplied(String, AppendId, Duration, Backoff)} rather than changing
+     * {@link #hasApplied(String, AppendId)} is what lets that report happen before the first sleep. This default
+     * loop's own {@code catch} runs after the first read has already answered.
+     * <p>
      * A wait always reads at least once before it honours {@code timeout}, so a timeout of zero, or one a caller
      * computed from a budget that has already run out, still asks the store rather than answering {@code false}
      * without looking. That much every implementation owes.
