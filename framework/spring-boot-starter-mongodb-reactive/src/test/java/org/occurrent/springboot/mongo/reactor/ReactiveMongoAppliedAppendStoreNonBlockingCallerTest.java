@@ -71,6 +71,7 @@ class ReactiveMongoAppliedAppendStoreNonBlockingCallerTest {
         AtomicReference<Boolean> applied = new AtomicReference<>();
         AtomicReference<Throwable> thrown = new AtomicReference<>();
         AtomicReference<Instant> start = new AtomicReference<>();
+        AtomicReference<Instant> end = new AtomicReference<>();
         CountDownLatch done = new CountDownLatch(1);
         Schedulers.parallel().schedule(() -> {
             start.set(Instant.now());
@@ -79,13 +80,14 @@ class ReactiveMongoAppliedAppendStoreNonBlockingCallerTest {
             } catch (Throwable t) {
                 thrown.set(t);
             } finally {
+                end.set(Instant.now());
                 done.countDown();
             }
         });
         assertThat(done.await(9, TimeUnit.SECONDS)).as("the scheduled call finished within the test's own timeout").isTrue();
-        // Started once the call itself is running, so scheduler dispatch under a loaded test JVM is never counted
-        // as this call's own latency.
-        Duration elapsed = Duration.between(start.get(), Instant.now());
+        // Both timestamps taken on the worker, so neither scheduler dispatch onto it nor the waiting JUnit thread
+        // being rescheduled after done.countDown() is ever counted as this call's own latency.
+        Duration elapsed = Duration.between(start.get(), end.get());
         return new CallOutcome(Boolean.TRUE.equals(applied.get()), thrown.get(), elapsed);
     }
 
