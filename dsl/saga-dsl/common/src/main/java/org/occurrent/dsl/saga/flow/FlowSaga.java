@@ -127,7 +127,9 @@ public final class FlowSaga {
          * several domain types onto one CloudEvent type string, is still retained, exactly as {@link Saga#replacementFilter()}
          * says, but it neither counts against {@code events} nor evicts one of the step's own events to make room for
          * itself. So this cap does not bound a step fed only such events, and the store-boundary warning is what
-         * surfaces that growth instead.
+         * surfaces that growth instead. A repeat of the start type after an instance has already started is
+         * uncapped the same way, and needs no widened selector to reach it, because the start type is declared
+         * only for the subscription, not for any step's own {@code on(...)} or window-condition leaf.
          * <p>
          * A step that is inside its cap keeps whatever carry-over {@link #historyWindow(int)} granted, and one that is over
          * it keeps only its own newest {@code events}, because reaching its oldest events means dropping the carry-over
