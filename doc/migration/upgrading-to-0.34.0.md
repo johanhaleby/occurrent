@@ -887,8 +887,11 @@ A `@Subscription`, `@StreamSubscription`, `@DcbSubscription` or `@SynchronousSub
 proxy cannot invoke now fails Spring Boot startup with `SubscriptionHandlerNotInvocableException`. Before this release
 it ran on the raw bean instead, with no advice applied, silently skipping `@Transactional` or any other aspect on
 every delivery, which is the bug #837 and #965 report. A method declared only on the concrete class while the bean
-is a JDK interface proxy, a private method, and a final method on a CGLIB proxy all hit the new check.
-Make the method non-private, expose it on an interface the proxy implements, drop `final`, or set
+is a JDK interface proxy, a private method a CGLIB proxy cannot override, a final method a CGLIB proxy cannot
+override either, and a static method, whose invocation never goes through any proxy at all, every one hits the new
+check, but only once the bean actually ends up behind such a proxy. An unproxied bean has no proxy to lose advice
+through in the first place, so a private or final handler there is unaffected and still registers normally.
+Make the method non-private, expose it on an interface the proxy implements, drop `final` or `static`, or set
 `spring.aop.proxy-target-class=true` so a CGLIB proxy is used instead of a JDK interface proxy.
 
 Registration for all four annotations also moves to the phase `@Projection`, `@Snapshot` and `@Saga` already use,
@@ -896,16 +899,21 @@ once every singleton in the application is instantiated. Before this release eac
 bean's creation, so whichever bean the container happened to construct first could already be live while a later
 bean was still writing an event from its own `@PostConstruct`. Whether that write reached the handler depended on
 bean creation order, an accident of the bean graph rather than something you configured. Every handler now registers
-only once every bean's own startup has finished, so a live-only subscription, `@Subscription`, `@StreamSubscription`
-or `@DcbSubscription` at `StartPosition.NOW` or the default position, and every `@SynchronousSubscription`, never
-sees an event written during another bean's own startup, regardless of creation order. `StartPosition.NOW`'s own
-contract was already "events written after the subscription starts", so this does not break a documented promise,
-it closes a gap the old, order-dependent timing sometimes closed by accident and sometimes did not. If your startup
-code relies on a live subscription seeing an event written while another bean is still starting, move that write
-until after startup completes, or start the subscription at `StartPosition.BEGINNING` and let it catch up
-explicitly. [#979](https://github.com/johanhaleby/occurrent/issues/979) tracks recording an early position marker
-during startup so a future release can close this without giving up the deferred proxy resolution this section's
-first half depends on.
+only once every such bean's own startup has finished, so a live-only subscription, `@Subscription`, `@StreamSubscription`
+or `@DcbSubscription` at `StartPosition.NOW`, and every `@SynchronousSubscription`, never sees an event one of those
+beans writes during its own startup, regardless of creation order. `StartPosition.NOW`'s own contract was already
+"events written after the subscription starts", so this does not break a documented promise, it closes a gap the
+old, order-dependent timing sometimes closed by accident and sometimes did not. `StartPosition.DEFAULT` is
+unaffected on a restart, since a durable subscription then resumes from its stored checkpoint and can still replay
+such an event, so only `NOW` is the position this section's guarantee actually covers. This only closes the gap for
+the bean graph the container builds up front, too. A bean the container creates later, one marked `@Lazy` for
+example, starts after registration, so its own startup writes are delivered normally to whatever already registered.
+If your startup code relies on a live subscription seeing an event written while another such bean is still
+starting, move that write until after startup completes, or start the subscription at `StartPosition.BEGINNING`
+and let it catch up explicitly.
+[#979](https://github.com/johanhaleby/occurrent/issues/979) tracks recording an early position marker during startup
+so a future release can close this without giving up the deferred proxy resolution this section's first half
+depends on.
 
 There is no recipe for either change. A proxy-invocability failure and a startup ordering dependency are both
 runtime behavior, not a call site a rewrite could search for.

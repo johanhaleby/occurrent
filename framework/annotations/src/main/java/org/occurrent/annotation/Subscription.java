@@ -62,8 +62,9 @@ import java.lang.annotation.*;
  * </p>
  * <p>
  * Registration happens once every singleton in the application is instantiated, so a subscription starting at
- * {@link StartPosition#NOW}, or at the default position on its first start, does not see an event written during another bean's own
- * startup, {@code @PostConstruct} included.
+ * {@link StartPosition#NOW} does not see an event one of those beans writes during its own startup, {@code @PostConstruct}
+ * included. A bean created later, such as one marked {@code @Lazy}, starts after registration, so its own writes are
+ * delivered normally.
  * </p>
  *
  * <h4>Metadata</h4>

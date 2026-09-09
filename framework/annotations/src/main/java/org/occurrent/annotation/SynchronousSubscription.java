@@ -41,9 +41,10 @@ import java.lang.annotation.*;
  * types to match.
  * </p>
  * <p>
- * Registration happens once every singleton in the application is instantiated, so a handler is not yet wired to
- * receive an event another bean's own startup writes, {@code @PostConstruct} included, even though delivery is
- * otherwise synchronous.
+ * Registration happens once every singleton in the application is instantiated, so a handler does not receive an
+ * event one of those beans writes during its own startup, {@code @PostConstruct} included, even though delivery is
+ * otherwise synchronous. A bean created later, such as one marked {@code @Lazy}, starts after registration, so its
+ * own writes are delivered normally.
  * </p>
  *
  * <h4>There is no free lunch</h4>
