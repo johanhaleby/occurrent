@@ -23,10 +23,12 @@ import java.util.List;
 
 /**
  * Additional querying capabilities that may be supported by a {@link SagaStateStore} implementation, for observing
- * instances rather than running them. The executor never calls anything here: it needs only
- * {@link SagaStateStore#find(String)}, {@link SagaStateStore#compareAndSave(String, SagaEnvelope, long)} and
- * {@link SagaStateStore#findWithDueTimers(Instant, int)}, so a store can run sagas perfectly well without implementing
- * this.
+ * instances rather than running them. The executor never calls anything here. What it needs is
+ * {@link SagaStateStore#find(String)}, {@link SagaStateStore#compareAndSave(String, SagaEnvelope, long)},
+ * {@link SagaStateStore#findWithDueTimers(Instant, int)}, and the two state-free members
+ * {@link SagaStateStore#findWithoutState(String)} and
+ * {@link SagaStateStore#compareAndSaveWithoutState(String, SagaEnvelope, long)}, which default to the first two. So a
+ * store can run sagas perfectly well without implementing this.
  * <p>
  * It is a separate capability because enumeration asks something genuinely new of a store: an <em>ordering</em>.
  * {@code findWithDueTimers} may return its instances in any order at all, while {@link #findByStatus} must return them

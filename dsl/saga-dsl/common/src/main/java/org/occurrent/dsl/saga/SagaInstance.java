@@ -54,6 +54,10 @@ public interface SagaInstance {
      * {@link SagaStatus#QUARANTINED} status means the budget elapsed and the instance stopped, and the record says
      * where and why. Those two read the same way here on purpose, because the operational question is the same one:
      * what is this instance stuck on.
+     * <p>
+     * {@link SagaFailure#firstFailedAt()} is when the instance started failing rather than when the input the record
+     * names first failed, and the two differ once a second input has failed on the same instance. See that record for
+     * why the budget belongs to the instance.
      */
     @Nullable SagaFailure failure();
 

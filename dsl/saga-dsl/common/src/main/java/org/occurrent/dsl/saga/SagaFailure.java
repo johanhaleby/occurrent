@@ -23,10 +23,17 @@ import java.time.Instant;
 import static java.util.Objects.requireNonNull;
 
 /**
- * One saga instance's record of the input it is failing on: which input, where in the subscription it sits, when the
- * failing started, and what came out of the saga. It is written on the first failure of that input and it survives
- * every later failure of the same one, which is what lets the executor measure how long the failure has lasted rather
- * than count attempts.
+ * One saga instance's record of the input it is failing on. Which input, where in the subscription it sits, when the
+ * instance started failing, and what came out of the saga. It is written on the instance's first failure and it
+ * survives every later failure, which is what lets the executor measure how long the failing has lasted rather than
+ * count attempts.
+ * <p>
+ * {@code input} names the input the instance is failing on <em>now</em>, while {@code firstFailedAt} is when the
+ * instance started failing, which is not always the same moment. An instance where two inputs fail in turn has the
+ * record renamed to whichever one failed last and keeps the earlier instant, because the budget belongs to the
+ * instance rather than to one of its inputs. Letting each input restart the clock meant such an instance never reached
+ * its budget and went on blocking every other instance of the saga. So read {@code firstFailedAt} as the start of this
+ * instance's current run of failing, and not as the first time {@code input} failed.
  * <p>
  * The record outliving a single attempt is the point. An input that fails once and succeeds on redelivery clears it,
  * an input that keeps failing past the runner's quarantine budget turns the instance {@link SagaStatus#QUARANTINED},
@@ -48,7 +55,8 @@ import static java.util.Objects.requireNonNull;
  *                       position. The same string the executor compares against to tell one failing input from the next
  * @param position       the global subscription position of the failing event, or {@code null} when the event carries
  *                       none, in which case {@code input} holds its stream id and version instead
- * @param firstFailedAt  when this input first failed, which is when the quarantine budget started running
+ * @param firstFailedAt  when this instance started failing, which is when the quarantine budget started running. Not
+ *                       necessarily when {@code input} first failed, see above
  * @param failureType    the class name of the exception the saga or its dispatcher threw
  * @param failureMessage that exception's message, or {@code null} when it had none
  */
