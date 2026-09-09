@@ -53,9 +53,9 @@ public interface DomainEventSink<E> {
      * {@code Iterable} republishes those, which is a duplicate and never a loss. An override that batches has to
      * hold the same property, so it cannot report success until the broker has taken every event it was given.
      * <p>
-     * The default sends each event through {@code publish(E)}, so none of them stamps a stream identity. There is
-     * no {@code Iterable} form of {@code publish(EventMetadata, E)}, since every event would need its own
-     * metadata.
+     * The default sends each event through {@code publish(E)}, so none of the resulting messages has a stream
+     * identity. There is no {@code Iterable} form of {@code publish(EventMetadata, E)}, since every event would need
+     * its own metadata.
      */
     default void publish(Iterable<E> domainEvents) {
         for (E domainEvent : domainEvents) {
