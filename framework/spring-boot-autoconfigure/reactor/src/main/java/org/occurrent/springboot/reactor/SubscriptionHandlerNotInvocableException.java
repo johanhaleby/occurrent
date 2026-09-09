@@ -20,8 +20,10 @@ import java.lang.reflect.Method;
 
 /**
  * Thrown when a {@code @Subscription}, {@code @StreamSubscription}, {@code @DcbSubscription} or
- * {@code @SynchronousSubscription} handler method cannot be invoked through the bean's Spring proxy, either because
- * a JDK interface proxy does not implement it or because the method is final and a CGLIB proxy cannot override it.
+ * {@code @SynchronousSubscription} handler method cannot be invoked through the bean's Spring proxy. A JDK interface
+ * proxy that does not implement the method reaches it, so does a private method, which a CGLIB proxy can never
+ * override either, and so does a final method on a CGLIB proxy specifically, since an unproxied bean invokes a
+ * final method directly with no proxy to lose.
  * <p>
  * Invoking the method on the raw bean instead would run it with no advice applied, including
  * {@code @Transactional}, on every delivery for as long as the application runs. Refused rather than done silently.
