@@ -24,7 +24,6 @@ import org.occurrent.annotation.Subscription;
 import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.api.reactor.Subscribable;
-import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.SmartInitializingSingleton;
@@ -172,8 +171,10 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // returns that instance's own class, a JDK dynamic proxy included, and ClassUtils.getUserClass only strips
     // CGLIB's naming convention, not a JDK proxy. Scanning that class finds nothing, since a JDK proxy implements
     // only its interfaces, so an already-created bean's annotation went undetected rather than reaching the
-    // resolveHandlerInvocation guard that exists to catch exactly this. AopUtils.getTargetClass unwraps either
-    // proxy kind given the real instance, so an already-created bean is resolved through it instead.
+    // resolveHandlerInvocation guard that exists to catch exactly this. SubscriptionAnnotations.ultimateTarget
+    // unwraps either proxy kind, through any number of nested layers, given the real instance, so an already-created
+    // bean is resolved through it instead, the same unwrap invokeDescriptorFactory already uses for a descriptor
+    // bean's own factory method.
     //
     // containsSingleton(beanName) is also true once a FactoryBean itself is created, whether or not its product
     // has been. getBean(beanName) dereferences that factory, so calling it here for every such name would create a
@@ -183,7 +184,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     private Class<?> resolveScanType(String beanName) {
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         if (beanFactory.containsSingleton(beanName) && !beanFactory.isFactoryBean(beanName)) {
-            return AopUtils.getTargetClass(applicationContext.getBean(beanName));
+            return SubscriptionAnnotations.ultimateTarget(applicationContext.getBean(beanName)).getClass();
         }
         Class<?> type = applicationContext.getType(beanName);
         return type == null ? null : ClassUtils.getUserClass(type);

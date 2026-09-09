@@ -333,12 +333,17 @@ public final class SubscriptionAnnotations {
         }
     }
 
-    // Unwraps through any number of nested AOP proxies to the innermost fixed target (AopProxyUtils.getSingletonTarget
-    // stops at one layer, hence the loop). Returns bean itself when it is not a proxy, or when a proxy's TargetSource
-    // is not a fixed singleton (a prototype- or pool-backed source is left proxied rather than risking a
-    // side-effecting getTarget() call, or invoking a different target instance than the one the descriptor id was
-    // registered against).
-    private static Object ultimateTarget(Object bean) {
+    /**
+     * Unwraps through any number of nested AOP proxies to the innermost fixed target
+     * ({@link AopProxyUtils#getSingletonTarget} stops at one layer, hence the loop). Returns {@code bean} itself
+     * when it is not a proxy, or when a proxy's {@code TargetSource} is not a fixed singleton, a prototype- or
+     * pool-backed source is left proxied rather than risking a side-effecting {@code getTarget()} call, or
+     * unwrapping to a different target instance than the one a caller registered a descriptor or handler against.
+     *
+     * @param bean the (possibly proxied, possibly nested-proxied) bean to unwrap
+     * @return the innermost fixed target, or {@code bean} itself when there is none to unwrap to
+     */
+    public static Object ultimateTarget(Object bean) {
         Object current = bean;
         Object next;
         while ((next = AopProxyUtils.getSingletonTarget(current)) != null) {
