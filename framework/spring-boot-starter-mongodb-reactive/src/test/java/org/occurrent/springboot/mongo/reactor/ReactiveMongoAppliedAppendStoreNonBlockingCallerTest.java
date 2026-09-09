@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.eventstore.api.AppendId;
+import org.occurrent.retry.Backoff;
 import org.springframework.data.mongodb.core.ReactiveMongoOperations;
 import org.springframework.data.mongodb.core.index.ReactiveIndexOperations;
 import org.springframework.data.mongodb.core.query.Query;
@@ -102,7 +103,7 @@ class ReactiveMongoAppliedAppendStoreNonBlockingCallerTest {
     }
 
     @Test
-    void the_two_argument_overload_reports_it_cannot_answer_the_same_way() throws InterruptedException {
+    void the_four_argument_overload_with_an_explicit_backoff_reports_it_cannot_answer_the_same_way() throws InterruptedException {
         ReactiveMongoOperations mongoOperations = mongoOperationsThatWouldAnswerApplied();
         AppliedAppendStore store = new ReactiveMongoAppliedAppendStore(mongoOperations, "appliedAppends", Duration.ofDays(7));
 
@@ -110,7 +111,7 @@ class ReactiveMongoAppliedAppendStoreNonBlockingCallerTest {
         CountDownLatch done = new CountDownLatch(1);
         Schedulers.parallel().schedule(() -> {
             try {
-                store.waitUntilApplied("orders", AppendId.mint(), Duration.ofSeconds(5));
+                store.waitUntilApplied("orders", AppendId.mint(), Duration.ofSeconds(5), Backoff.fixed(20));
             } catch (Throwable t) {
                 thrown.set(t);
             } finally {

@@ -101,13 +101,18 @@ public final class AppliedAppendRecording {
     /**
      * Answers whether {@link #recordIfReady(EventMetadata)} is certain to make no {@link AppliedAppendStore} call
      * for {@code metadata} right now, so a caller that would otherwise hop to a blocking-safe thread only to call
-     * it can skip that hop instead. Runs the exact same decision {@link #recordIfReady(EventMetadata)} makes,
-     * including noticing a catch-up {@link #reactToAnyNewCatchup()} has not reacted to yet, under the same
-     * {@code clearLock}, so its answer is that decision rather than a guess at it. An earlier version read
-     * {@link #catchup}, {@link #pendingClear} and {@link #lastRecorded} as three separate unsynchronized reads
-     * instead, and a catch-up announced between them, which takes only a field write rather than the lock, let it
-     * answer {@code true} from a combination {@link #recordIfReady(EventMetadata)} itself never decided, skipping
-     * an append whose store record that catch-up had already made stale.
+     * it can skip that hop instead. Runs the exact same decision {@link #recordIfReady(EventMetadata)} makes, under
+     * the same {@code clearLock}, so its answer is that decision rather than a guess at it built from unsynchronized
+     * reads of {@link #catchup}, {@link #pendingClear} and {@link #lastRecorded} a catch-up could interleave with,
+     * skipping an append whose store record that catch-up had already made stale.
+     * <p>
+     * {@link #catchupStarted(Object)} and {@link #historyRead(Object)} still never take {@code clearLock}, on
+     * purpose, so a catch-up can be announced while this method holds the lock and is partway through deciding,
+     * before {@link #reactToAnyNewCatchupAndReturnWhatItSaw()} or anything else here ever sees it. Every path that
+     * would otherwise answer {@code true} re-reads {@link #catchup} once more immediately before returning and
+     * compares it by identity to what {@link #reactToAnyNewCatchupAndReturnWhatItSaw()} saw, so a catch-up landing
+     * mid-decision is caught rather than silently believed. Answering {@code false} instead costs nothing beyond a
+     * hop {@link #recordIfReady(EventMetadata)} would also have made a decision on, never a lost record.
      * <p>
      * Safe to call from any thread, including one that must never block, because it only ever
      * {@link ReentrantLock#tryLock()}s {@code clearLock} rather than waiting for it, answering {@code false} at
@@ -122,19 +127,22 @@ public final class AppliedAppendRecording {
             return false;
         }
         try {
-            if (reactToAnyNewCatchup()) {
-                return !pendingClear;
+            Catchup seen = reactToAnyNewCatchupAndReturnWhatItSaw();
+            boolean wouldSkip;
+            if (seen != null && seen.readingHistory()) {
+                wouldSkip = !pendingClear;
+            } else if (pendingClear || !awaitingClear.isEmpty()) {
+                wouldSkip = false;
+            } else {
+                AppendId appendId;
+                try {
+                    appendId = AppendId.from(metadata).orElse(null);
+                } catch (IllegalArgumentException e) {
+                    appendId = null;
+                }
+                wouldSkip = appendId == null || appendId.equals(lastRecorded);
             }
-            if (pendingClear || !awaitingClear.isEmpty()) {
-                return false;
-            }
-            AppendId appendId;
-            try {
-                appendId = AppendId.from(metadata).orElse(null);
-            } catch (IllegalArgumentException e) {
-                return true;
-            }
-            return appendId == null || appendId.equals(lastRecorded);
+            return wouldSkip && catchup.get() == seen;
         } finally {
             clearLock.unlock();
         }
@@ -211,9 +219,17 @@ public final class AppliedAppendRecording {
      * Assumes clearLock is already held by the caller.
      */
     private boolean reactToAnyNewCatchup() {
+        Catchup current = reactToAnyNewCatchupAndReturnWhatItSaw();
+        return current != null && current.readingHistory();
+    }
+
+    // Same as reactToAnyNewCatchup(), returning the Catchup it read rather than only whether its history is
+    // still being read, so a caller can later confirm nothing this class does without the lock, catchupStarted or
+    // historyRead, moved catchup on since. Assumes clearLock is already held by the caller.
+    private @Nullable Catchup reactToAnyNewCatchupAndReturnWhatItSaw() {
         Catchup current = catchup.get();
         if (current == null) {
-            return false;
+            return null;
         }
         if (current.episode() != reactedTo) {
             reactedTo = current.episode();
@@ -221,7 +237,7 @@ public final class AppliedAppendRecording {
             // What a previous catch-up was holding describes a read model this one is rebuilding.
             dropAwaitingClear();
         }
-        return current.readingHistory();
+        return current;
     }
 
     // Assumes clearLock is already held by the caller.
