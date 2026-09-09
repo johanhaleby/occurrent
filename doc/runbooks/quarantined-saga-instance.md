@@ -38,7 +38,8 @@ has to exhaust, not how long it has been failing so far.
 
 That line does not repeat for every redelivery. The runner only logs it when it writes a failure record, and the same
 input failing again inside the budget records nothing new, so the redeliveries after the first are silent. A different
-input failing does write a record and does log again.
+input failing usually does write a record and log again, though not if that write loses a compare-and-set to something
+else touching the instance, in which case the runner discards it and says nothing.
 
 So silence after that first line tells you nothing on its own. The instance may still be failing on the same event, or
 a later delivery may have succeeded and cleared the record, which the runner does without logging anything. Read the
@@ -115,7 +116,9 @@ SagaFailure failure = instance.failure();
 //                          was written, which is later than the first failure itself if that write
 //                          lost a compare-and-set
 // failure.failureType()    the class name of the exception the saga or its dispatcher threw
-// failure.failureMessage() that exception's message, or null when it had none
+// failure.failureMessage() that exception's message, or null when it had none. Cut to the first
+//                          1000 characters with "... (truncated)" appended when it was longer,
+//                          so the log lines are where a long message survives whole
 ```
 
 Read `firstFailedAt()` as the start of the instance's current run of failing, and not as the first time

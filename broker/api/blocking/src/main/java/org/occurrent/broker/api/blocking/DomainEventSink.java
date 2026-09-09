@@ -53,6 +53,10 @@ public interface DomainEventSink<E> {
      * {@code Iterable} republishes those, which is a duplicate and never a loss. An override that batches has to
      * hold the same property, so it cannot report success until the broker has taken every event it was given.
      * <p>
+     * That retry has to be over the same events. {@link Iterable} promises nothing about being traversable twice, so
+     * a one-shot or stateful one can yield only what it had not already handed out, or nothing at all, and retrying
+     * that is a loss rather than a duplicate. Pass a collection, or rebuild the input before retrying.
+     * <p>
      * The default sends each event through {@code publish(E)}, so none of the resulting messages has a stream
      * identity. There is no {@code Iterable} form of {@code publish(EventMetadata, E)}, since every event would need
      * its own metadata.
