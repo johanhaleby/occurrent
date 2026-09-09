@@ -17,6 +17,7 @@
 package org.occurrent.springboot.blocking;
 
 import io.cloudevents.CloudEvent;
+import kotlin.jvm.functions.Function2;
 import org.aopalliance.intercept.MethodInterceptor;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
@@ -27,6 +28,7 @@ import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.subscription.blocking.Subscriptions;
 import org.occurrent.springboot.common.OccurrentProperties;
+import org.occurrent.subscription.AgnosticSubscriptionFilter;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.SmartFactoryBean;
 import org.springframework.beans.factory.config.BeanPostProcessor;
@@ -37,7 +39,11 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.NestedExceptionUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 /**
  * Characterizes the eager, per-bean validation the blocking annotation post-processor performs from
@@ -127,6 +133,39 @@ class SubscriptionAnnotationGuardTest {
             assertThat(context).hasNotFailed();
             assertThat(context.getBean("&lazyProductFactory", NeverEagerFactoryBean.class).productCreated()).isFalse();
         });
+    }
+
+    // Spring CGLIB-enhances a proxyBeanMethods = true @Configuration class to intercept its own @Bean factory method
+    // calls, and that enhancement is not an Advised proxy, so SubscriptionAnnotations.ultimateTarget leaves it
+    // untouched. CGLIB does not copy a method's annotations onto the override it generates, so scanning the enhanced
+    // subclass instead of the user class it enhances would miss a subscription handler method declared directly on
+    // the configuration class.
+    @Test
+    void handler_method_on_a_configuration_enhanced_class_registers_normally() {
+        runner.withUserConfiguration(ConfigurationEnhancedHandlerConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            verify(context.getBean(Subscriptions.class))
+                    .subscribe(eq("configuration-enhanced-handler"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+        });
+    }
+
+    @Configuration(proxyBeanMethods = true)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class ConfigurationEnhancedHandlerConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Subscription(id = "configuration-enhanced-handler")
+        void on(TestEvent event) {
+        }
     }
 
     @Configuration(proxyBeanMethods = false)

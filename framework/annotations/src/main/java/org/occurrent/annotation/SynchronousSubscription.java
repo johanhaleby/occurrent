@@ -40,6 +40,11 @@ import java.lang.annotation.*;
  * {@code startAtGlobalPosition}, {@code resumeBehavior}, {@code startupMode}) - only an {@link #id()} and the event
  * types to match.
  * </p>
+ * <p>
+ * Registration happens once every singleton in the application is instantiated, so a handler is not yet wired to
+ * receive an event another bean's own startup writes, {@code @PostConstruct} included, even though delivery is
+ * otherwise synchronous.
+ * </p>
  *
  * <h4>There is no free lunch</h4>
  * <p>

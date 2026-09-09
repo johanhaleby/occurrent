@@ -168,7 +168,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // resolveHandlerInvocation guard that exists to catch exactly this. SubscriptionAnnotations.ultimateTarget
     // unwraps either proxy kind, through any number of nested layers, given the real instance, so an already-created
     // bean is resolved through it instead, the same unwrap invokeDescriptorFactory already uses for a descriptor
-    // bean's own factory method.
+    // bean's own factory method. ultimateTarget only unwraps an Advised proxy though, and Spring's own CGLIB
+    // enhancement of a proxyBeanMethods = true @Configuration class is not one, so a subscription-annotated bean
+    // that happens to be such a class still needs ClassUtils.getUserClass afterward to strip that generated
+    // subclass, the same normalization the getType(beanName) branch below already applies.
     //
     // containsSingleton(beanName) is also true once a FactoryBean itself is created, whether or not its product
     // has been. getBean(beanName) dereferences that factory, so calling it here for every such name would create a
@@ -178,7 +181,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private Class<?> resolveScanType(String beanName) {
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         if (beanFactory.containsSingleton(beanName) && !beanFactory.isFactoryBean(beanName)) {
-            return SubscriptionAnnotations.ultimateTarget(applicationContext.getBean(beanName)).getClass();
+            return ClassUtils.getUserClass(SubscriptionAnnotations.ultimateTarget(applicationContext.getBean(beanName)).getClass());
         }
         Class<?> type = applicationContext.getType(beanName);
         return type == null ? null : ClassUtils.getUserClass(type);

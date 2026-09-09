@@ -60,6 +60,11 @@ import java.lang.annotation.*;
  * or class will be received. If you want to receive only some of the events that implement this interface, see
  * {@link #eventTypes()}.
  * </p>
+ * <p>
+ * Registration happens once every singleton in the application is instantiated, so a subscription starting at
+ * {@link StartPosition#NOW} or the default position does not see an event written during another bean's own
+ * startup, {@code @PostConstruct} included.
+ * </p>
  *
  * <h4>Metadata</h4>
  * <p>

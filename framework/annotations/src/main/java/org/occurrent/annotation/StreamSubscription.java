@@ -47,6 +47,11 @@ import java.lang.annotation.*;
  * Note also that if {@code MyDomainEvent} is a sealed interface/class, then all events implementing this interface/class will be received. If you want to receive only
  * some of the events that implements this interface, see {@link #eventTypes()}.
  * </p>
+ * <p>
+ * Registration happens once every singleton in the application is instantiated, so a subscription starting at
+ * {@link StartPosition#NOW} or the default position does not see an event written during another bean's own
+ * startup, {@code @PostConstruct} included.
+ * </p>
  *
  * <h4>Metadata</h4>
  * <p>
