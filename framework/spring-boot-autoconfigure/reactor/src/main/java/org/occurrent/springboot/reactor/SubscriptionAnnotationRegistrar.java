@@ -84,7 +84,15 @@ class SubscriptionAnnotationRegistrar {
     // method on a bean nothing proxies runs directly, with no advice to lose. Both proxy cases leave no way to
     // invoke the method through the proxy at all, so both are refused rather than silently invoked on the raw bean
     // with no advice applied.
+    //
+    // A static method is refused unconditionally, proxied or not. Method.invoke ignores its target argument for a
+    // static method and dispatches on the declaring class alone, so it always runs the same way a direct static call
+    // would, with no proxy in the invocation at all for any advice to apply through.
     private HandlerInvocation resolveHandlerInvocation(Object bean, Method method) {
+        if (Modifier.isStatic(method.getModifiers())) {
+            throw new SubscriptionHandlerNotInvocableException(method,
+                    "The method is static, so invoking it never goes through the bean's proxy. Make the method an instance method.");
+        }
         Method invocableMethod;
         try {
             invocableMethod = AopUtils.selectInvocableMethod(method, bean.getClass());

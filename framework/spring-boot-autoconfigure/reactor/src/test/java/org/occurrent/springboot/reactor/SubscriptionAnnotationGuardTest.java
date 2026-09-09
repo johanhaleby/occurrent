@@ -92,6 +92,18 @@ class SubscriptionAnnotationGuardTest {
         });
     }
 
+    // Method.invoke ignores its target for a static method, so it always dispatches on the declaring class alone,
+    // proxied or not. Unlike the final-on-CGLIB check, this guard applies whether or not the bean is proxied at all.
+    @Test
+    void static_handler_method_fails_fast() {
+        runner.withUserConfiguration(StaticHandlerConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(SubscriptionHandlerNotInvocableException.class)
+                    .hasMessageContaining("is static");
+        });
+    }
+
     // A final method on a bean nothing proxies has no proxy to lose advice through, so the CGLIB-only reason the
     // check above exists does not apply here, and registration succeeds exactly as it would for a non-final method.
     @Test
@@ -255,6 +267,25 @@ class SubscriptionAnnotationGuardTest {
     static class FinalHandlerSubscriber {
         @Subscription(id = "reactive-final-handler-cglib-guard")
         final void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class StaticHandlerConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        StaticHandlerSubscriber staticHandlerSubscriber() {
+            return new StaticHandlerSubscriber();
+        }
+    }
+
+    static class StaticHandlerSubscriber {
+        @Subscription(id = "reactive-static-handler-guard")
+        static void on(TestEvent event) {
         }
     }
 

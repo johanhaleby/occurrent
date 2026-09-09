@@ -62,7 +62,7 @@ import java.lang.annotation.*;
  * </p>
  * <p>
  * Registration happens once every singleton in the application is instantiated, so a subscription starting at
- * {@link StartPosition#NOW} or the default position does not see an event written during another bean's own
+ * {@link StartPosition#NOW}, or at the default position on its first start, does not see an event written during another bean's own
  * startup, {@code @PostConstruct} included.
  * </p>
  *
