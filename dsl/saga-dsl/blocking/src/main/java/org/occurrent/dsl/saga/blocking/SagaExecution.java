@@ -166,14 +166,17 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             if (record.quarantined() && !confirmedStillObtainable(cloudEvent, failure)) {
                 boolean firstRefusalForThisInstance = refusalAnnounced.add(sagaId);
+                // The measured time rather than the budget. A redelivery can arrive well after the budget elapsed, so
+                // reporting the budget as the elapsed time understates how long the instance has been stuck.
+                Duration failingFor = failingFor(record, now);
                 // Checked before the write, not after, because quarantining returns normally and that acknowledges the
                 // event to whatever fed it. An unconfirmed answer is treated as a no, so the instance keeps blocking
                 // and the exception propagates as it did before 0.34.0. Nothing is saved, which leaves the failure
                 // record the earlier attempts wrote and lets the next redelivery ask again. Retention is rechecked
                 // every time so a store coming back is noticed, while the warning is said once per instance.
                 if (firstRefusalForThisInstance) {
-                    log.warn("Saga '{}' instance '{}' has been failing for {} and is stopped on the event '{}', and it is not quarantined, because the subscription could not confirm that the event is still obtainable from what it reads. Either it is gone, or the check could not be completed, and quarantining acknowledges the event, which might drop the only copy of it. This instance keeps blocking the saga's other instances instead. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
-                            subscriptionId, sagaId, quarantineAfter, meta.redeliveryKey(), failure);
+                    log.warn("Saga '{}' instance '{}' has been failing for {}, which is past its budget of {}, and is stopped on the event '{}', and it is not quarantined, because the subscription could not confirm that the event is still obtainable from what it reads. Either it is gone, or the check could not be completed, and quarantining acknowledges the event, which might drop the only copy of it. This instance keeps blocking the saga's other instances instead. https://github.com/johanhaleby/occurrent/issues/918 is the path to closing that.",
+                            subscriptionId, sagaId, failingFor, quarantineAfter, meta.redeliveryKey(), failure);
                 }
                 return false;
             }
@@ -194,8 +197,8 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
                         subscriptionId, sagaId, meta.redeliveryKey(), quarantineAfter, failure);
                 return false;
             }
-            log.error("Saga '{}' instance '{}' has been failing for {} and is now QUARANTINED, stopped on the event '{}'. That is how long the instance has been failing, which may be longer than this one event has. It skips every further event and fires no timers, so the saga's other instances are no longer blocked behind it. Find it with findByStatus(QUARANTINED, ..).",
-                    subscriptionId, sagaId, quarantineAfter, meta.redeliveryKey(), failure);
+            log.error("Saga '{}' instance '{}' has been failing for {}, past its budget of {}, and is now QUARANTINED, stopped on the event '{}'. The time is how long the instance has been failing, which can be longer than this one event has. It skips every further event and fires no timers, so the saga's other instances are no longer blocked behind it. Find it with findByStatus(QUARANTINED, ..).",
+                    subscriptionId, sagaId, failingFor(record, now), quarantineAfter, meta.redeliveryKey(), failure);
             return true;
         } catch (RuntimeException storeFailure) {
             // What reaches here is the store being unreachable, or a store that can only read an instance whole
@@ -210,6 +213,13 @@ final class SagaExecution<E, S extends @Nullable Object, C> {
             }
             return false;
         }
+    }
+
+    // How long the instance has actually been failing, taken from the record rather than from the budget, because a
+    // redelivery can arrive well after the budget elapsed and the two then differ by however late it was.
+    private static <S extends @Nullable Object> Duration failingFor(FailureRecord<S> record, Instant now) {
+        SagaFailure failure = record.envelope().failure();
+        return failure == null ? Duration.ZERO : Duration.between(failure.firstFailedAt(), now);
     }
 
     // A retention check that throws has not said yes, and the design treats an answer it did not get as a no. Answered

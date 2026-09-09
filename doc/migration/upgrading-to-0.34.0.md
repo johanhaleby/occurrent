@@ -725,10 +725,13 @@ compiles without them.** They both inherit to `find` and `compareAndSave`, so a 
 longer be decoded, which a renamed event class or a changed converter produces. The executor decides and records a
 quarantine through these two rather than through `find`, because loading such an instance throws, and an instance that
 throws on every load records nothing, never reaches its budget, and goes on blocking every other instance of the saga.
-`findWithoutState` answers with an envelope whose `state` is `null` and every other member populated, the way
-`findByStatus` already does, and `compareAndSaveWithoutState` saves under the same compare-and-set rule while leaving
-the stored state where it is. Override both or neither, because the executor saves what it read, and a store that
-answers the read with no state and then writes the envelope whole erases the state it was careful not to decode.
+In a store that overrides them, `findWithoutState` answers with an envelope whose `state` is `null` and every other
+member populated, the way `findByStatus` already does, and `compareAndSaveWithoutState` saves under the same
+compare-and-set rule while leaving the stored state where it is. That is the contract for an override and not what you
+inherit. The defaults do the opposite, since `findWithoutState` delegates to `find` and hands the state back, and
+`compareAndSaveWithoutState` delegates to `compareAndSave` and writes it. So override both or neither, because the
+executor saves what it read, and a store that answers the read with no state and then writes the envelope whole erases
+the state it was careful not to decode.
 
 ```java
 // 0.33.0
