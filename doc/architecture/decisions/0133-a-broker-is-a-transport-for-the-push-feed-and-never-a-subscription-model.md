@@ -1202,8 +1202,8 @@ binding narrower than the subscription's filter stops events reaching a matcher 
 `AGENTS.md` that is a loss rather than a misconfiguration to warn about.
 
 **What the review settled is that no code changes now, and not that the gap is closed or acceptable as an end state.**
-The isolation rule has no severity ladder, so a loss that only a misconfiguration reaches is still a loss, and this
-one stays recorded as open with the path below rather than signed off. What was deliberate is the choice not to build
+The isolation rule has no severity ladder, so a loss that only a misconfiguration reaches is still a loss, and the
+gap stays recorded as open with the path below rather than signed off. What was deliberate is the choice not to build
 a check that cannot be built from inside a broker module today. This amendment records the alternative, because
 decision 5 states the gap and its cause without saying what the other option was or why it was not taken.
 
@@ -1235,7 +1235,5 @@ done, so `RoutingOutcome.FILTERED` reports a non-match and both domain bridges s
 matching. The domain half is closed and the CloudEvent half is not, so the CloudEvent half no longer waits on that
 work and needs its own.
 
-**What it needs is a way to read back the `SubscriptionFilter` a subscription was registered with**, which is what
-both alternatives above turn on. Until a subscription exposes that, a bridge cannot derive its bindings or check the
-ones it was given, and the rule stays a written one. Recording it here is the whole of what this amendment does about
-it, and a later ADR that adds such an accessor is what would close it.
+Recording the gap is the whole of what this amendment does about it. A later ADR that adds the accessor is what would
+close it.
