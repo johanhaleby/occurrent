@@ -200,8 +200,11 @@ public final class SagaExecutionSupport {
 
     /**
      * What to write when an input has failed. {@link #envelope()} holds the failure record to save with
-     * {@code compareAndSave(..., expectedVersion())}, and {@link #quarantined()} says whether the budget has now
-     * elapsed, meaning the executor stops rethrowing and lets the subscription move past the input.
+     * {@code compareAndSaveWithoutState(..., expectedVersion())}, and {@link #quarantined()} says whether the budget has
+     * now elapsed, meaning the executor stops rethrowing and lets the subscription move past the input.
+     * <p>
+     * Without the state, and not {@code compareAndSave}, because the envelope this carries came from a read that did not
+     * decode the state, so saving it whole would erase the state of the instance this record is about.
      */
     public record FailureRecord<S extends @Nullable Object>(SagaEnvelope<S> envelope, long expectedVersion, boolean quarantined) {
     }

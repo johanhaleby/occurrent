@@ -38,7 +38,9 @@ import static java.util.Objects.requireNonNull;
  * @param maxCasAttempts       the maximum compare-and-set attempts for one input before failing, also the maximum number
  *                             of times that input's commands can be re-dispatched
  * @param redeliveryDetection  what to do with an event the runner cannot recognise a redelivery of
- * @param quarantineAfter      how long one event may keep failing for one instance before that instance is quarantined
+ * @param quarantineAfter      how long one instance may keep failing before it is quarantined on whichever event it is
+ *                             failing on then. Measured across the instance rather than per event, so a second failing
+ *                             event inherits the elapsed time rather than restarting it
  *                             on that event and the subscription is allowed past it, or {@code null} to keep
  *                             rethrowing forever, which is what every version up to 0.33.0 did. A runner ignores this
  *                             and keeps rethrowing unless its subscription model guarantees that it holds every event
@@ -93,7 +95,7 @@ public record SagaRunnerConfig(Duration timerPollInterval, int timerBatchLimit, 
 
     /**
      * The default configuration: poll every 15 seconds, fire up to 100 due instances per poll, retry a lost save up to 50
-     * times, require redelivery detection, and quarantine an instance whose event has kept failing for five minutes. The poll interval only bounds how late a due timer fires, and saga
+     * times, require redelivery detection, and quarantine an instance that has kept failing for five minutes. The poll interval only bounds how late a due timer fires, and saga
      * timeouts run at a minutes-to-days timescale, so 15 seconds (the same default as JobRunr) keeps the store query
      * load low while firing well within tolerance. Lower it only when you rely on short timeouts firing promptly.
      */

@@ -86,9 +86,10 @@ import static java.util.Objects.requireNonNull;
  *       subscription model has to retain what it delivered, and the event has to arrive with a stream id and
  *       version or a global position, since an event the saga cannot recognise a redelivery of is never quarantined.
  *       Where any of those is missing the wait is the one every version up to 0.33.0 had, which is unbounded. Once one
- *       event has kept failing for one
- *       instance that long, the instance becomes {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED}, the executor
- *       stops rethrowing, and the subscription moves past the event so the saga's other instances keep going. The
+ *       instance has kept failing that long, it becomes {@link org.occurrent.dsl.saga.SagaStatus#QUARANTINED}, the
+ *       executor stops rethrowing, and the subscription moves past the event so the saga's other instances keep going.
+ *       The budget is the instance's rather than one event's, so an instance where two events both fail keeps the
+ *       instant it started failing and the record names whichever event it stopped on. The
  *       quarantined instance stops there, and 0.34.0 has no operation that brings it back, so
  *       {@code SagaStateStore.delete(sagaId)} is how you abandon it. Set {@code quarantineAfter} to {@code null} to
  *       keep the pre-0.34.0 behaviour of blocking indefinitely instead, which is also what a subscription model that
