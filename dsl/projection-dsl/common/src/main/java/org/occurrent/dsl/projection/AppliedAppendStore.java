@@ -44,8 +44,9 @@ import static java.util.Objects.requireNonNull;
  * opt-in and its recording wrapper in the blocking and reactor projection DSLs. Reading is a plain call to
  * {@link #hasApplied(String, AppendId)} or {@link #waitUntilApplied(String, AppendId, Duration)}.
  * <p>
- * A projection records an append after the first event of that append it handles and that has an append id, not
- * after every event the append wrote. So an append whose events reach this projection across several deliveries can
+ * A projection records an append after the first event of that append it applies successfully and that has an
+ * append id, not after every event the append wrote. An update that throws records nothing, and neither does one the
+ * wrapped view reports it skipped. So an append whose events reach this projection across several deliveries can
  * have {@link #hasApplied(String, AppendId)} and {@link #waitUntilApplied(String, AppendId, Duration)} both answer
  * {@code true} while some of those deliveries are still unapplied. In the ordinary case the rest follow in however
  * long the same node needs to work through the append's remaining events. What happens instead when that node stops

@@ -21,8 +21,9 @@ From 0.34.0 the executor times how long the instance has been failing. Once that
 `SagaRunnerConfig.quarantineAfter`, five minutes by default, the instance moves to `SagaStatus.QUARANTINED` and the
 executor stops rethrowing, so the subscription acknowledges the event and goes on delivering to everybody else.
 
-A quarantined instance receives no further events and fires no timers, and its redelivery watermarks stop moving, so
-nothing it skipped is recorded as handled.
+A quarantined instance applies no further events and fires no timers, and its redelivery watermarks stop moving, so
+nothing it skipped is recorded as handled. The subscription still delivers those events, and the runner still reads
+the instance before skipping each one, which step 5 comes back to.
 
 Nothing in 0.34.0 brings an instance out of quarantine. Deleting it is the only ending this release offers, and step 5
 is what that costs.
@@ -92,14 +93,22 @@ instances than that needs a higher number rather than a second call.
 MongoDB is:
 
 ```javascript
-db.getCollection("saga-order-fulfilment").find({ status: "QUARANTINED" }).sort({ updatedAt: 1 }).limit(100)
+db.getCollection("saga-order-fulfilment")
+  .find({ status: "QUARANTINED" }, { state: 0 })
+  .sort({ updatedAt: 1 })
+  .limit(100)
 ```
 
 `saga-<sagaId>` is the collection the Spring Boot starter uses when you never named one. If you built the
-`SpringMongoSagaStateStore` yourself, use the name you passed it. Keep the limit, and raise it when you have to. An
-index the store creates for itself on `status` and `updatedAt` serves the match and the sort, so this never scans the
-collection, but without a bound it still reads and returns every quarantined instance, which during an incident is
-exactly when there are most of them. `updatedAt` is stored as epoch milliseconds rather than a date.
+`SpringMongoSagaStateStore` yourself, use the name you passed it.
+
+Keep the limit, and raise it when you have to. An index the store creates for itself on `status` and `updatedAt`
+serves the match and the sort, so this never scans the collection, but without a bound it still reads and returns
+every quarantined instance, which during an incident is exactly when there are most of them.
+
+Keep the `{ state: 0 }` too. `findByStatus` projects the state away for the same reason, and a flow saga's state holds
+the events it has retained, so printing a hundred of them is a lot of data none of this step needs. `updatedAt` is
+stored as epoch milliseconds rather than a date.
 
 ### 2. [you] Read what the instance stopped on
 
