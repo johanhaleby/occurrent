@@ -140,6 +140,57 @@ class AppliedAppendRecordingTest {
         signalling.join(TimeUnit.SECONDS.toMillis(5));
     }
 
+    // cannotPossiblyRecord is the one method on this class a caller may call from a thread that must never block,
+    // so it has to answer instead of waiting whenever clearLock is already held by a store call in flight, the
+    // same store call neither_signal_waits_for_a_store_call_already_in_flight above proves the two signals never
+    // wait for either.
+    @Test
+    void cannotPossiblyRecord_answers_false_at_once_rather_than_waiting_for_a_store_call_already_in_flight() throws InterruptedException {
+        CountDownLatch clearEntered = new CountDownLatch(1);
+        CountDownLatch releaseClear = new CountDownLatch(1);
+        AppliedAppendStore delegate = AppliedAppendStore.inMemory();
+        AppliedAppendStore heldStore = new AppliedAppendStore() {
+            @Override
+            public void recordApplied(String projectionId, AppendId appendId) {
+                delegate.recordApplied(projectionId, appendId);
+            }
+
+            @Override
+            public boolean hasApplied(String projectionId, AppendId appendId) {
+                return delegate.hasApplied(projectionId, appendId);
+            }
+
+            @Override
+            public void clear(String projectionId) {
+                clearEntered.countDown();
+                awaitFor(releaseClear);
+                delegate.clear(projectionId);
+            }
+        };
+        AppliedAppendRecording recording = new AppliedAppendRecording(PROJECTION_ID, heldStore);
+        recording.catchupStarted(new Object());
+        Thread stuckInClear = new Thread(recording::pollForClear);
+        stuckInClear.start();
+        assertThat(clearEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        CountDownLatch answered = new CountDownLatch(1);
+        AtomicBoolean cannotPossiblyRecord = new AtomicBoolean(true);
+        Thread asking = new Thread(() -> {
+            cannotPossiblyRecord.set(recording.cannotPossiblyRecord(metadataWithAppendId(AppendId.mint())));
+            answered.countDown();
+        });
+        asking.start();
+
+        assertThat(answered.await(2, TimeUnit.SECONDS))
+                .as("answered while the store call was still in flight, rather than waiting for it")
+                .isTrue();
+        assertThat(cannotPossiblyRecord.get()).isFalse();
+
+        releaseClear.countDown();
+        stuckInClear.join(TimeUnit.SECONDS.toMillis(30));
+        asking.join(TimeUnit.SECONDS.toMillis(5));
+    }
+
     @Test
     void the_first_delivery_after_a_catch_up_starts_runs_the_clear_that_catch_up_owes() {
         AppliedAppendStore store = AppliedAppendStore.inMemory();

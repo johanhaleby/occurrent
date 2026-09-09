@@ -190,10 +190,10 @@ public class ReactiveMongoAppliedAppendStore implements AppliedAppendStore {
      * Ensures the compound unique index and the TTL index exist, once, the first time this store is actually asked
      * to do anything. Composed entirely as {@code Mono} operations rather than a nested {@code block()}, as an
      * earlier version of this method had. {@code retryWhen}'s delayed resubscription runs on
-     * {@code Schedulers.parallel()}, whose worker threads this project's dependencies do not instrument to reject a
-     * blocking call, so a nested {@code block()} there does not throw, but it does hold one of that shared pool's
-     * few threads for the length of the Mongo call on every retry, which is worth avoiding regardless of whether it
-     * throws. Wrapped in {@link Mono#defer(java.util.function.Supplier)} so a retry re-checks
+     * {@code Schedulers.parallel()}, which {@link Schedulers#isInNonBlockingThread()} marks non-blocking the same
+     * way it marks a Netty event loop, so a nested {@code block()} there throws {@link IllegalStateException} once
+     * the retried call actually needs to wait on Mongo, breaking the very retry meant to recover the index setup.
+     * Wrapped in {@link Mono#defer(java.util.function.Supplier)} so a retry re-checks
      * {@link #indexesEnsured} and rebuilds this {@code Mono} fresh, the same reason
      * {@link #recordApplied(String, AppendId)}'s own upsert is deferred. A race between two threads both finding
      * {@link #indexesEnsured} false is at worst wasted work and at best exactly the {@code IndexOptionsConflict}
