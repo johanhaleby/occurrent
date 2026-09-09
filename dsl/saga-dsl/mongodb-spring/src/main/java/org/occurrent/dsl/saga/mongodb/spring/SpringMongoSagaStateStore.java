@@ -263,7 +263,11 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
             // There is no document yet, so there is no stored state to leave alone and the whole envelope is written.
             return compareAndSave(sagaId, envelope, expectedVersion);
         }
-        Document document = toDocument(sagaId, envelope);
+        // Built without the state, rather than built whole and then having the state left out of the update. Serializing
+        // it converts every retained event of a flow saga and trips the retained-size warning, and this write stores none
+        // of it, so a caller handing over a full envelope would pay for a serialization the update discards and could
+        // fail on the very converter this method exists to work around.
+        Document document = toDocumentWithoutTheState(sagaId, envelope);
         Update update = new Update();
         for (String field : EVERY_FIELD_EXCEPT_THE_STATE) {
             if (document.containsKey(field)) {
@@ -332,13 +336,18 @@ public final class SpringMongoSagaStateStore<S extends @Nullable Object> impleme
     }
 
     private Document toDocument(String sagaId, SagaEnvelope<S> envelope) {
-        Document document = new Document(ID, sagaId)
-                .append(STATUS, envelope.status().name())
-                .append(VERSION, envelope.version());
+        Document document = toDocumentWithoutTheState(sagaId, envelope);
         S state = envelope.state();
         if (state != null) {
             document.append(STATE, toStateValue(sagaId, state));
         }
+        return document;
+    }
+
+    private Document toDocumentWithoutTheState(String sagaId, SagaEnvelope<S> envelope) {
+        Document document = new Document(ID, sagaId)
+                .append(STATUS, envelope.status().name())
+                .append(VERSION, envelope.version());
         List<Document> timers = new ArrayList<>();
         for (TimerEntry timer : envelope.timers()) {
             timers.add(new Document(TIMER_NAME, timer.name()).append(TIMER_FIRES_AT, timer.firesAtEpochMilli()));

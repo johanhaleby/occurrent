@@ -57,9 +57,11 @@ public interface SagaStateStore<S extends @Nullable Object> {
      * without ever recording that it was failing, so it never reached its budget and went on blocking every other
      * instance of the saga.
      * <p>
-     * {@link SagaEnvelope#state()} is therefore {@code null} on the result even for a healthy instance, exactly as it
-     * is on a {@link SagaStateStoreQueries#findByStatus} result. Every other member is populated. Use
-     * {@link #find(String)} when the state itself is wanted.
+     * A caller therefore must not read {@link SagaEnvelope#state()} off the result. A store that answers without
+     * decoding leaves it {@code null} even for a healthy instance, exactly as a
+     * {@link SagaStateStoreQueries#findByStatus} result does, while the default below hands back whatever {@code find}
+     * gave, so which of the two you get is the store's business and not something to branch on. Every other member is
+     * populated either way. Use {@link #find(String)} when the state itself is wanted.
      * <p>
      * The default reads the whole instance through {@link #find(String)}, so a store written against 0.33.0 keeps
      * compiling and keeps behaving as it did, which means it also keeps the blocking behaviour for an instance it

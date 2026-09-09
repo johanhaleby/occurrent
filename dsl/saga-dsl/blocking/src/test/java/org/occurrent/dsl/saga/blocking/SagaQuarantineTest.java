@@ -19,6 +19,7 @@ package org.occurrent.dsl.saga.blocking;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.read.ListAppender;
 import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.Nullable;
@@ -52,6 +53,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
@@ -353,6 +355,63 @@ class SagaQuarantineTest {
                 executionLog.detachAppender(appender);
                 appender.stop();
             }
+        }
+
+        /**
+         * A retention check can fail rather than answer, and an answer nobody got is not a yes. The refusal warning says
+         * as much already, so the throw has to reach that refusal instead of the silent one every store failure produces.
+         */
+        @Test
+        void blocks_them_and_says_why_when_the_retention_check_itself_throws() throws Exception {
+            ListAppender<ILoggingEvent> appender = new ListAppender<>();
+            appender.start();
+            Logger executionLog = (Logger) LoggerFactory.getLogger(SagaExecution.class);
+            executionLog.addAppender(appender);
+            try {
+                ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
+                SagaSubscription subscription = run(new ThrowsWhenAskedAboutAnEvent(feed, Integer.MAX_VALUE), CONFIG);
+                feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+                feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+                feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+                feed.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+                TimeUnit.SECONDS.sleep(2);
+
+                List<ILoggingEvent> refusals = appender.list.stream()
+                        .filter(event -> event.getFormattedMessage().contains("is not quarantined"))
+                        .toList();
+                assertAll(
+                        () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.ACTIVE),
+                        () -> assertThat(dispatched).doesNotContain(new ShipOrder(HEALTHY)),
+                        () -> assertThat(refusals).hasSize(1),
+                        // What the saga threw is still the exception the log reports, with what the check threw under it,
+                        // so an operator reading the refusal sees both rather than only the one that stopped the instance.
+                        () -> assertThat(refusals.getFirst().getThrowableProxy().getClassName())
+                                .isEqualTo(IllegalStateException.class.getName()),
+                        () -> assertThat(refusals.getFirst().getThrowableProxy().getSuppressed())
+                                .extracting(IThrowableProxy::getMessage).contains("the retention read is broken")
+                );
+            } finally {
+                executionLog.detachAppender(appender);
+                appender.stop();
+            }
+        }
+
+        @Test
+        void are_isolated_from_it_once_the_retention_check_can_answer_again() {
+            // Retention is rechecked on every redelivery rather than remembered, which is what lets a store that was
+            // unreachable and is now back be noticed. The instance quarantines on a later attempt.
+            ReplayableSubscriptionModel feed = new ReplayableSubscriptionModel();
+            SagaSubscription subscription = run(new ThrowsWhenAskedAboutAnEvent(feed, 2), CONFIG);
+            feed.push(cloudEvent(POISON, 1, new OrderPlaced("1", POISON)));
+            feed.push(cloudEvent(HEALTHY, 1, new OrderPlaced("2", HEALTHY)));
+            feed.push(cloudEvent(POISON, 2, new PaymentReserved("3", POISON)));
+            feed.push(cloudEvent(HEALTHY, 2, new PaymentReserved("4", HEALTHY)));
+
+            await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertAll(
+                    () -> assertThat(subscription.instances().find(POISON).orElseThrow().status()).isEqualTo(SagaStatus.QUARANTINED),
+                    () -> assertThat(dispatched).containsExactly(new ShipOrder(HEALTHY))
+            ));
         }
 
         @Test
@@ -663,6 +722,41 @@ class SagaQuarantineTest {
      * is wrong. The runner only enables quarantine on the guarantee, so this is the one way the per-event check is
      * still reached, and it is why that check is made rather than trusted.
      */
+    /**
+     * Guarantees it holds everything and then throws when asked about an event, which is a model whose retention read is
+     * broken rather than one whose answer is no. It throws for the first {@code throwForTheFirst} questions and answers
+     * yes after that, so one test can watch the refusal and another can watch the recovery.
+     */
+    private static final class ThrowsWhenAskedAboutAnEvent implements Subscribable, HistoryRetainingSubscriptions {
+
+        private final ReplayableSubscriptionModel delegate;
+        private final int throwForTheFirst;
+        private final AtomicInteger asked = new AtomicInteger();
+
+        private ThrowsWhenAskedAboutAnEvent(ReplayableSubscriptionModel delegate, int throwForTheFirst) {
+            this.delegate = delegate;
+            this.throwForTheFirst = throwForTheFirst;
+        }
+
+        @Override
+        public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            return delegate.subscribe(subscriptionId, filter, startAt, action);
+        }
+
+        @Override
+        public boolean retains(CloudEvent event) {
+            if (asked.incrementAndGet() <= throwForTheFirst) {
+                throw new IllegalStateException("the retention read is broken");
+            }
+            return true;
+        }
+
+        @Override
+        public boolean retainsEveryEvent() {
+            return true;
+        }
+    }
+
     private record GuaranteesMoreThanItHolds(ReplayableSubscriptionModel delegate)
             implements Subscribable, HistoryRetainingSubscriptions {
 
