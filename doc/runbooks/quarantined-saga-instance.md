@@ -75,11 +75,13 @@ instances than that needs a higher number rather than a second call.
 MongoDB is:
 
 ```javascript
-db.sagaInstances.find({ status: "QUARANTINED" }).sort({ updatedAt: 1 })
+db.getCollection("saga-order-fulfilment").find({ status: "QUARANTINED" }).sort({ updatedAt: 1 })
 ```
 
-Replace `sagaInstances` with the collection name you built your `SpringMongoSagaStateStore` with. That query is served
-by an index the store creates for itself on `status` and `updatedAt`, so it is cheap on a large collection.
+`saga-<sagaId>` is the collection the Spring Boot starter uses when you never named one. If you built the
+`SpringMongoSagaStateStore` yourself, use the name you passed it. Either way the query is served by an index the store
+creates for itself on `status` and `updatedAt`, so it is cheap on a large collection. `updatedAt` is stored as epoch
+milliseconds rather than a date.
 
 ### 2. [you] Read what the instance stopped on
 
@@ -190,7 +192,7 @@ instances.find("order-4711").isEmpty();
 Or against MongoDB:
 
 ```javascript
-db.sagaInstances.countDocuments({ _id: "order-4711" })
+db.getCollection("saga-order-fulfilment").countDocuments({ _id: "order-4711" })
 ```
 
 The `ERROR` line does not repeat for a deleted instance, since nothing rereads a quarantine. A new `ERROR` naming the
