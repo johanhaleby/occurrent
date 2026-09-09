@@ -300,6 +300,21 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
         }
     }
 
+    // Never throws. This runs inside the StartAt.dynamic supplier below, which a wrapped model can evaluate under
+    // its own retry loop, the exact case recordFirstPositionOrRefuse's own placement outside that supplier exists
+    // to avoid. StartPositionAlreadyPinnedException here means another node's write already settled the position,
+    // so its own positionStored is adopted instead of refusing, the same value a fresh storage.read() answers the
+    // next time this supplier runs. The rare case where that confirm-read itself found nothing or failed answers
+    // null, exactly what an unanswerable position source already does a few lines below this call, for a later
+    // retry to resolve instead of throwing from here.
+    private @Nullable Checkpoint saveFirstPositionOrAdoptWhatWon(String subscriptionId, Checkpoint globalCheckpoint) {
+        try {
+            return saveFirstPosition(subscriptionId, globalCheckpoint);
+        } catch (StartPositionAlreadyPinnedException e) {
+            return e.positionStored.orElse(null);
+        }
+    }
+
     // Something was stored between the read above and this write, so it was written where this model cannot order
     // it against the position it read. Reading it back answers the only question that settles it, whether it
     // holds that same position. Anything else is refused rather than started from a position this node never
@@ -338,7 +353,7 @@ public class DurableSubscriptionModel implements CheckpointAwareSubscriptionMode
                 if (checkpoint == null) {
                     Checkpoint globalCheckpoint = subscriptionModel.globalCheckpoint();
                     if (globalCheckpoint != null) {
-                        checkpoint = saveFirstPosition(subscriptionId, globalCheckpoint);
+                        checkpoint = saveFirstPositionOrAdoptWhatWon(subscriptionId, globalCheckpoint);
                     }
                 }
 

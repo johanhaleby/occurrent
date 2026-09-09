@@ -40,6 +40,7 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -76,6 +77,32 @@ class DurableSubscriptionModelFirstPositionRaceTest {
                 .isEqualTo("landed-during-registration");
     }
 
+    @Test
+    void a_registration_that_loses_the_write_from_inside_the_dynamic_supplier_adopts_the_winning_position_instead_of_throwing_from_inside_it() {
+        // startWhenNoStartPositionCanBeRecorded(true) plus a feed that answers null for globalCheckpoint() only on
+        // the eager, outside-the-supplier call lets recordFirstPositionOrRefuse return null without ever writing,
+        // so the dynamic supplier's own retry-path branch runs on this registration's very first (and only)
+        // evaluation, the same branch a wrapped model's own retry loop could otherwise evaluate more than once.
+        RaceSimulatingCheckpointStorage storage = new RaceSimulatingCheckpointStorage();
+        storage.whenTheSecondReadFindsNothing = () -> storage.delegate.save(SUBSCRIPTION_ID, new StringBasedCheckpoint("landed-during-registration"));
+        InMemoryFeed feed = new InMemoryFeed();
+        feed.answersCurrentPosition = true;
+        feed.answersNullOnFirstCallOnly = true;
+        DurableSubscriptionModel durable = new DurableSubscriptionModel(
+                feed, storage, new DurableSubscriptionModelConfig(1).startWhenNoStartPositionCanBeRecorded(true));
+
+        // Must not throw. A StartPositionAlreadyPinnedException surfacing from inside StartAt.dynamic's supplier
+        // reaches the wrapped model's own evaluation path instead of this call, which a retry wrapper could catch
+        // and re-evaluate forever, telling nobody, exactly what recordFirstPositionOrRefuse's own placement
+        // outside the supplier exists to avoid for the eager path.
+        assertThatCode(() -> durable.subscribe(SUBSCRIPTION_ID, __ -> {
+        })).doesNotThrowAnyException();
+
+        assertThat(storage.delegate.read(SUBSCRIPTION_ID).asString())
+                .as("the other node's already-stored position is adopted rather than lost or refused")
+                .isEqualTo("landed-during-registration");
+    }
+
     private static CloudEvent cloudEvent(String id) {
         return io.cloudevents.core.builder.CloudEventBuilder.v1().withId(id).withSource(URI.create("urn:test")).withType("test.event").build();
     }
@@ -88,14 +115,23 @@ class DurableSubscriptionModelFirstPositionRaceTest {
     private static final class RaceSimulatingCheckpointStorage implements CheckpointStorage {
         final InMemoryCheckpointStorage delegate = new InMemoryCheckpointStorage();
         @Nullable Runnable whenTheFirstReadFindsNothing;
+        @Nullable Runnable whenTheSecondReadFindsNothing;
+        private int nullReadCount = 0;
 
         @Override
         public @Nullable Checkpoint read(String subscriptionId) {
             Checkpoint found = delegate.read(subscriptionId);
-            if (found == null && whenTheFirstReadFindsNothing != null) {
-                Runnable hook = whenTheFirstReadFindsNothing;
-                whenTheFirstReadFindsNothing = null;
-                hook.run();
+            if (found == null) {
+                nullReadCount++;
+                if (nullReadCount == 1 && whenTheFirstReadFindsNothing != null) {
+                    Runnable hook = whenTheFirstReadFindsNothing;
+                    whenTheFirstReadFindsNothing = null;
+                    hook.run();
+                } else if (nullReadCount == 2 && whenTheSecondReadFindsNothing != null) {
+                    Runnable hook = whenTheSecondReadFindsNothing;
+                    whenTheSecondReadFindsNothing = null;
+                    hook.run();
+                }
             }
             return found;
         }
@@ -133,16 +169,28 @@ class DurableSubscriptionModelFirstPositionRaceTest {
     private static final class InMemoryFeed implements CheckpointAwareSubscriptionModel {
         final Map<String, Boolean> subscriptions = new LinkedHashMap<>();
         boolean answersCurrentPosition = false;
+        // Set only by the test that needs the eager, outside-the-supplier globalCheckpoint() call to answer
+        // unanswerable, so recordFirstPositionOrRefuse returns null without writing anything and the dynamic
+        // supplier's own retry-path branch is what asks again.
+        boolean answersNullOnFirstCallOnly = false;
+        private int globalCheckpointCalls = 0;
 
         @Override
         public Subscription subscribe(String subscriptionId, @Nullable SubscriptionFilter filter, StartAt startAt, Consumer<CloudEvent> action) {
+            if (startAt.isDynamic()) {
+                startAt.get(new SubscriptionModelContext(InMemoryFeed.class));
+            }
             subscriptions.put(subscriptionId, true);
             return dummySubscription(subscriptionId);
         }
 
         @Override
         public @Nullable Checkpoint globalCheckpoint() {
-            return answersCurrentPosition ? new StringBasedCheckpoint("0") : null;
+            globalCheckpointCalls++;
+            if (answersNullOnFirstCallOnly && globalCheckpointCalls == 1) {
+                return null;
+            }
+            return answersCurrentPosition ? new StringBasedCheckpoint("this-nodes-own-position") : null;
         }
 
         @Override
