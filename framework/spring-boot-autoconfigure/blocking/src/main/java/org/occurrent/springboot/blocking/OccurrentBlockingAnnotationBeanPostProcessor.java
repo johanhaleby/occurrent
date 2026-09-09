@@ -25,12 +25,15 @@ import org.occurrent.annotation.SynchronousSubscription;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
 import org.occurrent.springboot.common.SubscriptionAnnotations;
 import org.occurrent.subscription.push.blocking.PushSubscriptionModel;
+import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ClassUtils;
 
@@ -108,14 +111,14 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         for (String beanName : applicationContext.getBeanDefinitionNames()) {
             Class<?> type;
             try {
-                type = applicationContext.getType(beanName);
+                type = resolveScanType(beanName);
             } catch (RuntimeException e) {
                 continue;
             }
             if (type == null) {
                 continue;
             }
-            for (Method method : ClassUtils.getUserClass(type).getDeclaredMethods()) {
+            for (Method method : type.getDeclaredMethods()) {
                 collectSubscriptionId(beanName, method, idsToCheck, subscriptionBeanNames);
                 org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
                 if (projection != null) {
@@ -142,10 +145,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
         }
         for (String beanName : subscriptionBeanNames) {
-            // getType(beanName), not bean.getClass(): a JDK dynamic proxy's class implements only interfaces, so
-            // scanning it for annotated methods would miss any declared on the concrete class.
-            Class<?> userClass = ClassUtils.getUserClass(applicationContext.getType(beanName));
-            subscriptionRegistrar.registerSubscriptions(applicationContext.getBean(beanName), userClass);
+            subscriptionRegistrar.registerSubscriptions(applicationContext.getBean(beanName), resolveScanType(beanName));
         }
         CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
         for (Object[] pm : projectionMethods) {
@@ -159,6 +159,22 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         for (Object[] gm : sagaMethods) {
             sagaRegistrar.processSagaAnnotation(applicationContext.getBean((String) gm[0]), (Method) gm[1], (org.occurrent.annotation.Saga) gm[2]);
         }
+    }
+
+    // getType(beanName) predicts the type from the bean definition without forcing creation, which is what lets a
+    // @Lazy bean stay uncreated until a registrar actually needs it, but once a bean is already a singleton, getType
+    // returns that instance's own class, a JDK dynamic proxy included, and ClassUtils.getUserClass only strips
+    // CGLIB's naming convention, not a JDK proxy. Scanning that class finds nothing, since a JDK proxy implements
+    // only its interfaces, so an already-created bean's annotation went undetected rather than reaching the
+    // resolveHandlerInvocation guard that exists to catch exactly this. AopUtils.getTargetClass unwraps either
+    // proxy kind given the real instance, so an already-created bean is resolved through it instead.
+    private Class<?> resolveScanType(String beanName) {
+        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
+        if (beanFactory.containsSingleton(beanName)) {
+            return AopUtils.getTargetClass(applicationContext.getBean(beanName));
+        }
+        Class<?> type = applicationContext.getType(beanName);
+        return type == null ? null : ClassUtils.getUserClass(type);
     }
 
     // Every id here goes into registeredIds, the shared duplicate-id registry. Only the three that reach

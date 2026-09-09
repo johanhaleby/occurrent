@@ -30,7 +30,6 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.core.NestedExceptionUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -141,11 +140,6 @@ class SubscriptionAnnotationGuardTest {
             return new NoopCloudEventConverter();
         }
 
-        // @Lazy is what keeps this bean uncreated when afterSingletonsInstantiated scans for annotated methods, so
-        // the scan predicts MarkerSubscriber from this method's declared return type instead of seeing an
-        // already-proxied instance whose class implements only Marker (ProjectionAnnotationJdkProxyTest uses the
-        // same technique for the sibling #836 defect).
-        @Lazy
         @Bean
         MarkerSubscriber markerSubscriber() {
             return new MarkerSubscriber();

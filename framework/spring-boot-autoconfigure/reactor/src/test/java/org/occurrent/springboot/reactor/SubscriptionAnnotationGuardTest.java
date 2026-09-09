@@ -23,13 +23,11 @@ import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
 import org.occurrent.annotation.Subscription;
 import org.occurrent.application.converter.CloudEventConverter;
-import org.occurrent.subscription.api.reactor.Subscribable;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.core.NestedExceptionUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,17 +35,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Reactive counterpart of the blocking {@code SubscriptionAnnotationGuardTest}: a handler method the bean's Spring
  * proxy cannot invoke is rejected from {@code afterSingletonsInstantiated} rather than silently run unadvised on the
- * raw bean, reproduced without a running store (no Docker). A {@link Subscribable} bean has to be present or the
- * coordinator returns before scanning for any annotation at all.
+ * raw bean, reproduced without a running store (no Docker). Subscription scanning and registration run
+ * unconditionally there, ahead of the coordinator's own {@code Subscribable}-presence check, so no such bean is
+ * needed here for a subscription to reach {@code resolveHandlerInvocation}.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class SubscriptionAnnotationGuardTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new)
-            .withBean(Subscribable.class, () -> (subscriptionId, filter, startAt, action) -> {
-                throw new UnsupportedOperationException("Not needed: resolveHandlerInvocation fails before this is ever called.");
-            });
+            .withBean(OccurrentReactiveAnnotationBeanPostProcessor.class, OccurrentReactiveAnnotationBeanPostProcessor::new);
 
     // A JDK dynamic proxy implementing only Marker can never carry the handler method declared on the concrete
     // class, the same mismatch ReactiveStreamSubscriptionAnnotationJdkInterfaceProxyMongoTest used to paper over by
@@ -92,11 +88,6 @@ class SubscriptionAnnotationGuardTest {
             return new NoopCloudEventConverter();
         }
 
-        // @Lazy is what keeps this bean uncreated when afterSingletonsInstantiated scans for annotated methods, so
-        // the scan predicts MarkerSubscriber from this method's declared return type instead of seeing an
-        // already-proxied instance whose class implements only Marker (ProjectionAnnotationJdkProxyTest uses the
-        // same technique for the sibling #836 defect).
-        @Lazy
         @Bean
         MarkerSubscriber markerSubscriber() {
             return new MarkerSubscriber();

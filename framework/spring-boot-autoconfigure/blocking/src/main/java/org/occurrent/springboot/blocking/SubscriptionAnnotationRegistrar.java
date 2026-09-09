@@ -72,8 +72,10 @@ class SubscriptionAnnotationRegistrar {
     //
     // A JDK interface proxy (spring.aop.proxy-target-class=false) may not implement the handler method at all, when
     // the method was declared on the concrete class rather than an interface. A final handler method is never
-    // overridden by a CGLIB proxy either. Both leave no way to invoke the method through the proxy at all, so both
-    // are refused rather than silently invoked on the raw bean with no advice applied.
+    // overridden by a CGLIB proxy either, but that is only a problem once bean actually is a CGLIB proxy: a final
+    // method on a bean nothing proxies runs directly, with no advice to lose. Both proxy cases leave no way to
+    // invoke the method through the proxy at all, so both are refused rather than silently invoked on the raw bean
+    // with no advice applied.
     private HandlerInvocation resolveHandlerInvocation(Object bean, Method method) {
         Method invocableMethod;
         try {
@@ -82,9 +84,9 @@ class SubscriptionAnnotationRegistrar {
             throw new SubscriptionHandlerNotInvocableException(method,
                     "The proxy does not implement it. Either the method is private, so a CGLIB proxy cannot override it, or the bean is a JDK interface proxy implementing none of the interfaces the method is declared on. Make the method non-private, expose it on an interface, or set spring.aop.proxy-target-class=true so a CGLIB proxy is used instead.");
         }
-        if (Modifier.isFinal(invocableMethod.getModifiers())) {
+        if (AopUtils.isCglibProxy(bean) && Modifier.isFinal(invocableMethod.getModifiers())) {
             throw new SubscriptionHandlerNotInvocableException(method,
-                    "The method is final, so a CGLIB proxy cannot override it. Remove final from the method.");
+                    "The method is final, so the CGLIB proxy cannot override it. Remove final from the method.");
         }
         return new HandlerInvocation(bean, invocableMethod);
     }
