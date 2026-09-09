@@ -46,6 +46,16 @@ public interface DomainEventSink<E> {
     /**
      * Publish several domain events. The default publishes one at a time, and an implementation that can publish
      * several more efficiently overrides this.
+     * <p>
+     * Publishing one at a time means waiting for the broker to acknowledge each event before starting the next, so
+     * a call that throws part way has already published the events before the one it threw on. That is what makes
+     * this an at-least-once building block rather than something to make faster. A caller that retries the whole
+     * {@code Iterable} republishes those, which is a duplicate and never a loss. An override that batches has to
+     * hold the same property, so it cannot report success until the broker has taken every event it was given.
+     * <p>
+     * The default sends each event through {@code publish(E)}, so none of them stamps a stream identity. There is
+     * no {@code Iterable} form of {@code publish(EventMetadata, E)}, since every event would need its own
+     * metadata.
      */
     default void publish(Iterable<E> domainEvents) {
         for (E domainEvent : domainEvents) {
