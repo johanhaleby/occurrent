@@ -58,7 +58,7 @@ class KafkaDomainEventSinkTest extends KafkaTestSupport {
     }
 
     @Test
-    void publish_without_metadata_strips_every_extension_the_converter_set_so_the_consumer_sees_empty_metadata() {
+    void publish_without_metadata_strips_only_the_stream_identity_extensions_and_publishes_the_rest() {
         Map<String, Object> producerConfig = Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers());
         try (KafkaCloudEventSink cloudEventSink = KafkaCloudEventSink.builder(producerConfig, new FixedDestinationResolver(KafkaDestination.of(topic))).build()) {
             KafkaDomainEventSink<TestOrderPlaced> domainEventSink = KafkaDomainEventSink.using(cloudEventSink, converter);
@@ -66,13 +66,17 @@ class KafkaDomainEventSinkTest extends KafkaTestSupport {
             domainEventSink.publish(new TestOrderPlaced("order-4"));
 
             ConsumerRecord<String, byte[]> record = consumeOneRecord(topic);
-            assertThat(record.headers().lastHeader("ce_streamid")).isNull();
-            assertThat(record.headers().lastHeader("ce_tenantid")).isNull();
+            assertThat(record.headers().lastHeader("ce_streamid"))
+                    .as("streamid is a property of a stored event, which this one never was")
+                    .isNull();
+            assertThat(headerValue(record, "ce_tenantid"))
+                    .as("an application-set extension the converter produced is not the sink's to withhold")
+                    .isEqualTo("tenant-from-converter");
         }
     }
 
     @Test
-    void publish_with_empty_metadata_strips_a_converter_set_extension_no_name_in_metadata_names_the_same_way_publish_without_metadata_does() {
+    void publish_with_empty_metadata_behaves_the_same_as_publish_without_metadata() {
         Map<String, Object> producerConfig = Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers());
         try (KafkaCloudEventSink cloudEventSink = KafkaCloudEventSink.builder(producerConfig, new FixedDestinationResolver(KafkaDestination.of(topic))).build()) {
             KafkaDomainEventSink<TestOrderPlaced> domainEventSink = KafkaDomainEventSink.using(cloudEventSink, converter);
@@ -81,7 +85,23 @@ class KafkaDomainEventSinkTest extends KafkaTestSupport {
 
             ConsumerRecord<String, byte[]> record = consumeOneRecord(topic);
             assertThat(record.headers().lastHeader("ce_streamid")).isNull();
-            assertThat(record.headers().lastHeader("ce_tenantid")).isNull();
+            assertThat(headerValue(record, "ce_tenantid")).isEqualTo("tenant-from-converter");
+        }
+    }
+
+    @Test
+    void publish_with_metadata_naming_a_key_the_converter_also_set_uses_the_metadata_value() {
+        Map<String, Object> producerConfig = Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers());
+        try (KafkaCloudEventSink cloudEventSink = KafkaCloudEventSink.builder(producerConfig, new FixedDestinationResolver(KafkaDestination.of(topic))).build()) {
+            KafkaDomainEventSink<TestOrderPlaced> domainEventSink = KafkaDomainEventSink.using(cloudEventSink, converter);
+            EventMetadata metadata = new EventMetadata(Map.of("tenantid", "tenant-from-metadata"));
+
+            domainEventSink.publish(metadata, new TestOrderPlaced("order-6"));
+
+            ConsumerRecord<String, byte[]> record = consumeOneRecord(topic);
+            assertThat(headerValue(record, "ce_tenantid"))
+                    .as("the caller reading metadata off a stored event has the store's own answer")
+                    .isEqualTo("tenant-from-metadata");
         }
     }
 

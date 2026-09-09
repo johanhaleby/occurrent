@@ -335,17 +335,25 @@ otherwise. `publish(EventMetadata, E)` converts the domain event and then stamps
 resulting CloudEvent before handing it to the `CloudEventSink`, which is a second place extensions are written and is
 called out here so no implementer has to guess. Everything `EventMetadata` holds is stamped, not only the four named
 above, since `EventMetadata.from` reads every extension off the event and dropping the rest would mean the metadata
-does not survive the round trip. Any extension the converter set on its own is stripped first, so `metadata` is the
-only source of extensions on the published message and a consumer's `EventMetadata.from` always matches what the
-caller passed here, never a mix of that and whatever the converter happened to add.
+does not survive the round trip. Only the converter's own `streamid`, `streamversion`, `position` and `appendid` are
+stripped first, since none of them is a property a never-stored event can have. Any other extension the converter set
+on its own survives unless `metadata` names the same key, in which case `metadata` wins, because the caller reading it
+off a stored event is the one with the store's own answer.
 
-`publish(E)` strips every extension the `CloudEventConverter` set, the same way `publish(EventMetadata, E)` now does
-for anything `metadata` does not name, keeping only the core CloudEvent attributes and the data the converter
-produced. For an event that has never been through the event store that is no stream identity at all, because a
-stream version and a position are properties of a stored event and Occurrent cannot derive them, but it is also true
-of a converter-set extension the store never touched, since neither overload of `publish` is a place for a converter
-to smuggle an extension past the caller. A consumer of such a message sees an empty `EventMetadata`, and a projection
-keyed by metadata refuses it at delivery.
+`publish(E)` strips the same four extensions, `streamid`, `streamversion`, `position` and `appendid`, and publishes
+every other extension the `CloudEventConverter` set. `EventMetadata`'s own javadoc states its contract as carrying
+"the stream id and version and any other CloudEvent extension carried on the event", so stripping the rest would
+discard exactly what the type exists to convey, an application's own tenant id or correlation id for example, which
+neither overload has grounds to withhold from a caller who read it straight off the converter. An earlier draft of
+this decision had `publish(E)` strip every extension and made `publish(EventMetadata, E)` match it, on the reasoning
+that the two overloads should agree. That reasoning answered the wrong question, since agreeing with `publish(E)`
+first required deciding what `publish(E)` itself should strip, and a wider strip was never the right answer to that.
+The invariant that actually matters is narrower than "no converter extension survives": a never-stored event must not
+carry a stream identity it does not have. Occurrent's own four keys cover that on their own, and stripping anything
+past them means judging an application's own extension, which is not this decision's call to make. A consumer of
+either overload's message sees an `EventMetadata` with no `streamid`, `streamversion`, `position` or `appendid`, but
+every other extension the converter or the caller actually set, and a projection keyed by the stream identity refuses
+it at delivery the same as before.
 
 ### 5. A binding derived from a filter narrows what arrives, and never decides what is handled
 
