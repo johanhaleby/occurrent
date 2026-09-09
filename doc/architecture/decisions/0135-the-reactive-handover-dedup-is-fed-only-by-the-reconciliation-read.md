@@ -29,6 +29,20 @@ dropped and no second delivery was left to record it on.
 The blocking stacks do not have this. Their history reads pass a null cache and only their reconciliation reads fill
 it, so a second delivery follows and records the append.
 
+> **Amended on 2026-09-09, for [#963](https://github.com/johanhaleby/occurrent/issues/963).** "The blocking stacks"
+> above means the three blocking position catch-up stacks, and for those it is accurate. The survey behind it never
+> examined `BlockingHandover`, the catch-up-then-push engine, which is a fourth blocking path and does have this.
+> Its replay fills the same cache the live delivery filters on, so an event committed during the replay is applied
+> by the replay and its live copy is dropped, and the append is recorded by neither. The consequence bullet below
+> saying the blocking stacks need no change and get none is wrong for the same reason.
+>
+> The repair there is not this ADR's. The position stacks read history twice, so dropping the cache from the first
+> read leaves the second one to suppress the overlap. The handover reads once, from the beginning, against a broker
+> buffer with no positional relationship to that read, so dropping the cache would apply the event twice with
+> nothing to catch it. What it does instead is the third rejected alternative below, keeping the suppression and
+> making it record-aware, which was rejected here on cost and is the only option left there.
+> [ADR 137](0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md) decides it.
+
 ### Why the divergence existed
 
 ADR 38 introduced the reactive caching deliberately, in a section titled "The one divergence from blocking", on this
@@ -131,6 +145,10 @@ to any other live delivery.
 - The two stacks converge. Teaching the blocking stacks the reactive caching instead would reintroduce #891 on three
   more paths and was not a candidate.
 - The blocking stacks need no change and get none.
+
+> **Amended on 2026-09-09, for [#963](https://github.com/johanhaleby/occurrent/issues/963).** True of the three
+> blocking position catch-up stacks and false of `BlockingHandover`, for the reason the amendment in the context
+> above gives.
 
 ### Limits of the evidence
 

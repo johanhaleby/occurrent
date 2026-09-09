@@ -202,8 +202,9 @@ class RecordingMaterializedViewTest {
         recording.replayStarted();
         recording.replayCompleted();
         recording.replayAbandoned();
+        recording.alreadyDeliveredByReplay(EventMetadata.empty());
 
-        assertThat(calls).containsExactly("started", "completed", "abandoned");
+        assertThat(calls).containsExactly("started", "completed", "abandoned", "alreadyDeliveredByReplay");
     }
 
     @Test
@@ -352,6 +353,11 @@ class RecordingMaterializedViewTest {
         @Override
         public void replayAbandoned() {
             calls.add("abandoned");
+        }
+
+        @Override
+        public void alreadyDeliveredByReplay(EventMetadata metadata) {
+            calls.add("alreadyDeliveredByReplay");
         }
     }
 }

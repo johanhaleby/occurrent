@@ -68,4 +68,12 @@ final class BlockingMaterializedViewUpdate<E> implements BiFunction<EventMetadat
             replayAware.replayAbandoned();
         }
     }
+
+    @Override
+    public Mono<Void> alreadyDeliveredByReplay(EventMetadata metadata) {
+        if (materializedView instanceof ReplayAware replayAware) {
+            return Mono.<Void>fromRunnable(() -> replayAware.alreadyDeliveredByReplay(metadata)).subscribeOn(Schedulers.boundedElastic());
+        }
+        return Mono.empty();
+    }
 }

@@ -24,8 +24,10 @@ import org.junit.jupiter.api.Test;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.cloudevents.OccurrentCloudEventExtension;
+import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.Projection;
 import org.occurrent.dsl.view.ViewStateRepository;
+import org.occurrent.eventstore.api.AppendId;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.reactor.PositionOrderedReader;
 import org.occurrent.filter.Filter;
@@ -41,6 +43,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
@@ -182,6 +185,33 @@ class CatchupProjectionFeedTest {
         feed.catchUp().block();
 
         await().during(ofSeconds(1)).atMost(ofSeconds(5)).untilAsserted(() -> assertThat(repo.get("counter")).isEqualTo(2));
+    }
+
+    // The replay applies the overlapping event and the live copy is suppressed, which is right. What used to go
+    // missing with it was the recording. An applied append is written down on a live delivery, so a projection wired
+    // to record appends applied the event and never recorded it, and waitUntilApplied kept answering false.
+    @Test
+    void an_event_both_replayed_and_delivered_live_during_catch_up_is_recorded_as_applied() {
+        CloudEventConverter<Counted> converter = countedConverter();
+        Map<String, Integer> repo = new ConcurrentHashMap<>();
+        AppendId appendId = new AppendId(UUID.randomUUID());
+        AppliedAppendStore appliedAppends = AppliedAppendStore.inMemory();
+        ViewStateRepository<Integer, String> repository = ViewStateRepository.create(repo::get, repo::put);
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter",
+                Projections.recordingAppliedAppends(
+                        Projections.reactiveUpdateWithMetadata(projection(), repository, "counter"), "counter", appliedAppends),
+                Filter.all(), stampedReader(appendId, "1", "2"), converter, Counted::eventId, null);
+
+        // "2" also arrives live before the catch-up completes, carrying the metadata a broker bridge reads off the
+        // message rather than the no-metadata overload the test above uses.
+        feed.accept(EventMetadata.from(stamped(appendId, "2")), new Counted("2")).subscribe();
+        feed.catchUp().block();
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> {
+            assertThat(repo.get("counter")).isEqualTo(2);
+            assertThat(appliedAppends.hasApplied("counter", appendId)).isTrue();
+        });
     }
 
     @Test
@@ -457,6 +487,30 @@ class CatchupProjectionFeedTest {
                 return false;
             }
         };
+    }
+
+    // A reader whose history carries the append id a store stamps on the write it created.
+    private PositionOrderedReader stampedReader(AppendId appendId, String... eventIds) {
+        return new PositionOrderedReader() {
+            @Override
+            public Flux<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                return Flux.fromIterable(List.of(eventIds)).map(eventId -> stamped(appendId, eventId));
+            }
+
+            @Override
+            public Mono<Long> currentPosition() {
+                return Mono.just((long) eventIds.length);
+            }
+
+            @Override
+            public boolean writesPosition() {
+                return true;
+            }
+        };
+    }
+
+    private static CloudEvent stamped(AppendId appendId, String eventId) {
+        return OccurrentCloudEventExtension.withAppendId(cloudEvent(eventId), appendId.value().toString());
     }
 
     private static CloudEvent cloudEvent(String id) {

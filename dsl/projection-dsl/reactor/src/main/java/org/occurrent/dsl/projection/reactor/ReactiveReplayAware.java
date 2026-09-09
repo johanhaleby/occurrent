@@ -16,6 +16,7 @@
 
 package org.occurrent.dsl.projection.reactor;
 
+import org.occurrent.cloudevents.EventMetadata;
 import reactor.core.publisher.Mono;
 
 /**
@@ -56,4 +57,26 @@ public interface ReactiveReplayAware {
      * anyway. Must not throw: a failure here must not mask whatever the replay was already unwinding from.
      */
     void replayAbandoned();
+
+    /**
+     * A live copy arrived of an event the replay already delivered to this view, so the feed did not deliver it a
+     * second time. The view has applied the event and is meant to apply it exactly once, so nothing here should apply
+     * it again. What it is, is the only chance the view gets to do the work it does per delivery rather than per
+     * application, which for a recording view is writing down the append the event came from
+     * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
+     * <p>
+     * Sent only after {@link #replayCompleted()}, and only for an event the replay itself delivered. An event an
+     * earlier live delivery already handled is not sent here, because that delivery did all of it. Sent again for
+     * every further copy the feed is offered, so an implementation records rather than counts.
+     * <p>
+     * A {@link Mono} that errors here errors the event's own acknowledgement rather than the catch-up, so the source
+     * offers the event again. The default emits nothing.
+     *
+     * @param metadata What the feed knows about the event that was not delivered a second time. Empty when the live
+     *                 copy arrived through {@code accept(E)}, which carries no metadata, and there is then no append
+     *                 to write down.
+     */
+    default Mono<Void> alreadyDeliveredByReplay(EventMetadata metadata) {
+        return Mono.empty();
+    }
 }

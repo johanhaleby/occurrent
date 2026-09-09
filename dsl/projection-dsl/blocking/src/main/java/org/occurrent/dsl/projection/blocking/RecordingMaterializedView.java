@@ -16,16 +16,17 @@
 
 package org.occurrent.dsl.projection.blocking;
 
+import io.cloudevents.CloudEvent;
 import org.jspecify.annotations.NullMarked;
 import org.jspecify.annotations.Nullable;
-
-import java.util.concurrent.atomic.AtomicReference;
 import org.occurrent.cloudevents.EventMetadata;
 import org.occurrent.dsl.projection.AppliedAppendRecorder;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.dsl.projection.internal.AppliedAppendRecording;
 import org.occurrent.dsl.view.MaterializedView;
 import org.occurrent.dsl.view.ReplayAware;
+
+import java.util.concurrent.atomic.AtomicReference;
 
 import static java.util.Objects.requireNonNull;
 
@@ -94,6 +95,26 @@ public final class RecordingMaterializedView<E> implements MaterializedView<E>, 
     @Override
     public void historyRead(Object episode) {
         recording.historyRead(episode);
+    }
+
+    // The two overloads are the same fact reaching this view from the two compositions that can produce it, and both
+    // record. A subscription model holds this as a CatchupListener and has a CloudEvent, a pull feed holds it as a
+    // MaterializedView and has whatever metadata the live copy carried (ADR 137).
+    //
+    // Only the pull-feed overload forwards. A delegate's replay lifecycle is driven by that feed and by nothing else,
+    // so forwarding the subscription-model overload would hand a delegate a call from a lifecycle it never sees,
+    // which is why catchupStarted and historyRead do not forward either.
+    @Override
+    public void alreadyDeliveredByReplay(CloudEvent event) {
+        recording.recordIfReady(EventMetadata.from(event));
+    }
+
+    @Override
+    public void alreadyDeliveredByReplay(EventMetadata metadata) {
+        if (delegate instanceof ReplayAware replayAware) {
+            replayAware.alreadyDeliveredByReplay(metadata);
+        }
+        recording.recordIfReady(metadata);
     }
 
     @Override

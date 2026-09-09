@@ -35,7 +35,9 @@ import java.net.URI;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 /**
  * {@link Projections#reactiveUpdateWithMetadata(MaterializedView)} bridges a blocking {@link MaterializedView} onto a
@@ -70,6 +72,23 @@ class BlockingMaterializedViewUpdateTest {
         feed.catchUp().block();
 
         assertThat(view.calls).containsExactly("replayStarted", "update:1:replaying", "replayAbandoned");
+    }
+
+    // The bridge forwards every other replay lifecycle call, so it forwards this one too. Without it a blocking
+    // replay-aware view driven through the reactor DSL is the one composition that never hears that the live copy of
+    // an event its replay applied was de-duplicated away.
+    @Test
+    void a_live_copy_of_a_replayed_event_forwards_already_delivered_by_replay_to_the_wrapped_view() {
+        FakeReplayAwareView view = new FakeReplayAwareView();
+        CatchupProjectionFeed<Counted> feed = CatchupProjectionFeed.create(
+                "counter", Projections.reactiveUpdateWithMetadata(view), Filter.all(), reader("1", "2"), countedConverter(), Counted::eventId, null);
+
+        feed.accept(new Counted("2")).subscribe(); // buffered before the catch-up, overlaps the replay
+        feed.catchUp().block();
+
+        await().atMost(ofSeconds(5)).untilAsserted(() -> assertThat(view.calls)
+                .containsExactly("replayStarted", "update:1:replaying", "update:2:replaying", "replayCompleted",
+                        "alreadyDeliveredByReplay"));
     }
 
     @Test
@@ -116,6 +135,11 @@ class BlockingMaterializedViewUpdateTest {
         public void replayAbandoned() {
             replaying = false;
             calls.add("replayAbandoned");
+        }
+
+        @Override
+        public void alreadyDeliveredByReplay(EventMetadata metadata) {
+            calls.add("alreadyDeliveredByReplay");
         }
     }
 

@@ -26,11 +26,13 @@ import org.occurrent.annotation.Source;
 import org.occurrent.annotation.StartupMode;
 import org.occurrent.application.converter.CloudEventConverter;
 import org.occurrent.dsl.projection.blocking.DomainEventFeed;
+import org.occurrent.cloudevents.OccurrentCloudEventExtension;
 import org.occurrent.dsl.view.ViewStateRepository;
 import org.occurrent.eventstore.api.AppendId;
 import org.occurrent.eventstore.api.PositionRange;
 import org.occurrent.eventstore.api.blocking.PositionOrderedReader;
 import org.occurrent.filter.Filter;
+import org.occurrent.subscription.RoutingOutcome;
 import org.occurrent.dsl.projection.AppliedAppendStore;
 import org.occurrent.springboot.common.OccurrentProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -64,6 +66,9 @@ class DomainEventFeedProjectionPushStartupModeTest {
     // the beans, and reset per test.
     private static final CountDownLatch[] REPLAY_REACHED = {new CountDownLatch(1)};
     private static final CountDownLatch[] RELEASE_REPLAY = {new CountDownLatch(1)};
+    // Stamped on the one history event, the way a store stamps the append its write created, so a projection wired to
+    // record appends has something to record.
+    private static final AppendId HISTORY_APPEND = AppendId.mint();
 
     private ApplicationContextRunner runnerWith(Class<?> projectionConfiguration) {
         REPLAY_REACHED[0] = new CountDownLatch(1);
@@ -109,6 +114,47 @@ class DomainEventFeedProjectionPushStartupModeTest {
                     assertThat(store.hasApplied("domain-feed-push-recording", beforeTheRebuild))
                             .as("a poll tick retried the clear the feed replay left failing")
                             .isFalse();
+                });
+    }
+
+    // The whole path from a broker bridge down. The replay applies the event, the bridge offers the concurrent copy of
+    // it, the copy is de-duplicated against the replay rather than applied twice, and the append is recorded anyway. A
+    // recording projection whose only delivery of an append is one the replay already made used to apply the event and
+    // record nothing, so waitUntilApplied on that append ran to its timeout.
+    @Test
+    void a_live_copy_of_an_event_the_replay_applied_is_recorded_as_applied() {
+        AppliedAppendStore store = AppliedAppendStore.inMemory();
+
+        runnerWith(RecordingProjectionConfiguration.class)
+                .withBean(AppliedAppendStore.class, () -> store)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(REPLAY_REACHED[0].await(5, TimeUnit.SECONDS)).isTrue();
+
+                    @SuppressWarnings("unchecked")
+                    DomainEventFeed<TestEvent> feed = context.getBean(DomainEventFeed.class);
+                    // Offered while the replay still holds the event, so the bridge is told to offer it again rather
+                    // than acknowledge it.
+                    assertThat(feed.acceptCloudEvent(historyEvent()))
+                            .as("the copy offered during the replay")
+                            .isEqualTo(RoutingOutcome.DEFERRED);
+
+                    RELEASE_REPLAY[0].countDown();
+
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+                    RoutingOutcome outcome = feed.acceptCloudEvent(historyEvent());
+                    while (outcome != RoutingOutcome.DELIVERED && System.nanoTime() < deadline) {
+                        Thread.sleep(20);
+                        outcome = feed.acceptCloudEvent(historyEvent());
+                    }
+
+                    assertThat(outcome).as("the copy offered again once the feed is live").isEqualTo(RoutingOutcome.DELIVERED);
+                    @SuppressWarnings("unchecked")
+                    ViewStateRepository<Integer, String> viewStore = context.getBean(ViewStateRepository.class);
+                    assertThat(viewStore.findById("k")).as("applied once, by the replay").contains(1);
+                    assertThat(store.hasApplied("domain-feed-push-recording", HISTORY_APPEND))
+                            .as("the append the replay applied is recorded")
+                            .isTrue();
                 });
     }
 
@@ -232,7 +278,7 @@ class DomainEventFeedProjectionPushStartupModeTest {
             PositionOrderedReader reader = new PositionOrderedReader() {
                 @Override
                 public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
-                    return Stream.of(cloudEvent("history")).peek(ignored -> {
+                    return Stream.of(historyEvent()).peek(ignored -> {
                         REPLAY_REACHED[0].countDown();
                         try {
                             if (!RELEASE_REPLAY[0].await(5, TimeUnit.SECONDS)) {
@@ -310,6 +356,12 @@ class DomainEventFeedProjectionPushStartupModeTest {
                 .id(event -> "k")
                 .on(TestEvent.class, (state, event) -> state + 1)
                 .build();
+    }
+
+    // The single history event, stamped with the append it came from, built fresh each call because the replay and a
+    // bridge offering the concurrent copy both need it.
+    private static CloudEvent historyEvent() {
+        return OccurrentCloudEventExtension.withAppendId(cloudEvent("history"), HISTORY_APPEND.value().toString());
     }
 
     private static CloudEvent cloudEvent(String id) {

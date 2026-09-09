@@ -24,10 +24,16 @@ package org.occurrent.subscription;
  * {@code dedupCacheSize} bounds how far the replay-to-live overlap can be de-duplicated exactly. Beyond that window the
  * at-least-once contract applies, so an idempotent fold absorbs a duplicate.
  * <p>
+ * A handover keeps two de-dup caches, one holding what its replay delivered and one holding what a live delivery
+ * delivered, and this one value sizes each of them. So the ids retained reach twice this number, and raising it costs
+ * twice what the number alone suggests
+ * (<a href="https://github.com/johanhaleby/occurrent/blob/main/doc/architecture/decisions/0137-a-live-payload-the-replay-already-delivered-still-reaches-its-source.md">ADR 137</a>).
+ * <p>
  * {@code maxBufferedEvents} is a fail-loud cap, not a throttle. Reaching it means the replay is not keeping up with the
  * live feed at all, so the catch-up throws rather than silently dropping events or growing without bound.
  *
- * @param dedupCacheSize    Recently delivered event ids retained to de-duplicate the replay-to-live overlap.
+ * @param dedupCacheSize    Recently delivered event ids retained to de-duplicate the replay-to-live overlap, per
+ *                          cache, of which a handover keeps two.
  * @param maxBufferedEvents Cap on events buffered from the live feed during the catch-up replay before failing loud.
  */
 public record CatchupThenLiveOptions(int dedupCacheSize, int maxBufferedEvents) {

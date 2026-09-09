@@ -186,6 +186,11 @@ class RecordingReactiveUpdateTest {
             public void replayAbandoned() {
                 order.add("delegate-abandoned");
             }
+
+            @Override
+            public Mono<Void> alreadyDeliveredByReplay(EventMetadata metadata) {
+                return Mono.<Void>empty().doOnSuccess(ignored -> order.add("delegate-already-delivered"));
+            }
         };
         BiFunction<EventMetadata, String, Mono<Void>> update = (metadata, event) -> Mono.empty();
         RecordingReactiveUpdate<String> recording = newRecordingWithDelegateLifecycle(update, delegate);
@@ -193,8 +198,9 @@ class RecordingReactiveUpdateTest {
         recording.replayStarted();
         StepVerifier.create(recording.replayCompleted()).verifyComplete();
         recording.replayAbandoned();
+        StepVerifier.create(recording.alreadyDeliveredByReplay(EventMetadata.empty())).verifyComplete();
 
-        assertThat(order).containsExactly("delegate-started", "delegate-completed", "delegate-abandoned");
+        assertThat(order).containsExactly("delegate-started", "delegate-completed", "delegate-abandoned", "delegate-already-delivered");
     }
 
     private static RecordingReactiveUpdate<String> newRecordingWithDelegateLifecycle(BiFunction<EventMetadata, String, Mono<Void>> update, ReactiveReplayAware lifecycle) {
@@ -229,6 +235,11 @@ class RecordingReactiveUpdateTest {
         @Override
         public void replayAbandoned() {
             lifecycle.replayAbandoned();
+        }
+
+        @Override
+        public Mono<Void> alreadyDeliveredByReplay(EventMetadata metadata) {
+            return lifecycle.alreadyDeliveredByReplay(metadata);
         }
     }
 

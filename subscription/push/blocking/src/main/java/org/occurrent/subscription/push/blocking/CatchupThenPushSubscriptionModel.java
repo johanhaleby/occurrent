@@ -405,6 +405,14 @@ public class CatchupThenPushSubscriptionModel implements SubscriptionModel, Intr
                     listener.historyRead(self.get());
                 }
             }
+
+            @Override
+            public void alreadyDeliveredByReplay(CloudEvent event) {
+                CatchupListener listener = catchupListeners.get(subscriptionId);
+                if (listener != null) {
+                    listener.alreadyDeliveredByReplay(event);
+                }
+            }
         };
 
         FutureTask<Boolean> replay = new FutureTask<>(() -> {

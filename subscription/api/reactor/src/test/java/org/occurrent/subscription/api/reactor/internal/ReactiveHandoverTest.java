@@ -133,6 +133,47 @@ class ReactiveHandoverTest {
         assertThat(delivered).containsExactly("1");
     }
 
+    // The replay applies an event and the live copy of it is suppressed, so on the recording paths neither delivery
+    // would write down the append it came from. The suppression tells the source instead, once per suppressed copy,
+    // and for both timings, the copy that buffered during the replay and the one that arrived after the drain.
+    @Test
+    void a_payload_the_replay_delivered_reaches_the_source_when_its_live_copy_is_suppressed() throws Exception {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String> handover = handover(delivered);
+        FakeSource source = source(List.of("1"), false);
+
+        CompletableFuture<Void> buffered = handover.accept("1").toFuture();
+        handover.catchUp(source).block(Duration.ofSeconds(5));
+        // The buffered copy is suppressed after the catch-up Mono completes, so its own ack is what says the
+        // suppression has run.
+        buffered.get(5, TimeUnit.SECONDS);
+
+        assertThat(delivered).containsExactly("1");
+        assertThat(source.alreadyDeliveredByReplay).containsExactly("1");
+
+        StepVerifier.create(handover.accept("1")).verifyComplete();
+
+        assertThat(delivered).containsExactly("1");
+        assertThat(source.alreadyDeliveredByReplay).containsExactly("1", "1");
+    }
+
+    // The negative half, and the one that would still pass with a single cache. A repeat the replay never delivered
+    // was already delivered live, and that delivery wrote down whatever it owed, so telling the source again would
+    // have it write the same thing twice for one event.
+    @Test
+    void a_payload_an_earlier_live_delivery_handled_reaches_the_source_again_for_nothing() {
+        List<String> delivered = Collections.synchronizedList(new ArrayList<>());
+        ReactiveHandover<String> handover = handover(delivered);
+        FakeSource source = source(List.of(), false);
+        handover.catchUp(source).block(Duration.ofSeconds(5));
+
+        StepVerifier.create(handover.accept("A")).verifyComplete();
+        StepVerifier.create(handover.accept("A")).verifyComplete();
+
+        assertThat(delivered).containsExactly("A");
+        assertThat(source.alreadyDeliveredByReplay).isEmpty();
+    }
+
     // The test above only repeats an id the replay already delivered, so nothing covered a repeat that was only ever
     // live. That case is the common one in production, because a push sink acknowledges after the fold, so the broker
     // sends the event again whenever a fold throws. Below, A sent twice in a row is folded once. A, B, C, A folds A
@@ -921,6 +962,12 @@ class ReactiveHandoverTest {
         private int replayStartedCallCount = 0;
         private int replayCompletedCallCount = 0;
         private int replayAbandonedCallCount = 0;
+        private final List<String> alreadyDeliveredByReplay = Collections.synchronizedList(new ArrayList<>());
+
+        @Override
+        public Mono<Void> alreadyDeliveredByReplay(String payload) {
+            return Mono.fromRunnable(() -> alreadyDeliveredByReplay.add(payload));
+        }
 
         private void stopAfter(int deliveries) {
             this.stopAfter = deliveries;

@@ -757,7 +757,7 @@ handled. This section is the migration.
 
 A reactor catch-up subscription now delivers an event a second time when a write that was still in flight during the
 replay was read by a history window. Before this release the cache suppressed that second delivery whenever the
-event's id was still in it, and since it holds the most recently replayed `handoverCacheSize` ids, for an event this
+event's id was still in it, and since it held the most recently replayed `handoverCacheSize` ids, for an event this
 close to the head it was.
 
 A position is reserved before its write commits, so a write in flight when the replay read the head holds a position
@@ -781,8 +781,8 @@ deployments where it does not. Under a secondary read preference or a sharded `m
 can lag entries already in the oplog, and the catch-up constructors take any `CheckpointAwareSubscriptionModel`, so
 one of your own can answer whatever it likes. Where the checkpoint lags, the live stream delivers pre-replay history
 too, and the cache no longer suppresses it, so the repeats reach as far back as the lag rather than covering
-concurrent writes alone. That suppression was never the guarantee it looks like, because the cache holds only the most recently replayed
-`handoverCacheSize` ids and evicts the eldest, so a lag wider than the cache already produced these repeats before
+concurrent writes alone. That suppression was never the guarantee it looks like, because the cache held only the most recently replayed
+`handoverCacheSize` ids and evicted the eldest, so a lag wider than the cache already produced these repeats before
 this release. What is gone is the suppression of everything inside that window. The handler you need is the same one
 either way.
 
@@ -794,9 +794,12 @@ counter or writes an unconditional insert for example, make it safe before upgra
 CloudEvent id is the usual way.
 
 `handoverCacheSize` changes meaning along with it. It used to be filled by the whole replay and now sizes the
-reconciliation overlap alone, which is what the blocking `cacheSize` already means. A value you raised to cover a
-large rebuild's history is now bigger than it needs to be. Nothing fails if you leave it, the cache just holds fewer
-ids than it has room for.
+reconciliation overlap alone, which is what `cacheSize` on the blocking position catch-up models already means. A
+value you raised to cover a large rebuild's history is now bigger than it needs to be. Nothing fails if you leave
+it, the cache just holds fewer ids than it has room for.
+
+`handoverCacheSize` reaches the position catch-up models and nothing else. The catch-up-then-push handover has a
+setting of its own, `CatchupThenLiveOptions.dedupCacheSize`, and this section does not change what that one does.
 
 There is no recipe for this change. Nothing in your source code declares a requirement that an event arrives once, so
 there is nothing a rewrite could search for.
