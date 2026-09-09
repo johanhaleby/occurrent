@@ -187,6 +187,12 @@ public final class UpdateEventRepair {
         }
         long repaired = 0;
         List<UnrecoverableEvent> unrecoverable = new ArrayList<>();
+        // Bounds of every readable position this call and, once resumed, every earlier segment of this same run
+        // repaired, carried across a resume the same way unrecoverableCount is and for the same reason. Without
+        // that, a run killed after repairing positions in an earlier segment would return a range naming only the
+        // segment the resumed call walked itself, hiding the earlier one from step 7.
+        @Nullable Long minRepairedPosition = checkpoint == null ? null : numberOrNull(checkpoint.get(UpdateEventRepairCheckpoint.FIELD_MIN_REPAIRED_POSITION));
+        @Nullable Long maxRepairedPosition = checkpoint == null ? null : numberOrNull(checkpoint.get(UpdateEventRepairCheckpoint.FIELD_MAX_REPAIRED_POSITION));
         // Read once up front. A damaged event predates this run, since no version from 0.34.0 on can create one, so
         // its position cannot exceed the counter as it stands now.
         long positionCeiling = positionCeiling();
@@ -208,9 +214,14 @@ public final class UpdateEventRepair {
             long repairedInBatch = 0;
             for (Document event : batch) {
                 List<UnrecoverableEvent> found = new ArrayList<>(1);
-                if (repairEvent(event, found, positionCeiling)) {
+                List<Long> repairedPosition = new ArrayList<>(1);
+                if (repairEvent(event, found, repairedPosition, positionCeiling)) {
                     repaired++;
                     repairedInBatch++;
+                }
+                for (long position : repairedPosition) {
+                    minRepairedPosition = minRepairedPosition == null ? position : Math.min(minRepairedPosition, position);
+                    maxRepairedPosition = maxRepairedPosition == null ? position : Math.max(maxRepairedPosition, position);
                 }
                 if (!found.isEmpty()) {
                     // One document can produce more than one finding. A dcbtags value that is not a string and a
@@ -231,7 +242,7 @@ public final class UpdateEventRepair {
             // Advance past the whole batch, including events nothing could be done about. They keep matching the
             // damaged-event filter, so without this the next batch would return them again and the run would not end.
             lastProcessedId = batch.getLast().get(ID);
-            checkpoint(lastProcessedId, batch.size(), unrecoverableCount);
+            checkpoint(lastProcessedId, batch.size(), unrecoverableCount, minRepairedPosition, maxRepairedPosition);
             log.info("Repaired {} of {} events in this batch of collection '{}', {} repaired so far.",
                     repairedInBatch, batch.size(), eventStoreCollectionName, repaired);
 
@@ -247,9 +258,12 @@ public final class UpdateEventRepair {
         long lostPosition = withRetry(() -> eventCollection.countDocuments(lostPositionFilter()));
 
         deleteCheckpoint();
-        log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone, {} are left without a position.",
-                eventStoreCollectionName, repaired, unrecoverableCount, lostPosition);
-        return new UpdateEventRepairResult(repaired, unrecoverableCount, lostPosition, unrecoverable);
+        String repairedRange = minRepairedPosition == null
+                ? "No position was repaired"
+                : "Repaired positions ranged from " + minRepairedPosition + " to " + maxRepairedPosition;
+        log.info("Repair of collection '{}' finished: {} events repaired, {} events hold damage that cannot be undone, {} are left without a position. {}.",
+                eventStoreCollectionName, repaired, unrecoverableCount, lostPosition, repairedRange);
+        return new UpdateEventRepairResult(repaired, unrecoverableCount, lostPosition, unrecoverable, minRepairedPosition, maxRepairedPosition);
     }
 
     /**
@@ -281,10 +295,15 @@ public final class UpdateEventRepair {
      * unreadable position leaves the tag array repairable, and an unreadable tag encoding leaves the position
      * repairable. Only a rejected write keeps both exactly as they were found.
      *
+     * @param repairedPosition filled with this event's numeric {@code position}, but only once the update is
+     *                         confirmed to have reached the event. That position can be one this call restored, or
+     *                         one that was already correct, for instance a {@code POSITION_ALREADY_TAKEN} event
+     *                         whose position an operator set by hand before this run only had its tag array left to
+     *                         fix. Left empty when the update was rejected, or when the position stays unreadable.
      * @return whether this call's update reached the event. A write the server applied and then failed to acknowledge
      * counts, since the retry that follows it repairs nothing only because the first attempt already did.
      */
-    private boolean repairEvent(Document event, List<UnrecoverableEvent> unrecoverable, long positionCeiling) {
+    private boolean repairEvent(Document event, List<UnrecoverableEvent> unrecoverable, List<Long> repairedPosition, long positionCeiling) {
         Object eventId = event.get(ID);
         Object storedPosition = event.get(POSITION);
         Object rawTags = event.get(DcbCloudEvents.TAGS);
@@ -304,34 +323,13 @@ public final class UpdateEventRepair {
             encodedTags = null;
         }
         List<Bson> updates = new ArrayList<>(2);
+        @Nullable Long readablePosition = null;
 
         if (storedPosition instanceof String positionAsString) {
             Long position;
             try {
                 long parsedPosition = Long.parseLong(positionAsString);
-                if (parsedPosition > positionCeiling && positionCeiling > 0) {
-                    // Above the counter is as unassignable as at or below zero, and just as invisible, because a
-                    // read clamps its upper bound to this same counter. It is re-read here rather than trusted from the
-                    // start of the run, so a store that wrote while the repair walked cannot have an event wrongly
-                    // called forged. A counter of zero means there is no counter document to compare against.
-                    long ceilingNow = positionCeiling();
-                    if (ceilingNow > 0 && parsedPosition > ceilingNow) {
-                        unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ABOVE_COUNTER,
-                                positionAsString + ", and the store's position counter is " + ceilingNow));
-                        position = null;
-                    } else {
-                        position = parsedPosition;
-                    }
-                } else if (parsedPosition > 0) {
-                    position = parsedPosition;
-                } else {
-                    // A store's positions start above zero, and getPosition returns zero for an event that has none,
-                    // so zero and anything below it are values no store ever assigned. Writing one back as an int64
-                    // would count as a repair and leave the event exactly as invisible, because every position query
-                    // reads position greater than zero. Only a forged position gets here, so report it.
-                    unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE, positionAsString));
-                    position = null;
-                }
+                position = validatedPosition(parsedPosition, positionCeiling, eventId, unrecoverable);
             } catch (NumberFormatException e) {
                 // The tag array does not depend on the position, so rebuild it anyway, the way a dropped position
                 // does below. Only the position itself is beyond saving here.
@@ -342,11 +340,18 @@ public final class UpdateEventRepair {
                 Document positionHolder = new Document();
                 PositionDocumentMapper.addPosition(positionHolder, position);
                 updates.add(Updates.set(POSITION, positionHolder.get(POSITION)));
+                readablePosition = position;
             }
         } else if (storedPosition == null && encodedTags != null) {
             // A DCB append always writes a position, so a DCB event without one lost it. The tag array below is still
             // worth rebuilding, and the position is reported rather than invented.
             unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_LOST, "no position field"));
+        } else if (storedPosition instanceof Number number) {
+            // This event only matched the filter through its tag array, so its position was never damaged by the
+            // old write-back. A repair that follows a hand-set POSITION_ALREADY_TAKEN fix (the runbook's step 5)
+            // lands here with a position an operator typed by hand, and a slip there is exactly as unassignable as
+            // a forged string position would have been, so it gets the same validation and the same findings.
+            readablePosition = validatedPosition(number.longValue(), positionCeiling, eventId, unrecoverable);
         }
 
         if (encodedTags != null && !event.containsKey(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD)) {
@@ -373,7 +378,7 @@ public final class UpdateEventRepair {
         // the server therefore always modifies the document, and modified zero can only mean the lost acknowledgement
         // of a write that did land. Counting that as unrepaired would understate the run against the event's own log
         // line, which is written whatever the count says.
-        return withRetry(() -> {
+        boolean wrote = withRetry(() -> {
             try {
                 return eventCollection.updateOne(eq(ID, eventId), Updates.combine(updates)).getMatchedCount() > 0;
             } catch (MongoWriteException e) {
@@ -386,6 +391,41 @@ public final class UpdateEventRepair {
                 return false;
             }
         });
+        if (wrote && readablePosition != null) {
+            repairedPosition.add(readablePosition);
+        }
+        return wrote;
+    }
+
+    /**
+     * A position is assignable when it is positive and at or below the store's position counter, whether it came
+     * from parsing a damaged string or was read as a number from a document whose position was never damaged. Above
+     * the counter is as unassignable as at or below zero, and just as invisible, because a read clamps its upper
+     * bound to this same counter. The counter is re-read here rather than trusted from the start of the run, so a
+     * store that wrote while the repair walked cannot have an event wrongly called forged. A counter of zero means
+     * there is no counter document to compare against.
+     *
+     * @return the position, or {@code null} if it was reported as unrecoverable instead.
+     */
+    private @Nullable Long validatedPosition(long candidate, long positionCeiling, Object eventId, List<UnrecoverableEvent> unrecoverable) {
+        if (candidate > positionCeiling && positionCeiling > 0) {
+            long ceilingNow = positionCeiling();
+            if (ceilingNow > 0 && candidate > ceilingNow) {
+                unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_ABOVE_COUNTER,
+                        candidate + ", and the store's position counter is " + ceilingNow));
+                return null;
+            }
+            return candidate;
+        } else if (candidate > 0) {
+            return candidate;
+        } else {
+            // A store's positions start above zero, and getPosition returns zero for an event that has none, so
+            // zero and anything below it are values no store ever assigned. Writing one back as an int64 would
+            // count as a repair and leave the event exactly as invisible, because every position query reads
+            // position greater than zero. Only a forged or mistyped position gets here, so report it.
+            unrecoverable.add(new UnrecoverableEvent(eventId, UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE, String.valueOf(candidate)));
+            return null;
+        }
     }
 
     /**
@@ -409,16 +449,22 @@ public final class UpdateEventRepair {
         return value instanceof Number number ? number.longValue() : 0;
     }
 
+    private static @Nullable Long numberOrNull(@Nullable Object value) {
+        return value instanceof Number number ? number.longValue() : null;
+    }
+
     private static Bson afterFilter(@Nullable Object lastProcessedId) {
         return lastProcessedId == null ? new Document() : gt(ID, lastProcessedId);
     }
 
-    private void checkpoint(Object lastProcessedId, int batchSize, long unrecoverableCount) {
+    private void checkpoint(Object lastProcessedId, int batchSize, long unrecoverableCount, @Nullable Long minRepairedPosition, @Nullable Long maxRepairedPosition) {
         withRetry(() -> checkpointCollection.findOneAndUpdate(
                 eq(ID, UpdateEventRepairCheckpoint.CHECKPOINT_DOCUMENT_ID),
                 Updates.combine(
                         Updates.set(UpdateEventRepairCheckpoint.FIELD_LAST_PROCESSED_ID, lastProcessedId),
                         Updates.set(UpdateEventRepairCheckpoint.FIELD_UNRECOVERABLE_COUNT, unrecoverableCount),
+                        Updates.set(UpdateEventRepairCheckpoint.FIELD_MIN_REPAIRED_POSITION, minRepairedPosition),
+                        Updates.set(UpdateEventRepairCheckpoint.FIELD_MAX_REPAIRED_POSITION, maxRepairedPosition),
                         Updates.inc(UpdateEventRepairCheckpoint.FIELD_PROCESSED_COUNT, batchSize)
                 ),
                 new FindOneAndUpdateOptions().upsert(true)

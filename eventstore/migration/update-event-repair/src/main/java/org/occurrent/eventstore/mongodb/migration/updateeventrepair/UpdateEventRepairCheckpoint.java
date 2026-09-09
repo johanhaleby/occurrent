@@ -30,6 +30,11 @@ final class UpdateEventRepairCheckpoint {
     // found. Without it a resumed run walks only the events after the checkpoint and reports zero unrecoverable
     // while the events before it are still damaged.
     static final String FIELD_UNRECOVERABLE_COUNT = "unrecoverableCount";
+    // Carried across a resume for the same reason as the count above. A run killed after repairing positions in an
+    // earlier segment and resumed from the checkpoint would otherwise return a range bounding only the segment it
+    // walked itself, hiding the earlier segment's positions from an operator using the range for step 7.
+    static final String FIELD_MIN_REPAIRED_POSITION = "minRepairedPosition";
+    static final String FIELD_MAX_REPAIRED_POSITION = "maxRepairedPosition";
 
     private UpdateEventRepairCheckpoint() {
     }

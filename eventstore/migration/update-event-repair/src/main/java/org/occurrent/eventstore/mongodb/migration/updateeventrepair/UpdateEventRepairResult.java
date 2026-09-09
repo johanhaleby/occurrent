@@ -18,6 +18,7 @@
 package org.occurrent.eventstore.mongodb.migration.updateeventrepair;
 
 import org.jspecify.annotations.NullMarked;
+import org.jspecify.annotations.Nullable;
 
 import java.util.List;
 
@@ -60,12 +61,35 @@ import java.util.List;
  *                                {@code unrecoverableEventCount} covers the earlier part too, since that count is
  *                                carried in the checkpoint. Every finding is logged at WARN when it is found, so
  *                                neither a truncated list nor a resume means a lost report.
+ * @param minRepairedPosition     The lowest numeric {@code position} of every event this call successfully repaired,
+ *                                or {@code null} if none of them had a readable position. That position can be one
+ *                                this call restored, or one that was already correct on an event this call only
+ *                                rebuilt the tag array of, for instance a {@code POSITION_ALREADY_TAKEN} event an
+ *                                operator fixed by hand before running the repair again. A consumer whose checkpoint
+ *                                sits below this value cannot have read past a repaired event, since it has not
+ *                                reached one yet. One that sits at or above it might have, and that is the operator's
+ *                                cue to check it, rather than going back to the store to work out the range by hand.
+ *                                Carried across a resume the way {@code unrecoverableEventCount} is, so a run that
+ *                                resumed an interrupted one still bounds the positions the earlier segment repaired,
+ *                                not only the ones it walked itself.
+ * @param maxRepairedPosition     The highest position among the same events as {@code minRepairedPosition}, or
+ *                                {@code null} on the same condition. Together the two bound the repaired range
+ *                                without naming every event in it.
  */
 @NullMarked
 public record UpdateEventRepairResult(long eventsRepaired, long unrecoverableEventCount, long eventsWithLostPosition,
-                                      List<UnrecoverableEvent> unrecoverableEvents) {
+                                      List<UnrecoverableEvent> unrecoverableEvents, @Nullable Long minRepairedPosition,
+                                      @Nullable Long maxRepairedPosition) {
 
     public UpdateEventRepairResult {
         unrecoverableEvents = List.copyOf(unrecoverableEvents);
+        if ((minRepairedPosition == null) != (maxRepairedPosition == null)) {
+            throw new IllegalArgumentException(
+                    "minRepairedPosition and maxRepairedPosition must both be null or both be set, got " + minRepairedPosition + " and " + maxRepairedPosition);
+        }
+        if (minRepairedPosition != null && minRepairedPosition > maxRepairedPosition) {
+            throw new IllegalArgumentException(
+                    "minRepairedPosition must not be above maxRepairedPosition, got " + minRepairedPosition + " and " + maxRepairedPosition);
+        }
     }
 }

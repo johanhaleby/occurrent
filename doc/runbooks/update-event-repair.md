@@ -180,6 +180,50 @@ db.events.countDocuments({ dcbtags: { $exists: true }, dcbTags: { $exists: false
 Both should be `0`, except for the events step 5 left alone deliberately. Restart the application and confirm the
 startup warning is gone.
 
+### 7. [you] Recover consumers that read past a repaired position
+
+Repair fixes documents. It does not touch any subscription's stored checkpoint, so a consumer that had already
+resumed past a repaired event's position before you ran step 4 is still past it. A position-ordered stream read and
+position-based catch-up both resume strictly after their checkpoint, so a repaired position below that checkpoint is
+never delivered to them. This is a live consequence of the same damage "Why this is needed" describes for a read, not
+a new kind of damage, and it applies to the same stores, one with stream position on or one reading DCB. Time-ordered
+legacy catch-up is unaffected, because the event's time was never touched.
+
+`result.minRepairedPosition()` and `result.maxRepairedPosition()`, the same range the finished-run log line prints,
+bound the position of every event the repair touched and could read a position for, across the whole repair rather
+than only the last call to it. A killed and resumed repair stores this range in its checkpoint the same way it stores
+the unrecoverable count, so the numbers a finished run reports cover the segment an earlier, interrupted call walked
+as well as the one that finished it, not only the latter.
+
+That position can be one the repair restored, or one that was already correct on an event only its tag array needed
+rebuilding for, which is what a run after a hand-set `POSITION_ALREADY_TAKEN` fix (step 5) looks like. Both are `null`
+when the whole repair touched nothing with a readable position, whether because it found nothing to repair or because
+every event it touched had a position step 5 left you to deal with by hand, and `null` there means no consumer needs
+anything from you. Otherwise, a consumer whose checkpoint sits below `minRepairedPosition` has not read that far yet,
+so it will pick up every repaired event on its own the next time it resumes and needs nothing from you. One whose
+checkpoint sits at or above `minRepairedPosition` may already have skipped one, and that is the one to check next.
+
+Read that checkpoint the way you would for any other purpose, a durable subscription's checkpoint storage collection,
+or wherever a hand-rolled consumer keeps the position it last processed, and compare it to the range above.
+
+Decide between replaying and reconciling before you touch anything, because a side effect a replay reruns cannot be
+taken back afterward. Replaying a consumer redelivers every event from its restart point onward, not only the
+repaired one.
+
+Replaying is safe for a consumer that only overwrites or upserts its own state on each delivery, since writing the
+same value twice produces the same document as writing it once. Rewind its checkpoint to before
+`minRepairedPosition`, or restart it from the beginning if that is simpler, and let it catch up.
+
+Replaying is not safe for a consumer that causes a side effect outside its own state which cannot run twice, sending
+an email, charging a card, calling another system, since rewinding it reruns that side effect for every event since
+the restart point, not only the repaired one. Reconcile that consumer instead of replaying it.
+
+Read the events in the repaired range directly, for example
+`db.events.find({ position: { $gte: NumberLong(<minRepairedPosition>), $lte: NumberLong(<maxRepairedPosition>) } })`,
+and feed only the ones the consumer actually missed into its logic once, by hand or with a targeted script, leaving
+its checkpoint where it is. `NumberLong` matters once a store's position passes 2^53, since mongosh reads a bare
+number as a JavaScript double and a comparison against a `position` that large silently rounds.
+
 ## The damage this cannot find
 
 Two kinds of damage are invisible to both the tool and the queries above, and both come from an update function

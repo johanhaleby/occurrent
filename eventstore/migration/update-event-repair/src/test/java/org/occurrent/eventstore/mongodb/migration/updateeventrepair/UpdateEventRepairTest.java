@@ -68,6 +68,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -198,13 +199,19 @@ class UpdateEventRepairTest {
 
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
 
-        newRepair().run();
+        UpdateEventRepairResult result = newRepair().run();
 
         Document repaired = storedDocument("a");
         assertAll(
                 () -> assertThat(repaired.get(OccurrentCloudEventExtension.POSITION))
                         .as("the repaired position must be the original value, as a BSON int64")
                         .isInstanceOf(Long.class)
+                        .isEqualTo(positionBeforeDamage),
+                () -> assertThat(result.minRepairedPosition())
+                        .as("the only repaired position must bound both ends of the range")
+                        .isEqualTo(positionBeforeDamage),
+                () -> assertThat(result.maxRepairedPosition())
+                        .as("the only repaired position must bound both ends of the range")
                         .isEqualTo(positionBeforeDamage),
                 () -> assertThat(repaired.get(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD))
                         .as("the repaired tag array must be what the store writes for the same tags")
@@ -253,6 +260,44 @@ class UpdateEventRepairTest {
                         .as("a second run must leave the document exactly as the first run left it")
                         .isEqualTo(afterFirstRun)
         );
+    }
+
+    @Test
+    void the_repaired_range_spans_every_position_this_call_restored_but_not_an_event_left_undamaged() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        eventStore.append(List.of(taggedEvent("c", "Defined", "name:3")));
+        Object positionOfA = storedDocument("a").get(OccurrentCloudEventExtension.POSITION);
+        Object positionOfC = storedDocument("c").get(OccurrentCloudEventExtension.POSITION);
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        damageTheWayUpdateEventUsedTo("c", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.minRepairedPosition())
+                        .as("a's repaired position must be the floor of the range")
+                        .isEqualTo(positionOfA),
+                () -> assertThat(result.maxRepairedPosition())
+                        .as("c's repaired position must be the ceiling of the range, with b's untouched position between the two and no effect on it")
+                        .isEqualTo(positionOfC)
+        );
+    }
+
+    @Test
+    void a_repaired_range_with_only_one_end_set_is_refused() {
+        assertThatThrownBy(() -> new UpdateEventRepairResult(1, 0, 0, List.of(), 5L, null))
+                .as("minRepairedPosition without maxRepairedPosition must be refused, not silently accepted as a half range")
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new UpdateEventRepairResult(1, 0, 0, List.of(), null, 5L))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void a_repaired_range_with_the_bounds_inverted_is_refused() {
+        assertThatThrownBy(() -> new UpdateEventRepairResult(1, 0, 0, List.of(), 6L, 5L))
+                .as("minRepairedPosition above maxRepairedPosition must be refused rather than reported as a valid range")
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -325,6 +370,69 @@ class UpdateEventRepairTest {
     }
 
     @Test
+    void a_second_run_after_a_hand_set_position_still_bounds_the_range_with_it() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        long positionOfB = ((Number) requireNonNull(storedDocument("b").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        damageTheWayUpdateEventUsedTo("b", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(positionOfA))));
+
+        UpdateEventRepairResult first = newRepair().run();
+        assertThat(first.unrecoverableEvents())
+                .as("the first run must still collide on a's position, otherwise this test is not exercising the hand-fix step")
+                .singleElement()
+                .extracting(UnrecoverableEvent::reason)
+                .isEqualTo(UnrecoverableEvent.Reason.POSITION_ALREADY_TAKEN);
+
+        // Step 5: the operator resolves the collision by hand, giving b back its own original position rather than
+        // a's. Written as a number, the way an operator fixing this in mongosh would write it, not as the damaged
+        // string the tool would refuse to write back untouched.
+        events().updateOne(new Document("id", "b"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, positionOfB)));
+
+        UpdateEventRepairResult second = newRepair().run();
+
+        assertAll(
+                () -> assertThat(second.unrecoverableEvents())
+                        .as("b's position is valid now, so only its tag array is left to fix")
+                        .isEmpty(),
+                () -> assertThat(storedDocument("b").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .containsExactly("name:2"),
+                () -> assertThat(second.minRepairedPosition())
+                        .as("b's hand-set position must bound the range even though this run never wrote a position field")
+                        .isEqualTo(positionOfB),
+                () -> assertThat(second.maxRepairedPosition())
+                        .isEqualTo(positionOfB)
+        );
+    }
+
+    @Test
+    void a_hand_set_position_that_is_not_positive_is_reported_rather_than_included_in_the_range() {
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        // A typo in step 5's hand fix, written as a number rather than the damaged string the tool would otherwise
+        // still treat as string-typed damage. The tag array is still there to rebuild, so this event matches the
+        // filter through it, not through its position.
+        events().updateOne(new Document("id", "a"), new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, 0L)));
+
+        UpdateEventRepairResult result = newRepair().run();
+
+        assertAll(
+                () -> assertThat(result.unrecoverableEvents())
+                        .singleElement()
+                        .extracting(UnrecoverableEvent::reason)
+                        .isEqualTo(UnrecoverableEvent.Reason.POSITION_NOT_POSITIVE),
+                () -> assertThat(result.minRepairedPosition())
+                        .as("a position no store ever assigned must not be reported as part of the repaired range")
+                        .isNull(),
+                () -> assertThat(result.maxRepairedPosition()).isNull(),
+                () -> assertThat(storedDocument("a").getList(DcbDocumentMapper.DCB_TAGS_INDEX_FIELD, String.class))
+                        .as("the tag array does not depend on the position, so a forged position must not cost the event its tags too")
+                        .containsExactly("name:1")
+        );
+    }
+
+    @Test
     void an_event_whose_position_string_is_not_a_number_still_gets_its_tag_array_back() {
         eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
         damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
@@ -343,7 +451,11 @@ class UpdateEventRepairTest {
                         .containsExactly("name:1"),
                 () -> assertThat(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))
                         .as("a position that cannot be read must be left exactly as it was found")
-                        .isEqualTo("not-a-number")
+                        .isEqualTo("not-a-number"),
+                () -> assertThat(result.minRepairedPosition())
+                        .as("the tag array was repaired but the position was not, so the range must stay empty")
+                        .isNull(),
+                () -> assertThat(result.maxRepairedPosition()).isNull()
         );
     }
 
@@ -644,6 +756,48 @@ class UpdateEventRepairTest {
         assertThat(resumed.unrecoverableEventCount())
                 .as("a resumed run must carry the count the interrupted run already found, otherwise it reports a clean repair over damage that is still there")
                 .isEqualTo(1);
+    }
+
+    @Test
+    void a_resumed_run_still_reports_the_repaired_range_the_interrupted_run_found() throws InterruptedException {
+        // Repairing one event per batch and stopping after the first checkpoints that event's position behind the
+        // checkpoint, where a resumed run never looks again.
+        eventStore.append(List.of(taggedEvent("a", "Defined", "name:1")));
+        eventStore.append(List.of(taggedEvent("b", "Defined", "name:2")));
+        long positionOfA = ((Number) requireNonNull(storedDocument("a").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        long positionOfB = ((Number) requireNonNull(storedDocument("b").get(OccurrentCloudEventExtension.POSITION))).longValue();
+        damageTheWayUpdateEventUsedTo("a", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+        damageTheWayUpdateEventUsedTo("b", original -> CloudEventBuilder.v1(original).withSubject("rewritten").build());
+
+        UpdateEventRepair oneBatchOnly = new UpdateEventRepair(database, EVENT_COLLECTION,
+                UpdateEventRepairOptions.defaults().withBatchSize(1).withThrottleMillis(60_000));
+        Thread runner = new Thread(oneBatchOnly::run);
+        AtomicReference<Throwable> runnerFailure = new AtomicReference<>();
+        runner.setUncaughtExceptionHandler((thread, failure) -> runnerFailure.set(failure));
+        runner.start();
+        waitUntilCheckpointExists();
+        runner.interrupt();
+        runner.join(30_000);
+
+        assertAll(
+                () -> assertThat(runner.isAlive())
+                        .as("the interrupted run must have stopped before the resumed run starts, otherwise the two can race over the same checkpoint")
+                        .isFalse(),
+                () -> assertThat(runnerFailure.get())
+                        .as("interrupting the run must fail it with the documented exception rather than let it continue or die some other way")
+                        .isInstanceOf(RuntimeException.class)
+                        .hasMessageContaining("interrupted while throttling")
+        );
+
+        UpdateEventRepairResult resumed = newRepair().run();
+
+        assertAll(
+                () -> assertThat(resumed.minRepairedPosition())
+                        .as("a resumed run must carry the range the interrupted run already found, otherwise it hides the earlier segment's positions from step 7")
+                        .isEqualTo(Math.min(positionOfA, positionOfB)),
+                () -> assertThat(resumed.maxRepairedPosition())
+                        .isEqualTo(Math.max(positionOfA, positionOfB))
+        );
     }
 
     private void waitUntilCheckpointExists() {
