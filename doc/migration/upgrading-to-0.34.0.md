@@ -851,6 +851,10 @@ db.events.countDocuments({ position: { $type: "string" } })
 Replace `events` with your event collection name. From 0.34.0 the store runs the same check when it starts and logs
 a warning naming the repair when it finds something, so an affected store tells you on its next deploy.
 
+If you would rather that store refused to start than kept accepting conditional appends against a damaged event
+until the repair has run, set `EventStoreConfig.Builder.requireRepairedEvents(true)`. It is off by default on all
+three MongoDB stores, so upgrading on its own changes nothing here.
+
 An event whose position was dropped rather than turned into a string has no `position` field at all. Your store
 already warns about events without a position, but that warning names the position backfill, which is the wrong
 remedy here and will not fix it. If you see it and you have also called `updateEvent`, run the second query in the

@@ -61,6 +61,10 @@ From 0.34.0 the store also runs the first of these itself when it starts, and lo
 when it finds something. It runs only the first, because that is the one that costs nothing, so a silent startup
 rules out a damaged position rather than every kind of damage. Run the second query yourself.
 
+Set `EventStoreConfig.Builder.requireRepairedEvents(true)` if you would rather the store refused to start than kept
+accepting conditional appends against a damaged event until you have run the repair. It is off by default, and it
+covers the same first query, so it says nothing about the damage that query cannot see.
+
 ### 2. [tool] Take a report
 
 The report writes nothing, so it is safe against a live store. It returns two counts, how many events the repair

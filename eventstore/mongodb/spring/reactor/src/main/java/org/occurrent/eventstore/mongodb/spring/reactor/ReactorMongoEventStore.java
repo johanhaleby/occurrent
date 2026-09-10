@@ -134,6 +134,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
     private final DcbStreamIdGenerator dcbStreamIdGenerator;
     private final boolean streamPositionEnabled;
     private final boolean requireBackfilledPosition;
+    private final boolean requireRepairedEvents;
 
     /**
      * Create a new instance of {@code SpringReactorMongoEventStore}
@@ -158,6 +159,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         // upgrade over an existing un-backfilled collection does not build the position index at startup.
         this.streamPositionEnabled = resolveStreamPositionEnabled(config, eventStoreCollectionName, mongoTemplate);
         this.requireBackfilledPosition = config.requireBackfilledPosition;
+        this.requireRepairedEvents = config.requireRepairedEvents;
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, mongoTemplate).block();
     }
 
@@ -788,7 +790,7 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
             // Damage check first. The unpositioned check errors when requireBackfilledPosition is set, and an event
             // whose position updateEvent dropped has no position field either, so it would fail startup naming the
             // position backfill, and backfilling such an event assigns a wrong position for good.
-            chain = chain.then(warnOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate))
+            chain = chain.then(warnOrFailOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate))
                     .then(warnIfUnpositionedEventsExist(eventStoreCollectionName, mongoTemplate));
         }
 
@@ -821,16 +823,20 @@ public class ReactorMongoEventStore implements EventStore, EventStoreOperations,
         });
     }
 
-    // Warns when the collection holds events that updateEvent damaged before 0.34.0, which stored position as a
-    // string. Those events are missing from every position query and from the conflict query behind a conditional
-    // append. A string position sits in its own type range in the position index, so this reads no keys at all on a
-    // store that was never damaged.
-    private static Mono<Void> warnOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
+    // Warns, or errors when requireRepairedEvents is set, when the collection holds events that updateEvent damaged
+    // before 0.34.0, which stored position as a string. Those events are missing from every position query and from
+    // the conflict query behind a conditional append. A string position sits in its own type range in the position
+    // index, so this reads no keys at all on a store that was never damaged.
+    private Mono<Void> warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, ReactiveMongoTemplate mongoTemplate) {
         Query damagedQuery = new Query(where(OccurrentCloudEventExtension.POSITION).type(JsonSchemaObject.Type.STRING));
         return mongoTemplate.exists(damagedQuery, eventStoreCollectionName).flatMap(hasDamagedEvents -> {
-            if (hasDamagedEvents) {
-                LOGGER.warn(UpdateEventRepairValidator.damagedEventsMessage(eventStoreCollectionName));
+            if (!hasDamagedEvents) {
+                return Mono.<Void>empty();
             }
+            if (requireRepairedEvents) {
+                return Mono.<Void>error(UpdateEventRepairValidator.damagedEventsExist(eventStoreCollectionName));
+            }
+            LOGGER.warn(UpdateEventRepairValidator.damagedEventsMessage(eventStoreCollectionName));
             return Mono.<Void>empty();
         });
     }

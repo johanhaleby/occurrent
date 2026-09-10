@@ -55,11 +55,14 @@ import java.util.function.UnaryOperator;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.occurrent.eventstore.api.EventStoreCapability.STREAM;
 
 /**
- * The startup warning about events that {@code updateEvent} damaged before 0.34.0. A damaged event is missing from
- * every position query, so the warning is the only thing that tells anyone it is there.
+ * The startup check for events that {@code updateEvent} damaged before 0.34.0. A damaged event is missing from every
+ * position query, so this check is the only thing that tells anyone it is there, and
+ * {@code requireRepairedEvents(true)} turns its warning into a refusal to start.
  * <p>
  * The healthy case matters as much as the damaged one. This warning stays in the store for as long as anyone might
  * still be upgrading across the defect, so a version that cried wolf would put a scary line in the log of every
@@ -142,6 +145,37 @@ class SpringMongoEventStoreDamagedEventWarningTest {
         assertThat(warnings())
                 .as("turning position off skips both the damage check and the un-backfilled checks, so this is the only line the operator gets, and naming the backfill alone recommends the one remedy that cannot be undone")
                 .anySatisfy(message -> assertThat(message).contains("position-backfill", "update-event-repair.md"));
+    }
+
+    @Test
+    void a_store_told_to_require_repaired_events_refuses_to_start_until_the_damage_is_gone() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        makePositionAString();
+
+        assertThatThrownBy(this::newStoreRequiringRepairedEvents)
+                .as("an operator who asked for this must not get a store that accepts a conditional append against a damaged event")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged")
+                .hasMessageContaining("update-event-repair.md");
+
+        makePositionANumberAgain();
+
+        assertThatNoException()
+                .as("the same setting must let a repaired store start, otherwise it refuses on the setting rather than on the damage")
+                .isThrownBy(this::newStoreRequiringRepairedEvents);
+    }
+
+    private SpringMongoEventStore newStoreRequiringRepairedEvents() {
+        return newEventStore(builder -> builder.withStreamPosition().requireRepairedEvents(true));
+    }
+
+    private void makePositionANumberAgain() {
+        MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
+        Document damaged = requireNonNull(events.find(
+                new Document(OccurrentCloudEventExtension.POSITION, new Document("$type", "string"))).first());
+        long position = Long.parseLong(requireNonNull(damaged.getString(OccurrentCloudEventExtension.POSITION)));
+        events.updateOne(new Document("_id", damaged.get("_id")),
+                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, position)));
     }
 
     private void makePositionAString() {

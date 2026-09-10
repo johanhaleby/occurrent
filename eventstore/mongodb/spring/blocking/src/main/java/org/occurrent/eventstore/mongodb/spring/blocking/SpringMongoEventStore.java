@@ -144,7 +144,7 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
             // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
             // position updateEvent dropped has no position field either, so that check would fail startup
             // naming the position backfill, and backfilling such an event assigns a wrong position for good.
-            warnOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate);
+            warnOrFailOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate, config.requireRepairedEvents);
             checkForUnpositionedEvents(eventStoreCollectionName, mongoTemplate, config.requireBackfilledPosition);
         }
     }
@@ -971,18 +971,21 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
     }
 
     /**
-     * Warns when the collection holds events that {@code updateEvent} damaged before 0.34.0, which stored position as
-     * a string. Those events are missing from every position query and from the conflict query behind a conditional
-     * append. A string position sits in its own type range in the position index, so this reads no keys at all on a
-     * store that was never damaged.
+     * Warns, or fails when {@code requireRepairedEvents} is set, when the collection holds events that
+     * {@code updateEvent} damaged before 0.34.0, which stored position as a string. Those events are missing from
+     * every position query and from the conflict query behind a conditional append. A string position sits in its own
+     * type range in the position index, so this reads no keys at all on a store that was never damaged.
      */
-    private static void warnOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, MongoTemplate mongoTemplate) {
+    private static void warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, MongoTemplate mongoTemplate, boolean requireRepairedEvents) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {
             return;
         }
         Query damagedQuery = new Query(where(OccurrentCloudEventExtension.POSITION).type(JsonSchemaObject.Type.STRING));
         if (!mongoTemplate.exists(damagedQuery, eventStoreCollectionName)) {
             return;
+        }
+        if (requireRepairedEvents) {
+            throw UpdateEventRepairValidator.damagedEventsExist(eventStoreCollectionName);
         }
         log.warn(UpdateEventRepairValidator.damagedEventsMessage(eventStoreCollectionName));
     }

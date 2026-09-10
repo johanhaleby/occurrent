@@ -151,7 +151,7 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
             // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
             // position updateEvent dropped has no position field either, so that check would fail startup
             // naming the position backfill, and backfilling such an event assigns a wrong position for good.
-            warnOnEventsDamagedByUpdateEvent(eventCollection);
+            warnOrFailOnEventsDamagedByUpdateEvent(eventCollection, config.requireRepairedEvents);
             warnOrFailOnUnpositionedEvents(eventCollection, requireBackfilledPosition);
         }
     }
@@ -920,11 +920,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         log.warn(PositionBackfillValidator.unpositionedEventsMessage(collectionName));
     }
 
-    // Warns when the collection holds events that updateEvent damaged before 0.34.0, which stored position as a
-    // string. Those events are missing from every position query and from the conflict query behind a conditional
-    // append. A string position sits in its own type range in the position index, so this reads no keys at all on a
-    // store that was never damaged.
-    private static void warnOnEventsDamagedByUpdateEvent(MongoCollection<Document> eventCollection) {
+    // Warns, or fails when requireRepairedEvents is set, when the collection holds events that updateEvent damaged
+    // before 0.34.0, which stored position as a string. Those events are missing from every position query and from
+    // the conflict query behind a conditional append. A string position sits in its own type range in the position
+    // index, so this reads no keys at all on a store that was never damaged.
+    private static void warnOrFailOnEventsDamagedByUpdateEvent(MongoCollection<Document> eventCollection, boolean requireRepairedEvents) {
         // Whether one exists, not what is in it. Without the projection this pulls a whole stored event, payload and
         // all, into the startup path of an affected store. The Spring twins ask through exists() and never do.
         Document firstDamagedEvent = eventCollection.find(Filters.type(OccurrentCloudEventExtension.POSITION, BsonType.STRING))
@@ -932,7 +932,11 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         if (firstDamagedEvent == null) {
             return;
         }
-        log.warn(UpdateEventRepairValidator.damagedEventsMessage(eventCollection.getNamespace().getCollectionName()));
+        String collectionName = eventCollection.getNamespace().getCollectionName();
+        if (requireRepairedEvents) {
+            throw UpdateEventRepairValidator.damagedEventsExist(collectionName);
+        }
+        log.warn(UpdateEventRepairValidator.damagedEventsMessage(collectionName));
     }
 
     private static boolean collectionExists(MongoDatabase mongoDatabase, String collectionName) {

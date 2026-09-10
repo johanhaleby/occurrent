@@ -20,8 +20,8 @@ package org.occurrent.eventstore.api.internal;
 import org.jspecify.annotations.NullMarked;
 
 /**
- * Shared wording for the startup warning about events that Occurrent's own {@code updateEvent} damaged before
- * 0.34.0, so that all event stores say the same thing about it.
+ * Shared wording for the startup check for events that Occurrent's own {@code updateEvent} damaged before 0.34.0,
+ * so that all event stores say the same thing whether they warn about it or refuse to start.
  */
 @NullMarked
 public final class UpdateEventRepairValidator {
@@ -33,21 +33,37 @@ public final class UpdateEventRepairValidator {
 
     /**
      * The message to log at WARN when the event collection holds events with a string {@code position}, which is what
-     * the pre-0.34.0 {@code updateEvent} write-back left behind.
-     *
-     * <p>The store starts anyway and there is no setting to make it refuse to. Unlike an un-backfilled collection,
-     * this damage is finite and already done, so failing startup would take an application down over history that a
-     * one-off repair fixes, without protecting anything that is still being written.
+     * the pre-0.34.0 {@code updateEvent} write-back left behind, and {@code requireRepairedEvents(true)} is not set.
      *
      * @param eventStoreCollectionName the name of the event collection that contains damaged events
      * @return the message to log
      */
     public static String damagedEventsMessage(String eventStoreCollectionName) {
+        return problem(eventStoreCollectionName)
+                + " Run the repair described in " + RUNBOOK + ". Upgrading alone does not fix events that are already"
+                + " stored, and until the repair runs you can set requireRepairedEvents(true) to fail startup instead"
+                + " of warning.";
+    }
+
+    /**
+     * Create the {@link IllegalStateException} to throw when {@code requireRepairedEvents(true)} is set and the event
+     * collection holds events with a string {@code position}.
+     *
+     * @param eventStoreCollectionName the name of the event collection that contains damaged events
+     * @return the exception to throw
+     */
+    public static IllegalStateException damagedEventsExist(String eventStoreCollectionName) {
+        return new IllegalStateException(problem(eventStoreCollectionName)
+                + " This store is configured to require repaired events, so it will not start. Run the repair"
+                + " described in " + RUNBOOK + ", or turn off requireRepairedEvents to start with the damage still"
+                + " in place.");
+    }
+
+    private static String problem(String eventStoreCollectionName) {
         return "The event collection '" + eventStoreCollectionName + "' contains events that Occurrent's own"
                 + " updateEvent damaged in version 0.33.0 or earlier. Their position is stored as a string instead of"
                 + " a number, and events written by a DCB append also lost their tag index. DCB reads, position"
                 + " ordered reads and position based catch-up all skip such an event, and a conditional append can"
-                + " miss a conflict against it, with no error anywhere. Run the repair described in " + RUNBOOK + "."
-                + " Upgrading alone does not fix events that are already stored.";
+                + " miss a conflict against it, with no error anywhere.";
     }
 }

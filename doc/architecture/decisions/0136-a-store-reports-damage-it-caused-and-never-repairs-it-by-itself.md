@@ -95,15 +95,21 @@ the damage check nor the un-backfilled checks, so its warning about the resoluti
 sees. That message is the third one `PositionBackfillValidator` owns, and it carries the same caveat. Sharing the
 wording is also why the three stores no longer each hold their own copy of it.
 
-### 4. The warning cannot be escalated to a startup failure
+### 4. The warning defaults to a warning, and `requireRepairedEvents` turns it into a startup failure
 
-`requireBackfilledPosition` exists for the un-backfilled case and there is deliberately no equivalent here.
+`requireBackfilledPosition` exists for the un-backfilled case, and `requireRepairedEvents` is its counterpart here.
+Both are off by default, so an upgrade over damaged history still starts and says what is wrong.
 
-Un-backfilled history is an ongoing condition. A store keeps writing new positioned events alongside old
-un-positioned ones, and refusing to start protects an operator from running that way indefinitely. This damage is
-different. It is finite and already done, no new event can acquire it now that PR 901 has shipped, and a one-off
-repair ends it. Refusing to start would take an application down over history rather than protect anything still
-being written.
+The opt-in exists because the set of damaged events is finite while the harm coming out of it is not. No new event
+can acquire the damage now that PR 901 has shipped, so nothing is added to the set. A damaged event is missing from
+the conflict query behind a conditional append, though, so every conditional append made against it while it is
+still damaged is accepted when it should have been refused, and each one is a wrong outcome the repair does not
+undo. An operator who would rather have the application down than let that keep happening turns
+`requireRepairedEvents` on until the repair has run.
+
+The default stays a warning because that choice belongs to the operator. Refusing by default makes an upgrade to
+0.34.0 unbootable for exactly the people the defect already harmed, and a store whose damaged event sits in a stream
+nobody writes to loses nothing by starting and running the repair afterwards.
 
 ### 5. This is not the un-backfilled position check wearing a different hat
 
@@ -195,7 +201,9 @@ turning position on for a store that predates it. The two jobs share a collectio
 would mean one tool whose README has to explain two unrelated reasons to run it.
 
 **Fail startup by default when damage is found.** It makes an upgrade to 0.34.0 unbootable for exactly the people
-already harmed by the defect, and it protects nothing, since the damage cannot grow.
+already harmed by the defect. Refusing does protect something, since it stops further conditional appends being
+accepted against a damaged event, which is why `requireRepairedEvents` exists, but that is a call for the operator
+to make rather than a default this project imposes.
 
 **Repair with an aggregation pipeline using `$toLong` and `$split`.** It would run server-side in one command, but it
 reimplements the tag encoding in a second place, has to special-case the empty tag set to avoid producing an array
