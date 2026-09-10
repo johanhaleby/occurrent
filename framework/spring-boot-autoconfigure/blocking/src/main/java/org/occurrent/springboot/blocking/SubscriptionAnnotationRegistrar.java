@@ -211,8 +211,8 @@ class SubscriptionAnnotationRegistrar {
 
     // Every handler on the bean is claimed and checked before any of them subscribes, so a second handler that
     // cannot be registered means the first one never subscribes, rather than being live against a bean whose
-    // creation is about to fail. What stays outside this is a failure from subscribe itself, a store refusing for example,
-    // since undoing that one needs the subscription cancelled rather than never started.
+    // creation is about to fail. What stays outside this is a failure from subscribe itself, a store refusing for
+    // example, since undoing that one needs the subscription cancelled rather than never started.
     private void claimAndValidate(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, Predicate<Method> shouldRegister,
                                   Consumer<String> claimId, List<PendingRegistration> pending, Set<String> heldIds) {
         for (Method method : userClass.getDeclaredMethods()) {

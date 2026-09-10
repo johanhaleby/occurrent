@@ -25,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.mockito.ArgumentCaptor;
 import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.Source;
@@ -349,6 +350,17 @@ class LateBeanAnnotationRegistrationTest {
             verify(context.getBean(Subscriptions.class), never())
                     .subscribe(eq("reactive-first-of-two"), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
         });
+    }
+
+    // The scan repeats until a pass registers nothing, and a pass that cannot register a @Projection because no
+    // Subscribable bean exists still has to reach the step that builds the beans it scheduled. Skipping that step
+    // left the same bean scheduled on every pass and the loop never ended. The timeout is what makes a return of
+    // that fail here rather than hang the build.
+    @Test
+    @Timeout(30)
+    void a_projection_that_cannot_register_without_a_subscribable_does_not_loop_the_scan() {
+        runner.withUserConfiguration(NoSubscribableProjectionConfiguration.class).run(context ->
+                assertThat(context).hasNotFailed());
     }
 
     interface Marker {
@@ -964,6 +976,36 @@ class LateBeanAnnotationRegistrationTest {
         @Lazy
         Marker twoHandlerSubscriber() {
             return new TwoHandlerSubscriber();
+        }
+    }
+
+    interface NoSubscribableMarker {
+    }
+
+    static class NoSubscribableProjectionHolder implements NoSubscribableMarker {
+        @Projection(id = "reactive-no-subscribable-projection", source = Source.PUSH)
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    // No Subscribable bean, so the coordinator cannot register a @Projection at all, and the bean is declared
+    // behind an interface so its class is only predicted until something builds it.
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class NoSubscribableProjectionConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @Lazy
+        NoSubscribableMarker noSubscribableProjectionHolder() {
+            return new NoSubscribableProjectionHolder();
         }
     }
 

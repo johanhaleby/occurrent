@@ -82,6 +82,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     // scan handles every bean it builds itself, which is what keeps this from collecting every bean in the context.
     private final Queue<String> builtWhileScanning = new ConcurrentLinkedQueue<>();
     private volatile Thread scanningThread;
+    // Bean names this scan has built so a later pass can read their real class, so a build after which the class
+    // is still unknown is not attempted for ever.
+    private final Set<String> alreadyBuiltToBeScanned = new HashSet<>();
     private volatile boolean startupScanComplete;
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
     private ProjectionAnnotationRegistrar projectionRegistrar;
@@ -111,7 +114,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     @Override
     public Object postProcessBeforeInitialization(@NonNull Object bean, @NonNull String beanName) throws BeansException {
         if (!(bean instanceof FactoryBean<?>)) {
-            userClassByBeanName.putIfAbsent(beanName, userClassOf(bean));
+            // put rather than putIfAbsent, because a creation that failed is retried and the retry can produce a
+            // different class than the attempt that failed. The recording has to describe the instance the
+            // container is building now, not the first one it tried.
+            userClassByBeanName.put(beanName, userClassOf(bean));
         }
         return bean;
     }
@@ -141,8 +147,18 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         if (bean instanceof FactoryBean<?>) {
             return bean;
         }
-        userClassByBeanName.putIfAbsent(beanName, userClassOf(bean));
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
+        // Only a FactoryBean's product is recorded here. Every other bean was recorded by the callback above, from
+        // the instance before any proxy wrapped it, and overwriting that with what arrives here would record a
+        // proxy class for a proxy ultimateTarget cannot unwrap. A product is what reaches this
+        // callback without reaching that one, since the container passes the factory itself under this name there.
+        //
+        // containsBeanDefinition first, because not everything that reaches this callback is a bean. Spring's test
+        // support initializes a test instance through it under a name it never defined, and isFactoryBean throws
+        // NoSuchBeanDefinitionException for a name with no definition behind it.
+        if (beanFactory.containsBeanDefinition(beanName) && beanFactory.isFactoryBean(beanName)) {
+            userClassByBeanName.put(beanName, userClassOf(bean));
+        }
         Thread scanning = scanningThread;
         if (!startupScanComplete && scanning != null && scanning != Thread.currentThread()) {
             builtWhileScanning.add(beanName);
@@ -232,6 +248,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // Iteration order of getBeanDefinitionNames() is deterministic, so a LinkedHashSet keeps registration order
         // reproducible across runs.
         Set<String> subscriptionBeanNames = new LinkedHashSet<>();
+        // Beans whose class is only predicted and whose prediction shows an annotation. Built at the end of this
+        // pass so the next one can read their real class.
+        Set<String> beansToBuild = new LinkedHashSet<>();
         for (String beanName : beanNames) {
             Class<?> type;
             try {
@@ -240,6 +259,16 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                 continue;
             }
             if (type == null) {
+                continue;
+            }
+            // A predicted type is what the bean definition says, not what the container will build, so an
+            // annotation read from it may be one the concrete class overrides with different settings. Nothing is
+            // registered from it. Building the bean is what makes its class knowable, so a bean whose prediction
+            // shows any annotation at all is built by this pass and collected by the next one, from its own class.
+            if (!isConcreteScanType(beanName)) {
+                if (declaresAnyOccurrentAnnotation(type) && !alreadyBuiltToBeScanned.contains(beanName)) {
+                    beansToBuild.add(beanName);
+                }
                 continue;
             }
             for (Method method : type.getDeclaredMethods()) {
@@ -272,7 +301,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
         }
         boolean registeredAnything = !subscriptionBeanNames.isEmpty() || !projectionMethods.isEmpty()
-                || !snapshotMethods.isEmpty() || !sagaMethods.isEmpty();
+                || !snapshotMethods.isEmpty() || !sagaMethods.isEmpty() || !beansToBuild.isEmpty();
         // Only a handler the loop above collected registers, which is what keeps every id going through
         // claimSubscriptionId. The register step reads the bean's class again, and by then the bean exists, so that
         // class can declare a handler the collecting pass never saw. Registering it here would take its id without
@@ -305,7 +334,37 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             registerDescriptor(((org.occurrent.annotation.Saga) gm[2]).id(), () -> sagaRegistrar.processSagaAnnotation(beanResolver.apply((String) gm[0]), (Method) gm[1], (org.occurrent.annotation.Saga) gm[2]));
             markRegistered((String) gm[0], (Method) gm[1]);
         }
+        for (String beanName : beansToBuild) {
+            alreadyBuiltToBeScanned.add(beanName);
+            beanResolver.apply(beanName);
+        }
         return registeredAnything;
+    }
+
+    // Concrete when the container has handed the object over and its class was recorded, and when the bean is
+    // already a singleton whose own class resolveScanType reads directly. Everything else is the bean definition's
+    // prediction, which cannot be registered from.
+    private boolean isConcreteScanType(String beanName) {
+        if (userClassByBeanName.containsKey(beanName)) {
+            return true;
+        }
+        ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
+        return beanFactory.containsSingleton(beanName) && !beanFactory.isFactoryBean(beanName);
+    }
+
+    private static boolean declaresAnyOccurrentAnnotation(Class<?> type) {
+        for (Method method : type.getDeclaredMethods()) {
+            if (AnnotationUtils.findAnnotation(method, StreamSubscription.class) != null
+                    || AnnotationUtils.findAnnotation(method, Subscription.class) != null
+                    || AnnotationUtils.findAnnotation(method, DcbSubscription.class) != null
+                    || AnnotationUtils.findAnnotation(method, SynchronousSubscription.class) != null
+                    || AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class) != null
+                    || AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Snapshot.class) != null
+                    || AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Saga.class) != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
 
