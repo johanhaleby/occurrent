@@ -90,9 +90,9 @@ acts on the first remedy a log line names must not be acting on the one that can
 
 Ordering does not help a store that never reaches the ordered checks. A store where stream position is only on by default resolves
 that setting before it initializes, and turns position off when the oldest event in the collection has no `position`.
-One event whose position `updateEvent` dropped is enough to trigger it, and with position off the store runs neither
-the damage check nor the un-backfilled checks, so its warning about the resolution is the only line the operator
-sees. That message is the third one `PositionBackfillValidator` owns, and it carries the same caveat. Sharing the
+One event whose position `updateEvent` dropped is enough to trigger it, and with position off the store runs the
+un-backfilled checks not at all and the damage check only when `requireRepairedEvents` asks for it, so by default
+its warning about the resolution is the only line the operator sees. That message is the third one `PositionBackfillValidator` owns, and it carries the same caveat. Sharing the
 wording is also why the three stores no longer each hold their own copy of it.
 
 ### 4. The warning defaults to a warning, and `requireRepairedEvents` turns it into a startup failure
@@ -110,6 +110,14 @@ undo. An operator who would rather have the application down than let that keep 
 The default stays a warning because that choice belongs to the operator. Refusing by default makes an upgrade to
 0.34.0 unbootable for exactly the people the defect already harmed, and a store whose damaged event sits in a stream
 nobody writes to loses nothing by starting and running the repair afterwards.
+
+`requireRepairedEvents` runs the damage check whether or not the store writes position, which is the one place it
+does not simply mirror `requireBackfilledPosition`. A store writes no position in exactly two cases, an explicit
+`withoutStreamPosition()` and the resolver above turning position off over unpositioned history, and the second is
+the store that otherwise hears nothing at all. Refusing to check there would leave the setting silent on the store
+that needs it most. The check reads no index keys where the position index exists, so on a store that writes no
+position it can cost a collection scan at startup, which is a price only an operator who asked for the refusal
+pays.
 
 ### 5. This is not the un-backfilled position check wearing a different hat
 

@@ -313,6 +313,12 @@ public class EventStoreConfig {
          * instead. Off by default. Turn it on to keep the application down until the repair described in
          * {@code doc/runbooks/update-event-repair.md} has run.
          *
+         * <p>This applies whether or not the store writes position, since the two ways a store ends up writing none
+         * are {@code withoutStreamPosition()} and position being turned off at startup over unpositioned history,
+         * and neither means the damage stopped mattering. The check reads no index keys where the position index
+         * exists, which is where the store writes position, so on a store that writes none it can cost a collection
+         * scan at startup.
+         *
          * @return The same {@code Builder} instance.
          */
         public Builder requireRepairedEvents(boolean requireRepairedEvents) {

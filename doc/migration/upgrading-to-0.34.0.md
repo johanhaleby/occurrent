@@ -853,7 +853,8 @@ a warning naming the repair when it finds something, so an affected store tells 
 
 If you would rather that store refused to start than kept accepting conditional appends against a damaged event
 until the repair has run, set `EventStoreConfig.Builder.requireRepairedEvents(true)`. It is off by default on all
-three MongoDB stores, so upgrading on its own changes nothing here.
+three MongoDB stores, so upgrading on its own changes nothing here. It also covers the third message below, the
+store that turns position off and would otherwise run no damage check at all.
 
 An event whose position was dropped rather than turned into a string has no `position` field at all. Your store
 already warns about events without a position, but that warning names the position backfill, which is the wrong

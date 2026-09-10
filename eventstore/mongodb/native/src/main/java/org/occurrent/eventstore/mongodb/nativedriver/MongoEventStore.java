@@ -147,11 +147,16 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
         this.streamPositionEnabled = resolveStreamPositionEnabled(config, eventCollection);
         this.requireBackfilledPosition = config.requireBackfilledPosition;
         initializeEventStore(eventCollection, database, eventStoreCapabilities, writesPosition(), dcbPositionCollection.getNamespace().getCollectionName(), dcbCheckpointCollection.getNamespace().getCollectionName());
-        if (writesPosition()) {
-            // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
-            // position updateEvent dropped has no position field either, so that check would fail startup
-            // naming the position backfill, and backfilling such an event assigns a wrong position for good.
+        // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
+        // position updateEvent dropped has no position field either, so that check would fail startup
+        // naming the position backfill, and backfilling such an event assigns a wrong position for good.
+        // requireRepairedEvents runs the damage check on a store that writes no position too, since the two ways
+        // that happens are withoutStreamPosition() and the resolver turning position off over unpositioned
+        // history, and an operator who asked to be refused meant both.
+        if (writesPosition() || config.requireRepairedEvents) {
             warnOrFailOnEventsDamagedByUpdateEvent(eventCollection, config.requireRepairedEvents);
+        }
+        if (writesPosition()) {
             warnOrFailOnUnpositionedEvents(eventCollection, requireBackfilledPosition);
         }
     }

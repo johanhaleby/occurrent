@@ -139,12 +139,16 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
         this.dcbStreamIdGenerator = config.dcbStreamIdGenerator;
         this.streamPositionEnabled = resolveStreamPositionEnabled(config, eventStoreCollectionName, mongoTemplate);
         initializeEventStore(eventStoreCollectionName, dcbPositionCollectionName, dcbCheckpointCollectionName, eventStoreCapabilities, streamPositionEnabled, mongoTemplate);
-        if (writesPosition()) {
-
-            // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
-            // position updateEvent dropped has no position field either, so that check would fail startup
-            // naming the position backfill, and backfilling such an event assigns a wrong position for good.
+        // Before the unpositioned check, which throws when requireBackfilledPosition is set. An event whose
+        // position updateEvent dropped has no position field either, so that check would fail startup
+        // naming the position backfill, and backfilling such an event assigns a wrong position for good.
+        // requireRepairedEvents runs the damage check on a store that writes no position too, since the two ways
+        // that happens are withoutStreamPosition() and the resolver turning position off over unpositioned
+        // history, and an operator who asked to be refused meant both.
+        if (writesPosition() || config.requireRepairedEvents) {
             warnOrFailOnEventsDamagedByUpdateEvent(eventStoreCollectionName, mongoTemplate, config.requireRepairedEvents);
+        }
+        if (writesPosition()) {
             checkForUnpositionedEvents(eventStoreCollectionName, mongoTemplate, config.requireBackfilledPosition);
         }
     }

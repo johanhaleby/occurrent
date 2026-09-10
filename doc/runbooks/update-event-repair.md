@@ -63,7 +63,9 @@ rules out a damaged position rather than every kind of damage. Run the second qu
 
 Set `EventStoreConfig.Builder.requireRepairedEvents(true)` if you would rather the store refused to start than kept
 accepting conditional appends against a damaged event until you have run the repair. It is off by default, and it
-covers the same first query, so it says nothing about the damage that query cannot see.
+runs the same first query, so it says nothing about the damage that query cannot see. It applies whether or not the
+store writes position, so a store that turned position off over unpositioned history is refused too, at the cost of
+a collection scan at startup because such a store has no position index for the query to read.
 
 ### 2. [tool] Take a report
 

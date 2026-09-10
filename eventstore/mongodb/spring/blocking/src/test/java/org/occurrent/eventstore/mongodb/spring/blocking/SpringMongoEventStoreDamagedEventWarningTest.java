@@ -165,6 +165,39 @@ class SpringMongoEventStoreDamagedEventWarningTest {
                 .isThrownBy(this::newStoreRequiringRepairedEvents);
     }
 
+    @Test
+    void a_store_told_to_require_repaired_events_refuses_even_when_it_writes_no_position() {
+        newEventStore().write("stream:1", List.of(event("Defined")));
+        makePositionAString();
+
+        assertThatThrownBy(() -> newEventStore(builder -> builder.withoutStreamPosition().requireRepairedEvents(true)))
+                .as("withoutStreamPosition() skips the damage check, so a store that writes no position would start on damage the operator asked to be refused over")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+    }
+
+    @Test
+    void a_store_whose_position_is_turned_off_over_unpositioned_history_still_refuses_when_it_was_told_to() {
+        newEventStore().write("stream:1", List.of(event("Defined"), event("Renamed")));
+        makeTheNewestEventsPositionAString();
+        // The resolver reads the oldest event only, and turns position off when that one has no position. That is
+        // the store ADR 136 says reaches neither ordered check, so it is the one an operator hears nothing from.
+        dropThePosition();
+
+        assertThatThrownBy(() -> newEventStore(builder -> builder.requireRepairedEvents(true)))
+                .as("this is the store that turns position off at startup, so without the damage check it is the one that says nothing at all")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("updateEvent damaged");
+    }
+
+    private void makeTheNewestEventsPositionAString() {
+        MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
+        Document newest = requireNonNull(events.find().sort(new Document("_id", -1)).first());
+        long position = requireNonNull(newest.getLong(OccurrentCloudEventExtension.POSITION));
+        events.updateOne(new Document("_id", newest.get("_id")),
+                new Document("$set", new Document(OccurrentCloudEventExtension.POSITION, String.valueOf(position))));
+    }
+
     private SpringMongoEventStore newStoreRequiringRepairedEvents() {
         return newEventStore(builder -> builder.withStreamPosition().requireRepairedEvents(true));
     }
@@ -197,8 +230,8 @@ class SpringMongoEventStoreDamagedEventWarningTest {
     // event whose position updateEvent dropped is enough to put an otherwise healthy store on that path.
     private void dropThePosition() {
         MongoCollection<Document> events = mongoClient.getDatabase(databaseName).getCollection(EVENT_COLLECTION);
-        Document stored = requireNonNull(events.find().first());
-        events.updateOne(new Document("_id", stored.get("_id")),
+        Document oldest = requireNonNull(events.find().sort(new Document("_id", 1)).first());
+        events.updateOne(new Document("_id", oldest.get("_id")),
                 new Document("$unset", new Document(OccurrentCloudEventExtension.POSITION, "")));
     }
 
