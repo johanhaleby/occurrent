@@ -295,9 +295,10 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > Registering from `postProcessAfterInitialization` does meet the creation window, and the same
 > `startupMode = WAIT_UNTIL_STARTED` replay is what it meets. A late `@Subscription`, `@StreamSubscription`,
 > `@DcbSubscription` or `@SynchronousSubscription` therefore never waits for its replay, whatever `startupMode`
-> says, so the replay runs after the callback has returned and every delivery resolves the published singleton with
-> all of its advice. A late `@Projection`, `@Snapshot` or `@Saga` still reads `startupMode` itself and can wait
-> inside the callback, so this decision covers the four handler annotations rather than all seven. Waiting there
+> says, so creation finishes alongside the replay rather than behind it, and every delivery after publication
+> resolves the published singleton with all of its advice. A late `@Projection`, `@Snapshot` or `@Saga` still reads
+> `startupMode` itself and can wait inside the callback, so this decision covers the four handler annotations rather
+> than all seven. Waiting there
 > would have run the whole history against an object the context had not published, which is the loss the amendment
 > above exists to close, reappearing one phase later. Ignoring `startupMode` for these is also what the setting
 > means, since it asks for the replay to finish before the application is up and the application is already up by

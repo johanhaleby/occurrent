@@ -172,10 +172,11 @@ class SubscriptionAnnotationRegistrar {
     // still runs for every method, since a misconfigured handler must fail whether or not it registers.
     // mayBlockForReplay is false for a bean the container is still building. Waiting there would run the whole
     // history replay inside that bean's creation callback, delivering to a handler on an object the context has not
-    // published yet, so advice a later BeanPostProcessor adds is not on it. Not waiting lets the replay run
-    // once creation has finished, where every delivery resolves the published bean. It also matches what
-    // WAIT_UNTIL_STARTED means, which is finishing before the application is up, and the application is already up
-    // by the time a lazily built bean is asked for.
+    // published yet, so advice a later BeanPostProcessor adds is not on it. Not waiting lets creation finish
+    // alongside the replay rather than behind it, and every delivery after publication resolves the published bean.
+    // A replay on its own thread can still deliver before creation finishes, which is the race the coordinator and
+    // ADR 127 both describe. It also matches what WAIT_UNTIL_STARTED means, which is finishing before the
+    // application is up, and the application is already up by the time a lazily built bean is asked for.
     void registerSubscriptions(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
                                Predicate<Method> reserveHandler, Consumer<String> claimId,
                                Consumer<Method> releaseHandler, Consumer<String> releaseId) {
