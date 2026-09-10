@@ -37,8 +37,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>
  * This does not demonstrate any of that. The interleaving cannot be staged from a test, because parking a thread
  * inside a bean factory serialises other singleton creation at the Spring level, so the two threads the hazard
- * needs never overlap. What this catches is the realistic way the property regresses, which is somebody
- * simplifying one of these back to an {@code ArrayList} or a {@code HashSet} while tidying.
+ * needs never overlap.
+ * <p>
+ * It does not catch the drain style either, and that is worth saying because the drain style is what actually
+ * went wrong. One of these collections shipped with the right type and a drain that still iterated and then
+ * cleared, and this passed it. The reason each drain says so at the loop itself is that a sentence where the
+ * cursor already is beats an assertion in another file. What is left here is somebody putting an
+ * {@code ArrayList} or a {@code HashSet} back, which is a real regression and a smaller one.
  */
 @DisplayNameGeneration(ReplaceUnderscores.class)
 class LateRegistrationConcurrencyContractTest {

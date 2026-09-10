@@ -239,6 +239,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     private void drainBeansBuiltWhileScanning() {
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
         String beanName;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
         while ((beanName = builtWhileScanning.poll()) != null) {
             if (beanFactory.containsBeanDefinition(beanName) && !beanFactory.isCurrentlyInCreation(beanName)) {
                 scan(new String[]{beanName}, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, false);

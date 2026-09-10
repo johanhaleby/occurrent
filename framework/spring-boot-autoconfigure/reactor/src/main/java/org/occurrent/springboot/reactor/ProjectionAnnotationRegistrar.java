@@ -140,10 +140,12 @@ class ProjectionAnnotationRegistrar {
     void close() {
         closing = true;
         CatchupThenPushSubscriptionModel pushModel;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
         while ((pushModel = pushModels.poll()) != null) {
             pushModel.shutdown();
         }
         DomainEventFeed<?> backgroundFeed;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
         while ((backgroundFeed = backgroundFeeds.poll()) != null) {
             backgroundFeed.stopCatchUp();
         }
@@ -294,6 +296,7 @@ class ProjectionAnnotationRegistrar {
     // Catch up each domain-push feed once, after every projection is registered.
     void catchUpCollectedFeeds() {
         DomainFeedCatchUp polled;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
         while ((polled = domainFeedsToCatchUp.poll()) != null) {
             DomainFeedCatchUp pending = polled;
             if (pending.waitUntilStarted()) {

@@ -461,12 +461,14 @@ class SagaAnnotationRegistrar {
         // shutting one down waits for a replay still in flight, and a timer that fires during that wait dispatches a
         // command into a context that is already going down.
         SagaSubscription sagaSubscription;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
         while ((sagaSubscription = sagaSubscriptions.poll()) != null) {
             sagaSubscription.close();
         }
         // Then the catch-up replays, which the timer pollers are not: a replay runs on a thread of its own and only the
         // model that owns it can stop it.
         CatchupThenPushSubscriptionModel pushModel;
+        // Poll until empty, never iterate then clear, since an entry added between those two is dropped.
         while ((pushModel = pushModels.poll()) != null) {
             pushModel.shutdown();
         }
