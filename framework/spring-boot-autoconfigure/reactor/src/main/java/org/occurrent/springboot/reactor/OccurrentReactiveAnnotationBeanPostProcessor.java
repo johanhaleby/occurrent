@@ -188,7 +188,11 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // sees the flag set. Registering it twice is not possible, since both go through the same handler keys.
         if (startupScanComplete && beanFactory.containsBeanDefinition(beanName)) {
             boolean singleton = beanFactory.isSingleton(beanName);
-            scan(new String[]{beanName}, name -> bean,
+            // The class of the instance this callback received, never a second lookup by name. Two threads
+            // building the same prototype share the recorded entry, so a lookup here can answer with the other
+            // one's class and this bean would be scanned for methods its own class does not declare.
+            Class<?> userClass = userClassOf(bean);
+            scan(new String[]{beanName}, name -> userClass, name -> bean,
                     (name, resolved) -> () -> singleton && !beanFactory.isCurrentlyInCreation(name) ? applicationContext.getBean(name) : resolved, false);
         }
         return bean;
@@ -219,7 +223,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         synchronized (registrationLock) {
             scanningThread = Thread.currentThread();
             String[] beanNames = applicationContext.getBeanDefinitionNames();
-            while (scan(beanNames, applicationContext::getBean, (name, resolved) -> () -> resolved, true)) {
+            while (scan(beanNames, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, true)) {
                 beanNames = applicationContext.getBeanDefinitionNames();
             }
             startupScanComplete = true;
@@ -237,7 +241,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         String beanName;
         while ((beanName = builtWhileScanning.poll()) != null) {
             if (beanFactory.containsBeanDefinition(beanName) && !beanFactory.isCurrentlyInCreation(beanName)) {
-                scan(new String[]{beanName}, applicationContext::getBean, (name, resolved) -> () -> resolved, false);
+                scan(new String[]{beanName}, this::resolveScanType, applicationContext::getBean, (name, resolved) -> () -> resolved, false);
             }
         }
     }
@@ -246,7 +250,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // against. handlerTargets turns that object into the one a handler is invoked on, per delivery. They differ
     // only for a bean created after the startup scan, where the object is in hand but its name cannot be resolved
     // until creation finishes. Answers whether anything registered, which is what the loop above repeats on.
-    private boolean scan(String[] beanNames, Function<String, Object> beanResolver, BiFunction<String, Object, Supplier<Object>> handlerTargets, boolean mayBlockForReplay) {
+    private boolean scan(String[] beanNames, Function<String, Class<?>> typeResolver, Function<String, Object> beanResolver, BiFunction<String, Object, Supplier<Object>> handlerTargets, boolean mayBlockForReplay) {
         // A presence check, not a resolution: getBeanProvider(...).getIfAvailable() throws NoUniqueBeanDefinitionException
         // the moment two Subscribable beans exist (an application's own asynchronous model plus the register-only
         // SynchronousSubscriptionModel this starter always contributes), which starts failing every context the
@@ -272,7 +276,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         for (String beanName : beanNames) {
             Class<?> type;
             try {
-                type = resolveScanType(beanName);
+                type = typeResolver.apply(beanName);
             } catch (RuntimeException e) {
                 continue;
             }
@@ -321,22 +325,29 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // a handler that never registered, which is the loss this whole class exists to close.
         for (String beanName : subscriptionBeanNames) {
             Object bean = beanResolver.apply(beanName);
-            subscriptionRegistrar.registerSubscriptions(bean, resolveScanType(beanName), handlerTargets.apply(beanName, bean), mayBlockForReplay,
-                    method -> !isAlreadyRegistered(beanName, method),
-                    this::claimSubscriptionId, registeredIds::remove,
-                    method -> markRegistered(beanName, method));
+            subscriptionRegistrar.registerSubscriptions(bean, typeResolver.apply(beanName), handlerTargets.apply(beanName, bean), mayBlockForReplay,
+                    method -> markRegistered(beanName, method),
+                    this::claimSubscriptionId,
+                    (method, id) -> {
+                        registeredIds.remove(id);
+                        registeredHandlers.remove(handlerKey(beanName, method));
+                    });
         }
         // No early return here. The build step at the end of this method is what lets the loop above finish, so a
         // pass that skips registering must still reach it.
         for (Object[] pm : projectionMethods) {
-            registerDescriptor(((org.occurrent.annotation.Projection) pm[2]).id(), () -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]));
-            markRegistered((String) pm[0], (Method) pm[1]);
+            if (markRegistered((String) pm[0], (Method) pm[1])) {
+                registerDescriptor((String) pm[0], (Method) pm[1], ((org.occurrent.annotation.Projection) pm[2]).id(),
+                        () -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]));
+            }
         }
         // Catch up each domain-push feed once, after all its projections are registered.
         projectionRegistrar.catchUpCollectedFeeds();
         for (Object[] sm : snapshotMethods) {
-            registerDescriptor(((org.occurrent.annotation.Snapshot) sm[2]).id(), () -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply((String) sm[0]), (Method) sm[1], (org.occurrent.annotation.Snapshot) sm[2]));
-            markRegistered((String) sm[0], (Method) sm[1]);
+            if (markRegistered((String) sm[0], (Method) sm[1])) {
+                registerDescriptor((String) sm[0], (Method) sm[1], ((org.occurrent.annotation.Snapshot) sm[2]).id(),
+                        () -> snapshotRegistrar.processSnapshotAnnotation(beanResolver.apply((String) sm[0]), (Method) sm[1], (org.occurrent.annotation.Snapshot) sm[2]));
+            }
         }
         for (String beanName : beansToBuild) {
             alreadyBuiltToBeScanned.add(beanName);
@@ -381,13 +392,15 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // bean's next creation attempt would be refused as a duplicate of itself. The claim is released here instead.
     // A DuplicateSubscriptionIdException is the one failure that must not release, because the id it names belongs
     // to whoever claimed it first and releasing would hand it away.
-    private void registerDescriptor(String id, Runnable registration) {
+    private void registerDescriptor(String beanName, Method method, String id, Runnable registration) {
         try {
             registration.run();
         } catch (DuplicateSubscriptionIdException e) {
+            registeredHandlers.remove(handlerKey(beanName, method));
             throw e;
         } catch (RuntimeException | Error e) {
             registeredIds.remove(id);
+            registeredHandlers.remove(handlerKey(beanName, method));
             throw e;
         }
     }

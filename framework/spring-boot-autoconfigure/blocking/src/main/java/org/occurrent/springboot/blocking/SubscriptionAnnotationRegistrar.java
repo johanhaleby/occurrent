@@ -46,6 +46,7 @@ import java.util.Set;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BiConsumer;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -177,16 +178,16 @@ class SubscriptionAnnotationRegistrar {
     // WAIT_UNTIL_STARTED means, which is finishing before the application is up, and the application is already up
     // by the time a lazily built bean is asked for.
     void registerSubscriptions(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
-                               Predicate<Method> shouldRegister, Consumer<String> claimId, Consumer<String> releaseId,
-                               Consumer<Method> onRegistered) {
+                               Predicate<Method> reserveHandler, Consumer<String> claimId, BiConsumer<Method, String> release) {
+        // Everything this call has reserved and not yet registered, so a failure releases exactly what it took and
+        // nothing another registration holds. The handler reservation goes with the id, because reserving a
+        // handler is what decides that this call and not another one registers it.
+        List<PendingRegistration> held = new ArrayList<>();
         List<PendingRegistration> pending = new ArrayList<>();
-        // Every id this call has taken and not yet registered, so a failure releases exactly what it took and
-        // nothing another registration holds.
-        Set<String> heldIds = new LinkedHashSet<>();
         try {
-            claimAndValidate(bean, userClass, handlerTarget, shouldRegister, claimId, pending, heldIds);
+            claimAndValidate(bean, userClass, handlerTarget, reserveHandler, claimId, pending, held);
         } catch (RuntimeException | Error e) {
-            heldIds.forEach(releaseId);
+            held.forEach(h -> release.accept(h.method(), h.id()));
             throw e;
         }
         for (PendingRegistration handler : pending) {
@@ -201,11 +202,10 @@ class SubscriptionAnnotationRegistrar {
                     processSynchronousSubscribeAnnotation(bean, handler.method(), handlerTarget, mayBlockForReplay, handler.synchronousSubscription());
                 }
             } catch (RuntimeException | Error e) {
-                heldIds.forEach(releaseId);
+                held.forEach(h -> release.accept(h.method(), h.id()));
                 throw e;
             }
-            heldIds.remove(handler.id());
-            onRegistered.accept(handler.method());
+            held.remove(handler);
         }
     }
 
@@ -213,8 +213,8 @@ class SubscriptionAnnotationRegistrar {
     // cannot be registered means the first one never subscribes, rather than being live against a bean whose
     // creation is about to fail. What stays outside this is a failure from subscribe itself, a store refusing for
     // example, since undoing that one needs the subscription cancelled rather than never started.
-    private void claimAndValidate(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, Predicate<Method> shouldRegister,
-                                  Consumer<String> claimId, List<PendingRegistration> pending, Set<String> heldIds) {
+    private void claimAndValidate(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, Predicate<Method> reserveHandler,
+                                  Consumer<String> claimId, List<PendingRegistration> pending, List<PendingRegistration> held) {
         for (Method method : userClass.getDeclaredMethods()) {
             StreamSubscription streamSubscription = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
             Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
@@ -224,7 +224,10 @@ class SubscriptionAnnotationRegistrar {
             if (annotationCount > 1) {
                 throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @Subscription, @StreamSubscription, @DcbSubscription and @SynchronousSubscription, use only one.".formatted(userClass.getName(), method.getName()));
             }
-            if (annotationCount == 0 || !shouldRegister.test(method)) {
+            // Reserving is a single atomic add rather than a check followed by an add, so two threads building
+            // the same prototype cannot both find the handler free. The one that loses the reservation skips it
+            // instead of going on to the id claim and failing its bean's creation as a duplicate.
+            if (annotationCount == 0 || !reserveHandler.test(method)) {
                 continue;
             }
             // The id comes from the annotation this loop actually read, never from one a caller resolved earlier
@@ -234,10 +237,11 @@ class SubscriptionAnnotationRegistrar {
                     : subscription != null ? subscription.id()
                     : dcbSubscription != null ? dcbSubscription.id()
                     : synchronousSubscription.id();
+            PendingRegistration reserved = new PendingRegistration(method, id, streamSubscription, subscription, dcbSubscription, synchronousSubscription);
+            held.add(reserved);
             claimId.accept(id);
-            heldIds.add(id);
             resolveHandlerInvocation(bean, handlerTarget, method);
-            pending.add(new PendingRegistration(method, id, streamSubscription, subscription, dcbSubscription, synchronousSubscription));
+            pending.add(reserved);
         }
     }
 

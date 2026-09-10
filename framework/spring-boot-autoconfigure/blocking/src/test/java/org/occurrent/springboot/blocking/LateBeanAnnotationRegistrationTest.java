@@ -71,6 +71,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -166,6 +167,20 @@ class LateBeanAnnotationRegistrationTest {
             Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
             verify(subscriptions).subscribe(eq("declared-on-the-interface"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
             verify(subscriptions).subscribe(eq("declared-on-the-class"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+        });
+    }
+
+    // Reserving a handler is one atomic add rather than a check followed by an add. A second instance that finds
+    // the handler free would go on to claim the id, which the first instance already holds, and fail its own
+    // bean's creation as a duplicate of itself. Sequential requests hand back both instances and register once, so
+    // asking again must not turn into a failure.
+    @Test
+    void asking_for_a_second_prototype_instance_does_not_fail_as_a_duplicate() {
+        runner.withUserConfiguration(PrototypeConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            context.getBean("hiddenPrototypeSubscriber");
+
+            assertThatCode(() -> context.getBean("hiddenPrototypeSubscriber")).doesNotThrowAnyException();
         });
     }
 

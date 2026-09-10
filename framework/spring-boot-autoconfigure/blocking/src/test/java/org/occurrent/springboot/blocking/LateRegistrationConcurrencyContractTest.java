@@ -58,7 +58,9 @@ class LateRegistrationConcurrencyContractTest {
     void every_collection_a_late_registration_appends_to_is_a_queue_rather_than_a_list() throws Exception {
         assertQueue(ProjectionAnnotationRegistrar.class, "domainFeedsToCatchUp");
         assertQueue(ProjectionAnnotationRegistrar.class, "pushModels");
+        assertQueue(ProjectionAnnotationRegistrar.class, "backgroundCatchUps");
         assertQueue(SagaAnnotationRegistrar.class, "pushModels");
+        assertQueue(SagaAnnotationRegistrar.class, "sagaSubscriptions");
     }
 
     // A Queue rather than any Collection, because ArrayList is a Collection and a List but never a Queue, so this

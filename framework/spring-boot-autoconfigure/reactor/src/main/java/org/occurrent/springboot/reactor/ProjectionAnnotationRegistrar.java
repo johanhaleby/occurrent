@@ -147,8 +147,15 @@ class ProjectionAnnotationRegistrar {
         while ((backgroundFeed = backgroundFeeds.poll()) != null) {
             backgroundFeed.stopCatchUp();
         }
+        // Drained by polling, so an entry added while this runs is either taken here or left in the queue, never
+        // cleared without being waited for.
+        List<Mono<Void>> draining = new ArrayList<>();
+        Mono<Void> polled;
+        while ((polled = backgroundCatchUps.poll()) != null) {
+            draining.add(polled);
+        }
         long deadline = System.nanoTime() + SHUTDOWN_CATCHUP_TIMEOUT.toNanos();
-        for (Mono<Void> catchUp : backgroundCatchUps) {
+        for (Mono<Void> catchUp : draining) {
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) {
                 break;
@@ -159,7 +166,6 @@ class ProjectionAnnotationRegistrar {
                 // Already logged and recorded where it happened, and a shutdown has nowhere useful to put a timeout.
             }
         }
-        backgroundCatchUps.clear();
         // dispose() alone only stops the scheduler from accepting new work. A tick already blocked in
         // AppliedAppendStore.clear() can otherwise still be running once close() returns, against a store the
         // context is tearing down. disposeGracefully() is awaited outside recordingLock instead, capped at the

@@ -116,7 +116,7 @@ class ProjectionAnnotationRegistrar {
     // Catch-ups this registrar started on a thread of its own, plus how to stop each one. Concurrent because under
     // occurrent.subscription.mode = manual these are added from whichever thread calls ManualStartPushSources.start,
     // which can run long after refresh and alongside close().
-    private final List<BackgroundCatchUp> backgroundCatchUps = new CopyOnWriteArrayList<>();
+    private final Queue<BackgroundCatchUp> backgroundCatchUps = new ConcurrentLinkedQueue<>();
     // Set by close(). A background catch-up checks it before starting, because stopping a feed only takes effect once
     // the replay is running: a stop that lands before the thread gets scheduled would otherwise be cleared by the
     // catch-up itself and the whole history would replay into a closing store.
@@ -184,9 +184,17 @@ class ProjectionAnnotationRegistrar {
         while ((pushModel = pushModels.poll()) != null) {
             pushModel.shutdown();
         }
-        backgroundCatchUps.forEach(background -> background.stop().run());
+        // Drained by polling before anything is stopped, so an entry added while this runs is either taken here or
+        // left in the queue, never cleared without being stopped and waited for. Everything is stopped before
+        // anything is waited for, which is why they come out into a list first rather than one at a time.
+        List<BackgroundCatchUp> draining = new ArrayList<>();
+        BackgroundCatchUp polled;
+        while ((polled = backgroundCatchUps.poll()) != null) {
+            draining.add(polled);
+        }
+        draining.forEach(background -> background.stop().run());
         long deadline = System.nanoTime() + SHUTDOWN_CATCHUP_TIMEOUT.toNanos();
-        for (BackgroundCatchUp background : backgroundCatchUps) {
+        for (BackgroundCatchUp background : draining) {
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) {
                 break;
@@ -201,7 +209,6 @@ class ProjectionAnnotationRegistrar {
                 // put either that or a timeout. Keep unwinding the rest.
             }
         }
-        backgroundCatchUps.clear();
     }
 
     // Catch up each domain-push feed once, after every projection is registered.
