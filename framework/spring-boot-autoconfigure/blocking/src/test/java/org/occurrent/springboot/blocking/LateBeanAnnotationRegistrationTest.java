@@ -537,6 +537,18 @@ class LateBeanAnnotationRegistrationTest {
         });
     }
 
+    // The two families share the key a handler registers under, so without this the subscription registers first
+    // and the projection is dropped in silence. It used to be the second registrar refusing the return type.
+    @Test
+    void a_method_with_both_a_subscription_and_a_descriptor_annotation_is_refused_rather_than_half_registered() {
+        runner.withUserConfiguration(ProjectionCollaboratorsConfiguration.class, MixedFamilyConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("@Subscription and @Projection");
+        });
+    }
+
     interface Marker {
     }
 
@@ -1528,6 +1540,23 @@ class LateBeanAnnotationRegistrationTest {
         @Lazy
         Marker secondClashingProjection() {
             return new SecondClashingProjection();
+        }
+    }
+
+    // A valid subscription handler, so the subscription registers and nothing rejects the method. That is the only
+    // shape where the projection goes missing in silence, since any other one fails a signature check first.
+    static class MixedFamilyHolder {
+        @Subscription(id = "mixed-family-subscription")
+        @Projection(id = "mixed-family-projection", source = Source.PUSH)
+        void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class MixedFamilyConfiguration {
+        @Bean
+        MixedFamilyHolder mixedFamilyHolder() {
+            return new MixedFamilyHolder();
         }
     }
 

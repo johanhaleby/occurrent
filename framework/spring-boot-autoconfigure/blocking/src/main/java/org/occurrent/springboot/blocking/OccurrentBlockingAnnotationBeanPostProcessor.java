@@ -326,7 +326,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                     continue;
                 }
                 collectSubscriptionId(beanName, method, idsToCheck, subscriptionBeanNames);
-                refuseMoreThanOneDescriptorAnnotation(type, method);
+                refuseMoreThanOneHandlerAnnotation(type, method);
                 org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
                 if (projection != null) {
                     projectionMethods.add(new Object[]{beanName, method, projection});
@@ -453,11 +453,15 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
     }
 
-    // One method declares at most one descriptor annotation. They register through different registrars and return
-    // different descriptor types, so a method with two of them was always a mistake, and it used to be caught by
-    // the second registrar rejecting the return type. Registration is keyed by the method now, so the second one
-    // would be skipped in silence instead. Refused here rather than dropped.
-    private static void refuseMoreThanOneDescriptorAnnotation(Class<?> userClass, Method method) {
+    // One method declares at most one handler annotation. The descriptor ones register through different registrars
+    // and return different descriptor types, so a method with two of them was always a mistake, and it used to be
+    // caught by the second registrar rejecting the return type. A subscription annotation shares nothing with a
+    // descriptor one except the key both register under, and that key spans the two families, so a method carrying
+    // one of each used to be caught the same way. Registration is keyed by the method now, so the second one would
+    // be skipped in silence instead. Refused here rather than dropped.
+    //
+    // Two subscription annotations are left to the registrar, which names them in a message of its own.
+    private static void refuseMoreThanOneHandlerAnnotation(Class<?> userClass, Method method) {
         List<String> declared = new ArrayList<>();
         if (AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class) != null) {
             declared.add("@Projection");
@@ -470,6 +474,26 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         if (declared.size() > 1) {
             throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @Projection, @Snapshot and @Saga, use only one.".formatted(userClass.getName(), method.getName()));
+        }
+        if (declared.isEmpty()) {
+            return;
+        }
+        List<String> subscriptions = new ArrayList<>();
+        if (AnnotationUtils.findAnnotation(method, Subscription.class) != null) {
+            subscriptions.add("@Subscription");
+        }
+        if (AnnotationUtils.findAnnotation(method, StreamSubscription.class) != null) {
+            subscriptions.add("@StreamSubscription");
+        }
+        if (AnnotationUtils.findAnnotation(method, DcbSubscription.class) != null) {
+            subscriptions.add("@DcbSubscription");
+        }
+        if (AnnotationUtils.findAnnotation(method, SynchronousSubscription.class) != null) {
+            subscriptions.add("@SynchronousSubscription");
+        }
+        if (!subscriptions.isEmpty()) {
+            throw new IllegalArgumentException("Method %s#%s is annotated with %s and %s, which register as different things and cannot share a method, use only one.".formatted(
+                    userClass.getName(), method.getName(), String.join(" and ", subscriptions), String.join(" and ", declared)));
         }
     }
 

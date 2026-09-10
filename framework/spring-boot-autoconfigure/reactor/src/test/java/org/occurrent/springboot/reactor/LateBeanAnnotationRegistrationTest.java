@@ -363,6 +363,52 @@ class LateBeanAnnotationRegistrationTest {
                 assertThat(context).hasNotFailed());
     }
 
+    // The two families share the key a handler registers under, so without this the subscription registers first
+    // and the projection is dropped in silence. It used to be the second registrar refusing the return type.
+    @Test
+    void a_method_with_both_a_subscription_and_a_descriptor_annotation_is_refused_rather_than_half_registered() {
+        runner.withUserConfiguration(MixedFamilyConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("@Subscription and @Projection");
+        });
+    }
+
+    // A valid subscription handler, so the subscription registers and nothing rejects the method. That is the only
+    // shape where the projection goes missing in silence, since any other one fails a signature check first.
+    static class MixedFamilyHolder {
+        @Subscription(id = "reactive-mixed-family-subscription")
+        @Projection(id = "reactive-mixed-family-projection", source = Source.PUSH)
+        void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class MixedFamilyConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        Subscribable subscribable() {
+            return mock(Subscribable.class);
+        }
+
+        @Bean
+        MixedFamilyHolder mixedFamilyHolder() {
+            return new MixedFamilyHolder();
+        }
+    }
+
     interface Marker {
     }
 
