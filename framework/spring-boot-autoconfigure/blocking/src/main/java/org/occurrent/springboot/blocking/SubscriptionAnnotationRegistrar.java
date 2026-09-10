@@ -41,6 +41,8 @@ import org.springframework.core.annotation.AnnotationUtils;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BiConsumer;
@@ -118,14 +120,15 @@ class SubscriptionAnnotationRegistrar {
     private static final class HandlerInvocation {
         private final Supplier<Object> target;
         private final Method declaredMethod;
-        private volatile Class<?> resolvedFor;
-        private volatile Method resolved;
+        // The class and the method resolved for it are one value, so a delivery can never read the class from one
+        // resolution and the method from the next. Two separate fields allow exactly that, and the method that
+        // comes back then belongs to a class the target is not, which fails the reflective call.
+        private volatile Resolution resolution;
 
         HandlerInvocation(Supplier<Object> target, Method declaredMethod, Method resolved, Class<?> resolvedFor) {
             this.target = target;
             this.declaredMethod = declaredMethod;
-            this.resolved = resolved;
-            this.resolvedFor = resolvedFor;
+            this.resolution = new Resolution(resolvedFor, resolved);
         }
 
         Object target() {
@@ -134,8 +137,9 @@ class SubscriptionAnnotationRegistrar {
 
         Method methodFor(Object target) {
             Class<?> targetClass = target.getClass();
-            if (targetClass == resolvedFor) {
-                return resolved;
+            Resolution current = resolution;
+            if (targetClass == current.forClass()) {
+                return current.method();
             }
             Method method;
             try {
@@ -152,9 +156,11 @@ class SubscriptionAnnotationRegistrar {
                 throw new SubscriptionHandlerNotInvocableException(declaredMethod,
                         "The method is final, so a CGLIB proxy in the chain cannot override it. Remove final from the method.");
             }
-            resolved = method;
-            resolvedFor = targetClass;
+            resolution = new Resolution(targetClass, method);
             return method;
+        }
+
+        private record Resolution(Class<?> forClass, Method method) {
         }
     }
 
@@ -173,6 +179,42 @@ class SubscriptionAnnotationRegistrar {
     void registerSubscriptions(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, boolean mayBlockForReplay,
                                Predicate<Method> shouldRegister, Consumer<String> claimId, Consumer<String> releaseId,
                                Consumer<Method> onRegistered) {
+        List<PendingRegistration> pending = new ArrayList<>();
+        // Every id this call has taken and not yet registered, so a failure releases exactly what it took and
+        // nothing another registration holds.
+        Set<String> heldIds = new LinkedHashSet<>();
+        try {
+            claimAndValidate(bean, userClass, handlerTarget, shouldRegister, claimId, pending, heldIds);
+        } catch (RuntimeException | Error e) {
+            heldIds.forEach(releaseId);
+            throw e;
+        }
+        for (PendingRegistration handler : pending) {
+            try {
+                if (handler.streamSubscription() != null) {
+                    processSubscribeAnnotation(bean, handler.method(), handlerTarget, mayBlockForReplay, StreamSubscriptionDefinition.from(handler.streamSubscription()));
+                } else if (handler.subscription() != null) {
+                    processAgnosticSubscribeAnnotation(bean, handler.method(), handlerTarget, mayBlockForReplay, handler.subscription());
+                } else if (handler.dcbSubscription() != null) {
+                    processDcbSubscribeAnnotation(bean, handler.method(), handlerTarget, mayBlockForReplay, handler.dcbSubscription());
+                } else {
+                    processSynchronousSubscribeAnnotation(bean, handler.method(), handlerTarget, mayBlockForReplay, handler.synchronousSubscription());
+                }
+            } catch (RuntimeException | Error e) {
+                heldIds.forEach(releaseId);
+                throw e;
+            }
+            heldIds.remove(handler.id());
+            onRegistered.accept(handler.method());
+        }
+    }
+
+    // Every handler on the bean is claimed and checked before any of them subscribes, so a second handler that
+    // cannot be registered means the first one never subscribes, rather than being live against a bean whose
+    // creation is about to fail. What stays outside this is a failure from subscribe itself, a store refusing for example,
+    // since undoing that one needs the subscription cancelled rather than never started.
+    private void claimAndValidate(Object bean, Class<?> userClass, Supplier<Object> handlerTarget, Predicate<Method> shouldRegister,
+                                  Consumer<String> claimId, List<PendingRegistration> pending, Set<String> heldIds) {
         for (Method method : userClass.getDeclaredMethods()) {
             StreamSubscription streamSubscription = AnnotationUtils.findAnnotation(method, StreamSubscription.class);
             Subscription subscription = AnnotationUtils.findAnnotation(method, Subscription.class);
@@ -182,37 +224,25 @@ class SubscriptionAnnotationRegistrar {
             if (annotationCount > 1) {
                 throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @Subscription, @StreamSubscription, @DcbSubscription and @SynchronousSubscription, use only one.".formatted(userClass.getName(), method.getName()));
             }
-            if (annotationCount == 1 && !shouldRegister.test(method)) {
-                continue;
-            }
-            if (annotationCount == 0) {
+            if (annotationCount == 0 || !shouldRegister.test(method)) {
                 continue;
             }
             // The id comes from the annotation this loop actually read, never from one a caller resolved earlier
             // against a predicted type, because an overriding method may declare a different id than the one it
-            // overrides. It is claimed before the work and released if the work throws, so a bean whose creation
-            // failed can be built again and a nested scan cannot take the same id.
+            // overrides.
             String id = streamSubscription != null ? streamSubscription.id()
                     : subscription != null ? subscription.id()
                     : dcbSubscription != null ? dcbSubscription.id()
                     : synchronousSubscription.id();
             claimId.accept(id);
-            try {
-                if (streamSubscription != null) {
-                    processSubscribeAnnotation(bean, method, handlerTarget, mayBlockForReplay, StreamSubscriptionDefinition.from(streamSubscription));
-                } else if (subscription != null) {
-                    processAgnosticSubscribeAnnotation(bean, method, handlerTarget, mayBlockForReplay, subscription);
-                } else if (dcbSubscription != null) {
-                    processDcbSubscribeAnnotation(bean, method, handlerTarget, mayBlockForReplay, dcbSubscription);
-                } else {
-                    processSynchronousSubscribeAnnotation(bean, method, handlerTarget, mayBlockForReplay, synchronousSubscription);
-                }
-            } catch (RuntimeException | Error e) {
-                releaseId.accept(id);
-                throw e;
-            }
-            onRegistered.accept(method);
+            heldIds.add(id);
+            resolveHandlerInvocation(bean, handlerTarget, method);
+            pending.add(new PendingRegistration(method, id, streamSubscription, subscription, dcbSubscription, synchronousSubscription));
         }
+    }
+
+    private record PendingRegistration(Method method, String id, StreamSubscription streamSubscription, Subscription subscription,
+                                       DcbSubscription dcbSubscription, SynchronousSubscription synchronousSubscription) {
     }
 
     @SuppressWarnings("unchecked")

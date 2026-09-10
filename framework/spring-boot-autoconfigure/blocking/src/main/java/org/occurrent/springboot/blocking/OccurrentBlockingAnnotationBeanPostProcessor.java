@@ -78,8 +78,10 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private final Object registrationLock = new Object();
     // A bean another thread finishes while the startup scan is still running is recorded here, because the scan
     // may already have passed its name and the callback that finished it may see startupScanComplete as false and
-    // do nothing. The scan drains this once the flag is set.
+    // do nothing. The scan drains this once the flag is set. Only another thread's beans are recorded, since the
+    // scan handles every bean it builds itself, which is what keeps this from collecting every bean in the context.
     private final Queue<String> builtWhileScanning = new ConcurrentLinkedQueue<>();
+    private volatile Thread scanningThread;
     private volatile boolean startupScanComplete;
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
     private ProjectionAnnotationRegistrar projectionRegistrar;
@@ -141,7 +143,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         }
         userClassByBeanName.putIfAbsent(beanName, userClassOf(bean));
         ConfigurableListableBeanFactory beanFactory = ((ConfigurableApplicationContext) applicationContext).getBeanFactory();
-        if (!startupScanComplete) {
+        Thread scanning = scanningThread;
+        if (!startupScanComplete && scanning != null && scanning != Thread.currentThread()) {
             builtWhileScanning.add(beanName);
         }
         // Read again rather than reused, so a bean finishing as the scan ends is registered by whichever of the two
@@ -177,12 +180,14 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     @Override
     public void afterSingletonsInstantiated() {
         synchronized (registrationLock) {
+            scanningThread = Thread.currentThread();
             String[] beanNames = applicationContext.getBeanDefinitionNames();
             while (scan(beanNames, applicationContext::getBean, (name, resolved) -> () -> resolved, true)) {
                 beanNames = applicationContext.getBeanDefinitionNames();
             }
             startupScanComplete = true;
             drainBeansBuiltWhileScanning();
+            scanningThread = null;
         }
     }
 

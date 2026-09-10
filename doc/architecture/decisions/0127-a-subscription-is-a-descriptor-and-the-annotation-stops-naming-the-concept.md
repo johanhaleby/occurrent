@@ -322,6 +322,15 @@ which is why `@Projection`, `@Snapshot` and `@Saga` have not tripped over it. It
 than anything this design introduces, and the epic inherits it rather than widening it. Fixing it means unwrapping to
 the target before invoking a factory, for all four descriptor annotations at once, and that is its own issue.
 
+> **Amended on 2026-09-10, for #981.** The paragraph above describes a defect that has since been fixed and shipped.
+> [#836](https://github.com/johanhaleby/occurrent/issues/836) was the issue it says fixing this needs, and it closed
+> in 0.34.0. `SubscriptionAnnotations.invokeDescriptorFactory` unwraps a bean to its ultimate AOP target and
+> re-resolves the factory method there, shared by all five registrar paths that make this call, so a JDK interface
+> proxy no longer fails. A proxy backed by a prototype- or pool-scoped target source is left proxied and still
+> fails, now naming the annotation, the factory and the fix. Corrected here because the changelog entry for #836
+> links to this section, so a reader arriving from the release notes would otherwise be told that what they had
+> just read was fixed is still broken.
+
 This also closes something the current code calls out as a wart. Its comment notes that a `@Subscription` method
 registers per bean before the checkpoint fencing check runs, so one can write a checkpoint before that check happens,
 and marks it pre-existing. A descriptor annotation registered in the later phase is behind the check like every other

@@ -336,6 +336,21 @@ class LateBeanAnnotationRegistrationTest {
         });
     }
 
+    // A bean can declare several handlers, and the second one failing must not leave the first subscribed. The
+    // bean's creation fails either way, so a handler registered before the failure would be delivering to an
+    // instance nobody can reach, and the context stays up because a lazily built bean failing does not close it.
+    @Test
+    void a_bean_whose_second_handler_cannot_register_leaves_the_first_one_unsubscribed() {
+        runner.withUserConfiguration(SecondHandlerFailsConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThatThrownBy(() -> context.getBean("twoHandlerSubscriber")).isNotNull();
+
+            verify(context.getBean(Subscriptions.class), never())
+                    .subscribe(eq("reactive-first-of-two"), any(AgnosticSubscriptionFilter.class), any(), any(Function2.class));
+        });
+    }
+
     interface Marker {
     }
 
@@ -916,6 +931,39 @@ class LateBeanAnnotationRegistrationTest {
                     return proxyFactory.getProxy();
                 }
             };
+        }
+    }
+
+    static class TwoHandlerSubscriber implements Marker {
+        @Subscription(id = "reactive-first-of-two", startupMode = StartupMode.BACKGROUND)
+        void first(TestEvent event) {
+        }
+
+        // Static, so resolveHandlerInvocation refuses it. The refusal has to happen before the handler above
+        // subscribes, not after.
+        @Subscription(id = "reactive-second-of-two", startupMode = StartupMode.BACKGROUND)
+        static void second(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class SecondHandlerFailsConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        @Lazy
+        Marker twoHandlerSubscriber() {
+            return new TwoHandlerSubscriber();
         }
     }
 
