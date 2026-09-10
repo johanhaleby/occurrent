@@ -25,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayNameGeneration;
 import org.junit.jupiter.api.DisplayNameGenerator.ReplaceUnderscores;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.occurrent.annotation.Projection;
 import org.occurrent.annotation.Source;
 import org.occurrent.annotation.Subscription;
@@ -44,6 +45,7 @@ import org.springframework.beans.factory.SmartFactoryBean;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
@@ -57,6 +59,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
@@ -89,6 +96,8 @@ class LateBeanAnnotationRegistrationTest {
     private static final AtomicInteger PROJECTION_FACTORY_INVOCATIONS = new AtomicInteger();
     private static final AtomicInteger INTERFACE_PROJECTION_FACTORY_INVOCATIONS = new AtomicInteger();
     private static final AtomicInteger FAILING_PROJECTION_FACTORY_CALLS = new AtomicInteger();
+    private static final java.util.concurrent.atomic.AtomicBoolean DRAIN_TRIGGERED = new java.util.concurrent.atomic.AtomicBoolean();
+    private static final AtomicInteger LATE_FEED_READS = new AtomicInteger();
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(OccurrentBlockingAnnotationBeanPostProcessor.class, OccurrentBlockingAnnotationBeanPostProcessor::new);
@@ -374,6 +383,91 @@ class LateBeanAnnotationRegistrationTest {
 
             verify(context.getBean(Subscriptions.class), never())
                     .subscribe(eq("first-of-two"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+        });
+    }
+
+    // Claiming an id is one atomic add rather than a check under a lock, so two threads building two lazy beans
+    // that declare the same id cannot both win. The lock this replaced was held across the registrar's own
+    // collaborator lookups, which is what could deadlock against a thread building one of those collaborators.
+    @Test
+    @Timeout(60)
+    void two_threads_claiming_the_same_id_at_once_leave_exactly_one_winner() throws Exception {
+        runner.withUserConfiguration(SameIdOnTwoBeansConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            CyclicBarrier bothReady = new CyclicBarrier(2);
+            ExecutorService threads = Executors.newFixedThreadPool(2);
+            try {
+                List<Future<Throwable>> attempts = new ArrayList<>();
+                for (String beanName : List.of("firstClaimant", "secondClaimant")) {
+                    attempts.add(threads.submit(() -> {
+                        bothReady.await(30, TimeUnit.SECONDS);
+                        try {
+                            context.getBean(beanName);
+                            return null;
+                        } catch (Throwable e) {
+                            return e;
+                        }
+                    }));
+                }
+                List<Throwable> outcomes = new ArrayList<>();
+                for (Future<Throwable> attempt : attempts) {
+                    outcomes.add(attempt.get(60, TimeUnit.SECONDS));
+                }
+
+                assertThat(outcomes).describedAs("exactly one claimant wins").filteredOn(java.util.Objects::isNull).hasSize(1);
+                assertThat(outcomes).filteredOn(java.util.Objects::nonNull).allSatisfy(failure ->
+                        assertThat(NestedExceptionUtils.getMostSpecificCause(failure)).isInstanceOf(DuplicateSubscriptionIdException.class));
+                verify(context.getBean(Subscriptions.class), times(1))
+                        .subscribe(eq("contended-id"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+            } finally {
+                threads.shutdownNow();
+            }
+        });
+    }
+
+    // A bean built while another late registration is in flight registers the same way one built on its own does.
+    // Nothing is deferred to another thread and nothing waits on a lock, so the two are independent.
+    @Test
+    @Timeout(60)
+    void two_late_beans_built_at_once_both_register() throws Exception {
+        runner.withUserConfiguration(TwoLateBeansConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            CyclicBarrier bothReady = new CyclicBarrier(2);
+            ExecutorService threads = Executors.newFixedThreadPool(2);
+            try {
+                List<Future<?>> builds = new ArrayList<>();
+                for (String beanName : List.of("concurrentOne", "concurrentTwo")) {
+                    builds.add(threads.submit(() -> {
+                        bothReady.await(30, TimeUnit.SECONDS);
+                        return context.getBean(beanName);
+                    }));
+                }
+                for (Future<?> build : builds) {
+                    build.get(60, TimeUnit.SECONDS);
+                }
+
+                Subscriptions<?> subscriptions = context.getBean(Subscriptions.class);
+                verify(subscriptions).subscribe(eq("concurrent-one"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+                verify(subscriptions).subscribe(eq("concurrent-two"), any(AgnosticSubscriptionFilter.class), any(), anyBoolean(), any(Function2.class));
+            } finally {
+                threads.shutdownNow();
+            }
+        });
+    }
+
+    // The catch-up drain polls until the queue is empty rather than iterating it and clearing, so a feed added
+    // while the drain is running is still caught up. Iterating and then clearing drops such an entry, and a
+    // dropped entry there is a projection that never replays its history.
+    @Test
+    @Timeout(60)
+    void a_feed_registered_while_the_catch_up_drain_runs_is_still_caught_up() {
+        DRAIN_TRIGGERED.set(false);
+        LATE_FEED_READS.set(0);
+        runner.withUserConfiguration(DrainDuringCatchUpConfiguration.class).run(context -> {
+            assertThat(context).hasNotFailed();
+
+            assertThat(DRAIN_TRIGGERED).describedAs("the first feed's catch-up built the lazy projection").isTrue();
+            assertThat(LATE_FEED_READS).describedAs("the feed added during the drain was caught up too").hasValueGreaterThan(0);
         });
     }
 
@@ -1093,6 +1187,193 @@ class LateBeanAnnotationRegistrationTest {
         @Lazy
         Marker twoHandlerSubscriber() {
             return new TwoHandlerSubscriber();
+        }
+    }
+
+    static class FirstClaimant implements Marker {
+        @Subscription(id = "contended-id")
+        void on(TestEvent event) {
+        }
+    }
+
+    static class SecondClaimant implements Marker {
+        @Subscription(id = "contended-id")
+        void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class SameIdOnTwoBeansConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        @Lazy
+        Marker firstClaimant() {
+            return new FirstClaimant();
+        }
+
+        @Bean
+        @Lazy
+        Marker secondClaimant() {
+            return new SecondClaimant();
+        }
+    }
+
+    static class ConcurrentOne implements Marker {
+        @Subscription(id = "concurrent-one")
+        void on(TestEvent event) {
+        }
+    }
+
+    static class ConcurrentTwo implements Marker {
+        @Subscription(id = "concurrent-two")
+        void on(TestEvent event) {
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class TwoLateBeansConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new NoopCloudEventConverter();
+        }
+
+        @Bean
+        @SuppressWarnings("unchecked")
+        Subscriptions<TestEvent> subscriptions() {
+            return mock(Subscriptions.class);
+        }
+
+        @Bean
+        @Lazy
+        Marker concurrentOne() {
+            return new ConcurrentOne();
+        }
+
+        @Bean
+        @Lazy
+        Marker concurrentTwo() {
+            return new ConcurrentTwo();
+        }
+    }
+
+    static class DrainTriggeringProjectionHolder {
+        @Projection(id = "drain-trigger-projection", source = Source.PUSH, subscriptionModelName = "triggerFeed")
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    static class DrainAddedProjectionHolder implements Marker {
+        @Projection(id = "drain-added-projection", source = Source.PUSH, subscriptionModelName = "lateFeed")
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> projection() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(OccurrentProperties.class)
+    static class DrainDuringCatchUpConfiguration {
+        @Bean
+        CloudEventConverter<TestEvent> testEventCloudEventConverter() {
+            return new CloudEventConverter<>() {
+                @Override
+                public CloudEvent toCloudEvent(TestEvent domainEvent) {
+                    return CloudEventBuilder.v1().withId("id").withSource(URI.create("urn:test")).withType("TestEvent").build();
+                }
+
+                @Override
+                public TestEvent toDomainEvent(CloudEvent cloudEvent) {
+                    return new TestEvent();
+                }
+
+                @Override
+                public String getCloudEventType(Class<? extends TestEvent> type) {
+                    return type.getSimpleName();
+                }
+            };
+        }
+
+        @Bean
+        ViewStateRepository<Integer, String> viewStateRepository() {
+            Map<String, Integer> store = new ConcurrentHashMap<>();
+            return ViewStateRepository.create(store::get, store::put);
+        }
+
+        // Reading this feed is what the catch-up drain does, and it builds the lazy projection holder from inside
+        // that read, so a second feed is queued while the drain is still running.
+        @Bean
+        DomainEventFeed<TestEvent> triggerFeed(CloudEventConverter<TestEvent> converter, ApplicationContext context) {
+            PositionOrderedReader reader = new PositionOrderedReader() {
+                @Override
+                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    if (DRAIN_TRIGGERED.compareAndSet(false, true)) {
+                        context.getBean("drainAddedProjectionHolder");
+                    }
+                    return Stream.empty();
+                }
+
+                @Override
+                public long currentPosition() {
+                    return 0;
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+            return new DomainEventFeed<>(reader, converter, event -> "k");
+        }
+
+        @Bean
+        DomainEventFeed<TestEvent> lateFeed(CloudEventConverter<TestEvent> converter) {
+            PositionOrderedReader reader = new PositionOrderedReader() {
+                @Override
+                public Stream<CloudEvent> readInPositionOrder(Filter filter, PositionRange range) {
+                    LATE_FEED_READS.incrementAndGet();
+                    return Stream.empty();
+                }
+
+                @Override
+                public long currentPosition() {
+                    return 0;
+                }
+
+                @Override
+                public boolean writesPosition() {
+                    return true;
+                }
+            };
+            return new DomainEventFeed<>(reader, converter, event -> "k");
+        }
+
+        @Bean
+        DrainTriggeringProjectionHolder drainTriggeringProjectionHolder() {
+            return new DrainTriggeringProjectionHolder();
+        }
+
+        @Bean
+        @Lazy
+        Marker drainAddedProjectionHolder() {
+            return new DrainAddedProjectionHolder();
         }
     }
 

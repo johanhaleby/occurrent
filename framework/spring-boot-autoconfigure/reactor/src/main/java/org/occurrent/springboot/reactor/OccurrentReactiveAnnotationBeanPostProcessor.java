@@ -78,15 +78,27 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     // Every subscription and projection id must be unique, since it is the durable checkpoint key. Subscription ids are
     // added as their annotations are processed (before singletons finish), projection ids when they register below.
     // Shared as a single instance across every registrar so id uniqueness is enforced across all annotation kinds.
-    private final Set<String> registeredIds = new HashSet<>();
+    private final Set<String> registeredIds = ConcurrentHashMap.newKeySet();
 
     // The class the container actually built for a bean, recorded as the container hands the object over. This is
     // the only source that cannot fall short of the real class, see resolveScanType below for why the prediction
     // this replaces can.
     private final Map<String, Class<?>> userClassByBeanName = new ConcurrentHashMap<>();
-    // Every handler already registered, so scanning a bean a second time registers only what is new. Guarded by
-    // registrationLock, since a bean created after startup is created on whatever thread asked for it.
-    private final Set<String> registeredHandlers = new HashSet<>();
+    // Every handler already registered, so scanning a bean a second time registers only what is new. Concurrent
+    // rather than lock-guarded, because a bean created after startup is created on whatever thread asked for it,
+    // and claiming an id is an add that answers false when something else already holds it, which is the whole
+    // check. Holding a lock across a late registration instead deadlocks, since that registration resolves
+    // collaborators by type and a thread creating one of those enters this same callback, so it waits for the lock
+    // the first thread holds while the first waits for the bean the second is building.
+    //
+    // What keeps the late path safe is therefore two things together, and both have to stay true. No lock is held
+    // across a late registration, and every collection such a registration appends to is concurrent and drained by
+    // polling rather than by iterating and then clearing, in the three registrars as well as here. No test
+    // demonstrates either. The interleaving cannot be staged, because parking a thread inside a bean factory
+    // serialises other singleton creation at the Spring level, so the two threads the hazard needs never overlap.
+    // LateRegistrationConcurrencyContractTest asserts the types instead, which catches the way this realistically
+    // regresses rather than the hazard itself.
+    private final Set<String> registeredHandlers = ConcurrentHashMap.newKeySet();
     private final Object registrationLock = new Object();
     // A bean another thread finishes while the startup scan is still running is recorded here, because the scan
     // may already have passed its name and the callback that finished it may see startupScanComplete as false and
@@ -96,7 +108,7 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
     private volatile Thread scanningThread;
     // Bean names this scan has built so a later pass can read their real class, so a build after which the class
     // is still unknown is not attempted for ever.
-    private final Set<String> alreadyBuiltToBeScanned = new HashSet<>();
+    private final Set<String> alreadyBuiltToBeScanned = ConcurrentHashMap.newKeySet();
     private volatile boolean startupScanComplete;
 
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
@@ -176,10 +188,8 @@ class OccurrentReactiveAnnotationBeanPostProcessor implements BeanPostProcessor,
         // sees the flag set. Registering it twice is not possible, since both go through the same handler keys.
         if (startupScanComplete && beanFactory.containsBeanDefinition(beanName)) {
             boolean singleton = beanFactory.isSingleton(beanName);
-            synchronized (registrationLock) {
-                scan(new String[]{beanName}, name -> bean,
-                        (name, resolved) -> () -> singleton && !beanFactory.isCurrentlyInCreation(name) ? applicationContext.getBean(name) : resolved, false);
-            }
+            scan(new String[]{beanName}, name -> bean,
+                    (name, resolved) -> () -> singleton && !beanFactory.isCurrentlyInCreation(name) ? applicationContext.getBean(name) : resolved, false);
         }
         return bean;
     }

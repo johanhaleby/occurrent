@@ -67,14 +67,26 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private ApplicationContext applicationContext;
     // One shared duplicate-id registry across every registrar: all subscription ids are collected before projections,
     // snapshots and sagas each check-and-add against it.
-    private final Set<String> registeredIds = new HashSet<>();
+    private final Set<String> registeredIds = ConcurrentHashMap.newKeySet();
     // The class the container actually built for a bean, recorded as the container hands the object over. This is
     // the only source that cannot fall short of the real class, see resolveScanType below for why the prediction
     // this replaces can.
     private final Map<String, Class<?>> userClassByBeanName = new ConcurrentHashMap<>();
-    // Every handler already registered, so scanning a bean a second time registers only what is new. Guarded by
-    // registrationLock, since a bean created after startup is created on whatever thread asked for it.
-    private final Set<String> registeredHandlers = new HashSet<>();
+    // Every handler already registered, so scanning a bean a second time registers only what is new. Concurrent
+    // rather than lock-guarded, because a bean created after startup is created on whatever thread asked for it,
+    // and claiming an id is an add that answers false when something else already holds it, which is the whole
+    // check. Holding a lock across a late registration instead deadlocks, since that registration resolves
+    // collaborators by type and a thread creating one of those enters this same callback, so it waits for the lock
+    // the first thread holds while the first waits for the bean the second is building.
+    //
+    // What keeps the late path safe is therefore two things together, and both have to stay true. No lock is held
+    // across a late registration, and every collection such a registration appends to is concurrent and drained by
+    // polling rather than by iterating and then clearing, in the three registrars as well as here. No test
+    // demonstrates either. The interleaving cannot be staged, because parking a thread inside a bean factory
+    // serialises other singleton creation at the Spring level, so the two threads the hazard needs never overlap.
+    // LateRegistrationConcurrencyContractTest asserts the types instead, which catches the way this realistically
+    // regresses rather than the hazard itself.
+    private final Set<String> registeredHandlers = ConcurrentHashMap.newKeySet();
     private final Object registrationLock = new Object();
     // A bean another thread finishes while the startup scan is still running is recorded here, because the scan
     // may already have passed its name and the callback that finished it may see startupScanComplete as false and
@@ -84,7 +96,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
     private volatile Thread scanningThread;
     // Bean names this scan has built so a later pass can read their real class, so a build after which the class
     // is still unknown is not attempted for ever.
-    private final Set<String> alreadyBuiltToBeScanned = new HashSet<>();
+    private final Set<String> alreadyBuiltToBeScanned = ConcurrentHashMap.newKeySet();
     private volatile boolean startupScanComplete;
     private SubscriptionAnnotationRegistrar subscriptionRegistrar;
     private ProjectionAnnotationRegistrar projectionRegistrar;
@@ -167,10 +179,8 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // sees the flag set. Registering it twice is not possible, since both go through the same handler keys.
         if (startupScanComplete && beanFactory.containsBeanDefinition(beanName)) {
             boolean singleton = beanFactory.isSingleton(beanName);
-            synchronized (registrationLock) {
-                scan(new String[]{beanName}, name -> bean,
-                        (name, resolved) -> () -> singleton && !beanFactory.isCurrentlyInCreation(name) ? applicationContext.getBean(name) : resolved, false);
-            }
+            scan(new String[]{beanName}, name -> bean,
+                    (name, resolved) -> () -> singleton && !beanFactory.isCurrentlyInCreation(name) ? applicationContext.getBean(name) : resolved, false);
         }
         return bean;
     }
@@ -312,6 +322,14 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
         // so asking for the bean again creates it again and runs this callback again. A handler marked ahead of
         // its own registration would be skipped on that second attempt, and the bean would then be published with
         // a handler that never registered, which is the loss this whole class exists to close.
+        // A bean built after startup is checked before anything of its is activated. Failing after a subscription
+        // is live keeps it running against a bean whose creation then fails, and the context stays up, so the
+        // check has to come first here. The startup path keeps the order it had, where subscriptions register
+        // ahead of the check, which CheckpointStorageCannotFenceSubscriptionException's javadoc describes and
+        // ADR 127 records as open work rather than something this change settles.
+        if (!mayBlockForReplay) {
+            CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
+        }
         for (String beanName : subscriptionBeanNames) {
             Object bean = beanResolver.apply(beanName);
             subscriptionRegistrar.registerSubscriptions(bean, resolveScanType(beanName), handlerTargets.apply(beanName, bean), mayBlockForReplay,
@@ -319,7 +337,9 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                     this::claimSubscriptionId, registeredIds::remove,
                     method -> markRegistered(beanName, method));
         }
-        CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
+        if (mayBlockForReplay) {
+            CheckpointFencingConfigurationCheck.check(applicationContext, idsToCheck);
+        }
         for (Object[] pm : projectionMethods) {
             registerDescriptor(((org.occurrent.annotation.Projection) pm[2]).id(), () -> projectionRegistrar.processProjectionAnnotation(beanResolver.apply((String) pm[0]), (Method) pm[1], (org.occurrent.annotation.Projection) pm[2]));
             markRegistered((String) pm[0], (Method) pm[1]);

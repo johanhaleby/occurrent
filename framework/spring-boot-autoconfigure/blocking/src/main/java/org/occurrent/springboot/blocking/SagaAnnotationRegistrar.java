@@ -58,6 +58,8 @@ import java.lang.reflect.Type;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
@@ -89,7 +91,7 @@ class SagaAnnotationRegistrar {
     // Push catch-up models created here, kept so the context can stop their replay threads on the way down. Created
     // during registration on the refresh thread, whether or not manual mode withholds the saga itself, so a plain list
     // is enough where sagaSubscriptions needs a concurrent one.
-    private final List<CatchupThenPushSubscriptionModel> pushModels = new ArrayList<>();
+    private final Queue<CatchupThenPushSubscriptionModel> pushModels = new ConcurrentLinkedQueue<>();
 
     SagaAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, Set<String> registeredIds) {
         this.applicationContext = applicationContext;
@@ -462,8 +464,10 @@ class SagaAnnotationRegistrar {
         sagaSubscriptions.clear();
         // Then the catch-up replays, which the timer pollers are not: a replay runs on a thread of its own and only the
         // model that owns it can stop it.
-        pushModels.forEach(CatchupThenPushSubscriptionModel::shutdown);
-        pushModels.clear();
+        CatchupThenPushSubscriptionModel pushModel;
+        while ((pushModel = pushModels.poll()) != null) {
+            pushModel.shutdown();
+        }
     }
 
     // Resolve the SagaStateStore: by store()/storeName() reference, else the unique SagaStateStore bean, else the
