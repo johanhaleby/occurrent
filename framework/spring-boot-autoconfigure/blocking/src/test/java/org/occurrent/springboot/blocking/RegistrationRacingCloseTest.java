@@ -72,7 +72,7 @@ class RegistrationRacingCloseTest {
             .withBean(ManualStartPushSources.class, ManualStartPushSources::new)
             .withUserConfiguration(ManualPushSagaConfiguration.class);
 
-    // The symptom the issue names: a timer poller that outlives the context that owns it. The poller runs on a thread
+    // The symptom the issue names is a timer poller that outlives the context that owns it. The poller runs on a thread
     // named after its subscription, so a surviving one is visible by name rather than through the registrar's state.
     @Test
     void a_push_saga_started_after_the_context_closed_leaves_no_timer_poller_running() {
@@ -86,7 +86,7 @@ class RegistrationRacingCloseTest {
         });
     }
 
-    // The other half of refusing: a registration that discovers close() has passed stops what it built and abandons
+    // The other half of refusing. A registration that discovers close() has passed stops what it built and abandons
     // the rest, rather than half-completing. Publishing the handle would tell the application it has a running saga
     // when the poller behind it has just been stopped.
     @Test

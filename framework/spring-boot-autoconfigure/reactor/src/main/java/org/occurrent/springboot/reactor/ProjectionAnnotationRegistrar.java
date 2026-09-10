@@ -293,14 +293,10 @@ class ProjectionAnnotationRegistrar {
         }
     }
 
-    // Take one entry back out of a queue close() drains and stop it, when it is still there to take. close()'s poll()
-    // and this remove() cannot both take the same entry, so whichever succeeds is the one that stops it, never twice
-    // and never neither. The entries are models and feeds that define no equals, so remove() matches on identity and
-    // takes this exact entry rather than an equal one.
-    //
-    // Named rather than inlined into stopIfCloseHasPassed below because undoing one activation is useful on its own.
-    // See https://github.com/johanhaleby/occurrent/issues/987, where a registration that fails partway has to undo
-    // what it already activated, if it takes that branch rather than validating everything up front.
+    // Take one entry back out of a queue close() drains and stop it, when it is still there to take. close()'s
+    // poll() and this remove() cannot both take the same entry, so exactly one of them stops it. The entries
+    // define no equals, so remove() matches on identity. Named rather than inlined below because
+    // https://github.com/johanhaleby/occurrent/issues/987 needs this same undo if it compensates.
     private static <T> boolean removeAndStop(Queue<T> entries, T entry, Consumer<T> stop) {
         if (!entries.remove(entry)) {
             return false;
@@ -309,12 +305,9 @@ class ProjectionAnnotationRegistrar {
         return true;
     }
 
-    // The recheck half of the protocol. Add to the queue first, then call this. It answers whether close() had
-    // already drained past the entry, in which case it has stopped it here.
-    //
-    // Reading the flag after the add is what makes this work, and the order is the whole mechanism rather than a
-    // detail. close() sets closing before it drains, so an add that happens after that drain is an add whose thread
-    // must then read closing as true.
+    // The recheck half of the protocol. Add to the queue first, then call this, which answers whether close()
+    // had already drained past the entry and stopped it here. Reading the flag after the add is the mechanism,
+    // since close() sets closing before it drains, so an add that happens after that drain must read it as true.
     private <T> boolean stopIfCloseHasPassed(Queue<T> entries, T entry, Consumer<T> stop) {
         return closing && removeAndStop(entries, entry, stop);
     }
@@ -336,15 +329,10 @@ class ProjectionAnnotationRegistrar {
                 backgroundCatchUps.add(catchUp);
                 catchUp.subscribe(ignored -> {
                 }, error -> recordBackgroundFailure(pending.id(), error));
-                // Rechecked after subscribing rather than before. catchUpAll() is lazy, so the replay starts on
-                // the subscribe above, and CatchupProjectionFeed.catchUp clears its own stopped flag when it runs.
-                // A stop issued before the subscribe is therefore cleared by the replay it was meant to stop.
-                //
-                // stopCatchUp() is called whenever closing is set, rather than only when this took the feed back
-                // out of the queue, and that is the part worth reading twice. close() may have taken the feed
-                // between the add above and the subscribe, stopped it, and had that stop cleared a moment later by
-                // this very subscribe. The removal says nothing about whether that happened, so it cannot decide
-                // whether to stop. Stopping twice only sets a flag that is already set.
+                // Rechecked after the subscribe, since catchUpAll() is lazy and the replay starts there.
+                // stopCatchUp() runs whenever closing is set rather than only when this took the feed back,
+                // because close() may have stopped it before the subscribe and CatchupProjectionFeed.catchUp
+                // clears that stop. Stopping one close() already stopped only sets a flag that is set.
                 if (closing) {
                     backgroundCatchUps.remove(catchUp);
                     backgroundFeeds.remove(pending.feed());
