@@ -69,6 +69,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.Queue;
 import java.util.Optional;
 import java.util.Set;
@@ -304,6 +307,38 @@ class ProjectionAnnotationRegistrar {
         stop.accept(entry);
     }
 
+    // Wait for one catch-up to unwind, on the deadline close() uses. toFuture().get rather than block(), because
+    // this can run from a late bean creation on any thread the caller chose, and block() throws straight away on a
+    // non-blocking Reactor scheduler thread, which would turn the wait into no wait at all.
+    private static void awaitCatchUp(Mono<Void> catchUp) {
+        try {
+            catchUp.toFuture().get(SHUTDOWN_CATCHUP_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException | TimeoutException e) {
+            // Already recorded where it happened, and a shutdown has nowhere useful to put a failure or a timeout.
+        }
+    }
+
+    // Track a catch-up the same way a background one is tracked, so close() can stop it and wait for it to unwind
+    // instead of returning while it is still applying history to a store the context is disposing. Checking a flag and then starting
+    // an untracked replay narrows that window without closing it, because close() can set the flag and drain in
+    // between and never learn this replay exists. Answers empty when close() has already begun.
+    private Mono<Void> trackedCatchUp(DomainEventFeed<?> feed, Mono<Void> catchUp) {
+        Mono<Void> cached = catchUp.cache();
+        backgroundFeeds.add(feed);
+        backgroundCatchUps.add(cached);
+        if (closing) {
+            backgroundCatchUps.remove(cached);
+            removeThenStop(backgroundFeeds, feed, DomainEventFeed::stopCatchUp);
+            return Mono.empty();
+        }
+        return cached.doFinally(ignored -> {
+            backgroundCatchUps.remove(cached);
+            backgroundFeeds.remove(feed);
+        });
+    }
+
     // Whether close() has begun, stopping this registration's own model on the way out when it has. Null when the
     // projection takes its feed bare under catchup = NONE, where there is no model of ours to stop.
     private boolean stopIfClosing(@Nullable CatchupThenPushSubscriptionModel model) {
@@ -324,13 +359,7 @@ class ProjectionAnnotationRegistrar {
         while ((polled = domainFeedsToCatchUp.poll()) != null) {
             DomainFeedCatchUp pending = polled;
             if (pending.waitUntilStarted()) {
-                // Refused once close() has begun. This replay is awaited on the calling thread rather than tracked,
-                // so close() cannot stop it, and starting it would fold a whole history into a store the context is
-                // disposing.
-                if (closing) {
-                    continue;
-                }
-                recordingProgress(pending.id(), pending.feed().catchUpAll()).block();
+                trackedCatchUp(pending.feed(), recordingProgress(pending.id(), pending.feed().catchUpAll())).block();
             } else {
                 // startupMode = BACKGROUND. No thread of our own here, unlike the blocking twin: subscribing without
                 // blocking is all it takes, since the handover runs the replay on boundedElastic.
@@ -350,11 +379,7 @@ class ProjectionAnnotationRegistrar {
                 if (closing) {
                     backgroundCatchUps.remove(catchUp);
                     removeThenStop(backgroundFeeds, pending.feed(), DomainEventFeed::stopCatchUp);
-                    try {
-                        catchUp.block(SHUTDOWN_CATCHUP_TIMEOUT);
-                    } catch (RuntimeException e) {
-                        // Already recorded by the subscriber above, and a shutdown has nowhere to put a timeout.
-                    }
+                    awaitCatchUp(catchUp);
                 }
             }
         }
@@ -694,15 +719,18 @@ class ProjectionAnnotationRegistrar {
             // together, so nothing about this projection reaches the feed until the application starts it, and
             // running the deferred work leaves the feed in the same state registering it under auto mode would.
             applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
-                // Same refusal as catchUpCollectedFeeds, and this path is why it is needed: start(id) can be called
-                // long after close() has returned.
-                if (closing) {
-                    return Mono.<Void>empty();
+                // Tracked the same way as catchUpCollectedFeeds, and this path is why it matters, since start(id) can be
+                // called long after close() has returned. goLive starts no replay, so it only needs the flag.
+                if (!catchesUp) {
+                    return closing
+                            ? Mono.<Void>empty()
+                            : Mono.defer(() -> {
+                                registerOnFeed.run();
+                                return feed.goLive(id).doOnSuccess(ignored -> withPushCatchupStatus(status -> status.recordLive(id)));
+                            });
                 }
                 registerOnFeed.run();
-                return catchesUp
-                        ? recordingProgress(id, feed.catchUp(id))
-                        : feed.goLive(id).doOnSuccess(ignored -> withPushCatchupStatus(status -> status.recordLive(id)));
+                return trackedCatchUp(feed, recordingProgress(id, feed.catchUp(id)));
             });
         }
 

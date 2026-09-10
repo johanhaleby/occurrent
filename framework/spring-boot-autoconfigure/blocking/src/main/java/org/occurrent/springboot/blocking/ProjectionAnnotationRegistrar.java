@@ -223,6 +223,42 @@ class ProjectionAnnotationRegistrar {
         stop.accept(entry);
     }
 
+    // Run a catch-up on the calling thread, tracked exactly as a background one is, so close() can stop it and wait
+    // for it to unwind instead of returning while it is still applying history to a store the context is disposing. Checking a flag
+    // and then starting an untracked replay narrows that window without closing it, because close() can set the flag
+    // and drain in between and never learn this replay exists.
+    private void runTrackedOnThisThread(Runnable work, Runnable stop) {
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            work.run();
+            return null;
+        });
+        BackgroundCatchUp tracked = new BackgroundCatchUp(task, stop);
+        backgroundCatchUps.add(tracked);
+        if (closing) {
+            removeThenStop(backgroundCatchUps, tracked, entry -> entry.stop().run());
+            return;
+        }
+        try {
+            task.run();
+        } finally {
+            backgroundCatchUps.remove(tracked);
+        }
+        // Rethrown rather than left in the task, since this is the WAIT path and its caller is what reports a
+        // catch-up that failed at startup.
+        try {
+            task.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        } catch (ExecutionException e) {
+            switch (e.getCause()) {
+                case RuntimeException runtime -> throw runtime;
+                case Error error -> throw error;
+                case null, default -> throw new IllegalStateException(e.getCause());
+            }
+        }
+    }
+
     // Whether close() has begun, stopping this registration's own model on the way out when it has. Null when the
     // projection takes its feed bare under catchup = NONE, where there is no model of ours to stop.
     private boolean stopIfClosing(@Nullable ReplayAwareSubscriptions catchupModel) {
@@ -243,13 +279,8 @@ class ProjectionAnnotationRegistrar {
         while ((polled = domainFeedsToCatchUp.poll()) != null) {
             DomainFeedCatchUp pending = polled;
             if (pending.waitUntilStarted()) {
-                // Refused once close() has begun. This replay runs on the calling thread rather than one of ours, so
-                // nothing tracks it and close() cannot stop it, and starting it would fold a whole history into a
-                // store the context is disposing.
-                if (closing) {
-                    continue;
-                }
-                recordingProgress(pending.id(), () -> pending.feed().catchUpAll()).run();
+                runTrackedOnThisThread(recordingProgress(pending.id(), () -> pending.feed().catchUpAll()),
+                        pending.feed()::stopCatchUp);
             } else {
                 // startupMode = BACKGROUND. The feed itself deliberately has no background overload, since a caller
                 // that wants the replay off its own thread can run catchUpAll() on a thread it owns. This is that
@@ -738,12 +769,9 @@ class ProjectionAnnotationRegistrar {
                     feed.goLive(id);
                     withPushCatchupStatus(status -> status.recordLive(id));
                 } else if (waitUntilStarted) {
-                    // Same refusal as catchUpCollectedFeeds, and this path is why it is needed: start(id) can be
-                    // called long after close() has returned.
-                    if (closing) {
-                        return;
-                    }
-                    recordingProgress(id, () -> feed.catchUp(id)).run();
+                    // Tracked the same way as catchUpCollectedFeeds, and this path is why it matters, since start(id) can
+                    // be called long after close() has returned.
+                    runTrackedOnThisThread(recordingProgress(id, () -> feed.catchUp(id)), feed::stopCatchUp);
                 } else {
                     // Same treatment as auto mode, or startAll() would block for a full replay on a projection that
                     // asked for BACKGROUND.

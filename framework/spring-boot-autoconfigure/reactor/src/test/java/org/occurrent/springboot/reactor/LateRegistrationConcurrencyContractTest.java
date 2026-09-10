@@ -82,9 +82,8 @@ class LateRegistrationConcurrencyContractTest {
     // stop its own entry instead. Volatile because the registration and close() are on different threads by
     // definition, and a non-volatile read may never observe the write.
     //
-    // The blocking twin of this registrar has the behavioural cover, in RegistrationRacingCloseTest, since the
-    // manual-start path that lets a test close first and register second is a saga path and there is no reactive
-    // saga registrar. This only catches the field being removed or weakened.
+    // Behaviour is covered by RegistrationRacingCloseTest, which closes the context and then starts a withheld push
+    // projection through ManualStartPushSources. This only catches the field being removed or weakened.
     @Test
     void every_registrar_that_owns_something_close_stops_can_tell_a_registration_that_shutdown_began() throws Exception {
         assertVolatileClosingFlag(ProjectionAnnotationRegistrar.class);
