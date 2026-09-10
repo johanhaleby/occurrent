@@ -848,8 +848,9 @@ One query, which uses the `position` index and is cheap on a large collection:
 db.events.countDocuments({ position: { $type: "string" } })
 ```
 
-Replace `events` with your event collection name. From 0.34.0 the store runs the same check when it starts and logs
-a warning naming the repair when it finds something, so an affected store tells you on its next deploy.
+Replace `events` with your event collection name. From 0.34.0 a store that writes position runs the same check when
+it starts and logs a warning naming the repair when it finds something, so an affected store of that kind tells you
+on its next deploy. A store that writes no position never runs it, so run the query above yourself there.
 
 If you would rather that store refused to start than kept accepting conditional appends against a damaged event
 until the repair has run, set `EventStoreConfig.Builder.requireRepairedEvents(true)`. It is off by default on all

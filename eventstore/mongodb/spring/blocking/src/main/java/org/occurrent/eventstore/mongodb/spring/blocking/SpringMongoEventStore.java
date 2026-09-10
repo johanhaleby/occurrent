@@ -978,7 +978,9 @@ public class SpringMongoEventStore implements EventStore, EventStoreOperations, 
      * Warns, or fails when {@code requireRepairedEvents} is set, when the collection holds events that
      * {@code updateEvent} damaged before 0.34.0, which stored position as a string. Those events are missing from
      * every position query and from the conflict query behind a conditional append. A string position sits in its own
-     * type range in the position index, so this reads no keys at all on a store that was never damaged.
+     * type range in the position index, so where that index exists this reads no keys at all on a store that was
+     * never damaged. A store that writes no position has no such index, so {@code requireRepairedEvents} pays a
+     * collection scan there.
      */
     private static void warnOrFailOnEventsDamagedByUpdateEvent(String eventStoreCollectionName, MongoTemplate mongoTemplate, boolean requireRepairedEvents) {
         if (!mongoTemplate.collectionExists(eventStoreCollectionName)) {

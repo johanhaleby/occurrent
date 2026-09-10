@@ -158,7 +158,7 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
         makePositionAString();
 
         assertThatThrownBy(() -> newEventStore(builder -> builder.withoutStreamPosition().requireRepairedEvents(true)))
-                .as("withoutStreamPosition() skips the damage check, so a store that writes no position would start on damage the operator asked to be refused over")
+                .as("withoutStreamPosition() says the store wants no global position, not that the damage stopped mattering, so the refusal has to hold there too")
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("updateEvent damaged");
     }
@@ -172,7 +172,7 @@ class ReactorMongoEventStoreDamagedEventWarningTest {
         dropTheOldestEventsPosition();
 
         assertThatThrownBy(() -> newEventStore(builder -> builder.requireRepairedEvents(true)))
-                .as("this is the store that turns position off at startup, so without the damage check it is the one that says nothing at all")
+                .as("this store turns position off at startup and so runs neither ordered check, which makes it the one an operator hears nothing from unless the refusal reaches it")
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("updateEvent damaged");
     }

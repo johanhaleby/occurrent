@@ -928,7 +928,8 @@ public class MongoEventStore implements EventStore, EventStoreOperations, EventS
     // Warns, or fails when requireRepairedEvents is set, when the collection holds events that updateEvent damaged
     // before 0.34.0, which stored position as a string. Those events are missing from every position query and from
     // the conflict query behind a conditional append. A string position sits in its own type range in the position
-    // index, so this reads no keys at all on a store that was never damaged.
+    // index, so where that index exists this reads no keys at all on a store that was never damaged. A store that
+    // writes no position has no such index, so requireRepairedEvents pays a collection scan there.
     private static void warnOrFailOnEventsDamagedByUpdateEvent(MongoCollection<Document> eventCollection, boolean requireRepairedEvents) {
         // Whether one exists, not what is in it. Without the projection this pulls a whole stored event, payload and
         // all, into the startup path of an affected store. The Spring twins ask through exists() and never do.
