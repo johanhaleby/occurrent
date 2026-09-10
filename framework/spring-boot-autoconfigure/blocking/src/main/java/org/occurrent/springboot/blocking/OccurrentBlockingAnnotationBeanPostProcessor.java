@@ -292,6 +292,7 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
                     continue;
                 }
                 collectSubscriptionId(beanName, method, idsToCheck, subscriptionBeanNames);
+                refuseMoreThanOneDescriptorAnnotation(type, method);
                 org.occurrent.annotation.Projection projection = AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class);
                 if (projection != null) {
                     projectionMethods.add(new Object[]{beanName, method, projection});
@@ -412,6 +413,26 @@ class OccurrentBlockingAnnotationBeanPostProcessor implements BeanPostProcessor,
             }
             registeredHandlers.remove(handlerKey(beanName, method));
             throw e;
+        }
+    }
+
+    // One method declares at most one descriptor annotation. They register through different registrars and return
+    // different descriptor types, so a method with two of them was always a mistake, and it used to be caught by
+    // the second registrar rejecting the return type. Registration is keyed by the method now, so the second one
+    // would be skipped in silence instead. Refused here rather than dropped.
+    private static void refuseMoreThanOneDescriptorAnnotation(Class<?> userClass, Method method) {
+        List<String> declared = new ArrayList<>();
+        if (AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Projection.class) != null) {
+            declared.add("@Projection");
+        }
+        if (AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Snapshot.class) != null) {
+            declared.add("@Snapshot");
+        }
+        if (AnnotationUtils.findAnnotation(method, org.occurrent.annotation.Saga.class) != null) {
+            declared.add("@Saga");
+        }
+        if (declared.size() > 1) {
+            throw new IllegalArgumentException("Method %s#%s is annotated with more than one of @Projection, @Snapshot and @Saga, use only one.".formatted(userClass.getName(), method.getName()));
         }
     }
 

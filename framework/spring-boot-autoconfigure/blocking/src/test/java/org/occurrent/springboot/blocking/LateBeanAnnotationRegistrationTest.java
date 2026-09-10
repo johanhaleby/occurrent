@@ -523,6 +523,19 @@ class LateBeanAnnotationRegistrationTest {
         });
     }
 
+    // Registration is keyed by the method, so a method declaring two descriptor annotations would have the second
+    // one skipped in silence once the first marked the key. It was always a mistake, and it used to be caught by
+    // the second registrar rejecting the return type, so it is refused here rather than dropped.
+    @Test
+    void a_method_with_two_descriptor_annotations_is_refused_rather_than_half_registered() {
+        runner.withUserConfiguration(ProjectionCollaboratorsConfiguration.class, MixedDescriptorConfiguration.class).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(NestedExceptionUtils.getMostSpecificCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("more than one of @Projection, @Snapshot and @Saga");
+        });
+    }
+
     interface Marker {
     }
 
@@ -1514,6 +1527,25 @@ class LateBeanAnnotationRegistrationTest {
         @Lazy
         Marker secondClashingProjection() {
             return new SecondClashingProjection();
+        }
+    }
+
+    static class MixedDescriptorHolder {
+        @Projection(id = "mixed-descriptor-projection", source = Source.PUSH)
+        @org.occurrent.annotation.Snapshot(id = "mixed-descriptor-snapshot")
+        org.occurrent.dsl.projection.Projection<Integer, TestEvent, String> descriptor() {
+            return org.occurrent.dsl.projection.Projection.<Integer, TestEvent, String>builder(0)
+                    .id(event -> "k")
+                    .on(TestEvent.class, (state, event) -> state + 1)
+                    .build();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class MixedDescriptorConfiguration {
+        @Bean
+        MixedDescriptorHolder mixedDescriptorHolder() {
+            return new MixedDescriptorHolder();
         }
     }
 
