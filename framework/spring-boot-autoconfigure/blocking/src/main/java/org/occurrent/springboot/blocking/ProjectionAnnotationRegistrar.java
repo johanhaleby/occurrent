@@ -212,24 +212,29 @@ class ProjectionAnnotationRegistrar {
         }
     }
 
-    // Take one entry back out of a queue close() drains and stop it, when it is still there to take. close()'s
-    // poll() and this remove() cannot both take the same entry, so exactly one of them stops it. The entries
-    // define no equals, so remove() matches on identity. Named rather than inlined below because
-    // https://github.com/johanhaleby/occurrent/issues/987 needs this same undo if it compensates.
-    private static <T> boolean removeAndStop(Queue<T> entries, T entry, Consumer<T> stop) {
-        if (!entries.remove(entry)) {
+    // Take one entry out of a queue close() drains and stop it. Stopping happens whether or not the removal found
+    // it, because close() may have taken and stopped it before this registration activated anything, and an
+    // activation after that shutdown starts a replay nothing is left to stop. Every stop here is safe to call twice.
+    //
+    // Named rather than inlined because https://github.com/johanhaleby/occurrent/issues/987 needs this same undo of
+    // a single activation if it compensates rather than validating everything up front.
+    private static <T> void removeThenStop(Queue<T> entries, T entry, Consumer<T> stop) {
+        entries.remove(entry);
+        stop.accept(entry);
+    }
+
+    // Whether close() has begun, stopping this registration's own model on the way out when it has. Null when the
+    // projection takes its feed bare under catchup = NONE, where there is no model of ours to stop.
+    private boolean stopIfClosing(@Nullable ReplayAwareSubscriptions catchupModel) {
+        if (!closing) {
             return false;
         }
-        stop.accept(entry);
+        if (catchupModel instanceof CatchupThenPushSubscriptionModel model) {
+            removeThenStop(pushModels, model, CatchupThenPushSubscriptionModel::shutdown);
+        }
         return true;
     }
 
-    // The recheck half of the protocol. Add to the queue first, then call this, which answers whether close()
-    // had already drained past the entry and stopped it here. Reading the flag after the add is the mechanism,
-    // since close() sets closing before it drains, so an add that happens after that drain must read it as true.
-    private <T> boolean stopIfCloseHasPassed(Queue<T> entries, T entry, Consumer<T> stop) {
-        return closing && removeAndStop(entries, entry, stop);
-    }
 
     // Catch up each domain-push feed once, after every projection is registered.
     void catchUpCollectedFeeds() {
@@ -601,9 +606,6 @@ class ProjectionAnnotationRegistrar {
             // Retained so close() can stop it. Its replay runs on its own thread, so a context that closes without
             // stopping it leaves that replay folding into a store that is closing with it.
             pushModels.add(model);
-            // close() may already have drained past this add. No early return, because this method owes its caller
-            // a feed, and a context that is merely closing should not become a failed bean creation.
-            stopIfCloseHasPassed(pushModels, model, CatchupThenPushSubscriptionModel::shutdown);
             // Asked rather than recorded, so a model that is stopped and started again, replaying a second time,
             // reports catching up again instead of staying at whatever it reached the first time.
             withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
@@ -634,6 +636,12 @@ class ProjectionAnnotationRegistrar {
             // With waitUntilStarted the catch-up replay finishes here before handing over to the live push feed;
             // without it the replay runs on its own thread and this returns straight away.
             Subscription subscription = runner.project(id, projection, materializedView, null, waitUntilStarted);
+            // Checked after project(), because that is what subscribes, and the model does not refuse a subscribe
+            // once close() has shut it down. It starts a replay instead, and by then the model is out of the queue
+            // and close() cannot stop it a second time.
+            if (stopIfClosing(catchupModel)) {
+                return;
+            }
             if (!waitUntilStarted) {
                 // Nobody is left to see this replay fail, so join it on a thread of this registrar's own purely to
                 // record the failure. Stopping it is close()'s job through the model, so this needs no stop of its own.
@@ -648,6 +656,10 @@ class ProjectionAnnotationRegistrar {
         // not watch a background replay for itself.
         applicationContext.getBean(ManualStartPushSources.class).register(id, () -> {
             Subscription deferred = runner.project(id, projection, materializedView, null, waitUntilStarted);
+            // Runs on whichever thread called ManualStartPushSources.start, so close() may have gone past long ago.
+            if (stopIfClosing(catchupModel)) {
+                return;
+            }
             if (!waitUntilStarted) {
                 runInBackground("occurrent-push-catchup-watch", id, deferred::waitUntilStarted, () -> {
                 });

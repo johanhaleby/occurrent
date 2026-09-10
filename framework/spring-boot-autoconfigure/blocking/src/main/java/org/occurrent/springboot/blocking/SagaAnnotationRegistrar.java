@@ -191,11 +191,11 @@ class SagaAnnotationRegistrar {
                 refuseIfSagaSubscriptionBeanNameIsTaken(id);
                 SagaSubscription deferred = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
                 sagaSubscriptions.add(deferred);
-                // This runs on whichever thread called ManualStartPushSources.start, long after startup and possibly
-                // while the context is closing, so close() may already have drained past this add. Stop the timer
-                // poller and give up on the rest. Publishing a handle to a stopped subscription, into a bean factory
-                // that is being destroyed, tells the application it has something running when it does not.
-                if (stopIfCloseHasPassed(sagaSubscriptions, deferred, SagaSubscription::close)) {
+                // Runs on whichever thread called ManualStartPushSources.start, long after startup and possibly while
+                // the context is closing. Checked after run(), because that is what subscribes, and abandoned on the
+                // flag rather than on whether this stopped anything, since close() may have stopped it already.
+                if (closing) {
+                    stopOwnRegistration(deferred, subscribable);
                     return;
                 }
                 registerSagaSubscriptionSingleton(id, deferred);
@@ -207,9 +207,10 @@ class SagaAnnotationRegistrar {
         refuseIfSagaSubscriptionBeanNameIsTaken(id);
         SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
         sagaSubscriptions.add(sagaSubscription);
-        // Reached on the refresh thread at startup, and also from postProcessAfterInitialization for a saga on a bean
+        // Reached on the refresh thread at startup, and from postProcessAfterInitialization for a saga on a bean
         // Spring Boot builds later, which is the path that can overlap close().
-        if (stopIfCloseHasPassed(sagaSubscriptions, sagaSubscription, SagaSubscription::close)) {
+        if (closing) {
+            stopOwnRegistration(sagaSubscription, subscribable);
             return;
         }
         registerSagaSubscriptionSingleton(id, sagaSubscription);
@@ -329,9 +330,6 @@ class SagaAnnotationRegistrar {
         // it leaves that replay folding into a store that is closing with it, and a saga folding a replayed history is
         // one that issues commands while it does so.
         pushModels.add(model);
-        // close() may already have drained past this add. No early return, because this method owes its caller a
-        // feed, and the caller makes the same recheck against sagaSubscriptions and abandons the registration there.
-        stopIfCloseHasPassed(pushModels, model, CatchupThenPushSubscriptionModel::shutdown);
         // Asked rather than recorded, so a model that is stopped and started again, replaying a second time, reports
         // catching up again instead of staying at whatever it reached the first time.
         withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
@@ -498,24 +496,26 @@ class SagaAnnotationRegistrar {
         }
     }
 
-    // Take one entry back out of a queue close() drains and stop it, when it is still there to take. close()'s
-    // poll() and this remove() cannot both take the same entry, so exactly one of them stops it. The entries
-    // define no equals, so remove() matches on identity. Named rather than inlined below because
-    // https://github.com/johanhaleby/occurrent/issues/987 needs this same undo if it compensates.
-    private static <T> boolean removeAndStop(Queue<T> entries, T entry, Consumer<T> stop) {
-        if (!entries.remove(entry)) {
-            return false;
-        }
+    // Take one entry out of a queue close() drains and stop it. Stopping happens whether or not the removal found
+    // it, because close() may have taken and stopped it before this registration activated anything, and an
+    // activation after that shutdown starts a replay nothing is left to stop. Every stop here is safe to call twice.
+    //
+    // Named rather than inlined because https://github.com/johanhaleby/occurrent/issues/987 needs this same undo of
+    // a single activation if it compensates rather than validating everything up front.
+    private static <T> void removeThenStop(Queue<T> entries, T entry, Consumer<T> stop) {
+        entries.remove(entry);
         stop.accept(entry);
-        return true;
     }
 
-    // The recheck half of the protocol. Add to the queue first, then call this, which answers whether close()
-    // had already drained past the entry and stopped it here. Reading the flag after the add is the mechanism,
-    // since close() sets closing before it drains, so an add that happens after that drain must read it as true.
-    private <T> boolean stopIfCloseHasPassed(Queue<T> entries, T entry, Consumer<T> stop) {
-        return closing && removeAndStop(entries, entry, stop);
+    // Stop everything one registration created, once close() has begun. The push model as well as the subscription,
+    // because closing a subscription stops only its timer poller, while the replay thread belongs to the model.
+    private void stopOwnRegistration(SagaSubscription subscription, Subscribable subscribable) {
+        removeThenStop(sagaSubscriptions, subscription, SagaSubscription::close);
+        if (subscribable instanceof CatchupThenPushSubscriptionModel model) {
+            removeThenStop(pushModels, model, CatchupThenPushSubscriptionModel::shutdown);
+        }
     }
+
 
     // Resolve the SagaStateStore: by store()/storeName() reference, else the unique SagaStateStore bean, else the
     // store starter's zero-config default, whose state type is read from the factory return type.
