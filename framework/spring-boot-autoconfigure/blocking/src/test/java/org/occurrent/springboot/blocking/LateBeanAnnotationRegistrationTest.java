@@ -351,9 +351,10 @@ class LateBeanAnnotationRegistrationTest {
         });
     }
 
-    // Waiting for a replay inside the creation callback would deliver to the handler on an object the context has
-    // not published yet. A late registration therefore never waits, whatever startupMode says, and the replay runs
-    // once creation has finished instead.
+    // Waiting for a replay inside the creation callback would hold creation open until the replay finished. A late
+    // registration therefore never waits, whatever startupMode says, so creation finishes alongside the replay
+    // rather than behind it. The replay runs on its own thread and can deliver before creation finishes, so what
+    // this asserts is the flag the subscription was created with, not when anything was delivered.
     @Test
     void a_late_registration_does_not_wait_for_its_replay() {
         runner.withUserConfiguration(ReplayingStartupModeConfiguration.class).run(context -> {
