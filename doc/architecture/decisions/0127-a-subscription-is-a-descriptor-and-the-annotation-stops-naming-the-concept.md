@@ -293,13 +293,15 @@ The deprecated annotations stay in `postProcessBeforeInitialization`, since noth
 > invocation, so it cannot deadlock and has no raw-bean fallback to take, and it registers nothing.
 >
 > Registering from `postProcessAfterInitialization` does meet the creation window, and the same
-> `startupMode = WAIT_UNTIL_STARTED` replay is what it meets. A late registration therefore never waits for its
-> replay, whatever `startupMode` says, so the replay runs after the callback has returned and every delivery
-> resolves the published singleton with all of its advice. Waiting there would have run the whole history against
-> an object the context had not published, which is the loss the amendment above exists to close, reappearing one
-> phase later. Ignoring `startupMode` for these is also what the setting means, since it asks for the replay to
-> finish before the application is up and the application is already up by the time a lazily built bean is asked
-> for.
+> `startupMode = WAIT_UNTIL_STARTED` replay is what it meets. A late `@Subscription`, `@StreamSubscription`,
+> `@DcbSubscription` or `@SynchronousSubscription` therefore never waits for its replay, whatever `startupMode`
+> says, so the replay runs after the callback has returned and every delivery resolves the published singleton with
+> all of its advice. A late `@Projection`, `@Snapshot` or `@Saga` still reads `startupMode` itself and can wait
+> inside the callback, so this decision covers the four handler annotations rather than all seven. Waiting there
+> would have run the whole history against an object the context had not published, which is the loss the amendment
+> above exists to close, reappearing one phase later. Ignoring `startupMode` for these is also what the setting
+> means, since it asks for the replay to finish before the application is up and the application is already up by
+> the time a lazily built bean is asked for.
 >
 > What remains is a race rather than a window anyone can plan around. A replay running on its own thread can deliver
 > while the bean it belongs to is still finishing, and a delivery there runs on the instance the callback received.
