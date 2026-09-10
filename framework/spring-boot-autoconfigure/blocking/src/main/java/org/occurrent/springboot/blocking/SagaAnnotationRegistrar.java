@@ -86,12 +86,17 @@ class SagaAnnotationRegistrar {
     private final CompetingConsumerCheckpointWriteVersionSource writeVersionSource;
     // Registered sagas own a timer poller each, stop them when the context is destroyed so no poller thread leaks.
     // Concurrent because a push saga withheld by manual mode is added when the application starts it, on whichever
-    // thread that is, while close() may be reading the list.
+    // thread that is, while close() may be reading the queue.
     private final Queue<SagaSubscription> sagaSubscriptions = new ConcurrentLinkedQueue<>();
-    // Push catch-up models created here, kept so the context can stop their replay threads on the way down. Created
-    // during registration on the refresh thread, whether or not manual mode withholds the saga itself, so a plain list
-    // is enough where sagaSubscriptions needs a concurrent one.
+    // Push catch-up models created here, kept so the context can stop their replay threads on the way down.
+    // Concurrent for the same reason sagaSubscriptions is. This used to say a plain list was enough because these
+    // are created on the refresh thread, and a saga on a bean Spring Boot builds after startup falsified that. It
+    // registers from postProcessAfterInitialization, on whatever thread asked for the bean.
     private final Queue<CatchupThenPushSubscriptionModel> pushModels = new ConcurrentLinkedQueue<>();
+    // Set by close() before it drains either queue above. A registration that adds after that drain can then see
+    // that its own entry will never be taken, and stop it itself. Without this the registrar cannot tell a
+    // registration that shutdown has begun even in principle.
+    private volatile boolean closing = false;
 
     SagaAnnotationRegistrar(ApplicationContext applicationContext, StartPositionSupport startPositionSupport, Set<String> registeredIds) {
         this.applicationContext = applicationContext;
@@ -186,6 +191,13 @@ class SagaAnnotationRegistrar {
                 refuseIfSagaSubscriptionBeanNameIsTaken(id);
                 SagaSubscription deferred = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
                 sagaSubscriptions.add(deferred);
+                // This runs on whichever thread called ManualStartPushSources.start, long after startup and possibly
+                // while the context is closing, so close() may already have drained past this add. Stop the timer
+                // poller and give up on the rest. Publishing a handle to a stopped subscription, into a bean factory
+                // that is being destroyed, tells the application it has something running when it does not.
+                if (stopIfCloseHasPassed(sagaSubscriptions, deferred, SagaSubscription::close)) {
+                    return;
+                }
                 registerSagaSubscriptionSingleton(id, deferred);
                 watchBackgroundCatchUpIfNobodyElseWill(annotation, id, deferred, waitUntilStarted);
             });
@@ -195,6 +207,11 @@ class SagaAnnotationRegistrar {
         refuseIfSagaSubscriptionBeanNameIsTaken(id);
         SagaSubscription sagaSubscription = runner.run(id, saga, stateStore, commandDispatcher, startAt, config, timersEnabledFor(subscribable, id), waitUntilStarted);
         sagaSubscriptions.add(sagaSubscription);
+        // Reached on the refresh thread at startup, and also from postProcessAfterInitialization for a saga on a bean
+        // Spring Boot builds later, which is the path that can overlap close().
+        if (stopIfCloseHasPassed(sagaSubscriptions, sagaSubscription, SagaSubscription::close)) {
+            return;
+        }
         registerSagaSubscriptionSingleton(id, sagaSubscription);
         if (push) {
             watchBackgroundCatchUpIfNobodyElseWill(annotation, id, sagaSubscription, waitUntilStarted);
@@ -312,6 +329,15 @@ class SagaAnnotationRegistrar {
         // it leaves that replay folding into a store that is closing with it, and a saga folding a replayed history is
         // one that issues commands while it does so.
         pushModels.add(model);
+        // close() may already have drained past this add, on the late-registration path. Shutting the model down here
+        // is what stops its replay thread, since nothing else holds it once it is out of the queue.
+        //
+        // No early return, even though the model is stopped by the time this returns it. Bailing out would mean
+        // throwing, since this method owes its caller a feed, and turning a context that is merely closing into a
+        // failed bean creation is worse than the alternative. The alternative is safe, because the caller runs the saga on
+        // this stopped model and then makes the same recheck against sagaSubscriptions, which is still true, so it
+        // closes that subscription and abandons the registration. Nothing is left running either way.
+        stopIfCloseHasPassed(pushModels, model, CatchupThenPushSubscriptionModel::shutdown);
         // Asked rather than recorded, so a model that is stopped and started again, replaying a second time, reports
         // catching up again instead of staying at whatever it reached the first time.
         withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
@@ -457,6 +483,10 @@ class SagaAnnotationRegistrar {
     }
 
     void close() {
+        // Set before either drain below, which is what lets a registration racing close() see that its own entry
+        // will never be taken. A registration that adds before this either goes into a queue this still drains, or
+        // reads the flag afterwards and stops its own entry. Never neither.
+        closing = true;
         // Stop each saga's timer poller so no poller thread survives context shutdown. Before the models, because
         // shutting one down waits for a replay still in flight, and a timer that fires during that wait dispatches a
         // command into a context that is already going down.
@@ -472,6 +502,33 @@ class SagaAnnotationRegistrar {
         while ((pushModel = pushModels.poll()) != null) {
             pushModel.shutdown();
         }
+    }
+
+    // Take one entry back out of a queue close() drains and stop it, when it is still there to take. close()'s poll()
+    // and this remove() cannot both take the same entry, so whichever succeeds is the one that stops it, never twice
+    // and never neither. The entries are models and subscriptions that define no equals, so remove() matches on identity
+    // and takes this exact entry rather than an equal one.
+    //
+    // Named rather than inlined into stopIfCloseHasPassed below because undoing one activation is useful on its own.
+    // See https://github.com/johanhaleby/occurrent/issues/987, where a registration that fails partway has to undo
+    // what it already activated, if it takes that branch rather than validating everything up front.
+    private static <T> boolean removeAndStop(Queue<T> entries, T entry, Consumer<T> stop) {
+        if (!entries.remove(entry)) {
+            return false;
+        }
+        stop.accept(entry);
+        return true;
+    }
+
+    // The recheck half of the protocol. Add to the queue first, then call this. It answers whether close() had
+    // already drained past the entry, in which case it has stopped it here and the caller must abandon the rest of
+    // the registration rather than publish a handle to something that is no longer running.
+    //
+    // Reading the flag after the add is what makes this work, and the order is the whole mechanism rather than a
+    // detail. close() sets closing before it drains, so an add that happens after that drain is an add whose thread
+    // must then read closing as true.
+    private <T> boolean stopIfCloseHasPassed(Queue<T> entries, T entry, Consumer<T> stop) {
+        return closing && removeAndStop(entries, entry, stop);
     }
 
     // Resolve the SagaStateStore: by store()/storeName() reference, else the unique SagaStateStore bean, else the

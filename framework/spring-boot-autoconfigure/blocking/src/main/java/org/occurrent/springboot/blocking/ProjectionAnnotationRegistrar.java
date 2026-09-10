@@ -212,6 +212,32 @@ class ProjectionAnnotationRegistrar {
         }
     }
 
+    // Take one entry back out of a queue close() drains and stop it, when it is still there to take. close()'s poll()
+    // and this remove() cannot both take the same entry, so whichever succeeds is the one that stops it, never twice
+    // and never neither. The entries are models that define no equals, so remove() matches on identity and takes this
+    // exact entry rather than an equal one.
+    //
+    // Named rather than inlined into stopIfCloseHasPassed below because undoing one activation is useful on its own.
+    // See https://github.com/johanhaleby/occurrent/issues/987, where a registration that fails partway has to undo
+    // what it already activated, if it takes that branch rather than validating everything up front.
+    private static <T> boolean removeAndStop(Queue<T> entries, T entry, Consumer<T> stop) {
+        if (!entries.remove(entry)) {
+            return false;
+        }
+        stop.accept(entry);
+        return true;
+    }
+
+    // The recheck half of the protocol. Add to the queue first, then call this. It answers whether close() had
+    // already drained past the entry, in which case it has stopped it here.
+    //
+    // Reading the flag after the add is what makes this work, and the order is the whole mechanism rather than a
+    // detail. close() sets closing before it drains, so an add that happens after that drain is an add whose thread
+    // must then read closing as true.
+    private <T> boolean stopIfCloseHasPassed(Queue<T> entries, T entry, Consumer<T> stop) {
+        return closing && removeAndStop(entries, entry, stop);
+    }
+
     // Catch up each domain-push feed once, after every projection is registered.
     void catchUpCollectedFeeds() {
         DomainFeedCatchUp polled;
@@ -249,6 +275,16 @@ class ProjectionAnnotationRegistrar {
             }
             return null;
         });
+        // No recheck of closing here, unlike the other adds in this class, and the reason is an ordering rather than
+        // a mechanism, so it is written down rather than left to be rediscovered.
+        //
+        // close() sets closing before it drains this queue. This adds before it starts the thread, and the task body
+        // reads closing as its first act. So an add that happens after that drain is one whose thread must then read
+        // closing as true, and the task returns without replaying. The entry left behind in the queue holds a task
+        // that does nothing, which is inert rather than leaked.
+        //
+        // What this does not survive is close() being changed to set closing after a drain, or this being changed to
+        // start the thread before the add. Either one turns the guarantee above into a race.
         backgroundCatchUps.add(new BackgroundCatchUp(task, stop));
         Thread.ofVirtual().name(threadName + "-" + id).start(task);
     }
@@ -577,6 +613,11 @@ class ProjectionAnnotationRegistrar {
             // Retained so close() can stop it. Its replay runs on its own thread, so a context that closes without
             // stopping it leaves that replay folding into a store that is closing with it.
             pushModels.add(model);
+            // close() may already have drained past this add, on the late-registration path. Shutting the model down
+            // here is what stops its replay thread, since nothing else holds it once it is out of the queue. No early
+            // return, because this method owes its caller a feed, and turning a context that is merely closing into a failed
+            // bean creation is worse than handing back a model that is already stopped.
+            stopIfCloseHasPassed(pushModels, model, CatchupThenPushSubscriptionModel::shutdown);
             // Asked rather than recorded, so a model that is stopped and started again, replaying a second time,
             // reports catching up again instead of staying at whatever it reached the first time.
             withPushCatchupStatus(status -> status.register(id, () -> model.isCatchingUp(id), () -> model.isRunning(id)));
